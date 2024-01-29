@@ -1,0 +1,16 @@
+.env
+*.o
+*.db
+*.txt
+a.out
+mcc
+hcc
+watch
+*.dSYM
+*.gch
+debug-assembly
+unit_tests
+.DS_Store
+.cache
+compile_commands.json
+scratch

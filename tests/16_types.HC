@@ -1,0 +1,17 @@
+#include "testhelper.HC"
+
+U0 Main()
+{
+  "Test - comma separated declarators & types: ";
+  I64 correct = 0, tests = 3;
+  U8 *ptr, *ptr2 = "hey", ch;
+  ptr = "hello";
+  ch = 'f';
+
+  if (!strncmp(ptr,"hello",5)) ++correct;
+  if (!strncmp(ptr2,"hey",3)) ++correct;
+  if (ch == 'f') ++correct;
+
+  PrintResult(correct,tests);
+  "====\n";
+}
