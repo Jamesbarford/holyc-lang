@@ -69,12 +69,10 @@ I64 Wrap(I64 i)
   return i;
 }
 
-extern "c" I64 strncmp(U8 *s1, U8 *s2, I64 len);
-
 U0 Main()
 {
   I64 res, correct=0, tests = 15;
-  if (!StrNcmp("foo bar baz", Concat("foo", "bar", "baz"), 11)) {
+  if (!StrNCmp("foo bar baz", Concat("foo", "bar", "baz"), 11)) {
     correct++;
   }
 
@@ -118,6 +116,5 @@ U0 Main()
 
 
   PrintResult(correct,tests);
-  //"YO DONE\n";
   "=====\n";
 }

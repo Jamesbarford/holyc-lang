@@ -2,8 +2,6 @@
 #include <memory.HC>
 #include "testhelper.HC"
 
-extern "c" I64 StrCmp(U8 *buf, U8 *buf2);
-
 class BaseClass
 {
   I64 base;

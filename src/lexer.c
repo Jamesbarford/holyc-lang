@@ -943,7 +943,7 @@ error:
 char *lexGetBuiltInRoot(void) {
     struct passwd *pwd = getpwuid(getuid());
     aoStr *full_path = aoStrNew();
-    aoStrCatPrintf(full_path, "%s/.appxc", pwd->pw_dir);
+    aoStrCatPrintf(full_path, "%s/.holyc-lib", pwd->pw_dir);
     return aoStrMove(full_path);
 }
 

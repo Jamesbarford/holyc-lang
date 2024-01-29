@@ -1,4 +1,3 @@
-#include <memory.HC>
 #include <system.HC>
 #include "testhelper.HC"
 
@@ -50,7 +49,7 @@ U0 Main()
 
   if (s->id == 420) ++correct;
   if (s->age == 31) ++correct;
-  if (!strncmp(s->name,"James",5)) ++correct;
+  if (!StrNCmp(s->name,"James",5)) ++correct;
 
   spr->s = MAlloc(sizeof(Student));
   spr->id = 420;
@@ -62,7 +61,7 @@ U0 Main()
   spr->s->name[3] = '\0';
   ++spr->s->age;
 
-  if (!strncmp(spr->s->name,"Wil",3)) ++correct;
+  if (!StrNCmp(spr->s->name,"Wil",3)) ++correct;
   if (spr->s->age == 41) ++correct;
 
   PrintResult(correct,tests);

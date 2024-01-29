@@ -8,8 +8,8 @@ U0 Main()
   ptr = "hello";
   ch = 'f';
 
-  if (!strncmp(ptr,"hello",5)) ++correct;
-  if (!strncmp(ptr2,"hey",3)) ++correct;
+  if (!StrNCmp(ptr,"hello",5)) ++correct;
+  if (!StrNCmp(ptr2,"hey",3)) ++correct;
   if (ch == 'f') ++correct;
 
   PrintResult(correct,tests);

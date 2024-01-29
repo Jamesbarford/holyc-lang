@@ -4,6 +4,7 @@ CFLAGS := -O0 -ggdb -Wall
 OUT    := .
 
 LIB_SRC?=./holyc-lib
+SYNTAX?=./syntax-highlighting
 PREFIX?=/usr/local
 BUILT_IN_LOCATION?=~/.holyc-lib
 
@@ -38,8 +39,10 @@ OBJS = $(OUT)/main.o \
 $(TARGET): $(OBJS)
 	$(CC) -o $(TARGET) $(OBJS) -lm
 
+install-syntax-nvim:
+	cp $(SYNTAX)/hc.vim ~/.config/nvim/after/syntax/hc.vim
+
 install:
-	mkdir -p $(PREFIX)/bin
 	install -c -m 555 $(TARGET) $(PREFIX)/bin
 	mkdir -p $(BUILT_IN_LOCATION)
 	cp $(LIB_SRC)/builtins.HC $(BUILT_IN_LOCATION)/builtins.HC
@@ -56,7 +59,6 @@ install:
 	cp $(LIB_SRC)/hashtable.HC $(BUILT_IN_LOCATION)/hashtable.HC
 	cp $(LIB_SRC)/io.HC $(BUILT_IN_LOCATION)/io.HC
 	cp $(LIB_SRC)/math.HC $(BUILT_IN_LOCATION)/math.HC
-	cp $(LIB_SRC)/hc.vim ~/.config/nvim/after/syntax/hc.vim
 
 prsasm-test:
 	gcc -O0 -g -DPRSASM_TEST ./prsasm.c ./cctrl.c ./dict.c ./ast.c ./aostr.c ./list.c ./lexer.c ./prsutil.c

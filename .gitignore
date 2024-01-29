@@ -2,6 +2,7 @@
 *.o
 *.db
 *.txt
+*.s
 a.out
 mcc
 hcc

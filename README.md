@@ -21,6 +21,14 @@ Full documentation for the language can be found here: https://holyc-lang.com/
 This compiler is built from scratch in c. Currently it is non optimising,
 converting the AST to x86_64 assembly code which is fed into gcc to assemble.
 
+## Compatability
+Currently the this will compile x86_64 assembly and works on linux and intel
+macs.
+
+## Building
+Run `make`, then run `make install` this will install the compiler and holyc
+libraries for strings, hashtables, io, maths etc... see ./src/holyc-lib/
+ 
 ## Differences
 - `auto` key word for type inference, an addition which makes it easier
   to write code.

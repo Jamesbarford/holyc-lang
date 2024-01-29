@@ -1,4 +1,5 @@
 #include "testhelper.HC"
+#include <system.HC>
 
 #define MATHS_MUL 0
 #define MATHS_MOD 1
