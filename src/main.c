@@ -1,4 +1,6 @@
+#include <errno.h>
 #include <fcntl.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,6 +10,8 @@
 #include "compile.h"
 #include "cctrl.h"
 #include "util.h"
+
+#define ASM_TMP_FILE "/tmp/holyc-asm.s"
 
 typedef struct mccOptions {
     int print_ast;
@@ -67,6 +71,39 @@ void execGcc(char *filename, aoStr *asmbuf, aoStr *cmd) {
     system(cmd->data);
 }
 
+int writeAsmToTmp(aoStr *asmbuf) {
+    int fd;
+    ssize_t written;
+    size_t towrite = 0;
+    char *ptr;
+    ptr = asmbuf->data;
+
+    if ((fd = open(ASM_TMP_FILE,O_RDWR|O_TRUNC|O_CREAT,0644)) == -1) {
+        loggerPanic("Failed to create file for intermediary assembly: %s\n",
+                strerror(errno));
+    }
+
+    towrite = asmbuf->len;
+    ptr = asmbuf->data;
+
+    while (towrite > 0) {
+        written = write(fd,ptr,towrite);
+        if (written < 0) {
+            if (written == EINTR) {
+                continue;
+            }
+            close(fd);
+            loggerPanic("Failed to create file for intermediary assembly: %s\n",
+                    strerror(errno));
+        }
+        printf("%ld\n",written);
+        towrite -= written;
+        ptr += written;
+    }
+    close(fd);
+    return 1;
+} 
+
 void emitFile(aoStr *asmbuf, mccOptions *opts) {
     aoStr *cmd = aoStrNew();
 
@@ -81,10 +118,14 @@ void emitFile(aoStr *asmbuf, mccOptions *opts) {
         write(fd,asmbuf->data,asmbuf->len);
         close(fd);
     } else {
-        aoStr *escaped = aoStrEscapeString(asmbuf);
-        aoStrCatPrintf(cmd, "echo \"%s\" | gcc -x assembler -o ./a.out -", escaped->data);
-        aoStrRelease(escaped);
+        // aoStr *escaped = aoStrEscapeString(asmbuf);
+        writeAsmToTmp(asmbuf);
+        aoStrCatPrintf(cmd, "gcc %s -lm -lc -o ./a.out", ASM_TMP_FILE); // escaped->data);
+        // aoStrRelease(escaped);
+        loggerDebug("%s\n",cmd->data);
         system(cmd->data);
+        remove(ASM_TMP_FILE);
+
     }
     aoStrRelease(cmd);
     aoStrRelease(asmbuf);

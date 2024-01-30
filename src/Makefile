@@ -6,7 +6,7 @@ OUT    := .
 LIB_SRC?=./holyc-lib
 SYNTAX?=./syntax-highlighting
 PREFIX?=/usr/local
-BUILT_IN_LOCATION?=~/.holyc-lib
+BUILT_IN_LOCATION?=$(HOME)/.holyc-lib
 
 .PHONY: unit-test
 
@@ -63,7 +63,7 @@ install:
 prsasm-test:
 	gcc -O0 -g -DPRSASM_TEST ./prsasm.c ./cctrl.c ./dict.c ./ast.c ./aostr.c ./list.c ./lexer.c ./prsutil.c
 
-unit-test: install
+unit-test:
 	cd ../tests && ./tests.sh
 
 $(OUT)/dict.o: dict.c dict.h aostr.h 

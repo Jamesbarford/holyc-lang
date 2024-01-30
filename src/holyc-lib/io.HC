@@ -91,7 +91,7 @@ public U8 *FileRead(U8 *path, I64 *_size=NULL)
 public Bool FileWrite(U8 *filename, U8 *buf, I64 size,
     I64 flags=O_CREAT|O_RDWR)
 {
-  I64 towrite = size, total=0, nwritten = 0;
+  I64 towrite = size, nwritten = 0;
   I32 fd;
 
   if ((fd = open(filename,flags,438)) == -1) {
@@ -104,7 +104,8 @@ public Bool FileWrite(U8 *filename, U8 *buf, I64 size,
       close(fd);
       return FALSE;
     }
-    total += nwritten;
+
+    buf += nwritten;
     towrite -= nwritten;
   }
   close(fd);

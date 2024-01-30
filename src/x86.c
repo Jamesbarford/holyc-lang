@@ -1088,9 +1088,9 @@ void AsmAddr(Cctrl *cc, aoStr *buf, Ast *ast) {
         case AST_LVAR: {
             if (ast->operand->type->kind == AST_TYPE_POINTER) {
                 /* XXX: this feels extremely hacky */
+                aoStrCatPrintf(buf, "# ADDR of %s\n\t",
+                        AstKindToString(ast->operand->type->ptr->kind));
                 switch (ast->operand->type->ptr->kind) {
-                    aoStrCatPrintf(buf, "# ADDR of %s\n\t",
-                            AstKindToString(ast->operand->type->ptr->kind));
                     case AST_TYPE_ARRAY:
                     case AST_TYPE_CHAR:
                     case AST_TYPE_CLASS:
@@ -1938,11 +1938,7 @@ void AsmDataSection(Cctrl *cc, aoStr *buf) {
         ptr = str;
         while (*ptr) {
             switch (*ptr) {
-                case '\\': {
-                    /* XXX: this is weird but works */
-                    aoStrCatPrintf(escaped,"\\\\");
-                    break;
-                }
+                case '\\': aoStrCatPrintf(escaped,"\\"); break;
                 case '\n': aoStrCatPrintf(escaped,"\\n"); break;
                 case '\t': aoStrCatPrintf(escaped,"\\t"); break;
                 case '\r': aoStrCatPrintf(escaped,"\\r"); break;

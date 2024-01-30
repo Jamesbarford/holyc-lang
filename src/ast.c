@@ -42,6 +42,12 @@ AstType *AstTypeNew(void) {
     return at;
 }
 
+AstType *AstTypeCopy(AstType *type) {
+    AstType *copy = AstTypeNew();
+    memcpy(copy,type,sizeof(AstType));
+    return copy;
+}
+
 Ast *AstUnaryOperator(AstType *type, long kind, Ast *operand) {
     Ast *ast = AstNew();
     ast->type = type;

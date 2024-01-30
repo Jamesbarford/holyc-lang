@@ -89,8 +89,9 @@ int CompileToAst(Cctrl *cc, char *filepath, int lexer_flags) {
     lexer l;
     aoStr *file_path;
     char *src, *strpath;
-    Dict *seen_files = DictNew(&default_table_type);
- 
+    Dict *seen_files;
+
+    seen_files = DictNew(&default_table_type);
     tokens = ListNew();
     code_list = ListNew();
 
@@ -101,7 +102,6 @@ int CompileToAst(Cctrl *cc, char *filepath, int lexer_flags) {
 
     while ((file_path = ListPop(l.files)) != NULL) {
         if (DictGetLen(seen_files,file_path->data,file_path->len) != NULL) {
-            loggerDebug("saw: %s\n",file_path->data);
             aoStrRelease(file_path);
             continue;
         }
@@ -110,6 +110,7 @@ int CompileToAst(Cctrl *cc, char *filepath, int lexer_flags) {
         ListAppend(code_list,src);
         l.ptr = src;
         l.lineno = 1;
+        loggerDebug("lexing: %s\n",file_path->data);
         next_tokens = lexToLexemes(cc->macro_defs,&l);
 
         if (!next_tokens || next_tokens->next == next_tokens) {
@@ -152,18 +153,4 @@ aoStr *CompileCode(Cctrl *cc, char *code, int lexer_flags) {
     lexemeListRelease(tokens);
     free(l.files);
     return asm_str;
-}
-
-/* Essentially uses GCC's assembler on the generated assembly in asmvbuf */
-void CompileAssembleToFile(aoStr *asmbuf, char *filename) {
-    int fd = open(filename, O_CREAT|O_RDWR|O_TRUNC, 0666);
-    write(fd,asmbuf->data,asmbuf->len);
-
-    aoStr *cmd = aoStrNew();
-    aoStrCatPrintf(cmd, "gcc-13 ./%s -o ./a.out", filename);
-    printf("%s\n", cmd->data);
-    system(cmd->data);
-    aoStrRelease(cmd);
-    aoStrRelease(asmbuf);
-    close(fd);
 }
