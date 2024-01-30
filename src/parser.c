@@ -116,12 +116,20 @@ Ast *ParseDeclArrayInitInt(Cctrl *cc, AstType *type) {
     return AstArrayInit(initlist);
 }
 
-void ParseFlattenAnnonymous(AstType *anon, Dict *fields_dict, int offset) {
+void ParseFlattenAnnonymous(AstType *anon, Dict *fields_dict,
+        int offset, int make_copy)
+{
+    AstType *base, *type;
     for (int i = 0; i < anon->fields->capacity; ++i) {
         for (DictNode *dn = anon->fields->body[i]; dn; dn = dn->next) {
-            AstType *type = (AstType *)dn->val;
+            base = (AstType *)dn->val;
+            if (make_copy) {
+                type = AstTypeCopy(base);
+            } else {
+                type = base;
+            }
             type->offset += offset;
-            DictSet(fields_dict,type->clsname->data,type);
+            DictSet(fields_dict,dn->key,type);
         }
     }
 }
@@ -268,7 +276,7 @@ Dict *ParseClassOffsets(int *real_size, List *fields, AstType *base_class,
     
     if (base_class) {
         offset = base_class->size;
-        ParseFlattenAnnonymous(base_class,fields_dict,0);
+        ParseFlattenAnnonymous(base_class,fields_dict,0,1);
     } else {
         offset = 0;
     }
@@ -291,7 +299,7 @@ Dict *ParseClassOffsets(int *real_size, List *fields, AstType *base_class,
         field = it->value;
         if (field->clsname == NULL && ParseIsClassOrUnion(field->kind)) {
             offset += CalcPadding(offset,field->size);
-            ParseFlattenAnnonymous(field,fields_dict,offset);
+            ParseFlattenAnnonymous(field,fields_dict,offset,0);
             offset += field->size;
             continue;
         } else {
@@ -329,7 +337,7 @@ Dict *ParseUnionOffsets(int *real_size, List *fields) {
             max_size = field->size;
         }
         if (field->clsname == NULL && ParseIsClassOrUnion(field->kind)) {
-            ParseFlattenAnnonymous(field,fields_dict,0);
+            ParseFlattenAnnonymous(field,fields_dict,0,0);
             continue;
         }
 

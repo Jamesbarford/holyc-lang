@@ -103,7 +103,6 @@ Cctrl *CctrlNew(void);
 void CctrlInitTokenIter(Cctrl *cc, List *tokens);
 lexeme *CctrlTokenGet(Cctrl *cc);
 lexeme *CctrlTokenPeek(Cctrl *cc);
-lexeme *CctrlTokenPeekBy(Cctrl *cc, int steps);
 void CctrlTokenIterSetCur(Cctrl *cc, List *cur);
 void CctrlTokenRewind(Cctrl *cc);
 void CctrlTokenExpect(Cctrl *cc, long expected);

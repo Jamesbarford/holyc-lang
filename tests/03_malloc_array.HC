@@ -9,6 +9,7 @@ Bool ArrayJuggling()
 {
   I64 *ptr = 0;
   I64 arr[5][5];
+  arr[0][0] = 0;
   arr[0][0] += 1; // arr[0][0] = 1
   arr[0][0]++;    // arr[0][0] = 2
   ++(arr[0][0]);  // arr[0][0] = 3

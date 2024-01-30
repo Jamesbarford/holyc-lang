@@ -240,6 +240,7 @@ extern AstType *ast_void_type;
 extern Ast *placeholder_arg;
 
 Ast *AstNew(void);
+AstType *AstTypeCopy(AstType *type);
 void AstRelease(Ast *ast);
 void AstReleaseList(List *ast_list);
 

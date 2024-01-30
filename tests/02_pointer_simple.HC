@@ -21,5 +21,6 @@ U0 Main()
   I64 *p = &e->x;
   Assign(p);
   PrintResult(*p == 9, 1);
+  Free(e);
   "====\n";
 }

@@ -71,6 +71,7 @@ I64 Wrap(I64 i)
 
 U0 Main()
 {
+  "Test - Variable arguments: ";
   I64 res, correct=0, tests = 15;
   if (!StrNCmp("foo bar baz", Concat("foo", "bar", "baz"), 11)) {
     correct++;
@@ -82,8 +83,8 @@ U0 Main()
   res = Arg3(5,6,7,1); 
   if (res == 19) correct++;
 
-  if (AddS(2,2,2,4,4) == 14) correct++;
-  res = AddS(2,2,2,4,4);
+  if (AddS(2,2,2,4,4,0) == 14) correct++;
+  res = AddS(2,2,2,4,4,0);
   if (res == 14) correct++;
 
   /* assign and check */

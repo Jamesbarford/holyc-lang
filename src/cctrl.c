@@ -180,26 +180,6 @@ lexeme *CctrlTokenGet(Cctrl *cc) {
     return NULL;
 }
 
-/* Look ahead by `n` */
-lexeme *CctrlTokenPeekBy(Cctrl *cc, int steps) {
-    List *ll = cc->tkit->cur;
-    /* We are already positioned one ahead */
-    while (--steps && ll != cc->tkit->tokens) {
-        if (ll == cc->tkit->tokens) {
-            loggerWarning("All tokens consume."
-                    " Possible unexpected end of input\n");
-            return NULL;
-        }
-        ll = ll->next;
-    }
-    if (ll == cc->tkit->tokens) {
-        loggerWarning("All tokens consume."
-                " Possible unexpected end of input\n");
-        return NULL;
-    }
-    return ll->value;
-}
-
 /* Assert the token we are currently pointing at is a TK_PUNCT and the 'i64'
  * matches 'expected'. Then consume this token else throw an error */
 void CctrlTokenExpect(Cctrl *cc, long expected) {
