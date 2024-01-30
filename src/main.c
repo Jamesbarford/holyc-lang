@@ -108,21 +108,17 @@ void emitFile(aoStr *asmbuf, mccOptions *opts) {
     aoStr *cmd = aoStrNew();
 
     if (opts->emit_object) {
-        aoStr *escaped = aoStrEscapeString(asmbuf);
-        aoStrCatPrintf(cmd, "echo \"%s\" | gcc -x assembler -c -o ./%s -",
-                escaped->data, opts->obj_outfile);
-        aoStrRelease(escaped);
+        writeAsmToTmp(asmbuf);
+        aoStrCatPrintf(cmd, "gcc %s -lm -lc -c -o ./%s",
+                ASM_TMP_FILE,opts->obj_outfile);
         system(cmd->data);
     } else if (opts->asm_outfile && opts->assemble_only) {
         int fd = open(opts->asm_outfile, O_CREAT|O_RDWR|O_TRUNC, 0666);
         write(fd,asmbuf->data,asmbuf->len);
         close(fd);
     } else {
-        // aoStr *escaped = aoStrEscapeString(asmbuf);
         writeAsmToTmp(asmbuf);
-        aoStrCatPrintf(cmd, "gcc %s -lm -lc -o ./a.out", ASM_TMP_FILE); // escaped->data);
-        // aoStrRelease(escaped);
-        loggerDebug("%s\n",cmd->data);
+        aoStrCatPrintf(cmd, "gcc %s -lm -lc -o ./a.out", ASM_TMP_FILE);
         system(cmd->data);
         remove(ASM_TMP_FILE);
 
