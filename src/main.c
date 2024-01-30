@@ -109,7 +109,7 @@ void emitFile(aoStr *asmbuf, mccOptions *opts) {
 
     if (opts->emit_object) {
         writeAsmToTmp(asmbuf);
-        aoStrCatPrintf(cmd, "gcc %s -lm -lc -c -o ./%s",
+        aoStrCatPrintf(cmd, "gcc -c %s -lm -lc -o ./%s",
                 ASM_TMP_FILE,opts->obj_outfile);
         system(cmd->data);
     } else if (opts->asm_outfile && opts->assemble_only) {
