@@ -1182,18 +1182,36 @@ void AsmPopFloatArgs(aoStr *buf, List *argv) {
     }
 }
 
+#define FUN_EXISTS 0x1
+#define FUN_EXTERN 0x2
+#define FUN_VARARG 0x4
 void AsmPrepFuncCallArgs(Cctrl *cc, aoStr *buf, Ast *funcall) {
-    int int_cnt,float_cnt,stack_cnt,stackoffset,needs_padding,var_arg_start,argc;
+    int int_cnt,float_cnt,stack_cnt,stackoffset,needs_padding,var_arg_start,argc,
+        flags;
     List *int_args, *float_args, *stack_args, 
          *funparam, *funarg, *params;
     Ast *tmp, *fun, *arg;
 
+    flags = 0;
     fun = DictGetLen(cc->global_env,funcall->fname->data,funcall->fname->len);
     funarg = funparam = params = NULL;
 
+    /* This should exist on the AST */
+    if (fun) {
+        flags |= FUN_EXISTS;
+        if (fun->kind == AST_EXTERN_FUNC) {
+            flags |= FUN_EXTERN;
+        }
+        if (fun->type->has_var_args) {
+            flags |= FUN_VARARG;
+        }
+    }
+    /* Extern functions with variable argument lengths need to be 
+     * interoperable with c */
+
     var_arg_start = -1;
     argc = 0;
-    if (fun && fun->kind != AST_EXTERN_FUNC && fun->type->has_var_args) {
+    if (flags & (FUN_EXISTS|FUN_VARARG) && !(flags & FUN_EXTERN)) {
         ListForEach(fun->params) {
             var_arg_start++;
             arg = it->value;
@@ -1206,7 +1224,7 @@ void AsmPrepFuncCallArgs(Cctrl *cc, aoStr *buf, Ast *funcall) {
 
     /* Get the function parameters, either from the function call or the 
      * function definition. Try to get them from the definition first */
-    if (fun) {
+    if (flags & FUN_EXISTS) {
         if (fun->params != fun->params->next) {
             params = fun->params;
             funparam =  params->next;
@@ -1232,6 +1250,7 @@ void AsmPrepFuncCallArgs(Cctrl *cc, aoStr *buf, Ast *funcall) {
         if (funarg != NULL) {
             tmp = funarg->value;
             if (tmp->kind == AST_PLACEHOLDER) {
+                loggerDebug("place holder: %s\n",AstToString(funparam->value));
                 tmp = ((Ast *)funparam->value)->declinit;
                 if (tmp == NULL) {
                     loggerPanic("Default parameter not provided for function call: %s()\n",
@@ -1251,7 +1270,10 @@ void AsmPrepFuncCallArgs(Cctrl *cc, aoStr *buf, Ast *funcall) {
         /**
          * @SystemV - this below is incompatible
          * our var args are all placed on the stack after 'argc' */
-        if (var_arg_start == argc) {
+        if (flags & FUN_VARARG && 
+            !(flags & FUN_EXTERN) && 
+            var_arg_start == argc)
+        {
             ListAppend(stack_args,tmp);
             stack_cnt++;
         } else if (AstIsFloatType(tmp->type)) {
