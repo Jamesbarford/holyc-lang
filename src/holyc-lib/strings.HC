@@ -230,7 +230,7 @@ public _extern _TOUPPER U8 ToUpper(U8 ch);
 
 public U8 *StrNCpy(U8 *buf, I64 len)
 {
-  U8 *str = MAlloc(sizeof(U8)*len);
+  U8 *str = MAlloc(sizeof(U8)*len+1);
   MemCpy(str,buf,len);
   str[len] = '\0';
   return str;
@@ -342,11 +342,8 @@ U0 OutStr(U8 *instr,U8 **_buf,U8 **_dst,I64 len,I64 flags)
   } else {
     for (j=0;j<len-i;j++)
       SPutChar(&dst,CH_SPACE,_buf);
-    for (j=len-i;j<len;j++) {
-        SPutChar(_dst,*instr++,_buf);
-      //*dst++ = *instr++;
-    }
-    //*_dst = dst;
+    for (j=len-i;j<len;j++)
+      SPutChar(_dst,*instr++,_buf);
   }
 }
 
@@ -613,7 +610,7 @@ U8 *StrPrintJoin(U8 *_dst, U8 *fmt,I64 argc,I64 *argv)
 
       switch (*fmt++) {
         case '%': {
-          SPutChar(&ptr,*fmt,&dst);
+          SPutChar(&ptr,'%',&dst);
           break;
         }
 

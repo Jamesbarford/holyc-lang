@@ -105,7 +105,6 @@ public Bool FileWrite(U8 *filename, U8 *buf, I64 size,
       close(fd);
       return FALSE;
     }
-
     buf += nwritten;
     towrite -= nwritten;
   }

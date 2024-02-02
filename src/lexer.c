@@ -328,7 +328,6 @@ static void lexSkipCodeComment(lexer *l) {
     if (*l->ptr == '/') {
         while (*l->ptr != '\0') {
             if (*l->ptr == '\n') {
-                l->lineno++;
                 break;
             }
             l->ptr++;

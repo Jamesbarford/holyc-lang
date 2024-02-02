@@ -43,7 +43,7 @@ void getASMFileName(mccOptions *opts, char *file_name) {
         }
     }
 
-    printf("%s\n",file_name);
+    fprintf(stderr,"%s\n",file_name);
     if (slashptr == NULL || dotptr == NULL) {
         loggerPanic("Failed to extract filename\n");
     }
@@ -73,7 +73,7 @@ void execGcc(char *filename, aoStr *asmbuf, aoStr *cmd) {
 
 int writeAsmToTmp(aoStr *asmbuf) {
     int fd;
-    ssize_t written;
+    ssize_t written = 0;
     size_t towrite = 0;
     char *ptr;
     ptr = asmbuf->data;
@@ -96,7 +96,6 @@ int writeAsmToTmp(aoStr *asmbuf) {
             loggerPanic("Failed to create file for intermediary assembly: %s\n",
                     strerror(errno));
         }
-        printf("%ld\n",written);
         towrite -= written;
         ptr += written;
     }

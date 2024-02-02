@@ -315,11 +315,11 @@ public U0 StrMapSetFreeKey(StrMap *map, U0 (*_free_key)(U0 *key));
 public U0 StrMapRelease(StrMap *map);
 public U0 StrMapResize(StrMap *map, U64 size);
 
-U64 StrMapHashFunction(U8 *key, U64 mask)
-{ // Donald Knuth hashfunction 
+U64 StrMapHashFunction(U8 *key, I64 key_len, U64 mask)
+{ 
   U64 hash = 0;
-  while (*key) {
-   hash = ((hash<<5) ^ (hash >> 27)) ^ *key++;
+  for (I64 i = 0; i < key_len; ++i) {
+    hash = ((hash << 5) - hash) + key[i];
   }
   return hash & mask;
 }
@@ -357,15 +357,18 @@ StrMapNode *StrMapNodeNew(U8 *key, I64 key_len, U0 *value)
   return n;
 }
 
-static U64 StrMapGetNextIdx(StrMap *map, U8 *key, Bool *_is_free)
+static U64 StrMapGetNextIdx(StrMap *map, U8 *key, I64 key_len, Bool *_is_free)
 {// Finds the next avalible slot and marks it in the bit vector as set
   U64 mask = map->mask;
-  U64 idx = StrMapHashFunction(key,mask);
+  U64 idx = StrMapHashFunction(key,key_len,mask);
   U64 probe = 1;
   StrMapNode *cur;
   *_is_free = FALSE;
   while ((cur = map->entries[idx]) != NULL) {
-    if (cur->key == NULL || !StrNCmp(cur->key,key,cur->key_len)) {
+    if (cur->key == NULL) {
+      *_is_free = FALSE;
+      return idx;
+    } else if (!StrNCmp(cur->key,key,cur->key_len)) {
       *_is_free = FALSE;
       return idx;
     }
@@ -432,7 +435,7 @@ public Bool StrMapResize(StrMap *map, U64 size)
       if (old) {
         U8 *key = old->key;
         if (key != NULL) {
-          U64 idx = StrMapGetNextIdx(map,key,&is_free);
+          U64 idx = StrMapGetNextIdx(map,key,old->key_len,&is_free);
           new_entries[idx] = old;
           new_indexes->entries[new_indexes->len++] = idx;
         } else {
@@ -450,6 +453,7 @@ public Bool StrMapResize(StrMap *map, U64 size)
 auto StrMapSet(StrMap *map, U8 *key, U0 *value)
 {
   Bool is_free;
+  U64 mask = map->mask;
 
   if (map->size >= map->threashold) {
     if (!StrMapResize(map)) {
@@ -459,7 +463,8 @@ auto StrMapSet(StrMap *map, U8 *key, U0 *value)
   }
 
   I64 key_len = StrLen(key);
-  U64 idx = StrMapGetNextIdx(map,key,&is_free);
+
+  U64 idx = StrMapGetNextIdx(map,key,key_len,&is_free);
   if (is_free) {
     auto n = StrMapNodeNew(key,key_len,value); 
     map->entries[idx] = n;
@@ -485,7 +490,7 @@ public Bool StrMapDelete(StrMap *map, U8 *key)
   StrMapNode **entries = map->entries;
   StrMapNode *cur;
   mask = map->mask;
-  idx = StrMapHashFunction(key,mask);
+  idx = StrMapHashFunction(key,len,mask);
   probe = 1;
   U0 (*free_value)(U0 *_val) = map->_free_value;
   U0 (*free_key)(U0 *_key) = map->_free_key;
@@ -512,7 +517,7 @@ public U0 *StrMapGet(StrMap *map, U8 *key)
 
   mask = map->mask;
   probe = 1;
-  idx = StrMapHashFunction(key,mask);
+  idx = StrMapHashFunction(key,len,mask);
   while ((cur = entries[idx])) {
     if (cur->key == NULL) {
       return NULL;
@@ -552,7 +557,7 @@ public Bool StrMapValueIter(StrMap *map, I64 *_idx, U0 **_value)
   return FALSE;
 }
 
-public Bool StrMapKeyIter(StrMap *map, I64 *_idx, U8 *_key)
+public Bool StrMapKeyIter(StrMap *map, I64 *_idx, U8 **_key)
 {
   StrMapNode *node;
   if (StrMapIter(map,_idx,&node)) {
