@@ -74,14 +74,14 @@ U0 NowDateTimeStruct(CDateStruct *_ds)
 
   _ds->sec10000 = _tv.tv_usec/100;
   _ds->sec100 = _tv.tv_usec/10000;
-  _ds->sec  = static_cast<U64>(ptm->tm_sec);
-  _ds->min  = static_cast<U64>(ptm->tm_min);
-  _ds->hour = static_cast<U64>(ptm->tm_hour);
-  _ds->year = static_cast<U64>(ptm->tm_year);
-  _ds->mon  = static_cast<U64>(ptm->tm_mon);
+  _ds->sec  = cast<U64>(ptm->tm_sec);
+  _ds->min  = cast<U64>(ptm->tm_min);
+  _ds->hour = cast<U64>(ptm->tm_hour);
+  _ds->year = cast<U64>(ptm->tm_year);
+  _ds->mon  = cast<U64>(ptm->tm_mon);
   _ds->mon += 1;
-  _ds->day_of_week = static_cast<U64>(ptm->tm_wday);
-  _ds->day_of_mon = static_cast<U64>(ptm->tm_mday);
+  _ds->day_of_week = cast<U64>(ptm->tm_wday);
+  _ds->day_of_mon = cast<U64>(ptm->tm_mday);
   _ds->year += 1900;
 }
 

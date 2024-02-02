@@ -54,7 +54,7 @@ static LexerTypes lexer_types[] = {
     {"defined", KW_DEFINED},
     {"undef", KW_UNDEF},
 
-    {"static_cast", KW_STATIC_CAST},
+    {"cast", KW_CAST},
     {"sizeof", KW_SIZEOF},
     {"return", KW_RETURN},
     {"inline", KW_INLINE},
@@ -254,7 +254,7 @@ char *lexemeToString(lexeme *tok) {
                 case KW_ATOMIC:      aoStrCatPrintf(str,"atomic");  break;
                 case KW_DEFINE:      aoStrCatPrintf(str,"define");  break;
                 case KW_INCLUDE:     aoStrCatPrintf(str,"include"); break;
-                case KW_STATIC_CAST: aoStrCatPrintf(str,"static_cast"); break;
+                case KW_CAST:        aoStrCatPrintf(str,"cast"); break;
                 case KW_SIZEOF:      aoStrCatPrintf(str,"sizeof");  break;
                 case KW_RETURN:      aoStrCatPrintf(str,"return");  break;
                 case KW_SWITCH:      aoStrCatPrintf(str,"switch");  break;

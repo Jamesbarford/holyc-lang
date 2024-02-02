@@ -456,10 +456,29 @@ static Ast *ParseIdentifierOrFunction(Cctrl *cc, char *name, int len,
         int can_call_function)
 {
     Ast *ast;
-    lexeme *tok = CctrlTokenGet(cc);
+    AstType *type;
+    lexeme *tok,*peek;
+
+    tok = CctrlTokenGet(cc);
+    peek = CctrlTokenPeek(cc);
+
+    if (TokenPunctIs(tok,'(') && (type = CctrlGetKeyWord(cc,peek->start,peek->len)) != NULL) {
+        if ((ast = CctrlGetVar(cc, name, len)) == NULL) {
+            loggerPanic("Cannot find variable: %.*s line: %ld\n",
+                    len, name, cc->lineno);
+        }
+        type = ParseDeclSpec(cc);
+       // CctrlTokenGet(cc);
+        loggerWarning("postfix cast\n");
+        AstPrint(ast);
+        CctrlTokenExpect(cc,')');
+        return AstCast(ast,type);
+    }
+
     if (TokenPunctIs(tok,'(')) {
         return ParseFunctionArguments(cc,name,len,')');
     }
+
 
     CctrlTokenRewind(cc);
     if ((ast = CctrlGetVar(cc, name, len)) == NULL) {
@@ -492,8 +511,9 @@ static Ast *ParsePrimary(Cctrl *cc) {
 
     switch (tok->tk_type) {
     case TK_IDENT: {
-        return ParseIdentifierOrFunction(cc, tok->start, tok->len,
+        ast = ParseIdentifierOrFunction(cc, tok->start, tok->len,
                 can_call_function);
+        return ast;
     }
     case TK_I64: {
         ast = AstI64Type(tok->i64);
@@ -509,6 +529,7 @@ static Ast *ParsePrimary(Cctrl *cc) {
         return ast;
 
     case TK_PUNCT:
+        lexemePrint(tok);
         CctrlTokenRewind(cc);
         return NULL;
     case TK_EOF:
@@ -686,7 +707,6 @@ Ast *ParseExpr(Cctrl *cc, int prec) {
             continue;
         }
 
-
         compound_assign = ParseCompoundAssign(tok);
         if (TokenPunctIs(tok, '=') || compound_assign) {
             AssertLValue(LHS,cc->lineno);
@@ -712,7 +732,7 @@ Ast *ParseExpr(Cctrl *cc, int prec) {
     }
 }
 
-static Ast *ParseStaticCast(Cctrl *cc) {
+static Ast *ParseCast(Cctrl *cc) {
     Ast *ast;
     AstType *cast_type;
 
@@ -785,6 +805,10 @@ Ast *ParsePostFixExpr(Cctrl *cc) {
             return ast;
         }
 
+        if (TokenPunctIs(tok,'(')) {
+            loggerWarning("YES\n");
+        }
+
         if (TokenPunctIs(tok,'.')) {
             ast = ParseGetClassField(cc,ast);
             continue;
@@ -832,8 +856,8 @@ Ast *ParseUnaryExpr(Cctrl *cc) {
 
     if (tok->tk_type == TK_KEYWORD) {
         switch (tok->i64) {
-            case KW_SIZEOF:      return ParseSizeof(cc);
-            case KW_STATIC_CAST: return ParseStaticCast(cc);
+            case KW_SIZEOF: return ParseSizeof(cc);
+            case KW_CAST:   return ParseCast(cc);
             default:
                 loggerPanic("Unexpected keyword: %.*s while parsing unary expression at line: %d\n",
                         tok->len,tok->start,tok->line);

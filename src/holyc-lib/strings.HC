@@ -120,43 +120,6 @@ _STRCMP::
     LEAVE
     RET
 
-/* This copies over 8 bytes at a time up until RCX is not a multiple of 8 */
-_STRNCPY_OPTIMIZED::
-    PUSHQ   RBP
-    MOVQ    RBP, RSP
-    MOVQ    RCX, RDX
-    TEST    RDI, RDI
-    JZ      @@09
-    TEST    RSI, RSI
-    JZ      @@10
-
-@@12:
-    CMP     RCX, 8
-    JL      @@11
-    MOVQ    RAX, [RSI]
-    MOVQ    [RDI], RAX
-    ADDQ    RSI, 8
-    ADDQ    RDI, 8
-    SUBQ    RCX, 8
-    JMP     @@12
-
-@@11:
-    TEST    RCX, RCX
-    JZ      @@09
-    LODSB
-    STOSB
-    TEST    AL, AL
-    JZ      @@09
-    SUBQ    RCX,1
-    JMP     @@11
-
-@@10:
-    MOV     AL, 0
-    REP     STOSB
-@@09:
-    LEAVE
-    RET
-
 _STRLEN_FAST::
     MOVQ  RSI, RDI
     XOR   RAX, RAX
@@ -171,11 +134,8 @@ _STRLEN_FAST::
 _STRCPY:: 
 	PUSH	RBP
 	MOVQ    RBP,RSP
-    SUBQ    RSP,16
-	MOVQ    RDI, -8[RBP]
 	TEST    RDI,RDI
 	JZ      @@15
-	MOVQ    RSI, -16[RBP]
 	TEST    RSI, RSI
 	JNZ     @@05
 	XOR     RAX,RAX
@@ -223,7 +183,6 @@ public _extern _STRLEN_FAST U64 StrLen(U8 *buf);
 public _extern _STRNCMP I64 StrNCmp(U8 *s1, U8 *s2, I64 len);
 public _extern _STRNICMP I64 StrNICmp(U8 *s1, U8 *s2, I64 len);
 public _extern _STRCMP I64 StrCmp(U8 *s1, U8 *s2);
-// public _extern _STRNCPY_OPTIMIZED U8 StrNCpy(U8 *s1, I64 len);
 public _extern _STRCPY U0 StrCpy(U8 *dst, U8 *src);
 public _extern _TOLOWER U8 ToLower(U8 ch);
 public _extern _TOUPPER U8 ToUpper(U8 ch);
@@ -591,7 +550,7 @@ U8 *StrPrintJoin(U8 *_dst, U8 *fmt,I64 argc,I64 *argv)
       }
       if (*fmt == '*') {
         fmt++;
-        tlen = static_cast<U64>(argv[sp++]);
+        tlen = cast<U64>(argv[sp++]);
       }
       dec_len = -1;
       if (*fmt == '.') {
@@ -615,7 +574,7 @@ U8 *StrPrintJoin(U8 *_dst, U8 *fmt,I64 argc,I64 *argv)
         }
 
         case 'Q': {
-          strarg = static_cast<U8 *>(argv[sp++]);
+          strarg = cast<U8 *>(argv[sp++]);
           strarg = MPrintQ(strarg,flags);
           OutStr(strarg,&dst,&ptr,tlen,flags);
           Free(strarg);
@@ -623,7 +582,7 @@ U8 *StrPrintJoin(U8 *_dst, U8 *fmt,I64 argc,I64 *argv)
         }
 
         case 'T': {
-          strarg = static_cast<U8 *>(argv[sp++]);
+          strarg = cast<U8 *>(argv[sp++]);
           strarg = MPrintTime(strarg);
           OutStr(strarg,&dst,&ptr,tlen,flags);
           Free(strarg);
@@ -631,7 +590,7 @@ U8 *StrPrintJoin(U8 *_dst, U8 *fmt,I64 argc,I64 *argv)
         }
 
         case 'D': {
-          strarg = static_cast<U8 *>(argv[sp++]);
+          strarg = cast<U8 *>(argv[sp++]);
           strarg = MPrintDate(strarg);
           OutStr(strarg,&dst,&ptr,tlen,flags);
           Free(strarg);
@@ -700,13 +659,13 @@ U8 *StrPrintJoin(U8 *_dst, U8 *fmt,I64 argc,I64 *argv)
         }
 
         case 's': {
-          strarg = static_cast<U8 *>(argv[sp++]);
+          strarg = cast<U8 *>(argv[sp++]);
           OutStr(strarg,&dst,&ptr,dec_len,flags);
           break;
         }
         
         case 'F': { // a file
-          tmp = static_cast<U8 *>(argv[sp++]);
+          tmp = cast<U8 *>(argv[sp++]);
           strarg = FileRead(tmp,&len);
           OutStr(strarg,&dst,&ptr,dec_len,flags);
           Free(strarg);
@@ -714,7 +673,7 @@ U8 *StrPrintJoin(U8 *_dst, U8 *fmt,I64 argc,I64 *argv)
         }
 
         case 'c': {
-          uintarg = static_cast<U64>(argv[sp++]);
+          uintarg = cast<U64>(argv[sp++]);
           for (I64 i = 0; i < 8; ++i) {
             buf[i] = uintarg >> ((i*8) & 0xFF);
           }
@@ -724,7 +683,7 @@ U8 *StrPrintJoin(U8 *_dst, U8 *fmt,I64 argc,I64 *argv)
         }
 
         case 'C': {
-          uintarg = static_cast<U64>(argv[sp++]);
+          uintarg = cast<U64>(argv[sp++]);
           for (I64 i = 0; i < 8; ++i) {
             buf[i] = ToUpper(uintarg >> ((i*8) & 0xFF));
           }
@@ -735,11 +694,11 @@ U8 *StrPrintJoin(U8 *_dst, U8 *fmt,I64 argc,I64 *argv)
 
         case 'u':
         case 'd': {
-          uintarg = static_cast<U64>(argv[sp++]);
+          uintarg = cast<U64>(argv[sp++]);
           I64 idx = 0; /* Bit of a hack as I64ToStr will set this to TRUE which
                         * is 1. */
           if (*(fmt-1) == 'd') {
-            intarg = static_cast<I64>(uintarg);
+            intarg = cast<I64>(uintarg);
             if (intarg < 0) {
               idx = 1;
             }
@@ -783,7 +742,7 @@ U8 *StrPrintJoin(U8 *_dst, U8 *fmt,I64 argc,I64 *argv)
         case 'X': {
           U8arg = 'A';
 place_hex:
-          uintarg = static_cast<U64>(argv[sp++]);
+          uintarg = cast<U64>(argv[sp++]);
           len = 0;
 
           do {
@@ -815,7 +774,7 @@ place_hex:
         }
 
         case 'p': {
-          uintarg = static_cast<U64>(argv[sp++]);
+          uintarg = cast<U64>(argv[sp++]);
           len = StrIntToHex(buf,uintarg);
           OutStr(buf,&dst,&ptr,tlen,flags);
           break;
@@ -837,7 +796,7 @@ public U8 *StrMergeJoin(I64 argc, U64 *argv)
 {
   U8 *buf = MAlloc(256), *dst = buf;
   for (I64 i = 0; i < argc; ++i) {
-    OutStr(static_cast<U8 *>(argv[i]),&buf,&dst,0,0);
+    OutStr(cast<U8 *>(argv[i]),&buf,&dst,0,0);
   }
   return buf;
 }

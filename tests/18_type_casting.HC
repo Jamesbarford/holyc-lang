@@ -7,28 +7,28 @@ class Ptr
 
 I64 PtrCast(U0 *ptr)
 { // This mess shows we've casted from 'U0 *' to a 'Ptr *'
-  return static_cast<Ptr *>(ptr)->y == 11;
+  return cast<Ptr *>(ptr)->y == 11;
 }
 
 I64 I64ToI8Cast(I64 ll)
 { // down cast
-  return static_cast<I8>(ll) == 'h'; 
+  return cast<I8>(ll) == 'h'; 
 }
 
 I64 I64ToU8Cast(I64 ll)
 { // down cast
-  return static_cast<U8>(ll) == 0xFF; 
+  return ll(U8) == 0xFF; 
 }
 
 I64 U8ToI64(U8 ch)
 { // Upcast
-  return static_cast<I64>(ch) == 99;
+  return cast<I64>(ch) == 99;
 }
 
 I64 Varadic(...)
 {
   for (I64 i = 0; i < argc; ++i) {
-    static_cast<Ptr *>(argv[i])->x = 10;
+    (argv[i](Ptr *))->x = 10;
   }
 }
 

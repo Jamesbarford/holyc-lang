@@ -201,7 +201,7 @@ i64 stri64ToBuf(u8 *buf, i64 num) {
     if (v != I64_MIN) {
       v = -num;
     } else {
-      v = static_cast<u64>(I64_MAX)+1;
+      v = cast<u64>(I64_MAX)+1;
     }
   } else {
     v = num;
@@ -406,19 +406,19 @@ str *strCatVaPrintf(str *s, U8 *fmt, I64 argc, I64 *argv) {
 
         switch (ch) {
           case 's': { /* u8 string */
-            str_arg = static_cast<U8 *>(argv[sp++]);
+            str_arg = cast<U8 *>(argv[sp++]);
             strCatLen(s,str_arg,strlen(str_arg));
             break;
           }
 
           case 'S': { /* class str */
-            _s = static_cast<str *>(argv[sp++]);
+            _s = cast<str *>(argv[sp++]);
             strCatLen(s,_s->buf,_s->len);
             break;
           }
 
           case 'c': { /* char */
-            char_arg = static_cast<u8>(argv[sp++]);
+            char_arg = cast<u8>(argv[sp++]);
             strPutChar(s,char_arg);
             break;
           }
@@ -429,14 +429,14 @@ str *strCatVaPrintf(str *s, U8 *fmt, I64 argc, I64 *argv) {
           }
 
           case 'd': { /* signed number */
-            s_num = static_cast<i64>(argv[sp++]);
+            s_num = cast<i64>(argv[sp++]);
             arg_len = stri64ToBuf(ibuf,s_num);
             strCatLen(s,ibuf,arg_len);
             break;
           }
 
           case 'u': { /* unsigned number */
-            u_num = static_cast<u64>(argv[sp++]);
+            u_num = cast<u64>(argv[sp++]);
             arg_len = stru64ToBuf(ibuf,u_num);
             strCatLen(s,ibuf,arg_len);
             break;
@@ -444,14 +444,14 @@ str *strCatVaPrintf(str *s, U8 *fmt, I64 argc, I64 *argv) {
 
           case 'X':
           case 'x': { /* hex number */
-            u_num = static_cast<u64>(argv[sp++]);
+            u_num = cast<u64>(argv[sp++]);
             arg_len = strHexToBuf(ibuf,u_num);
             strCatLen(s,ibuf,arg_len);
             break;
           }
 
           case 'p': { /* memory */
-            u_num = static_cast<u64>(&(argv[sp++]));
+            u_num = cast<u64>(&(argv[sp++]));
             arg_len = strHexToBuf(ibuf,u_num);
             strCatLen(s,ibuf,arg_len);
             break;

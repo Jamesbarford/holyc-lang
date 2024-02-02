@@ -97,7 +97,7 @@ auto IntMapNew(U64 capacity)
   map->mask = capacity-1;
   map->size = 0;
   map->indexes = MapIndexNew(capacity);
-  map->threashold = static_cast<U64>(HT_LOAD * map->capacity);
+  map->threashold = cast<U64>(HT_LOAD * map->capacity);
   map->_free_value = NULL;
   map->entries = CAlloc(map->capacity * sizeof(IntMapNode *));
   return map;
@@ -201,7 +201,7 @@ public Bool IntMapResize(IntMap *map, U64 size)
   Free(old_entries);
   Free(map->indexes);
   map->indexes = new_indexes;
-  map->threashold = static_cast<U64>(map->capacity * HT_LOAD);
+  map->threashold = cast<U64>(map->capacity * HT_LOAD);
 }
 
 auto IntMapSet(IntMap *map, I64 key, U0 *value)
@@ -331,7 +331,7 @@ auto StrMapNew(U64 capacity)
   map->mask = capacity-1;
   map->size = 0;
   map->indexes = MapIndexNew(capacity);
-  map->threashold = static_cast<U64>(HT_LOAD * map->capacity);
+  map->threashold = cast<U64>(HT_LOAD * map->capacity);
   map->_free_value = NULL;
   map->_free_key = NULL;
   map->entries = CAlloc(map->capacity * sizeof(StrMapNode *));
@@ -447,7 +447,7 @@ public Bool StrMapResize(StrMap *map, U64 size)
   Free(old_entries);
   Free(map->indexes);
   map->indexes = new_indexes;
-  map->threashold = static_cast<U64>(map->capacity * HT_LOAD);
+  map->threashold = cast<U64>(map->capacity * HT_LOAD);
 }
 
 auto StrMapSet(StrMap *map, U8 *key, U0 *value)

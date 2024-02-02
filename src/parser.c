@@ -860,7 +860,7 @@ Ast *ParseStatement(Cctrl *cc) {
             /* It is possible to do: 
              * static_cast<Obj *>(_ptr)->x = 10;
              * */
-            case KW_STATIC_CAST: {
+            case KW_CAST: {
                 CctrlTokenRewind(cc);
                 ast = ParseExpr(cc,16);
                 tok = CctrlTokenGet(cc);

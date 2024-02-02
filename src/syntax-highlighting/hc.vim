@@ -8,7 +8,7 @@ syn keyword cConstant NULL FALSE TRUE EXIT_FAIL EXIT_OK I64_MIN I64_MAX U64_MAX 
 syn keyword cOperator public private sizeof
 syn clear cStatement
 syn keyword cKeyword return continue break goto
-syn keyword cCast static_cast
+syn keyword cCast cast
 syn keyword cClass class
 
 syn match cAsmKeyword "\<\asm\>"
