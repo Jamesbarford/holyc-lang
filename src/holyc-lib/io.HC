@@ -42,7 +42,7 @@
 /*XXX: Should create a script that converts a select amount of c-class to 
  * HC bindings so that they can be called and variance between operating systems
  * can be accounted for, i.e: the return value of `stat()` and flags */ 
-extern "c" I32 open(U8 *__nane, I32 flags, ...);
+extern "c" I32 open(U8 *__name, I32 flags, ...); 
 extern "c" I32 creat(U8 *__name, U16 __flags);
 extern "c" I32 fcntl(I32 __fd, I32 __flags, ...);
 extern "c" I32 close(I32 __fd);
@@ -93,8 +93,9 @@ public Bool FileWrite(U8 *filename, U8 *buf, I64 size,
 {
   I64 towrite = size, nwritten = 0;
   I32 fd;
+  I32 perms = 420;
 
-  if ((fd = open(filename,flags,438)) == -1) {
+  if ((fd = open(filename,flags,perms)) == -1) {
     return FALSE;
   }
 
@@ -104,7 +105,6 @@ public Bool FileWrite(U8 *filename, U8 *buf, I64 size,
       close(fd);
       return FALSE;
     }
-
     buf += nwritten;
     towrite -= nwritten;
   }

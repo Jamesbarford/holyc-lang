@@ -230,7 +230,7 @@ public _extern _TOUPPER U8 ToUpper(U8 ch);
 
 public U8 *StrNCpy(U8 *buf, I64 len)
 {
-  U8 *str = MAlloc(sizeof(U8)*len);
+  U8 *str = MAlloc(sizeof(U8)*len+1);
   MemCpy(str,buf,len);
   str[len] = '\0';
   return str;
@@ -315,11 +315,23 @@ U0 OutStr(U8 *instr,U8 **_buf,U8 **_dst,I64 len,I64 flags)
  // instr -> in string
  // _buf  -> the underlying buffer 
  // _dst  -> where the string will go
-  I64 i,j;
+  I64 i,j,size,dst_len;
+  U8 *buf,*dst;
   if (!instr)
     i=0;
   else
     i=StrLen(instr);
+  dst = *_dst;
+  buf = *_buf;
+  dst_len = dst-buf;
+  size = MSize(buf);
+
+  if (i >= (size - dst_len)) {
+    buf = ReAlloc(buf,((size*10)+i)*sizeof(U8));
+    *_buf = buf;
+    *_dst = buf + dst_len;
+    dst = *_dst;
+  }
   if (flags&PRTF_TRUNCATE && i>len)
     i=len;
   if (flags&PRTF_LEFT_JUSTIFY) {
@@ -329,11 +341,9 @@ U0 OutStr(U8 *instr,U8 **_buf,U8 **_dst,I64 len,I64 flags)
       SPutChar(_dst,CH_SPACE,_buf);
   } else {
     for (j=0;j<len-i;j++)
-      SPutChar(_dst,CH_SPACE,_buf);
-    for (j=len-i;j<len;j++) {
+      SPutChar(&dst,CH_SPACE,_buf);
+    for (j=len-i;j<len;j++)
       SPutChar(_dst,*instr++,_buf);
-    }
-    **_dst='\0';
   }
 }
 
@@ -445,6 +455,7 @@ I64 I64ToStr(U8 *buf, I64 num, Bool *_is_neg=NULL, I64 _len=5000)
   }
 
   buf[i] = '\0';
+  //StrReverse(dst, i);
   return i;
 }
 
@@ -469,7 +480,7 @@ U64 U64ToStr(U8 *dst, U64 num, I64 len=5000)
   }
 
   dst[i] = '\0';
-  StrReverse(dst, i);
+  //StrReverse(dst, i);
   return i;
 }
 
@@ -546,7 +557,7 @@ U8 *MPrintQ(U8 *ptr,I64 flags = 0)
   return buf;
 }
 
-U8 *StrPrintJoin(U8 *_dst=NULL, U8 *fmt,I64 argc,I64 *argv)
+U8 *StrPrintJoin(U8 *_dst, U8 *fmt,I64 argc,I64 *argv)
 {// @TempleOS - Not a 1:1 yet
   if (!fmt) return NULL;
   U64 uintarg, curlen = 0, memsize;
@@ -599,7 +610,7 @@ U8 *StrPrintJoin(U8 *_dst=NULL, U8 *fmt,I64 argc,I64 *argv)
 
       switch (*fmt++) {
         case '%': {
-          SPutChar(&ptr,*fmt,&dst);
+          SPutChar(&ptr,'%',&dst);
           break;
         }
 
@@ -824,22 +835,10 @@ place_hex:
 
 public U8 *StrMergeJoin(I64 argc, U64 *argv)
 {
-  U64 cap,len,full_len;
-  U8 *buf, *arg;
-  cap = 512;
-  buf = MAlloc(cap);
-  len = full_len = 0;
+  U8 *buf = MAlloc(256), *dst = buf;
   for (I64 i = 0; i < argc; ++i) {
-    arg = static_cast<U8 *>(argv[i]);
-    len = StrLen(arg);
-    if (full_len + len >= cap) {
-      cap = (cap * 2) + len; // massive;
-      buf = ReAlloc(buf,sizeof(U8)*cap);
-    }
-    MemCpy(buf+full_len,arg,len);
-    full_len+=len;
+    OutStr(static_cast<U8 *>(argv[i]),&buf,&dst,0,0);
   }
-  buf[full_len] = '\0';
   return buf;
 }
 

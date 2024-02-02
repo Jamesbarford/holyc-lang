@@ -110,7 +110,6 @@ int CompileToAst(Cctrl *cc, char *filepath, int lexer_flags) {
         ListAppend(code_list,src);
         l.ptr = src;
         l.lineno = 1;
-        loggerDebug("lexing: %s\n",file_path->data);
         next_tokens = lexToLexemes(cc->macro_defs,&l);
 
         if (!next_tokens || next_tokens->next == next_tokens) {

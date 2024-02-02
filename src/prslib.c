@@ -372,10 +372,14 @@ Ast *ParseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
         }
 
         if (param != NULL && param->kind == AST_VAR_ARGS) {
-            if (var_args == NULL) {
-                var_args = ListNew();
+            if (decl && decl->kind == AST_EXTERN_FUNC) {
+                ListAppend(argv,ast);
+            } else {
+                if (var_args == NULL) {
+                    var_args = ListNew();
+                }
+                ListAppend(var_args,ast);
             }
-            ListAppend(var_args,ast);
         } else {
             ListAppend(argv,ast);
         }

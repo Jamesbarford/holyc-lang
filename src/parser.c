@@ -1072,8 +1072,9 @@ Ast *ParseExternFunctionProto(Cctrl *cc, AstType *rettype, char *fname, int len)
                 "this will be defined elsewhere\n",
                 len,fname,tok->line);
     }
+    //AstRelease(ListPop(params));
     AstType *type = AstMakeFunctionType(rettype, AstParamTypes(params));
-    func = AstFunction(type,fname,len,params,NULL,NULL,has_var_args);
+    func = AstFunction(type,fname,len,params,NULL,NULL,0);
     func->kind = AST_EXTERN_FUNC;
     DictSet(cc->global_env,func->fname->data,func);
     return func;
