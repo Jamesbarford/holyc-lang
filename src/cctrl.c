@@ -185,9 +185,9 @@ lexeme *CctrlTokenGet(Cctrl *cc) {
 void CctrlTokenExpect(Cctrl *cc, long expected) {
     lexeme *tok = CctrlTokenGet(cc);
     if (!TokenPunctIs(tok, expected)) {
-        loggerPanic("Syntax error in on line %d: expected '%c' got: %s\n",
+        loggerPanic("Syntax error in on line %d: expected '%c' got: %.*s\n",
                 tok->line, (char)expected,
-                lexemeToString(tok));
+                tok->len, tok->start);
     }
 }
 

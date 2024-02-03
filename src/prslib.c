@@ -411,17 +411,14 @@ Ast *ParseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
     }
 
     if (!decl) {
-        if ((len == 6 && !strncmp(fname,"printf",6)) || 
-            (len == 8 && !strncmp(fname,"snprintf",8)) ||
-            (len == 7 && !strncmp(fname,"strtoll",7))) {
+        if ((len == 6 && !strncmp(fname,"printf",6))) {
             params = ListNew();
             rettype = ast_int_type;
             return AstFunctionCall(rettype,fname,len,argv,params);
         }
         loggerPanic("Function: %.*s() not defined at line: %ld\n",
                 len,fname,cc->lineno);
-        rettype = ast_int_type;
-        return AstFunctionCall(rettype,fname,len,argv,ListNew());
+ //       return AstFunctionCall(rettype,fname,len,argv,ListNew());
     }
 
     if (argv->next == argv) {
@@ -456,38 +453,37 @@ static Ast *ParseIdentifierOrFunction(Cctrl *cc, char *name, int len,
         int can_call_function)
 {
     Ast *ast;
-    AstType *type;
+    int is_lparen;
     lexeme *tok,*peek;
 
     tok = CctrlTokenGet(cc);
     peek = CctrlTokenPeek(cc);
+    is_lparen = TokenPunctIs(tok,'(');
 
-    if (TokenPunctIs(tok,'(') && (type = CctrlGetKeyWord(cc,peek->start,peek->len)) != NULL) {
+    if (!is_lparen) {
+        CctrlTokenRewind(cc);
         if ((ast = CctrlGetVar(cc, name, len)) == NULL) {
             loggerPanic("Cannot find variable: %.*s line: %ld\n",
                     len, name, cc->lineno);
         }
-        type = ParseDeclSpec(cc);
-       // CctrlTokenGet(cc);
-        loggerWarning("postfix cast\n");
-        AstPrint(ast);
-        CctrlTokenExpect(cc,')');
-        return AstCast(ast,type);
+        /* Function calls with no arguments are 'Function;' */
+        if (can_call_function && ast->kind == AST_FUNC) {
+            return AstFunctionCall(ast->type->rettype,ast->fname->data,ast->fname->len,ListNew(),ListNew());
+        }
+        return ast;
     }
 
-    if (TokenPunctIs(tok,'(')) {
+    /* Is a function call if the next char is '(' and the peek is not a type */
+    if (!CctrlIsKeyword(cc,peek->start,peek->len)) {
         return ParseFunctionArguments(cc,name,len,')');
     }
 
-
-    CctrlTokenRewind(cc);
+    /* Is a postfix typecast, need to grap the variable and 'ParsePostFixExpr' will do the cast */
     if ((ast = CctrlGetVar(cc, name, len)) == NULL) {
         loggerPanic("Cannot find variable: %.*s line: %ld\n",
                 len, name, cc->lineno);
     }
-    if (can_call_function && ast->kind == AST_FUNC) {
-        return AstFunctionCall(ast->type->rettype,ast->fname->data,ast->fname->len,ListNew(),ListNew());
-    }
+    CctrlTokenRewind(cc);
     return ast;
 }
 
@@ -529,7 +525,6 @@ static Ast *ParsePrimary(Cctrl *cc) {
         return ast;
 
     case TK_PUNCT:
-        lexemePrint(tok);
         CctrlTokenRewind(cc);
         return NULL;
     case TK_EOF:
@@ -686,6 +681,13 @@ Ast *ParseExpr(Cctrl *cc, int prec) {
             continue;
         }
 
+        if (TokenPunctIs(tok,'(')) {
+            AssertLValue(LHS,cc->lineno);
+            AstType *type = ParseDeclSpec(cc);
+            LHS = AstCast(LHS,type);
+            continue;
+        }
+
         if (TokenPunctIs(tok, TK_PLUS_PLUS) || TokenPunctIs(tok, TK_MINUS_MINUS)) {
             AssertLValue(LHS,cc->lineno);
             LHS = AstUnaryOperator(LHS->type, tok->i64, LHS);
@@ -775,7 +777,8 @@ static Ast *ParseSizeof(Cctrl *cc) {
 
 Ast *ParsePostFixExpr(Cctrl *cc) {
     Ast *ast;
-    lexeme *tok;
+    AstType *type;
+    lexeme *tok,*peek;
 
     /* Parse primary rightly or wrongly, amongst other things, either gets a 
      * variable or parses a function call. */
@@ -789,6 +792,7 @@ Ast *ParsePostFixExpr(Cctrl *cc) {
 
     while (1) {
         tok = CctrlTokenGet(cc);
+
         if (TokenPunctIs(tok,'[')) {
             /* XXX: something is wrong with the below however, if a pointer gets 
              * parsed as a binary expression it works, but does not for arrays.
@@ -799,26 +803,42 @@ Ast *ParsePostFixExpr(Cctrl *cc) {
             /* This is for normal arrays */
             if (ast->type->kind == AST_TYPE_ARRAY) {
                 ast = ParseSubscriptExpr(cc,ast);
+                if (TokenPunctIs(CctrlTokenPeek(cc),'(')) {
+                    continue;
+                } else {
+                    return ast;
+                }
+            }
+            peek = CctrlTokenPeek(cc);
+            if (TokenPunctIs(peek,'(')) {
+                continue;
+            } else {
+                CctrlTokenRewind(cc);
                 return ast;
             }
-            CctrlTokenRewind(cc);
-            return ast;
         }
 
-        if (TokenPunctIs(tok,'(')) {
-            loggerWarning("YES\n");
-        }
 
         if (TokenPunctIs(tok,'.')) {
             ast = ParseGetClassField(cc,ast);
             continue;
         }
 
-        /* XXX: something feels off about this however... it does work 
-         * A function pointer on a class */
-        if (TokenPunctIs(tok,'(') && ast->kind == AST_CLASS_REF) {
-            ast = ParseFunctionArguments(cc,ast->field,strlen(ast->field),')');
-            continue;
+        /* Postfix type cast OR function pointer on a class */
+        if (TokenPunctIs(tok,'(')) {
+            peek = CctrlTokenPeek(cc);
+            if (CctrlIsKeyword(cc,peek->start,peek->len)) {
+                type = ParseDeclSpec(cc);
+                CctrlTokenExpect(cc,')');
+                ast = AstCast(ast,type);
+                continue;
+            } else if (ast->kind == AST_CLASS_REF) { 
+                /* XXX: This is completely broken, a function pointer on a class 
+                 * should load the offset in assembly and then call the register 
+                 * that the offset was saved in. */
+                ast = ParseFunctionArguments(cc,ast->field,strlen(ast->field),')');
+                continue;
+            }
         }
 
         if (TokenPunctIs(tok,TK_ARROW)) {

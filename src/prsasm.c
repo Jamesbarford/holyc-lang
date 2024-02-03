@@ -127,15 +127,14 @@ void PrsAsmPunct(Cctrl *cc, lexeme *tok, aoStr *buf) {
             PrsAsmMem(cc,buf);
             break;
         case '-':
-            //aoStrPutChar(buf,'-');
             PrsAsmImm(cc,buf,tok);
             break;
         case '@':
             PrsAsmLabel(cc,buf);
             break;
         default:
-            loggerWarning("here  ");
             lexemePrint(tok);
+            loggerPanic("Unexpected character at line: %d\n", tok->line);
     }
 
     next = CctrlTokenPeek(cc);

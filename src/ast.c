@@ -1205,7 +1205,7 @@ void _AstToString(aoStr *str, Ast *ast, int depth) {
             Ast *ast_tmp;
             char *field_names[30];
             int field_name_count = 0;
-            aoStrCatPrintf(str, "<class_ref> %d\n", ast->type->size);
+            aoStrCatPrintf(str, "<class_ref>\n");
             AstType *field_type = DictGet(ast->cls->type->fields, ast->field);
 
             /* We only really want to print at the data type we are looking 
