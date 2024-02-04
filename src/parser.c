@@ -25,7 +25,6 @@ Ast *ParseVariableInitialiser(Cctrl *cc, Ast *var, long terminator_flags);
 Ast *ParseDecl(Cctrl *cc);
 Ast *ParseDeclOrStatement(Cctrl *cc);
 Ast *ParseCompoundStatement(Cctrl *cc);
-List *ParseParams(Cctrl *cc, char *fname, int len, long terminator, int *has_var_args);
 AstType *ParseClassDef(Cctrl *cc, int is_intrinsic);
 AstType *ParseUnionDef(Cctrl *cc);
 
@@ -138,12 +137,12 @@ List *ParseClassOrUnionFields(Cctrl *cc, aoStr *name,
         unsigned int (*computeSize)(List *), unsigned int *_size)
 {
     unsigned int size;
+    char *fnptr_name;
+    int fnptr_name_len;
     lexeme *tok, *tok_name;
     AstType *next_type, *base_type, *field_type;
     aoStr  *field_name;
     List *fields_list;
-    char *fnptr_name;
-    int fnptr_name_len;
 
     tok = CctrlTokenGet(cc);
 
@@ -200,8 +199,9 @@ List *ParseClassOrUnionFields(Cctrl *cc, aoStr *name,
                 field_name = aoStrDupRaw(tok_name->start,tok_name->len,
                         tok_name->len+5);
             } else {
-               next_type = ParseFunctionPointerType(cc,NULL,0,&fnptr_name,&fnptr_name_len,next_type);
-               field_name = aoStrDupRaw(fnptr_name,fnptr_name_len,fnptr_name_len);
+               next_type = ParseFunctionPointerType(cc,&fnptr_name,&fnptr_name_len,next_type);
+               field_name = aoStrDupRaw(fnptr_name,fnptr_name_len,
+                       fnptr_name_len+1);
             }
 
             field_type = AstMakeClassField(next_type, 0);
@@ -945,8 +945,7 @@ Ast *ParseCompoundStatement(Cctrl *cc) {
                     DictSet(cc->localenv,var->lname->data,var);
                 } else {
                     CctrlTokenGet(cc);
-                    var = ParseFunctionPointer(cc,cc->tmp_fname->data,
-                            cc->tmp_fname->len,next_type);
+                    var = ParseFunctionPointer(cc,next_type);
                     DictSet(cc->localenv,var->fname->data,var);
                 }
 
@@ -1065,7 +1064,7 @@ Ast *ParseExternFunctionProto(Cctrl *cc, AstType *rettype, char *fname, int len)
     lexeme *tok;
     cc->localenv = DictNewWithParent(cc->localenv);
 
-    params = ParseParams(cc,fname,len, ')', &has_var_args);
+    params = ParseParams(cc,')', &has_var_args);
     tok = CctrlTokenGet(cc);
     if (!TokenPunctIs(tok, ';')) {
         loggerPanic("extern %.*s() at line: %d cannot have a function body "
@@ -1083,7 +1082,7 @@ Ast *ParseFunctionOrDef(Cctrl *cc, AstType *rettype, char *fname, int len) {
     int has_var_args = 0;
     CctrlTokenExpect(cc,'(');
     cc->localenv = DictNewWithParent(cc->localenv);
-    List *params = ParseParams(cc,fname,len, ')', &has_var_args);
+    List *params = ParseParams(cc,')',&has_var_args);
     lexeme *tok = CctrlTokenGet(cc);
     if (TokenPunctIs(tok, '{')) {
         return ParseFunctionDef(cc,rettype,fname,len,params,has_var_args);
@@ -1131,8 +1130,7 @@ Ast *ParseAsmFunctionBinding(Cctrl *cc) {
     cc->localenv = DictNewWithParent(cc->localenv);
     CctrlTokenExpect(cc,'(');
 
-    params = ParseParams(cc, c_fname->data, c_fname->len,
-            ')', &has_var_args);
+    params = ParseParams(cc,')',&has_var_args);
 
     asm_func = AstAsmFunctionBind(
             AstMakeFunctionType(rettype, AstParamTypes(params)),

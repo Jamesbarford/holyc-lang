@@ -202,40 +202,34 @@ static void AstFreeFunctionDefaultParam(Ast *ast) {
 }
 
 Ast *AstFunctionPtrCall(AstType *type, char *fname, int len,
-     aoStr *owning_func, List *argv, List *paramtypes)
+     List *argv, List *paramtypes, Ast *ref)
 {
     Ast *ast = AstNew();
     ast->type = type;
     ast->kind = AST_FUNPTR_CALL;
     ast->fname = aoStrDupRaw(fname, len, len+3);
-    ast->owning_func = aoStrDup(owning_func);
     ast->args = argv;
+    ast->ref = ref;
     ast->paramtypes = paramtypes;
     return ast;
 }
 static void AstFreeFunctionPtrCall(Ast *ast) {
     /* paramtypes is a shared pointer */
     AstReleaseList(ast->args);
-    aoStrRelease(ast->owning_func);
     aoStrRelease(ast->fname);
     free(ast);
 }
 
-Ast *AstFunctionPtr(AstType *type, char *fname, int len, 
-        char *owning_func, int owning_func_len, List *params)
-{
+Ast *AstFunctionPtr(AstType *type, char *fname, int len, List *params) {
     Ast *ast = AstNew();
     ast->type = type;
     ast->kind = AST_FUNPTR;
-    ast->owning_func = aoStrDupRaw(owning_func,
-            owning_func_len, owning_func_len+3);  
     ast->fname = aoStrDupRaw(fname, len, len+3);
     ast->params = params;
     return ast;
 }
 static void AstFreeFunctionPtr(Ast *ast) {
     AstReleaseList(ast->params);
-    aoStrRelease(ast->owning_func);
     aoStrRelease(ast->fname);
     free(ast);
 }

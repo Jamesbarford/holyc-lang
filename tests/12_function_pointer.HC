@@ -66,6 +66,16 @@ Bool Test4()
   return FALSE;
 }
 
+Bool Test5()
+{ // You need to add a '&'
+  U0 (*fn)(U8 *arg) = &Identity;
+  auto _ptr = fn;
+  if (!strcmp(_ptr("hey"),"hey")) {
+    return TRUE;
+  }
+  return FALSE;
+}
+
 I64 Add(I64 x, I64 y)
 {
   return x + y;
@@ -79,13 +89,14 @@ I64 DoMaths(I64 (*mathfunc)(I64 a, I64 b), I64 x, I64 y)
 U0 Main()
 {
   "Test - Function pointers: ";
-  I64 correct = 0, tests = 4;
+  I64 correct = 0, tests = 5;
   I64 i = DoMaths(&Add,10,1);
 
   if (i == 11) correct++;
   if (Test2()) correct++;
   if (Test3()) correct++;
   if (Test4()) correct++;
+  if (Test5()) correct++;
   
   PrintResult(correct, tests);
   "====\n";
