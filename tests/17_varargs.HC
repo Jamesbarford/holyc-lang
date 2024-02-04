@@ -4,7 +4,7 @@ I64 Add(...)
 {
   I64 acc = 0, arg;
   for (I64 i = 0; i < argc; ++i) {
-    arg = static_cast<I64>(argv[i]);
+    arg = cast<I64>(argv[i]);
     acc += argv[i];
   }
   return acc;
@@ -14,7 +14,7 @@ I64 Arg2(I64 i1, ...)
 {
   I64 arg,acc = 0;
   for (I64 i = 0; i < argc; ++i) {
-    arg = static_cast<I64>(argv[i]);
+    arg = cast<I64>(argv[i]);
     acc += arg;
   }
   return i1+acc;
@@ -25,7 +25,7 @@ I64 Arg3(I64 i1, I64 i2, ...)
   I64 arg,acc;
   acc = 0;
   for (I64 i = 0; i < argc; ++i) {
-    arg = static_cast<I64>(argv[i]);
+    arg = cast<I64>(argv[i]);
     acc += argv[i];
   }
   return i1+i2+acc;
@@ -49,7 +49,7 @@ U8 *Concat(...)
   I64 len;
   len = 0;
   for (I64 i = 0; i < argc; ++i) {
-    arg = static_cast<U8*>(argv[i]);
+    arg = cast<U8*>(argv[i]);
     for (U8 *ptr = arg;*ptr;++ptr) {
       buf[len++] = *ptr;
     }

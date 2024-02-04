@@ -1,34 +1,45 @@
 #include "testhelper.HC"
 
+/**
+ * Type casting can be a postfix cast of a functional style `cast<TYPE>`.
+ * the result is the same.
+ */
+
 class Ptr
 {
   I64 x,y;
+  I64 (*fn)(I64 x);
 };
 
+I64 Add2(I64 x)
+{
+  return x + 2;
+}
+
 I64 PtrCast(U0 *ptr)
-{ // This mess shows we've casted from 'U0 *' to a 'Ptr *'
-  return static_cast<Ptr *>(ptr)->y == 11;
+{ // This shows we've casted from 'U0 *' to a 'Ptr *'
+  return ptr(Ptr *)->y == 11;
 }
 
 I64 I64ToI8Cast(I64 ll)
 { // down cast
-  return static_cast<I8>(ll) == 'h'; 
+  return cast<I8>(ll) == 'h'; 
 }
 
 I64 I64ToU8Cast(I64 ll)
 { // down cast
-  return static_cast<U8>(ll) == 0xFF; 
+  return ll(U8) == 0xFF; 
 }
 
 I64 U8ToI64(U8 ch)
 { // Upcast
-  return static_cast<I64>(ch) == 99;
+  return cast<I64>(ch) == 99;
 }
 
 I64 Varadic(...)
 {
   for (I64 i = 0; i < argc; ++i) {
-    static_cast<Ptr *>(argv[i])->x = 10;
+    argv[i](Ptr *)->x = 10;
   }
 }
 
@@ -39,18 +50,27 @@ Bool VaradicTest()
       *p3 = MAlloc(sizeof(Ptr)),
       *p4 = MAlloc(sizeof(Ptr));
   Varadic(p1,p2,p3,p4);
-  return p1->x == p2->x == p3->x == p4->x == 10;
+  return p1->x == 10 &&
+         p2->x == 10 &&
+         p3->x == 10 && 
+         p4->x == 10;
 }
+
+// XXX: function pointers on classes does not work yet
+//Bool CallingAFunctionPointer(U0 *ptr)
+//{
+//  Ptr *_ptr = cast<Ptr *>(ptr);
+//  _ptr->fn = &Add2;
+//  return _ptr->fn(5) == 7;
+//}
 
 U0 Main()
 {
-  "Test - Type casting: ";
-  I64 correct = 0, tests = 4;
+  "Test - Type casting:\n";
+  I64 correct = 0, tests = 5;
   Ptr *p = MAlloc(sizeof(Ptr));
   p->x = 10;
   p->y = 11;
-
-  VaradicTest();
 
   if (PtrCast(p)) ++correct;
   /* hello in hexidecimal */
@@ -58,6 +78,7 @@ U0 Main()
   if (U8ToI64(99)) ++correct;
   if (I64ToU8Cast(0xAAFF)) ++correct;
   if (VaradicTest()) ++correct;
+  //if (CallingAFunctionPointer()) ++correct;
 
   PrintResult(correct,tests);
   "=====\n";

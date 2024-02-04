@@ -50,7 +50,7 @@ U0 ListAppend(List *head, U0 *value)
 
 U0 *ListDeque(U0 *l)
 {
-  List *ll = static_cast<List *>(l);
+  List *ll = cast<List *>(l);
   if (ll->next == ll) {
     return NULL;
   }
@@ -78,7 +78,7 @@ U0 ListInsertValueBefore(List *ll, U0 *value)
 }
 
 U0 *ListPop(U0 *l) {
-  List *ll = static_cast<List *>(l);
+  List *ll = cast<List *>(l);
   if (ll->next == ll) {
     return NULL;
   }

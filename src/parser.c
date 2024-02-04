@@ -860,7 +860,7 @@ Ast *ParseStatement(Cctrl *cc) {
             /* It is possible to do: 
              * static_cast<Obj *>(_ptr)->x = 10;
              * */
-            case KW_STATIC_CAST: {
+            case KW_CAST: {
                 CctrlTokenRewind(cc);
                 ast = ParseExpr(cc,16);
                 tok = CctrlTokenGet(cc);
@@ -1072,7 +1072,6 @@ Ast *ParseExternFunctionProto(Cctrl *cc, AstType *rettype, char *fname, int len)
                 "this will be defined elsewhere\n",
                 len,fname,tok->line);
     }
-    //AstRelease(ListPop(params));
     AstType *type = AstMakeFunctionType(rettype, AstParamTypes(params));
     func = AstFunction(type,fname,len,params,NULL,NULL,0);
     func->kind = AST_EXTERN_FUNC;
