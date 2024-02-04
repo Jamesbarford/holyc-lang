@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "aostr.h"
 #include "ast.h"
 #include "cctrl.h"
 #include "lexer.h"
@@ -84,7 +85,6 @@ AstType *ParsePointerType(Cctrl *cc, AstType *type) {
 }
 
 AstType *ParseFunctionPointerType(Cctrl *cc,
-        char *owner_name, int owner_name_len,
         char **fnptr_name, int *fnptr_name_len, AstType *rettype)
 {
     int has_var_args;
@@ -100,22 +100,17 @@ AstType *ParseFunctionPointerType(Cctrl *cc,
     *fnptr_name_len = fname->len;
     CctrlTokenExpect(cc,')');
     CctrlTokenExpect(cc,'(');
-    params = ParseParams(cc,owner_name,owner_name_len,')',&has_var_args);
+    params = ParseParams(cc,')',&has_var_args);
     return AstMakeFunctionType(rettype,params);
 }
 
-/* XXX: this could to with a lick of paint */
-Ast *ParseFunctionPointer(Cctrl *cc, char *owning_func,
-        int owning_func_len, AstType *rettype)
-{
+Ast *ParseFunctionPointer(Cctrl *cc, AstType *rettype) {
     Ast *ast;
     char *fnptr_name;
     int fnptr_name_len;
     AstType *fnptr_type;
 
     fnptr_type = ParseFunctionPointerType(cc,
-            owning_func,
-            owning_func_len,
             &fnptr_name,
             &fnptr_name_len,
             rettype);
@@ -124,8 +119,6 @@ Ast *ParseFunctionPointer(Cctrl *cc, char *owning_func,
             fnptr_type,
             fnptr_name,
             fnptr_name_len,
-            owning_func,
-            owning_func_len,
             fnptr_type->params);
     return ast;
 }
@@ -139,7 +132,7 @@ Ast *ParseDefaultFunctionParam(Cctrl *cc, Ast *var) {
     return AstFunctionDefaultParam(var,init);
 }
 
-List *ParseParams(Cctrl *cc, char *fname, int len, long terminator,
+List *ParseParams(Cctrl *cc, long terminator,
         int *has_var_args)
 {
     List *params = ListNew();
@@ -182,7 +175,7 @@ List *ParseParams(Cctrl *cc, char *fname, int len, long terminator,
                 if (type->kind == AST_TYPE_ARRAY) {
                     type = AstMakePointerType(type->ptr);
                 }
-                var = ParseFunctionPointer(cc,fname,len,type);
+                var = ParseFunctionPointer(cc,type);
                 DictSet(cc->localenv,var->fname->data,var);
                 if (cc->tmp_locals) {
                     ListAppend(cc->tmp_locals, var);
@@ -338,30 +331,29 @@ static Ast *findFunctionDecl(Cctrl *cc, char *fname, int len) {
     return NULL;
 }
 
-/* Read function arguments for a function being called */
-Ast *ParseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
+List *ParseArgv(Cctrl *cc, Ast *decl, long terminator) {
     List *argv, *var_args = NULL, *params = NULL, *parameter = NULL; 
-    AstType *rettype;
-    Ast *ast, *decl, *param = NULL;
+    Ast *ast, *param = NULL;
     lexeme *tok;
 
-    decl = findFunctionDecl(cc,fname,len);
     if (decl) {
         if (decl->kind == AST_FUNPTR) {
             params = ((Ast *)decl)->type->params;
         } else {
             params = decl->params;
         }
-        rettype = decl->type->rettype;
     }
+
 
     argv = ListNew();
     tok = CctrlTokenPeek(cc);
-
     if (params) {
         parameter = params->next;
         param = parameter->value;
     }
+
+    argv = ListNew();
+    tok = CctrlTokenPeek(cc);
 
     while (tok && !TokenPunctIs(tok, terminator)) {
         ast = ParseExpr(cc,16);
@@ -410,6 +402,26 @@ Ast *ParseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
         ListMergeAppend(argv,var_args);
     }
 
+    if (argv->next == argv) {
+        CctrlTokenGet(cc);
+    }
+
+    return argv;
+}
+
+/* Read function arguments for a function being called */
+Ast *ParseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
+    List *argv, *params = NULL; 
+    AstType *rettype;
+    Ast *decl;
+
+    decl = findFunctionDecl(cc,fname,len);
+    if (decl) {
+        rettype = decl->type->rettype;
+    }
+
+    argv = ParseArgv(cc,decl,terminator);
+
     if (!decl) {
         if ((len == 6 && !strncmp(fname,"printf",6))) {
             params = ListNew();
@@ -418,25 +430,22 @@ Ast *ParseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
         }
         loggerPanic("Function: %.*s() not defined at line: %ld\n",
                 len,fname,cc->lineno);
- //       return AstFunctionCall(rettype,fname,len,argv,ListNew());
     }
 
     if (argv->next == argv) {
         params = ListNew();
-        /* move passed '(' as we have not parsed anything */
-        CctrlTokenGet(cc);
     }
+
 
     switch (decl->kind) {
         case AST_LVAR:
         case AST_FUNPTR:
-            return AstFunctionPtrCall(rettype,fname,len,
-                    cc->tmp_fname,argv,params);
+            return AstFunctionPtrCall(rettype,fname,len,argv,params,decl);
 
         case AST_ASM_FUNCDEF:
         case AST_ASM_FUNC_BIND:
-        return AstAsmFunctionCall(rettype,
-                aoStrDup(decl->asmfname), argv, params);
+            return AstAsmFunctionCall(rettype,
+                    aoStrDup(decl->asmfname),argv,params);
 
         case AST_EXTERN_FUNC:
         case AST_FUNC:
@@ -836,7 +845,15 @@ Ast *ParsePostFixExpr(Cctrl *cc) {
                 /* XXX: This is completely broken, a function pointer on a class 
                  * should load the offset in assembly and then call the register 
                  * that the offset was saved in. */
-                ast = ParseFunctionArguments(cc,ast->field,strlen(ast->field),')');
+                List *argv = ParseArgv(cc,ast,')');
+                //ast = ParseFunctionArguments(cc,ast->field,strlen(ast->field),')');
+                ast = AstFunctionPtrCall(
+                        ast->type->rettype,
+                        ast->field,
+                        strlen(ast->field),
+                        argv,
+                        ast->type->params,
+                        ast);
                 continue;
             }
         }

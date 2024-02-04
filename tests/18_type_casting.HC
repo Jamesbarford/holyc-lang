@@ -56,18 +56,23 @@ Bool VaradicTest()
          p4->x == 10;
 }
 
-// XXX: function pointers on classes does not work yet
-//Bool CallingAFunctionPointer(U0 *ptr)
-//{
-//  Ptr *_ptr = cast<Ptr *>(ptr);
-//  _ptr->fn = &Add2;
-//  return _ptr->fn(5) == 7;
-//}
+Bool CallingAFunctionPointer(U0 *ptr)
+{ // This is the most amount of casting possible to do
+  ptr(Ptr *)->fn = &Add2;
+  return ptr(Ptr *)->fn(5)(I32) == 7;
+}
+
+Bool CallingAFunctionPointerPart2(U0 *_ptr)
+{
+  Ptr *ptr = _ptr(Ptr *);
+  ptr->fn = &Add2;
+  return ptr->fn(5)(I32) == 7;
+}
 
 U0 Main()
 {
   "Test - Type casting:\n";
-  I64 correct = 0, tests = 5;
+  I64 correct = 0, tests = 7;
   Ptr *p = MAlloc(sizeof(Ptr));
   p->x = 10;
   p->y = 11;
@@ -78,7 +83,8 @@ U0 Main()
   if (U8ToI64(99)) ++correct;
   if (I64ToU8Cast(0xAAFF)) ++correct;
   if (VaradicTest()) ++correct;
-  //if (CallingAFunctionPointer()) ++correct;
+  if (CallingAFunctionPointer(p)) ++correct;
+  if (CallingAFunctionPointerPart2(p)) ++correct;
 
   PrintResult(correct,tests);
   "=====\n";

@@ -79,31 +79,6 @@ uint64_t ieee754(double _f64) {
            (fraction & ~(1ULL << 52));
 }
 
-Ast *AsmFindFunPtrsInOwner(Cctrl *cc, Ast *funptrcall) {
-    Ast *owner,*funparam;
-    owner = DictGetLen(cc->global_env,funptrcall->owning_func->data,
-            funptrcall->owning_func->len);
-    if (!owner || (owner->kind != AST_FUNC)) {
-        return NULL;
-    }
-
-    ListForEach(owner->params) {
-        funparam = it->value;
-        if (funparam->kind == AST_FUNPTR) {
-            return funparam;
-        }
-    }
-
-    ListForEach(owner->locals) {
-        funparam = it->value;
-        if (funparam->kind == AST_FUNPTR) {
-            return funparam;
-        }
-    }
-
-    return NULL;
-}
-
 /* This is a hacky, but seemingly functional way of me being able
  * to run this on Macos and Linux */
 char *AsmNormaliseFunctionName(char *fname) {
@@ -1323,6 +1298,24 @@ void AsmPrepFuncCallArgs(Cctrl *cc, aoStr *buf, Ast *funcall) {
         stack_pointer-=8;
     }
 
+    if (funcall->kind == AST_FUNPTR_CALL) {
+        switch (funcall->ref->kind) {
+            case AST_CLASS_REF:
+                AsmLoadClassRef(cc,buf,funcall->ref->cls,funcall->ref->type,0);
+                break;
+
+            case AST_FUNPTR:
+            case AST_LVAR:
+                AsmLLoad(buf,funcall->ref->type,funcall->ref->loff);
+                break;
+
+            case AST_GVAR:
+                AsmGLoad(buf,funcall->ref->type,funcall->ref->gname,0);
+                break;
+        }
+        aoStrCatPrintf(buf,"movq    %%rax,%%r11\n\t");
+    }
+
     stackoffset = AsmPlaceArgs(cc,buf,stack_args,1);
     AsmPlaceArgs(cc,buf,int_args,0);
     AsmPlaceArgs(cc,buf,float_args,0);
@@ -1335,12 +1328,7 @@ void AsmPrepFuncCallArgs(Cctrl *cc, aoStr *buf, Ast *funcall) {
     }
 
     if (funcall->kind == AST_FUNPTR_CALL) {
-        if ((tmp = AsmFindFunPtrsInOwner(cc,funcall)) == NULL) {
-            loggerPanic("Function pointer not found: %s %d\n",
-                    AstToString(funcall),funcall->loff);
-        }
-        aoStrCatPrintf(buf, "movq    %d(%%rbp), %%r8\n\t"
-                            "call    *%%r8\n\t", tmp->loff);
+        aoStrCatPrintf(buf, "call    *%%r11\n\t");
     } else {
         AsmCall(buf, funcall->fname->data);
     }

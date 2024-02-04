@@ -154,13 +154,15 @@ typedef struct Ast {
             /* Asm function binding */
             aoStr *asmfname;
             aoStr *fname;
-            aoStr *owning_func;
             List *args;
             List *paramtypes;
             /* Declaration */
             List *params;
             List *locals;
             Ast *body;
+            Ast *ref; /* for function pointers, a reference to the variable 
+                       * allows for keeping track of the offset when converting 
+                       * to assembly. */
             int has_var_args;
         };
 
@@ -282,9 +284,9 @@ Ast *AstFunction(AstType *rettype, char *fname, int len, List *params,
                  Ast *body, List *locals, int has_var_args);
 Ast *AstReturn(Ast *retval, AstType *rettype);
 Ast *AstFunctionPtr(AstType *type, char *fname, int len, 
-        char *owning_func, int owning_func_len, List *params);
+        List *params);
 Ast *AstFunctionPtrCall(AstType *type, char *fname, int len,
-        aoStr *owning_func, List *argv, List *paramtypes);
+        List *argv, List *paramtypes, Ast *ref);
 Ast *AstFunctionDefaultParam(Ast *var, Ast *init);
 Ast *AstVarArgs(void);
 
