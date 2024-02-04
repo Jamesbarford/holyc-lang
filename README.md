@@ -18,7 +18,7 @@ _An implementation of Terry A. Davis's HolyC_
 Full documentation for the language can be found here: https://holyc-lang.com/
 
 ## Introduction
-This compiler is built from scratch in c. Currently it is non optimising,
+This compiler is built from scratch in C. Currently it is non optimising,
 converting the AST to x86_64 assembly code which is fed into gcc to assemble.
 
 ## Compatability
@@ -32,19 +32,16 @@ libraries for strings, hashtables, io, maths etc... see ./src/holyc-lib/
 ## Differences
 - `auto` key word for type inference, an addition which makes it easier
   to write code.
-- `static_cast<type>` skill issue on my behalf, post-fix type casting
-  is something I've not yet tried.
+- `cast<type>` for casting as well as post-fix type casting.
+- `break` and `continue` allowed in loops.
 - You can call any libc code with `extern "c" <type> <function_name>`
 
 ## Bugs
 This is a non exhuastive list of things that are buggy
 - using `%f` for string formatting floats not work
-- `4.5==4.5` does not return `1` if you try and print it
-- `union` these are very broken
-- line number in error messages is always off and does not report the file
-- function pointers on a class are a bit iffy
+- line number in error messages is sometimes off and does not report the file
 - function pointers in a parameter list have to come at the end
-- Varaiable arguments are all passed on the stack
+- Variable arguments are all passed on the stack
 
 ## Inspirations & Resources:
 A lot of the assembly has been cobbled together by running `gcc -S -O0 <file>`
