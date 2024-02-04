@@ -321,7 +321,7 @@ static Ast *findFunctionDecl(Cctrl *cc, char *fname, int len) {
             return decl;
         }
     } else if (cc->localenv && (decl = DictGetLen(cc->localenv,fname,len)) != NULL) {
-        if (decl->kind == AST_FUNPTR) {
+        if (decl->kind == AST_FUNPTR || decl->kind == AST_LVAR) {
             return decl;
         }
     } else if ((decl = DictGetLen(cc->asm_funcs,fname,len)) != NULL) {
@@ -842,11 +842,7 @@ Ast *ParsePostFixExpr(Cctrl *cc) {
                 ast = AstCast(ast,type);
                 continue;
             } else if (ast->kind == AST_CLASS_REF) { 
-                /* XXX: This is completely broken, a function pointer on a class 
-                 * should load the offset in assembly and then call the register 
-                 * that the offset was saved in. */
                 List *argv = ParseArgv(cc,ast,')');
-                //ast = ParseFunctionArguments(cc,ast->field,strlen(ast->field),')');
                 ast = AstFunctionPtrCall(
                         ast->type->rettype,
                         ast->field,
