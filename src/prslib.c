@@ -635,7 +635,7 @@ Ast *ParseGetClassField(Cctrl *cc, Ast *cls) {
         loggerPanic("Property: %.*s does not exist on class\n", 
                 tok->len, tok->start);
     }
-    aoStr *field_name = aoStrDupRaw(tok->start, tok->len, tok->len+5);
+    aoStr *field_name = aoStrDupRaw(tok->start, tok->len);
     return AstClassRef(field, cls, aoStrMove(field_name));
 }
 

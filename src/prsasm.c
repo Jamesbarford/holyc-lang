@@ -210,7 +210,7 @@ Ast *PrsAsmToATT(Cctrl *cc) {
 
                     /* Just the function name in op1, this is so it can be 
                      * called in the c code. */
-                    curfunc = aoStrDupRaw(tok->start,tok->len,tok->len);
+                    curfunc = aoStrDupRaw(tok->start,tok->len);
                     /* Save the name for pasting labels */
                     cc->tmp_asm_fname = curfunc;
                     tok = CctrlTokenGet(cc);
@@ -218,13 +218,13 @@ Ast *PrsAsmToATT(Cctrl *cc) {
                     continue;
                 }
                 if (isbol) {
-                    op1 = aoStrDupRaw(tok->start,tok->len,tok->len+1);
+                    op1 = aoStrDupRaw(tok->start,tok->len);
                     isbol = 0;
                 } else {
                     if (count == 1) {
-                        op2 = aoStrDupRaw(tok->start,tok->len,tok->len+1);
+                        op2 = aoStrDupRaw(tok->start,tok->len);
                     } else {
-                        op3 = aoStrDupRaw(tok->start,tok->len,tok->len+1);
+                        op3 = aoStrDupRaw(tok->start,tok->len);
                     }
                 }
                 count++;

@@ -4,14 +4,15 @@
 
 #include "list.h"
 
-void ListInit(List *l) {
-    l->next = l->prev = l;
-    l->value = NULL;
+void ListInit(List *ll) {
+    ll->next = ll->prev = ll;
+    ll->value = NULL;
 }
 
 List *ListNew(void) {
     List *ll = malloc(sizeof(List));
-    ListInit(ll);
+    ll->next = ll->prev = ll;
+    ll->value = NULL;
     return ll;
 }
 
@@ -20,19 +21,9 @@ int ListEmpty(List *l) {
     return l->next == l;
 }
 
-void ListGenericAppend(void *head, void *next_ptr) {
-    List *_head = (List *)head;
-    List *tail = _head->prev;
-    List *node = (List *)next_ptr;
-    node->prev = tail;
-    node->next = _head;
-    tail->next = node;
-    _head->prev = node;
-}
-
 void ListAppend(List *head, void *value) {
-    List *tail = head->prev;
     List *node = ListNew();
+    List *tail = head->prev;
     node->value = value;
     node->prev = tail;
     node->next = head;
@@ -89,6 +80,7 @@ void *ListPop(void *l) {
 }
 
 void ListRelease(List *ll, void (*freeValue)(void *)) {
+    if (!ll) return;
     List *node = ll->next;
     List *next;
     while (node != ll) {

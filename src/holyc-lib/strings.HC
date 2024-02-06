@@ -505,7 +505,7 @@ U8 *MPrintQ(U8 *ptr,I64 flags = 0)
 	  if (ch>=CH_SHIFT_SPACE && ch!=0x7F)
 	    SPutChar(_dst,ch,_buf);
 	  else {
-	    StrPrint(buf2,"\x%02X",ch);
+	    StrPrint(buf2,"x%02X",ch);
 	    ptr2=buf2;
 	    while (*ptr2)
 	      SPutChar(_dst,*ptr2++,_buf);

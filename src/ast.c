@@ -133,7 +133,7 @@ Ast *AstLVar(AstType *type, char *name, int len) {
     Ast *ast = AstNew();
     ast->kind = AST_LVAR;
     ast->type = type;
-    ast->lname = aoStrDupRaw(name, len, len+3);
+    ast->lname = aoStrDupRaw(name, len);
     return ast;
 }
 static void AstFreeLVar(Ast *ast) {
@@ -145,9 +145,8 @@ Ast *AstGVar(AstType *type, char *name, int len, int local_file) {
     Ast *ast = AstNew();
     ast->kind = AST_GVAR;
     ast->type = type;
-    ast->gname = aoStrDupRaw(name, len, len+3);
+    ast->gname = aoStrDupRaw(name, len);
     ast->glabel = local_file ? AstMakeLabel() : ast->gname;
-    // ListAppend(ast_globals, ast);
     return ast;
 }
 static void AstFreeGVar(Ast *ast) {
@@ -160,7 +159,7 @@ static void AstFreeGVar(Ast *ast) {
 Ast *AstString(char *str, int len) {
     Ast *ast = AstNew();
     ast->kind = AST_STRING;
-    ast->sval = aoStrDupRaw(str,len, len+3);
+    ast->sval = aoStrDupRaw(str,len);
     ast->type = AstMakeArrayType(ast_u8_type, ast->sval->len + 1);
     ast->slabel = AstMakeLabel();
     return ast;
@@ -175,7 +174,7 @@ Ast *AstFunctionCall(AstType *type, char *fname, int len, List *argv, List *para
     Ast *ast = AstNew();
     ast->type = type;
     ast->kind = AST_FUNCALL;
-    ast->fname = aoStrDupRaw(fname, len, len+3);
+    ast->fname = aoStrDupRaw(fname, len);
     ast->args = argv;
     ast->paramtypes = paramtypes;
     return ast;
@@ -207,7 +206,7 @@ Ast *AstFunctionPtrCall(AstType *type, char *fname, int len,
     Ast *ast = AstNew();
     ast->type = type;
     ast->kind = AST_FUNPTR_CALL;
-    ast->fname = aoStrDupRaw(fname, len, len+3);
+    ast->fname = aoStrDupRaw(fname, len);
     ast->args = argv;
     ast->ref = ref;
     ast->paramtypes = paramtypes;
@@ -224,7 +223,7 @@ Ast *AstFunctionPtr(AstType *type, char *fname, int len, List *params) {
     Ast *ast = AstNew();
     ast->type = type;
     ast->kind = AST_FUNPTR;
-    ast->fname = aoStrDupRaw(fname, len, len+3);
+    ast->fname = aoStrDupRaw(fname, len);
     ast->params = params;
     return ast;
 }
@@ -241,7 +240,7 @@ Ast *AstFunction(AstType *type, char *fname, int len, List *params, Ast *body,
     ast->type = type;
     type->has_var_args = has_var_args;
     ast->kind = AST_FUNC;
-    ast->fname = aoStrDupRaw(fname, len, len+3);
+    ast->fname = aoStrDupRaw(fname, len);
     ast->params = params;
     ast->locals = locals;
     ast->body = body;
@@ -315,7 +314,7 @@ static void AstFreeCase(Ast *ast) {
 Ast *AstDest(char *name, int len) {
     Ast *ast = AstNew();
     ast->kind = AST_LABEL;
-    ast->sval= aoStrDupRaw(name,len,len+1);
+    ast->sval= aoStrDupRaw(name,len);
     ast->slabel = NULL;
     return ast;
 }
@@ -323,7 +322,7 @@ Ast *AstDest(char *name, int len) {
 Ast *AstJump(char *name, int len) {
     Ast *ast = AstNew();
     ast->kind = AST_JUMP;
-    ast->jump_label = aoStrDupRaw(name,len,len+1);
+    ast->jump_label = aoStrDupRaw(name,len);
     return ast;
 }
 static void AstFreeJump(Ast *ast) {
@@ -570,8 +569,6 @@ Ast *AstAsmFunctionBind(AstType *rettype, aoStr *asm_fname,
     ast->asmfname = asm_fname;
     ast->type = rettype;
     ast->params = params;
-    ast->locals = NULL;
-    ast->body = NULL;
     return ast;
 }
 static void AstFreeAsmFunctionBind(Ast *ast) {

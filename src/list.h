@@ -13,7 +13,6 @@ typedef struct List {
 void ListInit(List *l);
 List *ListNew(void);
 int ListEmpty(List *l);
-void ListGenericAppend(void *head, void *next_ptr);
 void ListAppend(List *head, void *value);
 void ListPrepend(List *head, void *value);
 void ListInsertBefore(List *ll, List *new_node);

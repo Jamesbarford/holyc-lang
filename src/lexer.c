@@ -1045,8 +1045,7 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
                                                builtin_root, ident->data);
                                 aoStrRelease(ident);
                             } else if (next.tk_type == TK_STR) {
-                                include_path = aoStrDupRaw(next.start, next.len,
-                                                           next.len + 2);
+                                include_path = aoStrDupRaw(next.start, next.len);
                             } else {
                                 loggerPanic(
                                         "Syntax is: #include \"<value>\" got: %s\n",
@@ -1068,8 +1067,7 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
                                 loggerPanic(
                                         "Syntax is: #define <TK_IDENT> <value>\n");
                             }
-                            ident = aoStrDupRaw(next.start, next.len,
-                                                next.len + 1);
+                            ident = aoStrDupRaw(next.start, next.len);
 
                             lex(l, &next);
                             copy = lexemeCopy(&next);

@@ -97,7 +97,7 @@ int CompileToAst(Cctrl *cc, char *filepath, int lexer_flags) {
 
     lexerInit(&l,NULL);
 
-    ListAppend(l.files,aoStrDupRaw(filepath,strlen(filepath),0));
+    ListAppend(l.files,aoStrDupRaw(filepath,strlen(filepath)));
     l.flags |= lexer_flags;
 
     while ((file_path = ListPop(l.files)) != NULL) {

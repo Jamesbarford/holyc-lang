@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "aostr.h"
+#include "util.h"
 
 aoStr *aoStrAlloc(size_t capacity) {
     aoStr *buf = malloc(sizeof(aoStr));
@@ -123,29 +124,25 @@ int aoStrWouldOverflow(aoStr *buf, size_t additional) {
 
 /* Grow the capacity of the string buffer by `additional` space */
 int aoStrExtendBuffer(aoStr *buf, unsigned int additional) {
-    size_t new_capacity = buf->capacity + additional;
+    size_t new_capacity = (buf->capacity*2) + additional;
     if (new_capacity <= buf->capacity) {
         return -1;
     }
 
-    char *_str = buf->data;
-    char *tmp = (char *)realloc(_str, new_capacity);
-
+    char *tmp = (char *)realloc(buf->data, new_capacity);
     if (tmp == NULL) {
         return 0;
     }
     buf->data = tmp;
-
-    aoStrSetCapacity(buf, new_capacity);
-
+    buf->capacity = new_capacity;
     return 1;
 }
 
 /* Only extend the buffer if the additional space required would overspill the
  * current allocated capacity of the buffer */
 static int aoStrExtendBufferIfNeeded(aoStr *buf, size_t additional) {
-    if ((buf->len + 1 + additional) >= buf->capacity) {
-        return aoStrExtendBuffer(buf, additional);
+    if ((buf->len + additional + 1) >= buf->capacity) {
+        return aoStrExtendBuffer(buf, additional+1);
     }
     return 0;
 }
@@ -239,11 +236,13 @@ aoStr *aoStrFromString(char *s, size_t len) {
     return str;
 }
 
-aoStr *aoStrDupRaw(char *s, size_t len, size_t capacity) {
+aoStr *aoStrDupRaw(char *s, size_t len) {
+    size_t capacity = len+10;
     aoStr *dupe = aoStrAlloc(capacity);
     memcpy(dupe->data, s, len);
-    aoStrSetLen(dupe, len);
-    aoStrSetCapacity(dupe, capacity);
+    dupe->len = len;
+    dupe->data[len] = '\0';
+    dupe->capacity = capacity;
     return dupe;
 }
 
@@ -256,7 +255,7 @@ void aoStrReset(aoStr *buf) {
 
 /* Create a string view */
 aoStr *aoStrView(char *s, size_t len) {
-    return aoStrDupRaw(s, len, len + 10);
+    return aoStrDupRaw(s, len);
 }
 
 void aoStrViewRelease(aoStr *buf) {
@@ -283,7 +282,7 @@ aoStr *aoStrDup(aoStr *buf) {
 }
 
 void aoStrCatLen(aoStr *buf, const void *d, size_t len) {
-    aoStrExtendBufferIfNeeded(buf, len * 2);
+    aoStrExtendBufferIfNeeded(buf, len);
     memcpy(buf->data + buf->len, d, len);
     buf->len += len;
     buf->data[buf->len] = '\0';
@@ -306,10 +305,12 @@ void aoStrCatPrintf(aoStr *b, const char *fmt, ...) {
     va_start(ap, fmt);
 
     /* Probably big enough */
-    size_t min_len = 512;
-    size_t bufferlen = strlen(fmt) * 3;
-    bufferlen = bufferlen > min_len ? bufferlen : min_len;
-    size_t len = 0;
+    size_t fmt_len = strlen(fmt);
+    size_t bufferlen = 1024;
+    if (fmt_len > bufferlen) {
+        bufferlen = fmt_len;
+    }
+    int len = 0;
     char *buf = (char *)malloc(sizeof(char) * bufferlen);
 
     while (1) {
@@ -317,9 +318,15 @@ void aoStrCatPrintf(aoStr *b, const char *fmt, ...) {
         len = vsnprintf(buf, bufferlen, fmt, copy);
         va_end(copy);
 
-        if (len >= bufferlen) {
+        if (len < 0) {
             free(buf);
-            bufferlen = len + 1;
+            return;
+        }
+
+        if (((size_t)len) >= bufferlen) {
+            loggerDebug("got here\n");
+            free(buf);
+            bufferlen = ((size_t)len) + 1;
             buf = malloc(bufferlen);
             if (buf == NULL) {
                 return;
@@ -493,11 +500,11 @@ aoStr **aoStrSplit(char *to_split, char delimiter, int *count) {
     start = end = 0;
     arrsize = 0;
 
-    if ((outArr = malloc(sizeof(char) * memslot)) == NULL)
+    if ((outArr = malloc(sizeof(aoStr *) * memslot)) == NULL)
         return NULL;
 
     while (*ptr != '\0') {
-        if (memslot < arrsize + 5) {
+        if (arrsize + 1 >= memslot) {
             memslot *= 5;
             if ((tmp = (aoStr **)realloc(outArr, sizeof(aoStr) * memslot)) ==
                 NULL)
@@ -506,8 +513,7 @@ aoStr **aoStrSplit(char *to_split, char delimiter, int *count) {
         }
 
         if (*ptr == delimiter) {
-            outArr[arrsize] = aoStrDupRaw(to_split + start, end - start,
-                                          end - start);
+            outArr[arrsize] = aoStrDupRaw(to_split + start, end - start);
             ptr++;
             arrsize++;
             start = end + 1;
@@ -519,7 +525,7 @@ aoStr **aoStrSplit(char *to_split, char delimiter, int *count) {
         ptr++;
     }
 
-    outArr[arrsize] = aoStrDupRaw(to_split + start, end - start, end - start);
+    outArr[arrsize] = aoStrDupRaw(to_split + start, end - start);
     arrsize++;
     *count = arrsize;
 

@@ -53,7 +53,7 @@ int aoStrCmp(aoStr *b1, aoStr *b2);
 int aoStrCaseCmp(aoStr *b1, aoStr *b2);
 void aoStrSlice(aoStr *buf, size_t from, size_t to, size_t size);
 aoStr *aoStrFromString(char *s, size_t len);
-aoStr *aoStrDupRaw(char *s, size_t len, size_t capacity);
+aoStr *aoStrDupRaw(char *s, size_t len);
 aoStr *aoStrDup(aoStr *buf);
 aoStr *aoStrMaybeDup(aoStr *buf);
 void aoStrReset(aoStr *buf);
