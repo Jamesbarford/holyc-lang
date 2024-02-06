@@ -11,7 +11,6 @@ aoStr *aoStrAlloc(size_t capacity) {
     aoStr *buf = malloc(sizeof(aoStr));
     buf->capacity = capacity + 10;
     buf->len = 0;
-    buf->offset = 0;
     buf->data = malloc(sizeof(char) * buf->capacity);
     return buf;
 }
