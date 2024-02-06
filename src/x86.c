@@ -100,7 +100,7 @@ void AsmRemovePreviousTab(aoStr *buf) {
 }
 
 char *AsmGetMov(AstType *type) {
-    if (type->is_intrinsic) {
+    if (type->kind == AST_TYPE_CLASS && type->is_intrinsic) {
         return "movq";
     }
     switch (type->size) {
@@ -114,7 +114,7 @@ char *AsmGetMov(AstType *type) {
 }
 
 char *AsmGetMovWithSign(AstType *type) {
-    if (type->is_intrinsic) {
+    if (type->kind == AST_TYPE_CLASS && type->is_intrinsic) {
         return "movq";
     }
     switch (type->size) {
@@ -126,7 +126,7 @@ char *AsmGetMovWithSign(AstType *type) {
             else                return "movzwl";
         case 4:
             if (type->issigned) return "movsl";
-            else                return "movq";
+            else                return "mov";
         case 8: return "movq";
         default:
             loggerPanic("Unsupported size: %d\n",type->size);
@@ -148,7 +148,7 @@ char *AsmGetPop(int size) {
 char *AsmGetPtrMove(int kind) {
     switch (kind) {
         case AST_TYPE_ARRAY: return "leaq";
-        default:             return "movq";
+        default:             return "mov";
     }
 }
 
@@ -273,9 +273,9 @@ void AsmGSave(aoStr *buf, char *name, AstType *type, int offset) {
 void AsmPlaceString(aoStr *buf, aoStr *str, int offset) {
     int i = 0;
     /* Place string on the stack character by character */
-    for (; i < aoStrLen(str); ++i) {
+    for (; i < str->len; ++i) {
         aoStrCatPrintf(buf,"movb   $%d, %d(%%rbp)\n\t",
-                (int)aoStrGetCharAt(str, i), 
+                (int)str->data[i], 
                 -(offset - i));
     }
     /* Place '\0' */
@@ -399,8 +399,9 @@ void AsmAssignDerefInternal(aoStr *buf, AstType *type, int offset) {
             AstKindToString(type->kind));
 
     aoStrCatPrintf(buf, "movq   (%%rax), %%rcx #OK mov\n\t");
-    reg = AsmGetIntReg(type, 'c');
     AsmPop(buf, "rcx");
+
+    reg = AsmGetIntReg(type, 'c');
     mov = AsmGetMov(type);
 
     if (type->kind == AST_TYPE_FLOAT) {
@@ -1527,10 +1528,11 @@ void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
                 aoStrCatPrintf(buf,"# deref not ptr start\n\t");
             } else if (result->kind == AST_TYPE_POINTER) {
                 reg = AsmGetIntReg(result,'a');
+                char *mov = AsmGetMov(result);
                 switch (result->ptr->kind) {
                     case AST_TYPE_CHAR:
                         aoStrCatPrintf(buf,"# deref char start\n\t");
-                        aoStrCatPrintf(buf,"movq   (%%%s), %%rax\n\t", reg);
+                        aoStrCatPrintf(buf,"%s   (%%%s), %%rax\n\t",mov, reg);
                         aoStrCatPrintf(buf,"# deref char end\n\t");
                         break;
                     case AST_TYPE_INT:
@@ -1941,8 +1943,8 @@ void AsmDataSection(Cctrl *cc, aoStr *buf) {
         ast = (Ast *)it->value;
         assert(ast->kind == AST_STRING);
 
-        label = aoStrGetData(ast->slabel);
-        str = aoStrGetData(ast->sval);
+        label = ast->slabel->data;
+        str = ast->sval->data;
         escaped = aoStrNew();
 
         ptr = str;

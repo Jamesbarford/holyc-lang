@@ -1128,7 +1128,6 @@ Ast *ParseAsmFunctionBinding(Cctrl *cc) {
     }
     c_fname = aoStrDupRaw(tok->start,tok->len);
     cc->localenv = DictNewWithParent(cc->localenv);
-    cc->tmp_locals = ListNew();
     CctrlTokenExpect(cc,'(');
 
     params = ParseParams(cc,')',&has_var_args);
@@ -1136,7 +1135,7 @@ Ast *ParseAsmFunctionBinding(Cctrl *cc) {
     asm_func = AstAsmFunctionBind(
             AstMakeFunctionType(rettype, AstParamTypes(params)),
             asm_fname,c_fname,params);
-    asm_func->locals = cc->tmp_locals;
+
     cc->localenv = NULL;
     /* Map a c function to an ASM function */
     DictSet(cc->asm_funcs,c_fname->data,asm_func);
@@ -1362,7 +1361,6 @@ void ParseToAst(Cctrl *cc) {
             if (!ListEmpty(cc->tmp_locals)) {
                 ListMergeAppend(cc->initaliser_locals,cc->tmp_locals);
             }
-            cc->tmp_locals = NULL;
         } else if (ast->kind != AST_FUN_PROTO) {
             ListAppend(cc->ast_list,ast);
         }
@@ -1371,6 +1369,7 @@ void ParseToAst(Cctrl *cc) {
         if (!tok) {
             break;
         }
+        cc->tmp_locals = NULL;
         cc->localenv = NULL;
     }
 }

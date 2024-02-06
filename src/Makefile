@@ -1,6 +1,6 @@
 TARGET := hcc 
 CC     := gcc
-CFLAGS := -O0 -ggdb -Wall -fsanitize=address
+CFLAGS := -O0 -ggdb -Wall
 OUT    := .
 
 LIB_SRC?=./holyc-lib
@@ -37,7 +37,7 @@ OBJS = $(OUT)/main.o \
 	   $(OUT)/lexer.o
 
 $(TARGET): $(OBJS)
-	$(CC) -o $(TARGET) $(OBJS) -lm -fsanitize=address
+	$(CC) -o $(TARGET) $(OBJS) -lm
 
 install-syntax-nvim:
 	cp $(SYNTAX)/hc.vim ~/.config/nvim/after/syntax/hc.vim
