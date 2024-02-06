@@ -48,8 +48,8 @@ void getASMFileName(mccOptions *opts, char *file_name) {
         loggerPanic("Failed to extract filename\n");
     }
 
-    asm_outfile = malloc(sizeof(char) * len);
-    obj_outfile = malloc(sizeof(char) * len);
+    asm_outfile = malloc(sizeof(char) * len+1);
+    obj_outfile = malloc(sizeof(char) * len+1);
 
     memcpy(asm_outfile, slashptr, dotptr-slashptr);
     memcpy(obj_outfile, slashptr, dotptr-slashptr);

@@ -196,12 +196,10 @@ List *ParseClassOrUnionFields(Cctrl *cc, aoStr *name,
             }
             if (!TokenPunctIs(tok_name, '(')) {
                 next_type = ParseArrayDimensions(cc,next_type);
-                field_name = aoStrDupRaw(tok_name->start,tok_name->len,
-                        tok_name->len+5);
+                field_name = aoStrDupRaw(tok_name->start,tok_name->len);
             } else {
                next_type = ParseFunctionPointerType(cc,&fnptr_name,&fnptr_name_len,next_type);
-               field_name = aoStrDupRaw(fnptr_name,fnptr_name_len,
-                       fnptr_name_len+1);
+               field_name = aoStrDupRaw(fnptr_name,fnptr_name_len);
             }
 
             field_type = AstMakeClassField(next_type, 0);
@@ -365,7 +363,7 @@ AstType *ParseClassOrUnion(Cctrl *cc, Dict *env,
     cc->localenv = DictNewWithParent(cc->localenv);
 
     if (tok->tk_type == TK_IDENT) {
-        tag = aoStrDupRaw(tok->start,tok->len,tok->len);
+        tag = aoStrDupRaw(tok->start,tok->len);
 
         tok = CctrlTokenGet(cc);
         if (TokenPunctIs(tok, ':')) { // Class inheritance
@@ -1109,24 +1107,26 @@ Ast *ParseAsmFunctionBinding(Cctrl *cc) {
 
     tok = CctrlTokenGet(cc);
 
-    cc->localenv = DictNewWithParent(cc->localenv);
     if (tok->tk_type != TK_IDENT && tok->start[0] != '_') {
         loggerPanic("ASM function binds must begin with '_' got: %.*s at line: %d\n",
                 tok->len, tok->start, tok->line);
     }
-    asm_fname = aoStrDupRaw(tok->start,tok->len,tok->len+1);
+
+    asm_fname = aoStrDupRaw(tok->start,tok->len);
     rettype = ParseDeclSpec(cc);
+
     if (rettype->kind == AST_TYPE_AUTO) {
         loggerPanic("auto cannot be used with an assembly binding for function %s(), type cannot be automatically deduced at line: %ld\n",
                 asm_fname->data,
                 cc->lineno);
     }
+
     tok = CctrlTokenGet(cc);
     if (tok->tk_type != TK_IDENT) {
         loggerPanic("ASM function requires c function name at line: %d\n",
                 tok->line);
     }
-    c_fname = aoStrDupRaw(tok->start,tok->len,tok->len+1);
+    c_fname = aoStrDupRaw(tok->start,tok->len);
     cc->localenv = DictNewWithParent(cc->localenv);
     CctrlTokenExpect(cc,'(');
 
@@ -1135,6 +1135,7 @@ Ast *ParseAsmFunctionBinding(Cctrl *cc) {
     asm_func = AstAsmFunctionBind(
             AstMakeFunctionType(rettype, AstParamTypes(params)),
             asm_fname,c_fname,params);
+
     cc->localenv = NULL;
     /* Map a c function to an ASM function */
     DictSet(cc->asm_funcs,c_fname->data,asm_func);
@@ -1360,7 +1361,6 @@ void ParseToAst(Cctrl *cc) {
             if (!ListEmpty(cc->tmp_locals)) {
                 ListMergeAppend(cc->initaliser_locals,cc->tmp_locals);
             }
-            cc->tmp_locals = NULL;
         } else if (ast->kind != AST_FUN_PROTO) {
             ListAppend(cc->ast_list,ast);
         }
@@ -1369,6 +1369,7 @@ void ParseToAst(Cctrl *cc) {
         if (!tok) {
             break;
         }
+        cc->tmp_locals = NULL;
         cc->localenv = NULL;
     }
 }
