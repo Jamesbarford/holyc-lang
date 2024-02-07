@@ -569,8 +569,8 @@ long lexString(lexer *l, char terminator, int escape_quotes) {
 
 /* Length of the char const is returned, it OR's in at max 8 characters. 
  * A long being 64 bits and 64/8 = 8. */
-long lexCharConst(lexer *l) {
-    long char_const = 0;
+unsigned long lexCharConst(lexer *l) {
+    unsigned long char_const = 0;
     long hex_num = 0;
     long len;
     char ch;
@@ -612,7 +612,8 @@ long lexCharConst(lexer *l) {
                     break;
             }
         } else {
-            char_const |= ch << (len * 8);
+            loggerDebug("[%ld]%c => 0x%x\n",len*8,ch,ch);
+            char_const |= (unsigned long)(((unsigned long)ch) << ((unsigned long)(len * 8)));
         }
     }
 
@@ -625,6 +626,7 @@ long lexCharConst(lexer *l) {
     if (lexPeek(l) == '\'') {
         lexNextChar(l);
     } 
+    loggerDebug("%lx\n",char_const);
     l->cur_i64 = char_const;
     l->cur_strlen = len;
     return TK_CHAR_CONST;
@@ -724,7 +726,7 @@ int lex(lexer *l, lexeme *le) {
         
         case '\'':
             lexCharConst(l);
-            le->start = start;
+            le->start = start+1;
             le->len = l->cur_strlen;
             le->i64 = l->cur_i64;
             le->tk_type = TK_CHAR_CONST;
