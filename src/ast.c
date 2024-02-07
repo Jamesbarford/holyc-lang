@@ -919,8 +919,10 @@ void _AstToString(aoStr *str, Ast *ast, int depth) {
             break;
         
         case AST_LVAR:
-            aoStrCatPrintf(str, "<lvar> %s %s", AstTypeToString(ast->type),
+            tmp = AstTypeToString(ast->type);
+            aoStrCatPrintf(str, "<lvar> %s %s\n", tmp,
                     ast->lname->data);
+            free(tmp);
             break;
         
         case AST_DECL:

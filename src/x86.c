@@ -133,18 +133,6 @@ char *AsmGetMovWithSign(AstType *type) {
     }
 }
 
-char *AsmGetPop(int size) {
-    stack_pointer -=8;
-    switch (size) {
-        case 1:
-        case 2:
-        case 4: return "pop";
-        case 8: return "popq";
-        default:
-            loggerPanic("Unsupported size: %d\n",size);
-    }
-}
-
 char *AsmGetPtrMove(int kind) {
     switch (kind) {
         case AST_TYPE_ARRAY: return "leaq";
@@ -247,7 +235,7 @@ void AsmPop(aoStr *buf, char *reg) {
     aoStrCatPrintf(buf,"pop    %%%s\n\t", reg);
     stack_pointer -= 8;
     if (stack_pointer < 0) {
-        loggerPanic("Stack underflow\n");
+        loggerPanic("Int register stack underflow\n");
     }
 }
 
@@ -423,7 +411,6 @@ void AsmAssignDerefInternal(aoStr *buf, AstType *type, int offset) {
 
 void AsmAssignDeref(Cctrl *cc,aoStr *buf, Ast *ast) {
     AsmPush(buf, REG_RAX);
-    // AsmPush(buf, REG_RDX);
     AsmExpression(cc,buf,ast->operand);
     AsmAssignDerefInternal(buf,ast->operand->type->ptr, 0);
 }
@@ -500,15 +487,13 @@ void AsmPointerArithmetic(Cctrl *cc, aoStr *buf, long op, Ast *LHS, Ast *RHS) {
         if (size > 1) {
             aoStrCatPrintf(buf, "imul   $%d, %%rax\n\t", size);
         }
-        stack_pointer -=8;
+        AsmPop(buf,REG_RCX);
         aoStrCatPrintf(buf,
-            "popq   %%rcx\n\t"
             "%-3s   %%rax, %%rcx\n\t"
             "movq   %%rcx, %%rax\n\t", fn);
     } else {
-        stack_pointer -=8;
+        AsmPop(buf,REG_RCX);
         aoStrCatPrintf(buf,
-                "popq   %%rcx\n\t"
                 "cmpq   %%rax, %%rcx\n\t"
                 "%-3s   %%al\n\t"
                 "movzb  %%al, %%rax\n\t", fn);
@@ -1296,7 +1281,7 @@ void AsmPrepFuncCallArgs(Cctrl *cc, aoStr *buf, Ast *funcall) {
 
     if (needs_padding) {
         aoStrCatPrintf(buf, "subq   $%d, %%rsp #stack pad\n\t", 8);
-        stack_pointer-=8;
+        stack_pointer += 8;
     }
 
     if (funcall->kind == AST_FUNPTR_CALL) {
@@ -1347,7 +1332,7 @@ void AsmPrepFuncCallArgs(Cctrl *cc, aoStr *buf, Ast *funcall) {
         aoStrCatPrintf(buf, "addq   $%d, %%rsp #rewind stack\n\t", stack_cnt);
     } else if (needs_padding) {
         aoStrCatPrintf(buf, "addq   $%d, %%rsp #stack add\n\t", 8);
-        stack_pointer += 8;
+        stack_pointer -= 8;
     }
 
     ListRelease(int_args,NULL);
