@@ -659,6 +659,44 @@ static int ParseCompoundAssign(lexeme *tok) {
     }
 }
 
+Ast *ParseArray(Cctrl *cc, AstType *type) {
+    lexeme *tok = CctrlTokenGet(cc);
+    List *initlist;
+    Ast *init;
+
+    if (type->ptr->kind == AST_TYPE_CHAR  && tok->tk_type == TK_STR) {
+        return AstString(tok->start,tok->len);
+    }
+    if (!TokenPunctIs(tok, '{')) {
+        loggerPanic("Expected intializer list for '%c', at '%ld'",
+                (char)tok->i64, cc->lineno);
+    }
+
+    initlist = ListNew();
+    while (1) {
+        tok = CctrlTokenGet(cc);
+        if (TokenPunctIs(tok, '}')) {
+            break;
+        }
+
+
+        CctrlTokenRewind(cc);
+        init = ParseExpr(cc,16);
+
+        ListAppend(initlist,init);
+
+        if ((AstGetResultType('=', init->type, type->ptr)) == NULL) {
+            loggerPanic("Incompatiable types: %s %s at line: %ld\n",
+                    AstToString(init), AstTypeToString(type->ptr),cc->lineno);
+        }
+        tok = CctrlTokenGet(cc);
+        if (!TokenPunctIs(tok, ',')) {
+            CctrlTokenRewind(cc);
+        }
+    }
+    return AstArrayInit(initlist);
+}
+
 Ast *ParseExpr(Cctrl *cc, int prec) {
     Ast *LHS, *RHS;
     lexeme *tok;

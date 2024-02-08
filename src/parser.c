@@ -100,7 +100,7 @@ Ast *ParseDeclArrayInitInt(Cctrl *cc, AstType *type) {
         loggerPanic("Expected intializer list for '%c', at '%ld'",
                 (char)tok->i64, cc->lineno);
     }
-    
+
     initlist = ListNew();
     while (1) {
         tok = CctrlTokenGet(cc);
@@ -108,7 +108,18 @@ Ast *ParseDeclArrayInitInt(Cctrl *cc, AstType *type) {
             break;
         }
         CctrlTokenRewind(cc);
-        init = ParseExpr(cc,16);
+        if (TokenPunctIs(tok,'{')) {
+            init = ParseDeclArrayInitInt(cc,type->ptr);
+            tok = CctrlTokenGet(cc);
+            ListAppend(initlist,init);
+            if (TokenPunctIs(tok,'}')) {
+                init = AstArrayInit(initlist);
+                return init;
+            }
+            continue;
+        } else {
+            init = ParseExpr(cc,16);
+        }
         ListAppend(initlist,init);
         if ((AstGetResultType('=', init->type, type->ptr)) == NULL) {
             loggerPanic("Incompatiable types: %s %s at line: %ld\n",

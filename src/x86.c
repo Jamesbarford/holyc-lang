@@ -465,7 +465,14 @@ void AsmPointerArithmetic(Cctrl *cc, aoStr *buf, long op, Ast *LHS, Ast *RHS) {
         if (LHS->type->ptr->kind == AST_TYPE_POINTER) {
             size = 8;
         } else {
-            size = LHS->type->ptr->ptr->size; 
+            loggerDebug("%s %s %s %d %s %d\n",
+                    AstKindToString(LHS->kind),
+                    AstKindToString(LHS->type->kind),
+                    AstKindToString(LHS->type->ptr->kind),
+                    LHS->type->ptr->size,
+                    AstKindToString(LHS->type->ptr->ptr->kind),
+                    LHS->type->ptr->ptr->size);
+            size = LHS->type->ptr->size; 
         }
     } else {
         size = LHS->type->ptr->size; 
@@ -1345,6 +1352,38 @@ void AsmFunCall(Cctrl *cc, aoStr *buf, Ast *ast) {
     AsmPrepFuncCallArgs(cc,buf,ast);
 }
 
+void AsmArrayInit(Cctrl *cc, aoStr *buf, Ast *ast, AstType *type, int offset) {
+    Ast *tmp;
+
+    ListForEach(ast->arrayinit) {
+        tmp = it->value;
+        if (tmp->kind == AST_ARRAY_INIT) {
+            AsmArrayInit(cc,buf,tmp,type->ptr,offset);
+            offset += type->ptr->size;
+            continue;
+        }
+        switch (tmp->type->kind) {
+        case AST_TYPE_CHAR:
+        case AST_TYPE_INT:
+            if (tmp->type->issigned) {
+                aoStrCatPrintf(buf, "movq   $%lld, %%rax\n\t", tmp->i64);
+            } else if (!tmp->type->issigned) {
+                aoStrCatPrintf(buf, "movq   $%lu, %%rax\n\t",
+                               (unsigned long)tmp->i64);
+            }
+            break;
+            // case AST_TYPE_FLOAT:
+        default:
+            AsmExpression(cc, buf, it->value);
+            break;
+        }
+
+        AsmLSave(buf, type->ptr,  offset);
+
+        offset += type->ptr->size;
+    }
+}
+
 void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
     List *it;
     aoStr *label_begin, *label_end;
@@ -1416,35 +1455,36 @@ void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
 
 
         if (ast->declinit->kind == AST_ARRAY_INIT) {
-            int offset = 0;
-            Ast *tmp;
-            it = ast->declinit->arrayinit->next;
-            while (it != ast->declinit->arrayinit) {
-                tmp = it->value;
-                switch (tmp->type->kind) {
-                case AST_TYPE_CHAR:
-                case AST_TYPE_INT:
-                    if (tmp->type->issigned) {
-                        aoStrCatPrintf(buf, "movq   $%lld, %%rax\n\t", 
-                                tmp->i64);
-                    } else if (!tmp->type->issigned) {
-                        aoStrCatPrintf(buf, "movq   $%lu, %%rax\n\t",
-                                (unsigned long)tmp->i64);
-                    }
-                    break;
-                // case AST_TYPE_FLOAT:
-                default:
-                    AsmExpression(cc,buf,it->value);
-                    break;
-                }
+            AsmArrayInit(cc,buf,ast->declinit,ast->declvar->type,ast->declvar->loff);
+            //int offset = 0;
+            //Ast *tmp;
+            //it = ast->declinit->arrayinit->next;
+            //while (it != ast->declinit->arrayinit) {
+            //    tmp = it->value;
+            //    switch (tmp->type->kind) {
+            //    case AST_TYPE_CHAR:
+            //    case AST_TYPE_INT:
+            //        if (tmp->type->issigned) {
+            //            aoStrCatPrintf(buf, "movq   $%lld, %%rax\n\t", 
+            //                    tmp->i64);
+            //        } else if (!tmp->type->issigned) {
+            //            aoStrCatPrintf(buf, "movq   $%lu, %%rax\n\t",
+            //                    (unsigned long)tmp->i64);
+            //        }
+            //        break;
+            //    // case AST_TYPE_FLOAT:
+            //    default:
+            //        AsmExpression(cc,buf,it->value);
+            //        break;
+            //    }
 
 
-                AsmLSave(buf,ast->declvar->type->ptr,
-                        ast->declvar->loff+offset);
+            //    AsmLSave(buf,ast->declvar->type->ptr,
+            //            ast->declvar->loff+offset);
 
-                offset += ast->declvar->type->ptr->size;
-                it = it->next;
-            }
+            //    offset += ast->declvar->type->ptr->size;
+            //    it = it->next;
+            //}
         } else if (ast->declvar->type->kind == AST_TYPE_ARRAY) {
             assert(ast->declinit->kind == AST_STRING);
             AsmPlaceString(buf,ast->declinit->sval,ast->declvar->loff);
