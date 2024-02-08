@@ -30,14 +30,20 @@ AstType *ParseUnionDef(Cctrl *cc);
 
 /* Kinda cheating converting it to a string and calling printf */
 Ast *ParseFloatingCharConst(Cctrl *cc, lexeme *tok) {
-    long ch = tok->i64;
+    unsigned long ch = (unsigned long)tok->i64;
     Ast *ast;
-    char str[sizeof(long)+1];
+    char str[9];
     List *argv = ListNew();
-    for (int i = 0; i < 8; ++i) {
-        str[i] = ch >> ((long)i*8) & 0xFF;
-    }
+    str[0] = ch & 0xFF;
+    str[1] = ((unsigned long)ch) >> 8  & 0xFF;
+    str[2] = ((unsigned long)ch) >> 16 & 0xFF;
+    str[3] = ((unsigned long)ch) >> 24 & 0xFF;
+    str[4] = ((unsigned long)ch) >> 32 & 0xFF;
+    str[5] = ((unsigned long)ch) >> 40 & 0xFF;
+    str[6] = ((unsigned long)ch) >> 48 & 0xFF;
+    str[7] = ((unsigned long)ch) >> 56 & 0xFF;
     str[8] = '\0';
+
     ast = AstString(str,sizeof(str));
     ListAppend(cc->strings,ast);
     ListAppend(argv,ast);
@@ -45,6 +51,7 @@ Ast *ParseFloatingCharConst(Cctrl *cc, lexeme *tok) {
     CctrlTokenExpect(cc,';');
     return ast;
 }
+
 /* Does a distinctly adequate job of type checking function parameters */
 void ParseFunctionTypeCheck(Cctrl *cc, List *argv, List *params,
         char *fname, int len)

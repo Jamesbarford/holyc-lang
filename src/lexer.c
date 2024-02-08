@@ -569,8 +569,8 @@ long lexString(lexer *l, char terminator, int escape_quotes) {
 
 /* Length of the char const is returned, it OR's in at max 8 characters. 
  * A long being 64 bits and 64/8 = 8. */
-long lexCharConst(lexer *l) {
-    long char_const = 0;
+unsigned long lexCharConst(lexer *l) {
+    unsigned long char_const = 0, idx;
     long hex_num = 0;
     long len;
     char ch;
@@ -580,39 +580,40 @@ long lexCharConst(lexer *l) {
         if (!ch || ch == '\'') {
             break;
         }
+        idx = len * 8;
         if (ch == '\\') {
             ch = lexNextChar(l);
             switch (ch) {
-                case '0':  char_const |= '\0' << (len * 8); break;
-                case '\'': char_const |= '\'' << (len * 8); break;
-                case '`':  char_const |= '`'  << (len * 8); break;
-                case '\"': char_const |= '\"' << (len * 8); break;
-                case 'd':  char_const |= '$'  << (len * 8); break;
-                case 'n':  char_const |= '\n' << (len * 8); break;
-                case 'r':  char_const |= '\r' << (len * 8); break;
-                case 't':  char_const |= '\t' << (len * 8); break;
+                case '0':  char_const |= (unsigned long)'\0' << ((unsigned long)idx); break;
+                case '\'': char_const |= (unsigned long)'\'' << ((unsigned long)idx); break;
+                case '`':  char_const |= (unsigned long)'`'  << ((unsigned long)idx); break;
+                case '\"': char_const |= (unsigned long)'\"' << ((unsigned long)idx); break;
+                case 'd':  char_const |= (unsigned long)'$'  << ((unsigned long)idx); break;
+                case 'n':  char_const |= (unsigned long)'\n' << ((unsigned long)idx); break;
+                case 'r':  char_const |= (unsigned long)'\r' << ((unsigned long)idx); break;
+                case 't':  char_const |= (unsigned long)'\t' << ((unsigned long)idx); break;
                 case 'x':
                 case 'X':
                     for (int i = 0; i < 2; ++i) {
                         ch = toupper(lexNextChar(l));
                         if (isHex(ch)) {
                             if (ch <= '9') {
-                                hex_num |= (hex_num<<4)+ch-'0';
+                                hex_num |= (unsigned long)(hex_num<<4)+ch-'0';
                             } else {
-                                hex_num |= (hex_num<<4)+ch-'A'+10;
+                                hex_num |= (unsigned long)(hex_num<<4)+ch-'A'+10;
                             }
                         } else {
                             break;
                         }
                     }
-                    char_const |= hex_num << (len * 8);
+                    char_const |= (unsigned long)hex_num << (unsigned long)(idx);
                     break;
                 default:
-                    char_const |= '\\' << (len * 8);
+                    char_const |= (unsigned long)'\\' << (unsigned long)(idx);
                     break;
             }
         } else {
-            char_const |= ch << (len * 8);
+            char_const |= (unsigned long)(((unsigned long)ch) << ((unsigned long)(idx)));
         }
     }
 
@@ -724,7 +725,7 @@ int lex(lexer *l, lexeme *le) {
         
         case '\'':
             lexCharConst(l);
-            le->start = start;
+            le->start = start+1;
             le->len = l->cur_strlen;
             le->i64 = l->cur_i64;
             le->tk_type = TK_CHAR_CONST;
