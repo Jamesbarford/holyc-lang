@@ -34,9 +34,8 @@ Ast *ParseFloatingCharConst(Cctrl *cc, lexeme *tok) {
     Ast *ast;
     char str[9];
     List *argv = ListNew();
-    loggerDebug("0x%lx -> %.*s\n",ch,tok->len,tok->start);
     str[0] = ch & 0xFF;
-    str[1] = ((unsigned long)ch) >> 8 & 0xFF;
+    str[1] = ((unsigned long)ch) >> 8  & 0xFF;
     str[2] = ((unsigned long)ch) >> 16 & 0xFF;
     str[3] = ((unsigned long)ch) >> 24 & 0xFF;
     str[4] = ((unsigned long)ch) >> 32 & 0xFF;
@@ -45,7 +44,6 @@ Ast *ParseFloatingCharConst(Cctrl *cc, lexeme *tok) {
     str[7] = ((unsigned long)ch) >> 56 & 0xFF;
     str[8] = '\0';
 
-    loggerDebug("CHAR_CONST: %s\n",str);
     ast = AstString(str,sizeof(str));
     ListAppend(cc->strings,ast);
     ListAppend(argv,ast);
@@ -53,6 +51,7 @@ Ast *ParseFloatingCharConst(Cctrl *cc, lexeme *tok) {
     CctrlTokenExpect(cc,';');
     return ast;
 }
+
 /* Does a distinctly adequate job of type checking function parameters */
 void ParseFunctionTypeCheck(Cctrl *cc, List *argv, List *params,
         char *fname, int len)
