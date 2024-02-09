@@ -93,9 +93,15 @@ Ast *ParseDeclArrayInitInt(Cctrl *cc, AstType *type) {
     List *initlist;
     Ast *init;
 
-    if (type->kind != AST_TYPE_CLASS && type->ptr->kind == AST_TYPE_CHAR  && tok->tk_type == TK_STR) {
+    if (type->kind == AST_TYPE_CLASS) {
+        loggerPanic("Initalising an array of classes is unsupported at line: %d\n",
+                tok->line);
+    }
+
+    if (type->ptr->kind == AST_TYPE_CHAR  && tok->tk_type == TK_STR) {
         return AstString(tok->start,tok->len);
     }
+
     if (!TokenPunctIs(tok, '{')) {
         loggerPanic("Expected intializer list for '%c', at '%ld'",
                 (char)tok->i64, cc->lineno);
@@ -109,9 +115,7 @@ Ast *ParseDeclArrayInitInt(Cctrl *cc, AstType *type) {
         }
         CctrlTokenRewind(cc);
         if (TokenPunctIs(tok,'{')) {
-            loggerDebug("%s\n", AstTypeToString(type->ptr));
             init = ParseDeclArrayInitInt(cc,type->ptr);
-            AstPrint(init);
             tok = CctrlTokenGet(cc);
             ListAppend(initlist,init);
             if (TokenPunctIs(tok,'}')) {
@@ -463,7 +467,6 @@ Ast *ParseVariableAssignment(Cctrl *cc, Ast *var, long terminator_flags) {
     Ast *init;
     int len;
     if (var->type->kind == AST_TYPE_ARRAY) {
-        loggerWarning("%s\n",AstTypeToString(var->type));
         init = ParseDeclArrayInitInt(cc,var->type);
         if (init->kind == AST_STRING) {
             len = init->sval->len+1;

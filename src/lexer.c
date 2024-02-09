@@ -537,9 +537,6 @@ long lexString(lexer *l, char terminator, int escape_quotes) {
     int str_done = 0;
     long len, char_count;
 
-    if (escape_quotes) {
-        loggerDebug("excape\n");
-    }
     len = char_count = 0;
     buf2 = buf3 = NULL;
     
