@@ -330,5 +330,7 @@ char *AstTypeToString(AstType *type);
 char *AstKindToString(int kind);
 char *AstToString(Ast *ast);
 void AstPrint(Ast *ast);
+void AstTypePrint(AstType *type);
+void AstKindPrint(int kind);
 
 #endif

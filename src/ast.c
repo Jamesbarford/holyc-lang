@@ -814,8 +814,8 @@ char *AstTypeToString(AstType *type) {
                 else                aoStrCatPrintf(str, "U16");
                 break;
             case 4:
-                if (type->issigned) aoStrCatPrintf(str, "I64");
-                else                aoStrCatPrintf(str, "U64");
+                if (type->issigned) aoStrCatPrintf(str, "I32");
+                else                aoStrCatPrintf(str, "U32");
                 break;
             case 8:
                 if (type->issigned) aoStrCatPrintf(str, "I64");
@@ -1432,6 +1432,17 @@ void AstPrint(Ast *ast) {
     printf("%s\n", str);
     //printf("%s\n", AstKindToString(ast->kind));
     free(str);
+}
+
+void AstTypePrint(AstType *type) {
+    char *str = AstTypeToString(type);
+    printf("%s\n", str);
+    free(str);
+}
+
+void AstKindPrint(int kind) {
+    char *str = AstKindToString(kind);
+    printf("%s\n",str);
 }
 
 void AstReleaseList(List *ast_list) {

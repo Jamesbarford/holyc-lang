@@ -93,14 +93,20 @@ Ast *ParseDeclArrayInitInt(Cctrl *cc, AstType *type) {
     List *initlist;
     Ast *init;
 
+    if (type->kind == AST_TYPE_CLASS) {
+        loggerPanic("Initalising an array of classes is unsupported at line: %d\n",
+                tok->line);
+    }
+
     if (type->ptr->kind == AST_TYPE_CHAR  && tok->tk_type == TK_STR) {
         return AstString(tok->start,tok->len);
     }
+
     if (!TokenPunctIs(tok, '{')) {
         loggerPanic("Expected intializer list for '%c', at '%ld'",
                 (char)tok->i64, cc->lineno);
     }
-    
+
     initlist = ListNew();
     while (1) {
         tok = CctrlTokenGet(cc);
@@ -108,12 +114,24 @@ Ast *ParseDeclArrayInitInt(Cctrl *cc, AstType *type) {
             break;
         }
         CctrlTokenRewind(cc);
-        init = ParseExpr(cc,16);
-        ListAppend(initlist,init);
-        if ((AstGetResultType('=', init->type, type->ptr)) == NULL) {
-            loggerPanic("Incompatiable types: %s %s at line: %ld\n",
-                    AstToString(init), AstTypeToString(type->ptr),cc->lineno);
+        if (TokenPunctIs(tok,'{')) {
+            init = ParseDeclArrayInitInt(cc,type->ptr);
+            tok = CctrlTokenGet(cc);
+            ListAppend(initlist,init);
+            if (TokenPunctIs(tok,'}')) {
+                init = AstArrayInit(initlist);
+                return init;
+            }
+            continue;
+        } else {
+            init = ParseExpr(cc,16);
+            if ((AstGetResultType('=', init->type, type->ptr)) == NULL) {
+                loggerPanic("Incompatiable types: %s %s at line: %ld\n",
+                        AstToString(init), AstTypeToString(type->ptr),cc->lineno);
+            }
         }
+        ListAppend(initlist,init);
+
         tok = CctrlTokenGet(cc);
         if (!TokenPunctIs(tok, ',')) {
             CctrlTokenRewind(cc);
