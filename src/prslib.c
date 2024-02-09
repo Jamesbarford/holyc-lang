@@ -276,10 +276,11 @@ static AstType *ParseArrayDimensionsInternal(Cctrl *cc, AstType *base_type) {
         return AstMakeArrayType(sub_type,dimension);
     }
 
-    return AstMakeArrayType(base_type,dimension);    
+    return AstMakeArrayType(base_type,dimension);
 }
 
 AstType *ParseArrayDimensions(Cctrl *cc, AstType *base_type) {
+    loggerDebug("%s\n",AstTypeToString(base_type));
     AstType *type = ParseArrayDimensionsInternal(cc,base_type);
     if (type) {
         return type;

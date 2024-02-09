@@ -93,7 +93,7 @@ Ast *ParseDeclArrayInitInt(Cctrl *cc, AstType *type) {
     List *initlist;
     Ast *init;
 
-    if (type->ptr->kind == AST_TYPE_CHAR  && tok->tk_type == TK_STR) {
+    if (type->kind != AST_TYPE_CLASS && type->ptr->kind == AST_TYPE_CHAR  && tok->tk_type == TK_STR) {
         return AstString(tok->start,tok->len);
     }
     if (!TokenPunctIs(tok, '{')) {
@@ -109,7 +109,9 @@ Ast *ParseDeclArrayInitInt(Cctrl *cc, AstType *type) {
         }
         CctrlTokenRewind(cc);
         if (TokenPunctIs(tok,'{')) {
+            loggerDebug("%s\n", AstTypeToString(type->ptr));
             init = ParseDeclArrayInitInt(cc,type->ptr);
+            AstPrint(init);
             tok = CctrlTokenGet(cc);
             ListAppend(initlist,init);
             if (TokenPunctIs(tok,'}')) {
@@ -119,12 +121,13 @@ Ast *ParseDeclArrayInitInt(Cctrl *cc, AstType *type) {
             continue;
         } else {
             init = ParseExpr(cc,16);
+            if ((AstGetResultType('=', init->type, type->ptr)) == NULL) {
+                loggerPanic("Incompatiable types: %s %s at line: %ld\n",
+                        AstToString(init), AstTypeToString(type->ptr),cc->lineno);
+            }
         }
         ListAppend(initlist,init);
-        if ((AstGetResultType('=', init->type, type->ptr)) == NULL) {
-            loggerPanic("Incompatiable types: %s %s at line: %ld\n",
-                    AstToString(init), AstTypeToString(type->ptr),cc->lineno);
-        }
+
         tok = CctrlTokenGet(cc);
         if (!TokenPunctIs(tok, ',')) {
             CctrlTokenRewind(cc);
@@ -460,6 +463,7 @@ Ast *ParseVariableAssignment(Cctrl *cc, Ast *var, long terminator_flags) {
     Ast *init;
     int len;
     if (var->type->kind == AST_TYPE_ARRAY) {
+        loggerWarning("%s\n",AstTypeToString(var->type));
         init = ParseDeclArrayInitInt(cc,var->type);
         if (init->kind == AST_STRING) {
             len = init->sval->len+1;

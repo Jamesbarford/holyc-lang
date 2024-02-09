@@ -100,7 +100,7 @@ void AsmRemovePreviousTab(aoStr *buf) {
 }
 
 char *AsmGetMov(AstType *type) {
-    if (type->kind == AST_TYPE_CLASS && type->is_intrinsic) {
+    if (type->kind == AST_TYPE_CLASS) {
         return "movq";
     }
     switch (type->size) {
@@ -167,7 +167,7 @@ char *AsmGetLoadMov(AstType *type) {
 
 char *AsmGetIntReg(AstType *type, char ch) {
     if (ch == 'a') {
-        if (type->kind == AST_TYPE_CLASS && type->is_intrinsic) {
+        if (type->kind == AST_TYPE_CLASS) {
             return "rax";
         }
         switch (type->size) {
@@ -1358,6 +1358,7 @@ void AsmArrayInit(Cctrl *cc, aoStr *buf, Ast *ast, AstType *type, int offset) {
     ListForEach(ast->arrayinit) {
         tmp = it->value;
         if (tmp->kind == AST_ARRAY_INIT) {
+            loggerDebug("%s %d\n",AstTypeToString(type->ptr),type->ptr->size);
             AsmArrayInit(cc,buf,tmp,type->ptr,offset);
             offset += type->ptr->size;
             continue;
@@ -1378,9 +1379,16 @@ void AsmArrayInit(Cctrl *cc, aoStr *buf, Ast *ast, AstType *type, int offset) {
             break;
         }
 
-        AsmLSave(buf, type->ptr,  offset);
+        loggerDebug("%s %d\n",AstTypeToString(tmp->type),tmp->type->size);
+        if (type->ptr) {
+            AsmLSave(buf, type->ptr,  offset);
+            offset += type->ptr->size;
+        } else {
+            AsmLSave(buf, type, offset);
+            AstPrint(ast);
+            offset += tmp->type->size;
+        }
 
-        offset += type->ptr->size;
     }
 }
 
