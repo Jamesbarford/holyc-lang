@@ -50,7 +50,6 @@ extern "c" I64 read(I32 __fd, U0 *__buf, U64 __nbyte);
 extern "c" I64 write(I32 __fd, U0 *__buf, U64 __nbyte);
 extern "c" I64 lseek(I32 __fd, I64 __offset, I32 __whence);
 extern "c" I32 chdir(U8 *path);
-I32 errno;
 
 public U8 *FileRead(U8 *path, I64 *_size=NULL)
 {

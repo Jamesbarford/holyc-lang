@@ -22,8 +22,7 @@ static char *x86_registers = "rax,rbx,rcx,rdx,rsi,rdi,rbp,rsp,r8,r9,r10,r11,r12,
 /* eventually it would be nice to remove the dependency on these functions 
  * syscall can be used for a lot of them */
 static char *libc_functions = "printf,snprintf,exit,malloc,free,open,read,close,"
-    "pthread_create,pthread_join,pthread_mutex_init,pthread_mutex_init,pthread_mutex_lock,"
-    "pthread_mutex_destroy,pthread_mutex_unlock,exit,system";
+    "exit,system";
 
 typedef struct BuiltInType {
     char *name;
@@ -31,13 +30,6 @@ typedef struct BuiltInType {
     int size;
     int issigned;
 } BuiltInType;
-
-typedef struct PreProcVal {
-    aoStr *label;
-    union {
-        long i64;
-    };
-} PreProcVal;
 
 /* Name, kind, size, issigned, essentially duplicated in the 
  * lexer */

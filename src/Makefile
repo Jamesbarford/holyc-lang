@@ -51,8 +51,6 @@ install:
 	cp $(LIB_SRC)/memory.HC $(BUILT_IN_LOCATION)/memory.HC
 	cp $(LIB_SRC)/defs.HH $(BUILT_IN_LOCATION)/defs.HH
 	cp $(LIB_SRC)/system.HC $(BUILT_IN_LOCATION)/system.HC
-	cp $(LIB_SRC)/strlib.HC $(BUILT_IN_LOCATION)/strlib.HC
-	cp $(LIB_SRC)/iolib.HC $(BUILT_IN_LOCATION)/iolib.HC
 	cp $(LIB_SRC)/csv.HC $(BUILT_IN_LOCATION)/csv.HC
 	cp $(LIB_SRC)/date.HC $(BUILT_IN_LOCATION)/date.HC
 	cp $(LIB_SRC)/list.HC $(BUILT_IN_LOCATION)/list.HC
