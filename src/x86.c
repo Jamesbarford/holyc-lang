@@ -100,7 +100,7 @@ void AsmRemovePreviousTab(aoStr *buf) {
 }
 
 char *AsmGetMov(AstType *type) {
-    if (type->kind == AST_TYPE_CLASS) {
+    if (type->kind == AST_TYPE_CLASS && type->is_intrinsic) {
         return "movq";
     }
     switch (type->size) {
@@ -167,7 +167,7 @@ char *AsmGetLoadMov(AstType *type) {
 
 char *AsmGetIntReg(AstType *type, char ch) {
     if (ch == 'a') {
-        if (type->kind == AST_TYPE_CLASS) {
+        if (type->kind == AST_TYPE_CLASS && type->is_intrinsic) {
             return "rax";
         }
         switch (type->size) {
