@@ -108,7 +108,7 @@ void emitFile(aoStr *asmbuf, mccOptions *opts) {
 
     if (opts->emit_object) {
         writeAsmToTmp(asmbuf);
-        aoStrCatPrintf(cmd, "gcc -c %s -lm -lc -o ./%s",
+        aoStrCatPrintf(cmd, "gcc -c %s -lm -lpthread -lc -o ./%s",
                 ASM_TMP_FILE,opts->obj_outfile);
         system(cmd->data);
     } else if (opts->asm_outfile && opts->assemble_only) {
@@ -117,7 +117,7 @@ void emitFile(aoStr *asmbuf, mccOptions *opts) {
         close(fd);
     } else {
         writeAsmToTmp(asmbuf);
-        aoStrCatPrintf(cmd, "gcc %s -lm -lc -o ./a.out", ASM_TMP_FILE);
+        aoStrCatPrintf(cmd, "gcc %s -lm -lpthread -lc -o ./a.out", ASM_TMP_FILE);
         system(cmd->data);
         remove(ASM_TMP_FILE);
 

@@ -155,7 +155,7 @@ static U0 *ThreadPoolMain(U0 *argv)
   pool->alive_threads++;
   pthread_mutex_unlock(&pool->lock);
   
-  while (1) {
+  while (pool->run) {
     ThreadSemaphoreWait(pool->sem);
     pthread_mutex_lock(&pool->lock);
     pool->active_threads++;
@@ -237,13 +237,16 @@ U0 ThreadPoolStop(ThreadPool *pool)
 U0 ThreadPoolRelease(ThreadPool *pool)
 {// abrubtly stop the pool, destroy conditions, locks and free structures
   if (pool) {
+    auto sem = pool->sem;
+    pool->run = 0;
     ThreadPoolStop(pool);
     pthread_cond_destroy(&pool->has_work);
     pthread_cond_destroy(&pool->no_work);
-    pthread_cond_destroy(&pool->sem->cond);
     pthread_mutex_destroy(&pool->lock);
     pthread_mutex_destroy(&pool->qlock);
-    pthread_mutex_destroy(&pool->sem->lk);
+
+    pthread_cond_destroy(&sem->cond);
+    pthread_mutex_destroy(&sem->lk);
 
     ListRelease(pool->jobs,NULL);
     Free(pool->workers);
