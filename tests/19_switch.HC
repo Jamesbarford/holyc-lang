@@ -41,10 +41,25 @@ Bool TestBreakInLoop()
   return i == 5;
 }
 
+Bool UnNamedCase()
+{
+  I32 num = 0;
+  for (I32 i = 0; i <= 5; ++i) {
+    switch (i) {
+      case: num++; break; //0
+      case: num++; break; //1
+      case 3: num++; break; //3
+      case: num++; break; //4
+      case: num++; break; //5
+    }
+  }
+  return num == 5;
+}
+
 U0 Main(I32 argc, U8 **argv)
 {
   "Test - Switch statement: ";
-  I64 correct = 0, tests = 4, count = 0;
+  I64 correct = 0, tests = 5, count = 0;
 
   for (I64 i = 0; i < 10; ++i) {
     switch (i) {
@@ -82,6 +97,7 @@ U0 Main(I32 argc, U8 **argv)
 
   if (TestBreakInLoop())      correct++;
   if (TestBreakInLoopCrazy()) correct++;
+  if (UnNamedCase()) correct++;
 
   PrintResult(correct,tests);
 }

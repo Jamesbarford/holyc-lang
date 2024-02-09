@@ -706,11 +706,22 @@ Ast *ParseCaseLabel(Cctrl *cc, lexeme *tok) {
     if (cc->tmp_case_list == NULL) {
         loggerPanic("unexpected 'case' found at: %d\n",tok->line);
     }
-    Ast *case_;
+    Ast *case_, *prev;
+    lexeme *peek;
     aoStr *label;
     int begining;
 
-    begining = EvalIntConstExpr(ParseExpr(cc,16));    
+    peek = CctrlTokenPeek(cc);
+    if (TokenPunctIs(peek,':')) {
+        if (ListEmpty(cc->tmp_case_list)) {
+            begining = 0;
+        } else {
+            prev = cc->tmp_case_list->prev->value;
+            begining = prev->case_end+1;
+        }
+    } else {
+        begining = EvalIntConstExpr(ParseExpr(cc,16));
+    }
     label = AstMakeLabel();
     tok = CctrlTokenPeek(cc);
 
