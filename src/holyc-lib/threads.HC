@@ -1,108 +1,253 @@
+#include <list.HC>
 #include <memory.HC>
 
-asm {
-_THREAD_NEW::
-	PUSHQ	RBP
-	MOVQ	RBP, RSP
-	SUBQ	RSP, 32
-	MOVQ	-24[RBP], RDI
-	MOVQ	-32[RBP], RSI
-	MOVQ	RCX,-32[RBP]
-	MOVQ	RDX,-24[RBP]
-	LEAQ	RAX, -8[RBP] 
-	MOVQ	RSI, 0
-	MOVQ	RDI,RAX
-	CALL	pthread_create
-	MOVQ	RAX, -8[RBP]
-    ADDQ    RSP, 32
-	LEAVE
-	RET
+#define __MUTEX_LOCK_PADDING__   56
+#define __MUTEX_LOCK_ATTR_SIZE__ 8
 
-_THREAD_JOIN::
-	PUSHQ	RBP
-	MOVQ	RBP, RSP
-	MOVQ    -8[RBP], RDI
-	MOVQ	RDI, -8[RBP]
-	MOVQ	RSI, 0
-	CALL	pthread_join
-	LEAVE
-	RET
+#define __THREAD_COND_SIZE__     40
+#define __THREAD_CONDATTR_SIZE__ 8
+#define __THREAD_SIZE__          8176
 
-_THREAD_LOCK_INIT::
-	PUSHQ	RBP
-	MOVQ	RBP, RSP
-	SUBQ	RSP, 16
-	MOVQ	-8[RBP], RDI
-	MOVQ	RDI, -8[RBP]
-    MOVQ    RSI, 0
-	CALL	pthread_mutex_init
-    ADDQ    RSP, 16
-	LEAVE
-	RET
-
-_THREAD_LOCK::
-	PUSHQ	RBP
-	MOVQ	RBP, RSP
-	SUBQ	RSP, 8
-	MOVQ	-8[RBP], RDI
-	MOVQ	RDI, -8[RBP]
-	CALL	pthread_mutex_lock
-    ADDQ    RSP, 8
-	LEAVE
-	RET
-
-_THREAD_UNLOCK::
-	PUSHQ	RBP
-	MOVQ	RBP, RSP
-	SUBQ	RSP, 8
-	MOVQ	-8[RBP], RDI
-	MOVQ	RDI, -8[RBP]
-	CALL	pthread_mutex_unlock
-    ADDQ    RSP, 8
-	LEAVE
-	RET
-
-_THREAD_LOCK_DESTORY::
-	PUSHQ	RBP
-	MOVQ	RBP, RSP
-	SUBQ	RSP, 8
-	MOVQ	-8[RBP], RDI
-	MOVQ	RDI, -8[RBP]
-	CALL	pthread_mutex_destroy
-    ADDQ    RSP, 8
-	LEAVE
-	RET
-}
-
-#define __MUTEX_LOCK_PADDING__ 56
 
 /* This I _think_ is specific to MacOS implementation of pthreads 
- * It does work. */
+ * It does work on linux though. */
 class MutexLock 
 {
   I64 __sig;
   I8 __opaque[__MUTEX_LOCK_PADDING__];
 };
 
-public _extern _THREAD_NEW I64 ThreadNew(U0 (*function_ptr)(U0 *argv),
-        U0 *argv=NULL);
-public _extern _THREAD_JOIN I64 ThreadJoin(I64 thread_id,
-        U0 *thread_attr=NULL);
-public _extern _THREAD_LOCK_INIT I64 ThreadLockInit(MutexLock *lk,
-        U0 *thread_attr=NULL);
-public _extern _THREAD_LOCK_DESTORY I64 ThreadLockDestroy(MutexLock *lk);
-public _extern _THREAD_LOCK I64 ThreadLock(MutexLock *lk);
-public _extern _THREAD_UNLOCK I64 ThreadUnLock(MutexLock *lk);
-
-public MutexLock *MutexLockNew()
+class MutexLockattr
 {
-  MutexLock *lk = MAlloc(sizeof(MutexLock));
-  ThreadLockInit(lk);
-  return lk;
+  I64 __sig;
+  I8 __opaque[__MUTEX_LOCK_ATTR_SIZE__];
+};
+
+class ThreadCond
+{
+  I64 __sig;
+  I8 __opaque[__THREAD_COND_SIZE__];
+};
+
+class ThreadCondattr {
+  I64 __sig;
+  I8 __opaque[__THREAD_CONDATTR_SIZE__];
+};
+
+class pthread_handler_rec
+{
+  U0 (*__routine)(U0 *__arg); // Routine to call
+  U0 *__arg;                  // Argument to pass
+  pthread_handler_rec *__next;
+};
+
+class pthread_t 
+{
+  I64 __sig;
+  pthread_handler_rec  *__cleanup_stack;
+  I8 __opaque[__THREAD_SIZE__];
+};
+
+class ThreadWorker
+{
+  pthread_t *th;
+  I32 id;
+};
+
+class ThreadSemaphore
+{
+  ThreadCond cond;
+  MutexLock lk;
+  I32 val;
+}; 
+
+class ThreadWorkerJob
+{
+  U0 (*callback)(U0 *priv_data, U0 *argv);
+  U0 *argv;
+  ThreadWorkerJob *next;
+};
+
+class ThreadPool
+{
+  U64 worker_count,alive_threads,active_threads;
+  Bool run;
+  ThreadCond has_work,no_work;
+  MutexLock lock, qlock;
+  ThreadSemaphore *sem;
+  ThreadWorker *workers;
+  List *jobs;
+  U0 *priv_data;
+};
+
+public extern "c" I64 pthread_create(pthread_t *th, U0 *thread_attr=NULL, 
+		U0 (*function_ptr)(U0 *argv), U0 *argv=NULL);
+public extern "c" I32 pthread_mutex_init(MutexLock *lk, MutexLockattr *mutex_attr=NULL);
+public extern "c" I32 pthread_mutex_destroy(MutexLock *lk);
+public extern "c" I32 pthread_mutex_lock(MutexLock *lk);
+public extern "c" I32 pthread_mutex_unlock(MutexLock *lk);
+public extern "c" I32 pthread_join(pthread_t th, U0 *ptr=NULL);
+public extern "c" I32 pthread_cond_broadcast(ThreadCond *cond);
+public extern "c" I32 pthread_cond_destroy(ThreadCond *cond);
+public extern "c" I32 pthread_cond_init(ThreadCond *cond,
+		ThreadCondattr *attr=NULL);
+public extern "c" I32 pthread_cond_signal(ThreadCond *cond);
+public extern "c" I32 pthread_cond_wait(ThreadCond *cond, MutexLock *lk);
+public extern "c" I32 pthread_exit(U0 *data=NULL);
+public extern "c" I32 pthread_detach(pthread_t *th);
+
+static U0 ThreadSemaphoreSignal(ThreadSemaphore *sem)
+{
+  pthread_mutex_lock(&sem->lk);
+  sem->val = 1;
+  pthread_cond_signal(&sem->cond);
+  pthread_mutex_unlock(&sem->lk);
 }
 
-public U0 MutexLockDestroy(MutexLock *lk)
+static U0 ThreadSemaphoreWait(ThreadSemaphore *sem)
 {
-   ThreadLockDestroy(lk);
-   Free(lk);
+  pthread_mutex_lock(&sem->lk);
+  while (sem->val != 1) {
+    pthread_cond_wait(&sem->cond,&sem->lk);
+  }
+  sem->val = 0;
+  pthread_mutex_unlock(&sem->lk);
+}
+
+U0 ThreadPoolEnqueue(ThreadPool *pool, U0 *argv, U0 (*callback)(U0 *priv_data, U0 *argv))
+{// Enqueue a job
+  ThreadWorkerJob *job = MAlloc(sizeof(ThreadWorkerJob));
+  job->callback = callback;
+  job->argv = argv;
+  job->next = NULL;
+  pthread_mutex_lock(&pool->qlock);
+  ListAppend(pool->jobs,job);
+  ThreadSemaphoreSignal(pool->sem);
+  pthread_mutex_unlock(&pool->qlock);
+}
+
+static ThreadWorkerJob *ThreadPoolDequeue(ThreadPool *pool)
+{
+  pthread_mutex_lock(&pool->qlock);
+  ThreadWorkerJob *job = ListDeque(pool->jobs);
+  if (job) {
+    ThreadSemaphoreSignal(pool->sem);
+  }
+  pthread_mutex_unlock(&pool->qlock);
+  return job;
+}
+
+U0 ThreadPoolWait(ThreadPool *pool)
+{//Wait for all jobs in the queue to be complete
+  pthread_mutex_lock(&pool->lock);
+  while (!ListEmpty(pool->jobs) || pool->active_threads != 0) {
+    pthread_cond_wait(&pool->no_work,&pool->lock);
+  }
+  pthread_mutex_unlock(&pool->lock);
+}
+
+static U0 *ThreadPoolMain(U0 *argv)
+{// This takes jobs of the queue, calls them and waits for more work
+  ThreadPool *pool = argv(ThreadPool *);
+  ThreadWorkerJob *job;
+
+  pthread_mutex_lock(&pool->lock);
+  pool->alive_threads++;
+  pthread_mutex_unlock(&pool->lock);
+  
+  while (1) {
+    ThreadSemaphoreWait(pool->sem);
+    pthread_mutex_lock(&pool->lock);
+    pool->active_threads++;
+    pthread_mutex_unlock(&pool->lock);
+
+    if ((job = ThreadPoolDequeue(pool)) != NULL) {
+      job->callback(pool->priv_data,job->argv);
+      Free(job);
+    }
+
+    pthread_mutex_lock(&pool->lock);
+    pool->active_threads--;
+    if (pool->active_threads == 0) {
+      pthread_cond_signal(&pool->no_work);
+    }
+    pthread_mutex_unlock(&pool->lock);
+  }
+  pool->worker_count--;
+  if (pool->active_threads == 0) {
+    pthread_cond_signal(&pool->no_work);
+  }
+  pthread_mutex_unlock(&pool->lock);
+  pthread_exit();
+  return NULL;
+}
+
+ThreadPool *ThreadPoolNew(I64 worker_count)
+{// Create a new pool
+  ThreadPool *pool = MAlloc(sizeof(ThreadPool));
+  ThreadSemaphore *sem = MAlloc(sizeof(ThreadSemaphore));
+  ThreadWorker *workers = MAlloc(sizeof(ThreadWorker) * worker_count);
+
+  pool->jobs = ListNew();
+  pool->run = TRUE;
+  pool->active_threads = 0;
+  pool->alive_threads = 0;
+  pool->sem = sem;
+  pool->worker_count = worker_count;
+  pool->workers = workers;
+  pool->priv_data = NULL;
+
+  sem->val = 0;
+
+  pthread_mutex_init(&sem->lk);
+  pthread_cond_init(&sem->cond);
+
+  pthread_cond_init(&pool->no_work);
+  pthread_cond_init(&pool->has_work);
+  pthread_mutex_init(&pool->lock);
+  pthread_mutex_init(&pool->qlock);
+
+  for (I64 i = 0; i < pool->worker_count; ++i) {
+    ThreadWorker *worker = workers + i;
+    worker->id = i;
+    pthread_create(&worker->th,NULL,&ThreadPoolMain,pool);
+    pthread_detach(worker->th);
+  }
+  while (pool->alive_threads != pool->worker_count);
+  return pool;
+}
+
+U0 ThreadPoolStop(ThreadPool *pool)
+{// Wait for all the jobs to be done
+  pthread_mutex_lock(&pool->lock);
+  while (pool->active_threads != 0) {
+    pthread_cond_wait(&pool->has_work,&pool->lock);
+  }
+  pool->run = FALSE;
+  pthread_cond_broadcast(&pool->has_work);
+  pthread_mutex_unlock(&pool->lock);
+
+  for (I64 i = 0; i < pool->worker_count; ++i) {
+    pthread_join(pool->workers[i].th);
+  }
+  pool->worker_count = 0;
+  pthread_cond_signal(&pool->no_work);
+}
+
+U0 ThreadPoolRelease(ThreadPool *pool)
+{// abrubtly stop the pool, destroy conditions, locks and free structures
+  if (pool) {
+    ThreadPoolStop(pool);
+    pthread_cond_destroy(&pool->has_work);
+    pthread_cond_destroy(&pool->no_work);
+    pthread_cond_destroy(&pool->sem->cond);
+    pthread_mutex_destroy(&pool->lock);
+    pthread_mutex_destroy(&pool->qlock);
+    pthread_mutex_destroy(&pool->sem->lk);
+
+    ListRelease(pool->jobs,NULL);
+    Free(pool->workers);
+    Free(pool->sem);
+    Free(pool);
+  }
 }

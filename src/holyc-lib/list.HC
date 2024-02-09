@@ -50,6 +50,7 @@ U0 ListAppend(List *head, U0 *value)
 
 U0 *ListDeque(U0 *l)
 {
+  if (!l) return NULL;
   List *ll = cast<List *>(l);
   if (ll->next == ll) {
     return NULL;
