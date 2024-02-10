@@ -127,7 +127,7 @@ double EvalFloatExpr(Ast *ast) {
         }
     case '+': return EvalFloatExpr(ast->left) + EvalFloatExpr(ast->right);
     case '-': {
-        if (ast->operand != NULL) {
+        if (ast->right == NULL && ast->operand != NULL) {
             return -ast->operand->f64;
         }
         return EvalFloatExpr(ast->left) - EvalFloatExpr(ast->right);
@@ -164,7 +164,7 @@ long EvalIntConstExpr(Ast *ast) {
         }
     case '+': return EvalIntConstExpr(ast->left) + EvalIntConstExpr(ast->right);
     case '-': {
-        if (ast->operand != NULL) {
+        if (ast->right == NULL && ast->operand != NULL) {
             return -ast->operand->i64;
         }
         return EvalIntConstExpr(ast->left) - EvalIntConstExpr(ast->right);

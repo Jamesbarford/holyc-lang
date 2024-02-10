@@ -1059,9 +1059,14 @@ lexeme *lexDefine(Dict *macro_defs, lexer *l) {
         expanded = lexemeNew(start->start,end->len-start->len);
         expanded->tk_type = tk_type;
         if (tk_type == TK_STR) {
-            if (ast->kind != TK_STR) {
+            if (ast->kind != TK_STR && ast->kind != AST_STRING) {
                 loggerPanic("#define %s expected string but got: %s at line: %d\n",
                         ident->data,AstKindToString(ast->kind),next.line);
+            }
+            if (ast->kind == AST_STRING) {
+                /* Copy as we will free the AST which will free the string*/
+                expanded->start = strndup(ast->sval->data,ast->sval->len);
+                expanded->len = ast->sval->len;
             }
         } else if (tk_type == TK_F64) {
             expanded->f64 = (long double)EvalFloatExpr(ast);
