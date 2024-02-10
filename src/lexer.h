@@ -123,7 +123,7 @@ typedef struct lexeme {
     int ishex;
     union {
         long i64;
-        long double f64;
+        double f64;
     };
 } lexeme;
 
@@ -134,11 +134,12 @@ typedef struct lexer {
     char *cur_str;
     long cur_strlen;
     long cur_i64;
-    long double cur_f64;
+    double cur_f64;
     int lineno;
     int flags;
     int ishex;
     List *files;
+    Dict *symbol_table;
 } lexer;
 
 lexeme *lexemeTokNew(char *start, int len, int line, long ch);

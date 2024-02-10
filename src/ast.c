@@ -6,9 +6,8 @@
 #include "ast.h"
 #include "config.h"
 #include "dict.h"
-#include "lexer.h"
 #include "list.h"
-#include "prsutil.h"
+#include "lexer.h"
 #include "util.h"
 
 AstType *ast_u8_type = &(AstType){.kind = AST_TYPE_CHAR, .size = 8, .ptr = NULL,.issigned=0};
@@ -65,7 +64,7 @@ Ast *AstBinaryOp(long operation, Ast *left, Ast *right) {
     ast->type = AstGetResultType(operation,left->type,right->type);  
     if (ast->type == NULL) {
         loggerPanic("Could not derive type for: %s %s using op: %s\n",
-                lexemePunctToString(operation),
+                AstKindToString(operation),
                 AstToString(left),AstToString(right));
     }
     ast->kind = operation;
@@ -661,6 +660,20 @@ List *AstParamTypes(List *params) {
         it = it->next;
     }
     return ref;
+}
+
+void AssertIsValidPointerOp(long op, long lineno) {
+    switch (op) {
+        case '-': case '+':
+        case '<': case TK_LESS_EQU:
+        case '>': case TK_GREATER_EQU:
+        case TK_EQU_EQU: case TK_NOT_EQU:
+        case TK_OR_OR: case TK_AND_AND:    
+            return;
+        default:
+            loggerPanic("Invalid pointer operation: %s at line: %ld\n",
+                    AstKindToString(op),lineno);
+    }
 }
 
 /* This is pretty gross to look at but, eliminated recursion */

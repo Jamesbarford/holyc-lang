@@ -53,6 +53,13 @@ static BuiltInType built_in_types[] = {
     {"private",AST_TYPE_VIS_MODIFIER,0,0},
 };
 
+Cctrl *CcMacroProcessor(Dict *macro_defs) {
+    Cctrl *cc = malloc(sizeof(Cctrl));
+    cc->tkit = malloc(sizeof(TokenIter));
+    cc->macro_defs = macro_defs;
+    return cc;
+}
+
 /* Instantiate a new compiler control struct */
 Cctrl *CctrlNew(void) {
     Cctrl *cc = malloc(sizeof(Cctrl));
@@ -144,17 +151,18 @@ void CctrlTokenIterSetCur(Cctrl *cc, List *cur) {
 /* Have a look at the next lexeme but don't consume */
 lexeme *CctrlTokenPeek(Cctrl *cc) {
     TokenIter *it = cc->tkit;
-    lexeme *macro, *retval;
+    lexeme *retval, *macro;
 
     if (it->cur == it->tokens) {
         return NULL;
     }
 
     retval = (lexeme *)it->cur->value;
-    if (retval->tk_type == TK_IDENT &&
-            (macro = DictGetLen(cc->macro_defs,retval->start,
-                                retval->len)) != NULL) {
-        return macro;
+    if (retval->tk_type == TK_IDENT) {
+        if ((macro = DictGetLen(cc->macro_defs,retval->start,retval->len)) != NULL) {
+            lexemePrint(macro);
+            return macro;
+        }
     }
     return retval;
 }

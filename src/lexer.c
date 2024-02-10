@@ -6,9 +6,13 @@
 #include <unistd.h>
 
 #include "aostr.h"
+#include "ast.h"
+#include "cctrl.h"
 #include "dict.h"
 #include "lexer.h"
 #include "list.h"
+#include "prslib.h"
+#include "prsutil.h"
 #include "util.h"
 
 typedef struct {
@@ -128,6 +132,8 @@ lexeme *lexemeNewOp(char *start, int len, long op, int line) {
     return le;
 }
 
+static Cctrl *macro_proccessor = NULL;
+
 void lexerInit(lexer *l, char *source) {
     l->ptr = source;
     l->cur_ch = -1;
@@ -139,6 +145,18 @@ void lexerInit(lexer *l, char *source) {
     l->flags = 0;
     l->ishex = 0;
     l->files = ListNew();
+    l->symbol_table = DictNew(&default_table_type);
+    DictSetFreeKey(l->symbol_table, NULL);
+    if (macro_proccessor == NULL) {
+        macro_proccessor = CcMacroProcessor(NULL);
+    }
+    /* XXX: create one symbol table for the whole application ;
+     * hoist to 'compile.c'*/
+    for (int i = 0; i < static_size(lexer_types); ++i) {
+        LexerTypes *bilt = &lexer_types[i]; 
+        DictSet(l->symbol_table, bilt->name, bilt);
+    }
+
 }
 
 /* Is the lexeme both of type TK_PUNCT and does 'ch' match */
@@ -955,27 +973,170 @@ int lexHasFile(lexer *l, aoStr *file) {
     return 0;
 }
 
-List *lexUntil(Dict *macro_defs, lexer *l, char to) {
-    List *tokens; 
-    Dict *symbol_table = DictNew(&default_table_type);
-    LexerTypes *bilt;
-    DictSetFreeKey(symbol_table, NULL);
+void lexInclude(lexer *l, char *builtin_root) {
+    aoStr *ident, *include_path;
+    lexeme next;
 
-    /* XXX: create one symbol table for the whole application ;
-     * hoist to 'compile.c'*/
-    for (int i = 0; i < static_size(lexer_types); ++i) {
-        bilt = &lexer_types[i]; 
-        DictSet(symbol_table, bilt->name, bilt);
+    lex(l, &next);
+    if (TokenPunctIs(&next, '<')) {
+        lex(l, &next);
+        ident = aoStrNew();
+        do {
+            aoStrCatPrintf(ident, "%.*s", next.len,
+                    next.start);
+            lex(l, &next);
+        } while (next.i64 != '>');
+        include_path = aoStrNew();
+        aoStrCatPrintf(include_path, "%s/%s",
+                builtin_root, ident->data);
+        aoStrRelease(ident);
+    } else if (next.tk_type == TK_STR) {
+        include_path = aoStrDupRaw(next.start, next.len);
+    } else {
+        loggerPanic(
+                "Syntax is: #include \"<value>\" got: %s\n",
+                lexemeToString(&next));
     }
 
-    int ok,tmp_len;
-    lexeme le,next,*copy;
-    char *builtin_root, prevous_to, tmp[128];
-    aoStr *ident, *include_path;
+    if (!lexHasFile(l, include_path)) {
+        ListAppend(l->files, include_path);
+    } else {
+        aoStrRelease(include_path);
+    }
+}
+
+lexeme *lexDefine(Dict *macro_defs, lexer *l) {
+    int tk_type;
+    List *macro_tokens;
+    lexeme next,*start,*end,*expanded;
+    aoStr *ident;
+    tk_type = -1;
+    macro_tokens = ListNew();
+    /* <ident> <value> */
+    lex(l, &next);
+    if (next.tk_type != TK_IDENT) {
+        loggerPanic("Syntax is: #define <TK_IDENT> <value> at line: %d\n",next.line);
+    }
+    ident = aoStrDupRaw(next.start, next.len);
+    /* A define must be on one line a \n determines the end of a define */
+    l->flags |= CCF_ACCEPT_NEWLINES;
+    do {
+        if (!lex(l,&next)) break;
+        if (tk_type == -1) {
+            switch (next.tk_type) {
+                case TK_F64:
+                case TK_I64:
+                case TK_STR: 
+                case TK_CHAR_CONST:
+                    tk_type = next.tk_type;
+                    break;
+            }
+        }
+        if (!TokenPunctIs(&next,'\n') && !TokenPunctIs(&next,'\0')) {
+            ListAppend(macro_tokens,lexemeCopy(&next));
+        }
+    } while (!TokenPunctIs(&next,'\n') && !TokenPunctIs(&next,'\0'));
+    /* Turn off the flag */
+    l->flags &= ~CCF_ACCEPT_NEWLINES;
+    l->lineno++;
+
+    if (tk_type == -1) {
+        loggerPanic("Error while parsing #define %s at line %d, #define either be a numerical expression or a string\n",
+                ident->data,next.line);
+    }
+
+    start = macro_tokens->next->value;
+    end = macro_tokens->prev->value;
+
+    if (start == end) {
+        expanded = lexemeCopy(start);
+        DictSet(macro_defs,ident->data,expanded);
+    } else {
+        CctrlInitTokenIter(macro_proccessor,macro_tokens);
+        Ast *ast = ParseExpr(macro_proccessor,16);
+        expanded = lexemeNew(start->start,end->len-start->len);
+        expanded->tk_type = tk_type;
+        if (tk_type == TK_STR) {
+            if (ast->kind != TK_STR) {
+                loggerPanic("#define %s expected string but got: %s at line: %d\n",
+                        ident->data,AstKindToString(ast->kind),next.line);
+            }
+        } else if (tk_type == TK_F64) {
+            expanded->f64 = (long double)EvalFloatExpr(ast);
+            expanded->line = start->line;
+        } else if (tk_type == TK_I64 || tk_type == TK_CHAR_CONST) {
+            expanded->i64 = EvalIntConstExpr(ast);
+            expanded->line = start->line;
+        }
+        DictSet(macro_defs,ident->data,expanded);
+        AstRelease(ast);
+    }
+    lexemeListRelease(macro_tokens);
+    return expanded;
+}
+
+void lexUndef(Dict *macro_defs, lexer *l) {
+    lexeme next;
+    char tmp[256];
+    int tmp_len = 0;
+
+    lex(l, &next);
+    if (next.tk_type != TK_IDENT) {
+        loggerPanic(
+                "Syntax is: #undef <TK_IDENT> at line: %d\n",next.line);
+    }
+    tmp_len = snprintf(tmp,sizeof(tmp),"%.*s",
+            next.len,next.start);
+    tmp[tmp_len] = '\0';
+    DictDelete(macro_defs,tmp);
+}
+
+void lexExpandAndCollect(lexer *l, Dict *macro_defs, List *tokens, char *builtin_root) {
+    lexeme next;
+    LexerTypes *bilt;
+
+    do {
+        if (!lex(l,&next)) break;
+        if (TokenPunctIs(&next,'#')) {
+            lex(l,&next);
+            if ((bilt = DictGetLen(l->symbol_table,next.start,next.len)) != NULL) {
+                switch (bilt->kind) {
+                    case KW_INCLUDE: lexInclude(l,builtin_root); break;
+                    case KW_DEFINE: lexDefine(macro_defs,l); break;
+                    case KW_UNDEF: lexUndef(macro_defs, l); break;
+                    case KW_ENDIF:
+                    case KW_ELSE: {
+                        goto done;
+                    }
+                    default:
+                       loggerPanic("Invalid #<keyword> '%.*s' at line: %d\n",next.len,next.start,next.line);
+
+                }
+            } else if (TokenIdentIs(&next,"error",5)) {
+                lex(l,&next);
+                loggerPanic("%.*s",next.len,next.start);
+            } 
+        } else {
+            ListAppend(tokens,lexemeCopy(&next));
+        }
+    } while (1);
+done:
+    lexemePrint(&next);
+    return;
+}
+
+List *lexUntil(Dict *macro_defs, lexer *l, char to) {
+    List *tokens; 
+    LexerTypes *bilt;
+
+    int ok;
+    lexeme le,next,*copy,*macro;
+    char *builtin_root, prevous_to;
 
     prevous_to = to;
     builtin_root = lexGetBuiltInRoot();
     tokens = ListNew();
+    macro_proccessor->macro_defs = macro_defs;
 
     while (1) {
         ok = lex(l,&le);
@@ -993,7 +1154,11 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
         }
         
         if (le.tk_type == TK_IDENT) {
-            if ((bilt = DictGetLen(symbol_table,le.start,le.len)) != NULL) {
+            if ((macro = DictGetLen(macro_defs,le.start,le.len)) != NULL) {
+                copy = lexemeCopy(macro);
+                ListAppend(tokens, copy);
+                continue;
+            } else if ((bilt = DictGetLen(l->symbol_table,le.start,le.len)) != NULL) {
                 le.tk_type = TK_KEYWORD;
                 le.i64 = bilt->kind;
 
@@ -1026,69 +1191,33 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
 
         if (l->flags & CCF_PRE_PROC && TokenPunctIs(&le, '#')) {
             if (lex(l,&next) && next.tk_type == TK_IDENT) {
-                if ((bilt = DictGetLen(symbol_table,next.start,next.len)) != NULL) {
+                if ((bilt = DictGetLen(l->symbol_table,next.start,next.len)) != NULL) {
                     switch (bilt->kind) {
-                        case KW_INCLUDE: {
-                            lex(l, &next);
-                            if (TokenPunctIs(&next, '<')) {
-                                lex(l, &next);
-                                ident = aoStrNew();
-                                do {
-                                    aoStrCatPrintf(ident, "%.*s", next.len,
-                                                   next.start);
-                                    lex(l, &next);
-                                } while (next.i64 != '>');
-                                include_path = aoStrNew();
-                                aoStrCatPrintf(include_path, "%s/%s",
-                                               builtin_root, ident->data);
-                                aoStrRelease(ident);
-                            } else if (next.tk_type == TK_STR) {
-                                include_path = aoStrDupRaw(next.start, next.len);
-                            } else {
-                                loggerPanic(
-                                        "Syntax is: #include \"<value>\" got: %s\n",
-                                        lexemeToString(&next));
-                            }
+                        case KW_INCLUDE: lexInclude(l,builtin_root); break;
+                        case KW_DEFINE: copy = lexDefine(macro_defs,l); break;
+                        case KW_UNDEF: lexUndef(macro_defs, l); break;
 
-                            if (!lexHasFile(l, include_path)) {
-                                ListAppend(l->files, include_path);
-                            } else {
-                                aoStrRelease(include_path);
-                            }
-                            break;
-                        }
-
-                        case KW_DEFINE: {
-                            /* <ident> <value> */
-                            lex(l, &next);
-                            if (next.tk_type != TK_IDENT) {
-                                loggerPanic(
-                                        "Syntax is: #define <TK_IDENT> <value>\n");
-                            }
-                            ident = aoStrDupRaw(next.start, next.len);
-
-                            lex(l, &next);
-                            copy = lexemeCopy(&next);
-                            DictSet(macro_defs, ident->data, copy);
-                            break;
-                        }
-
-                        case KW_UNDEF: {
-                            lex(l, &next);
-                            if (next.tk_type != TK_IDENT) {
-                                loggerPanic(
-                                        "Syntax is: #undef <TK_IDENT> <value>\n");
-                            }
-                            tmp_len = snprintf(tmp,sizeof(tmp),"%.*s",
-                                    next.len,next.start);
-                            tmp[tmp_len] = '\0';
-                            DictDelete(macro_defs,tmp);
-                            break;
-                        }
-
-                        case KW_IF_DEF:
                         case KW_IF_NDEF:
-                            loggerPanic("#ifdef or #ifndef unimplemented at line: %d\n", le.line);
+                        case KW_IF_DEF:
+                            lex(l, &next);
+                            if (next.tk_type != TK_IDENT) {
+                                loggerPanic("Syntax is: #ifdef <TK_IDENT> at line:%d\n",next.line);
+                            }
+                            macro = DictGetLen(macro_defs,next.start,next.len);
+                            lexemePrint(macro);
+                            if ((bilt->kind == KW_IF_NDEF && macro) || (bilt->kind == KW_IF_DEF && !macro))  {
+                                do {
+                                    if (!lex(l,&next)) break;
+                                    if (TokenPunctIs(&next,'#')) {
+                                        lex(l,&next);
+                                        if (TokenIdentIs(&next,"endif",5)) {
+                                            break;
+                                        }
+                                    }
+                                } while (1);
+                            } else {
+                                lexExpandAndCollect(l,macro_defs,tokens,builtin_root);
+                            }
                             break;
                         default:
                             loggerPanic("#%.*s unimplemented at line: %d\n",le.len,le.start, le.line);
@@ -1101,7 +1230,6 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
         }
     }
     free(builtin_root);
-    DictRelease(symbol_table);
     return tokens;
 }
 
