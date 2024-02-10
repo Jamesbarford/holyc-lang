@@ -1148,7 +1148,6 @@ void lexExpandAndCollect(lexer *l, Dict *macro_defs, List *tokens, char *builtin
                         break;
 
                     case KW_ELSE: {
-                        loggerWarning("here\n");
                         if (should_collect) should_collect = 0;
                         else should_collect = 1;
                         break;
@@ -1238,7 +1237,6 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
         if (l->flags & CCF_PRE_PROC && TokenPunctIs(&le, '#')) {
             if (lex(l,&next) && next.tk_type == TK_IDENT) {
                 if ((bilt = DictGetLen(l->symbol_table,next.start,next.len)) != NULL) {
-                    lexemePrint(&next);
                     switch (bilt->kind) {
                         case KW_INCLUDE: lexInclude(l,builtin_root); break;
                         case KW_DEFINE: copy = lexDefine(macro_defs,l); break;
@@ -1252,7 +1250,6 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
                             }
                             macro = DictGetLen(macro_defs,next.start,next.len);
                             if ((bilt->kind == KW_IF_DEF && macro) || (bilt->kind == KW_IF_NDEF && !macro))  {
-                                loggerDebug("herer\n");
                                 lexExpandAndCollect(l,macro_defs,tokens,builtin_root,1);
                             } else {
                                 lexExpandAndCollect(l,macro_defs,tokens,builtin_root,0);

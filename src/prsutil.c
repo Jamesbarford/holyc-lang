@@ -128,7 +128,6 @@ double EvalFloatExpr(Ast *ast) {
     case '+': return EvalFloatExpr(ast->left) + EvalFloatExpr(ast->right);
     case '-': {
         if (ast->operand != NULL) {
-            AstPrint(ast->operand);
             return -ast->operand->f64;
         }
         return EvalFloatExpr(ast->left) - EvalFloatExpr(ast->right);

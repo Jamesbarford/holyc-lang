@@ -949,7 +949,6 @@ Ast *ParseUnaryExpr(Cctrl *cc) {
 
     if (TokenPunctIs(tok,'-')) {
         Ast *operand = ParseUnaryExpr(cc);
-        AstPrint(operand);
         operand = AstUnaryOperator(operand->type,'-',operand);
         return operand;
     }

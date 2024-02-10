@@ -125,7 +125,6 @@ int CompileToAst(Cctrl *cc, char *filepath, int lexer_flags) {
     }
 
     DictRelease(seen_files);
-    lexemePrintList(tokens);
     CctrlInitTokenIter(cc,tokens);
     ParseToAst(cc);
     ListRelease(code_list,free);
