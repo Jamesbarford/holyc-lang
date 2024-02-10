@@ -50,9 +50,12 @@ static LexerTypes lexer_types[] = {
     {"for", KW_FOR},
     {"goto", KW_GOTO},
     {"default", KW_DEFAULT},
+
     {"if", KW_IF},
     {"else", KW_ELSE},
+    {"define", KW_DEFINE},
     {"ifndef", KW_IF_NDEF},
+    {"ifdef", KW_IF_DEF},
     {"endif", KW_ENDIF},
     {"elif", KW_ELIF},
     {"defined", KW_DEFINED},
@@ -70,7 +73,6 @@ static LexerTypes lexer_types[] = {
     {"class", KW_CLASS},
     {"union", KW_UNION},
 
-    {"define", KW_DEFINE},
     {"include", KW_INCLUDE},
     {"static", KW_STATIC},
 };
@@ -1091,9 +1093,10 @@ void lexUndef(Dict *macro_defs, lexer *l) {
     DictDelete(macro_defs,tmp);
 }
 
-void lexExpandAndCollect(lexer *l, Dict *macro_defs, List *tokens, char *builtin_root) {
-    lexeme next;
+void lexExpandAndCollect(lexer *l, Dict *macro_defs, List *tokens, char *builtin_root, int should_collect) {
+    lexeme next,*macro;
     LexerTypes *bilt;
+    int endif_count = 1;
 
     do {
         if (!lex(l,&next)) break;
@@ -1101,12 +1104,54 @@ void lexExpandAndCollect(lexer *l, Dict *macro_defs, List *tokens, char *builtin
             lex(l,&next);
             if ((bilt = DictGetLen(l->symbol_table,next.start,next.len)) != NULL) {
                 switch (bilt->kind) {
-                    case KW_INCLUDE: lexInclude(l,builtin_root); break;
-                    case KW_DEFINE: lexDefine(macro_defs,l); break;
-                    case KW_UNDEF: lexUndef(macro_defs, l); break;
+                    case KW_INCLUDE: {
+                        if (should_collect) {
+                            lexInclude(l,builtin_root);
+                        }
+                        break;
+                    }
+                    case KW_DEFINE: {
+                        if (should_collect) {
+                            lexDefine(macro_defs,l);
+                        }
+                        break;
+                    }
+                    case KW_UNDEF: {
+                        if (should_collect) {
+                            lexUndef(macro_defs, l);
+                        }
+                        break;
+                    }
+                    case KW_IF_DEF: {
+                        lex(l,&next);
+                        should_collect = 0;
+                        if ((macro = DictGetLen(macro_defs,next.start,next.len)) != NULL) {
+                            should_collect = 1;
+                        }
+                        endif_count++;
+                        break;
+                    }
+                    case KW_IF_NDEF: {
+                        lex(l,&next);
+                        should_collect = 0;
+                        if ((macro = DictGetLen(macro_defs,next.start,next.len)) == NULL) {
+                            should_collect = 1;
+                        }
+                        endif_count++;
+                        break;
+                    }
                     case KW_ENDIF:
+                        endif_count--;
+                        if (endif_count == 0) {
+                            goto done;
+                        }
+                        break;
+
                     case KW_ELSE: {
-                        goto done;
+                        loggerWarning("here\n");
+                        if (should_collect) should_collect = 0;
+                        else should_collect = 1;
+                        break;
                     }
                     default:
                        loggerPanic("Invalid #<keyword> '%.*s' at line: %d\n",next.len,next.start,next.line);
@@ -1117,11 +1162,12 @@ void lexExpandAndCollect(lexer *l, Dict *macro_defs, List *tokens, char *builtin
                 loggerPanic("%.*s",next.len,next.start);
             } 
         } else {
-            ListAppend(tokens,lexemeCopy(&next));
+            if (should_collect) {
+                ListAppend(tokens,lexemeCopy(&next));
+            }
         }
     } while (1);
 done:
-    lexemePrint(&next);
     return;
 }
 
@@ -1192,6 +1238,7 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
         if (l->flags & CCF_PRE_PROC && TokenPunctIs(&le, '#')) {
             if (lex(l,&next) && next.tk_type == TK_IDENT) {
                 if ((bilt = DictGetLen(l->symbol_table,next.start,next.len)) != NULL) {
+                    lexemePrint(&next);
                     switch (bilt->kind) {
                         case KW_INCLUDE: lexInclude(l,builtin_root); break;
                         case KW_DEFINE: copy = lexDefine(macro_defs,l); break;
@@ -1204,23 +1251,15 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
                                 loggerPanic("Syntax is: #ifdef <TK_IDENT> at line:%d\n",next.line);
                             }
                             macro = DictGetLen(macro_defs,next.start,next.len);
-                            lexemePrint(macro);
-                            if ((bilt->kind == KW_IF_NDEF && macro) || (bilt->kind == KW_IF_DEF && !macro))  {
-                                do {
-                                    if (!lex(l,&next)) break;
-                                    if (TokenPunctIs(&next,'#')) {
-                                        lex(l,&next);
-                                        if (TokenIdentIs(&next,"endif",5)) {
-                                            break;
-                                        }
-                                    }
-                                } while (1);
+                            if ((bilt->kind == KW_IF_DEF && macro) || (bilt->kind == KW_IF_NDEF && !macro))  {
+                                loggerDebug("herer\n");
+                                lexExpandAndCollect(l,macro_defs,tokens,builtin_root,1);
                             } else {
-                                lexExpandAndCollect(l,macro_defs,tokens,builtin_root);
+                                lexExpandAndCollect(l,macro_defs,tokens,builtin_root,0);
                             }
                             break;
                         default:
-                            loggerPanic("#%.*s unimplemented at line: %d\n",le.len,le.start, le.line);
+                            loggerPanic("#%.*s invalid at line: %d\n",next.len,next.start, next.line);
                     }
                 }
             }

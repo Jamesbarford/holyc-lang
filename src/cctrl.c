@@ -8,6 +8,7 @@
 #include "lexer.h"
 #include "list.h"
 #include "util.h"
+#include "config.h"
 
 static char *x86_registers = "rax,rbx,rcx,rdx,rsi,rdi,rbp,rsp,r8,r9,r10,r11,r12,"
     "r13,r14,r15,cs,ds,es,fs,gs,ss,rip,rflags,st0,st1,st2,st3,st4,st5,st6,st7,"
@@ -52,6 +53,18 @@ static BuiltInType built_in_types[] = {
     {"auto",AST_TYPE_AUTO,0,0},
     {"private",AST_TYPE_VIS_MODIFIER,0,0},
 };
+
+static void CctrlAddBuiltinMacros(Cctrl *cc) {
+    lexeme *le;
+    le = lexemeSentinal();
+    if (IS_BSD)        DictSet(cc->macro_defs,"IS_BSD",le);
+    else if (IS_LINUX) DictSet(cc->macro_defs,"IS_LINUX",le);
+    
+    if (IS_X86_64)      DictSet(cc->macro_defs,"IS_X86_64",le);
+    else if (IS_ARM_64) DictSet(cc->macro_defs,"IS_ARM_64",le); 
+
+    // XXX: do DATE, TIME, TIMESTAMP, HCC_VERSION
+}
 
 Cctrl *CcMacroProcessor(Dict *macro_defs) {
     Cctrl *cc = malloc(sizeof(Cctrl));
@@ -114,6 +127,9 @@ Cctrl *CctrlNew(void) {
         type->ptr = NULL;
         DictSet(cc->symbol_table, bilt->name, type);
     }
+
+    CctrlAddBuiltinMacros(cc);
+
     Ast *cmd_args = AstGlobalCmdArgs();
     ListAppend(cc->ast_list,cmd_args->argc);
     ListAppend(cc->ast_list,cmd_args->argv);
