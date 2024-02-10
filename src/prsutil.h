@@ -23,12 +23,12 @@ int TokenMatchFlag(lexeme *tok, long flags);
 AstType *ParseGetType(Cctrl *cc, lexeme *tok);
 int ParseIsKeyword(lexeme *tok, Cctrl *cc);
 long EvalIntConstExpr(Ast *ast);
+double EvalFloatExpr(Ast *ast);
 int EvalClassRef(Ast *ast, int offset);
 void AssertLValue(Ast *ast, long lineno);
 int ParseIsFloatOrInt(Ast *ast);
 int ParseIsClassOrUnion(int kind);
 
-void AssertIsValidPointerOp(long op, long lineno);
 void AssertTokenIsTerminator(lexeme *tok, long terminator_flags);
 void AssertUniqueSwitchCaseLabels(List *case_list, Ast *case_);
 void AssertIsFloatOrInt(Ast *ast, long lineno);

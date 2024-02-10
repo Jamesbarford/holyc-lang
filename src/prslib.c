@@ -530,7 +530,9 @@ static Ast *ParsePrimary(Cctrl *cc) {
         return AstCharType(tok->i64);
     case TK_STR:
         ast = AstString(tok->start, tok->len);
-        ListAppend(cc->strings, ast);
+        if (cc->strings) {
+            ListAppend(cc->strings, ast);
+        }
         return ast;
 
     case TK_PUNCT:
@@ -947,7 +949,8 @@ Ast *ParseUnaryExpr(Cctrl *cc) {
 
     if (TokenPunctIs(tok,'-')) {
         Ast *operand = ParseUnaryExpr(cc);
-        return AstUnaryOperator(operand->type,'-',operand);
+        operand = AstUnaryOperator(operand->type,'-',operand);
+        return operand;
     }
 
     CctrlTokenRewind(cc);

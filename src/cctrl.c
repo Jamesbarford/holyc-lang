@@ -1,6 +1,8 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <sys/time.h>
 
 #include "ast.h"
 #include "cctrl.h"
@@ -8,6 +10,7 @@
 #include "lexer.h"
 #include "list.h"
 #include "util.h"
+#include "config.h"
 
 static char *x86_registers = "rax,rbx,rcx,rdx,rsi,rdi,rbp,rsp,r8,r9,r10,r11,r12,"
     "r13,r14,r15,cs,ds,es,fs,gs,ss,rip,rflags,st0,st1,st2,st3,st4,st5,st6,st7,"
@@ -52,6 +55,81 @@ static BuiltInType built_in_types[] = {
     {"auto",AST_TYPE_AUTO,0,0},
     {"private",AST_TYPE_VIS_MODIFIER,0,0},
 };
+
+static void CctrlAddBuiltinMacros(Cctrl *cc) {
+    lexeme *le;
+    struct tm *ptm;
+    struct timeval tm;
+    long milliseconds,len;
+    time_t seconds;
+    char *date,*time,*time_stamp,*version;
+    long bufsize = sizeof(char)*128;
+
+    le = lexemeSentinal();
+    if (IS_BSD)        DictSet(cc->macro_defs,"IS_BSD",le);
+    else if (IS_LINUX) DictSet(cc->macro_defs,"IS_LINUX",le);
+    
+    if (IS_X86_64)      {
+        DictSet(cc->macro_defs,"IS_X86_64",le);
+        le = lexemeNew("X86_64",6);
+        le->tk_type = TK_STR;
+        DictSet(cc->macro_defs,"__ARCH__",le);
+    } else if (IS_ARM_64) {
+        DictSet(cc->macro_defs,"IS_ARM_64",le);
+        le = lexemeNew("ARM_64",6);
+        le->tk_type = TK_STR;
+        DictSet(cc->macro_defs,"__ARCH__",le);
+    }
+
+    gettimeofday(&tm,NULL);
+    milliseconds = (tm.tv_sec*1000) +
+        (tm.tv_usec/1000);
+    seconds = milliseconds / 1000;
+    ptm = localtime(&seconds);
+
+    time = malloc(bufsize);
+    date = malloc(bufsize);
+    time_stamp = malloc(bufsize);
+    version = malloc(bufsize);
+
+    len = snprintf(time,bufsize,"%02d:%02d:%02d",
+            ptm->tm_hour,ptm->tm_min,ptm->tm_sec);
+    time[len] = '\0';
+    le = lexemeNew(time,len);
+    le->tk_type = TK_STR;
+    DictSet(cc->macro_defs,"__TIME__",le);
+
+    len = snprintf(date,bufsize,"%04d/%02d/%02d",
+            ptm->tm_year+1900,ptm->tm_mon+1,ptm->tm_mday);
+    date[len] = '\0';
+    le = lexemeNew(date,len);
+    le->tk_type = TK_STR;
+    DictSet(cc->macro_defs,"__DATE__",le);
+
+    len = snprintf(time_stamp,bufsize,
+            "%d-%02d-%02d %02d:%02d:%02d",
+            ptm->tm_year+1900,
+            ptm->tm_mon+1,ptm->tm_mday,ptm->tm_hour,
+            ptm->tm_min,ptm->tm_sec);
+    date[len] = '\0';
+    le = lexemeNew(time_stamp,len);
+    le->tk_type = TK_STR;
+    DictSet(cc->macro_defs,"__TIMESTAMP__",le);
+
+
+    len = snprintf(version,bufsize,"v0.0.1-alpha");
+    version[len] = '\0';
+    le = lexemeNew(version,len);
+    le->tk_type = TK_STR;
+    DictSet(cc->macro_defs,"__HCC_VERSION__",le);
+}
+
+Cctrl *CcMacroProcessor(Dict *macro_defs) {
+    Cctrl *cc = malloc(sizeof(Cctrl));
+    cc->tkit = malloc(sizeof(TokenIter));
+    cc->macro_defs = macro_defs;
+    return cc;
+}
 
 /* Instantiate a new compiler control struct */
 Cctrl *CctrlNew(void) {
@@ -107,6 +185,9 @@ Cctrl *CctrlNew(void) {
         type->ptr = NULL;
         DictSet(cc->symbol_table, bilt->name, type);
     }
+
+    CctrlAddBuiltinMacros(cc);
+
     Ast *cmd_args = AstGlobalCmdArgs();
     ListAppend(cc->ast_list,cmd_args->argc);
     ListAppend(cc->ast_list,cmd_args->argv);
@@ -144,17 +225,17 @@ void CctrlTokenIterSetCur(Cctrl *cc, List *cur) {
 /* Have a look at the next lexeme but don't consume */
 lexeme *CctrlTokenPeek(Cctrl *cc) {
     TokenIter *it = cc->tkit;
-    lexeme *macro, *retval;
+    lexeme *retval, *macro;
 
     if (it->cur == it->tokens) {
         return NULL;
     }
 
     retval = (lexeme *)it->cur->value;
-    if (retval->tk_type == TK_IDENT &&
-            (macro = DictGetLen(cc->macro_defs,retval->start,
-                                retval->len)) != NULL) {
-        return macro;
+    if (retval->tk_type == TK_IDENT) {
+        if ((macro = DictGetLen(cc->macro_defs,retval->start,retval->len)) != NULL) {
+            return macro;
+        }
     }
     return retval;
 }

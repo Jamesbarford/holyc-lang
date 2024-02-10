@@ -45,20 +45,6 @@ inline int ParseIsFunctionCall(Ast *ast) {
            ast->type->kind == AST_ASM_FUNCALL);
 }
 
-void AssertIsValidPointerOp(long op, long lineno) {
-    switch (op) {
-        case '-': case '+':
-        case '<': case TK_LESS_EQU:
-        case '>': case TK_GREATER_EQU:
-        case TK_EQU_EQU: case TK_NOT_EQU:
-        case TK_OR_OR: case TK_AND_AND:    
-            return;
-        default:
-            loggerPanic("Invalid pointer operation: %s at line: %ld\n",
-                    AstKindToString(op),lineno);
-    }
-}
-
 void AssertIsFloat(Ast *ast, long lineno) {
     if (ast && !AstIsFloatType(ast->type)) {
         loggerPanic("Expected float type got %s at line %ld\n",
@@ -131,11 +117,42 @@ int EvalClassRef(Ast *ast, int offset) {
     return EvalIntConstExpr(ast) + offset;
 }
 
+double EvalFloatExpr(Ast *ast) {
+    switch (ast->kind) {
+    case AST_LITERAL:
+        if (AstIsFloatType(ast->type)) {
+            return ast->f64;
+        } else if (AstIsIntType(ast->type)) {
+            return (double)ast->i64;
+        }
+    case '+': return EvalFloatExpr(ast->left) + EvalFloatExpr(ast->right);
+    case '-': {
+        if (ast->right == NULL && ast->operand != NULL) {
+            return -ast->operand->f64;
+        }
+        return EvalFloatExpr(ast->left) - EvalFloatExpr(ast->right);
+    }
+    case '/': return EvalFloatExpr(ast->left) / EvalFloatExpr(ast->right);
+    case '*': return EvalFloatExpr(ast->left) * EvalFloatExpr(ast->right);
+    case TK_EQU_EQU: return EvalFloatExpr(ast->left) == EvalFloatExpr(ast->right);
+    case TK_GREATER_EQU: return EvalFloatExpr(ast->left) >= EvalFloatExpr(ast->right);
+    case TK_LESS_EQU: return EvalFloatExpr(ast->left) <= EvalFloatExpr(ast->right);
+    case TK_NOT_EQU: return EvalFloatExpr(ast->left) != EvalFloatExpr(ast->right);
+    case TK_OR_OR: return EvalFloatExpr(ast->left) || EvalFloatExpr(ast->right);
+    case TK_AND_AND: return EvalFloatExpr(ast->left) && EvalFloatExpr(ast->right);
+    default:
+        loggerPanic("%s is an invalid floating point constant expression operator\n",
+                AstKindToString(ast->kind));
+    }
+}
+
 long EvalIntConstExpr(Ast *ast) {
     switch (ast->kind) {
     case AST_LITERAL:
         if (AstIsIntType(ast->type)) {
             return ast->i64;
+        } else if (AstIsFloatType(ast->type)) {
+            return (long)ast->f64;
         }
     case AST_ADDR:
         if (ast->operand->kind == AST_CLASS_REF) {
@@ -146,7 +163,12 @@ long EvalIntConstExpr(Ast *ast) {
             return EvalIntConstExpr(ast->operand);
         }
     case '+': return EvalIntConstExpr(ast->left) + EvalIntConstExpr(ast->right);
-    case '-': return EvalIntConstExpr(ast->left) - EvalIntConstExpr(ast->right);
+    case '-': {
+        if (ast->right == NULL && ast->operand != NULL) {
+            return -ast->operand->i64;
+        }
+        return EvalIntConstExpr(ast->left) - EvalIntConstExpr(ast->right);
+    }
     case TK_SHL: return EvalIntConstExpr(ast->left) << EvalIntConstExpr(ast->right);
     case TK_SHR: return EvalIntConstExpr(ast->left) >> EvalIntConstExpr(ast->right);
     case '&': return EvalIntConstExpr(ast->left) & EvalIntConstExpr(ast->right);
@@ -155,6 +177,11 @@ long EvalIntConstExpr(Ast *ast) {
     case '*': return EvalIntConstExpr(ast->left) * EvalIntConstExpr(ast->right);
     case '/': return EvalIntConstExpr(ast->left) / EvalIntConstExpr(ast->right);
     case '%': return EvalIntConstExpr(ast->left) % EvalIntConstExpr(ast->right);
+    case '~': {
+        if (ast->operand != NULL) {
+            return ~ast->operand->i64;
+        }
+    }
     case TK_EQU_EQU: return EvalIntConstExpr(ast->left) == EvalIntConstExpr(ast->right);
     case TK_GREATER_EQU: return EvalIntConstExpr(ast->left) >= EvalIntConstExpr(ast->right);
     case TK_LESS_EQU: return EvalIntConstExpr(ast->left) <= EvalIntConstExpr(ast->right);

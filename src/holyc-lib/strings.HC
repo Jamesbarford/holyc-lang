@@ -4,7 +4,6 @@
 #include <memory.HC>
 #include <io.HC>
 
-
 extern "c" U0 exit(I32 code);
 extern "c" F64 strtod(U8 *nptr, U8 **endptr);
 extern "c" I64 strtoll(U8 *nptr, U8 **endptr, I64 base=10);
@@ -34,28 +33,31 @@ U8 *StrPrint(U8 *dst,U8 *fmt,...);
 U8 *StrPrintJoin(U8 *_dst, U8 *fmt,I64 argc,I64 *argv);
 U8 *MPrintTime(CDate cdt);
 U8 *MPrintDate(CDate cdt);
+U8 *MPrintTimestampNow();
 I64 StrOcc(U8 *src, I64 ch);
 
 #define STR_LEN 256
 
-#define PRTF_PAD_ZERO         0x001
-#define PRTF_LEFT_JUSTIFY	  0x002
-#define PRTF_TRUNCATE		  0x004
-#define PRTF_COMMA		      0x008
-#define PRTF_DOLLAR           0x010
-#define PRTF_SLASH		      0x020
-#define PRTF_QUESTION		  0x040
-#define PRTF_AUX_FMT_NUM	  0x080
-#define PRTF_DECIMAL		  0x100
-#define PRTF_NEG		      0x200
-#define PRTF_NEG_E		      0x400
-#define PRTF_NEG_AUX_FMT_NUM  0x800
+#define PRTF_PAD_ZERO        0x001
+#define PRTF_LEFT_JUSTIFY	   0x002
+#define PRTF_TRUNCATE		     0x004
+#define PRTF_COMMA		       0x008
+#define PRTF_DOLLAR          0x010
+#define PRTF_SLASH		       0x020
+#define PRTF_QUESTION		     0x040
+#define PRTF_AUX_FMT_NUM	   0x080
+#define PRTF_DECIMAL		     0x100
+#define PRTF_NEG		         0x200
+#define PRTF_NEG_E           0x400
+#define PRTF_NEG_AUX_FMT_NUM 0x800
 
-#define CH_BACKSPACE	0x08
-#define CH_ESC          0x1B
-#define CH_SHIFT_ESC	0x1C
-#define CH_SHIFT_SPACE	0x1F
-#define CH_SPACE	    0x20
+#define CH_BACKSPACE   0x08
+#define CH_ESC         0x1B
+#define CH_SHIFT_ESC   0x1C
+#define CH_SHIFT_SPACE 0x1F
+#define CH_SPACE	     0x20
+
+#define TIMESTAMP_FMT "%d-%02d-%02d %02d:%02d:%02d"
 
 asm {
 // RDI=s1, RSI=s2, RDX=N
@@ -850,6 +852,19 @@ U8 *MPrintDate(CDate cdt)
   CDateStruct ds;
   Date2Struct(&ds,cdt);
   return MStrPrint("%02d/%02d/%04d",ds.mon,ds.day_of_mon,ds.year);
+}
+
+
+U8 *MPrintTimestampNow()
+{// Get a timestamp
+  I64 seconds = NowMilliseconds() / 1000; 
+  U8 *timestamp = MAlloc(sizeof(U8)*32);
+  auto ptm = localtime(&seconds);
+  auto len = snprintf(timestamp,sizeof(U8)*32,TIMESTAMP_FMT,
+          ptm->tm_year+1900,ptm->tm_mon+1,ptm->tm_mday,
+          ptm->tm_hour,ptm->tm_min,ptm->tm_sec);
+  timestamp[len] = '\0';
+  return timestamp;
 }
 
 U8 *CatPrint(U8 *_dst,U8 *fmt,...)

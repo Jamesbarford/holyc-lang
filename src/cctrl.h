@@ -100,6 +100,8 @@ typedef struct Cctrl {
 
 /* Instantiate a new compiler control struct */
 Cctrl *CctrlNew(void);
+/* Slimmed down Cctrl, for expanding macros */
+Cctrl *CcMacroProcessor(Dict *macro_defs);
 void CctrlInitTokenIter(Cctrl *cc, List *tokens);
 lexeme *CctrlTokenGet(Cctrl *cc);
 lexeme *CctrlTokenPeek(Cctrl *cc);
