@@ -1010,7 +1010,7 @@ void lexInclude(lexer *l, char *builtin_root) {
 lexeme *lexDefine(Dict *macro_defs, lexer *l) {
     int tk_type;
     List *macro_tokens;
-    lexeme next,*start,*end,*expanded;
+    lexeme next,*start,*end,*expanded,*macro;
     aoStr *ident;
     tk_type = -1;
     macro_tokens = ListNew();
@@ -1024,6 +1024,15 @@ lexeme *lexDefine(Dict *macro_defs, lexer *l) {
     l->flags |= CCF_ACCEPT_NEWLINES;
     do {
         if (!lex(l,&next)) break;
+
+        if (next.tk_type == TK_IDENT) {
+            if ((macro = DictGetLen(macro_defs,next.start,next.len)) != NULL) {
+                ListAppend(macro_tokens,lexemeCopy(macro));
+                tk_type = macro->tk_type;
+                continue;
+            }
+        }
+
         if (tk_type == -1) {
             switch (next.tk_type) {
                 case TK_F64:
