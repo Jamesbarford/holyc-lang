@@ -55,7 +55,7 @@ public U8 *FileRead(U8 *path, I64 *_size=NULL)
 {
   if (!path) return NULL;
   I32 fd;
-  I64 len, rbytes;
+  I64 len, rbytes, size;
   U8 *s;
 
   if ((fd = open(path,O_RDONLY,438)) == -1) {
@@ -71,18 +71,26 @@ public U8 *FileRead(U8 *path, I64 *_size=NULL)
   lseek(fd,0,SEEK_SET);
 
   s = MAlloc(len+100);
+  size = 0;
 
-  if ((rbytes = read(fd,s,len)) != len) {
+  while ((rbytes = read(fd,s,len)) != 0) {
+    size += rbytes;
+  }
+
+  if (size != len) {
     close(fd);
     Free(s);
+    if (_size) {
+      *_size = 0;
+    }
     return NULL;
   }
 
   if (_size) {
-    *_size = rbytes;
+    *_size = len;
   }
 
-  s[rbytes-1] = '\0';
+  s[len-1] = '\0';
   close(fd);
   return s;
 }
