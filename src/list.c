@@ -95,11 +95,10 @@ void ListRelease(List *ll, void (*freeValue)(void *)) {
 }
 
 int ListCount(List *ll) {
-    List *node = ll->next;
+    if (!ll) return 0;
     int count = 0;
-    while (node != ll) {
+    ListForEach(ll) {
         count++;
-        node = node->next;
     }
     return count;
 }

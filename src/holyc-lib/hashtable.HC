@@ -83,14 +83,14 @@ public Bool IntMapSet(IntMap *map, I64 key, U0 *value);
 public IntMap *IntMapNew(U64 capacity=1<<8);
 public U0 IntMapSetFreeValue(IntMap *map, U0 (*_free_value)(U0 *value));
 public U0 IntMapRelease(IntMap *map);
-public U0 IntMapResize(IntMap *map, U64 size);
+public Bool IntMapResize(IntMap *map, U64 size);
 
 U64 IntMapHashFunction(I64 key, U64 mask)
 {
   return key & mask;
 }
 
-auto IntMapNew(U64 capacity)
+IntMap *IntMapNew(U64 capacity)
 {
   IntMap *map = MAlloc(sizeof(IntMap));
   map->capacity = capacity;
@@ -202,6 +202,7 @@ public Bool IntMapResize(IntMap *map, U64 size)
   Free(map->indexes);
   map->indexes = new_indexes;
   map->threashold = cast<U64>(map->capacity * HT_LOAD);
+  return TRUE;
 }
 
 auto IntMapSet(IntMap *map, I64 key, U0 *value)
@@ -251,11 +252,12 @@ public Bool IntMapDelete(IntMap *map, I64 key)
     idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
     probe++;
   }
+  return FALSE;
 }
 
 public U0 *IntMapGet(IntMap *map, I64 key)
 {
-  U64 idx,mask, probe;
+  U64 idx, mask, probe;
   IntMapNode **entries = map->entries;
   IntMapNode *cur;
 
@@ -313,7 +315,7 @@ public StrMap *StrMapNew(U64 capacity=1<<8);
 public U0 StrMapSetFreeValue(StrMap *map, U0 (*_free_value)(U0 *value));
 public U0 StrMapSetFreeKey(StrMap *map, U0 (*_free_key)(U0 *key));
 public U0 StrMapRelease(StrMap *map);
-public U0 StrMapResize(StrMap *map, U64 size);
+public Bool StrMapResize(StrMap *map, U64 size);
 
 U64 StrMapHashFunction(U8 *key, I64 key_len, U64 mask)
 { 
@@ -324,7 +326,7 @@ U64 StrMapHashFunction(U8 *key, I64 key_len, U64 mask)
   return hash & mask;
 }
 
-auto StrMapNew(U64 capacity)
+StrMap *StrMapNew(U64 capacity)
 {
   StrMap *map = MAlloc(sizeof(StrMap));
   map->capacity = capacity;
@@ -448,9 +450,10 @@ public Bool StrMapResize(StrMap *map, U64 size)
   Free(map->indexes);
   map->indexes = new_indexes;
   map->threashold = cast<U64>(map->capacity * HT_LOAD);
+  return TRUE;
 }
 
-auto StrMapSet(StrMap *map, U8 *key, U0 *value)
+Bool StrMapSet(StrMap *map, U8 *key, U0 *value)
 {
   Bool is_free;
   U64 mask = map->mask;
@@ -506,6 +509,7 @@ public Bool StrMapDelete(StrMap *map, U8 *key)
     idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
     probe++;
   }
+  return TRUE;
 }
 
 public U0 *StrMapGet(StrMap *map, U8 *key)

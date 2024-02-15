@@ -191,5 +191,4 @@ U0 Main()
   AndTests();
   NotTests();
   "=====\n";
-  return 0;
 }
