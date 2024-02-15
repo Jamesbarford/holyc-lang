@@ -393,15 +393,6 @@ List *ParseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
                     free(fstring);
                     free(expected);
                     free(got);
-
-
-                
-              //      loggerWarning("line %ld: "ESC_GREEN"%s"ESC_RESET" %.*s() incompatiable function argument" 
-              //              " expected type: "ESC_GREEN"%s"ESC_RESET
-              //              " got: "ESC_GREEN"%s"ESC_RESET"\n",
-              //              CctrlGetLineno(cc), 
-              //              AstTypeToString(rettype),len,fname,
-              //              AstTypeToString(param->type),AstTypeToString(ast->type));
                 }
             }
             ListAppend(argv,ast);
