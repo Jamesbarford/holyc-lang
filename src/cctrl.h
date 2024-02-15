@@ -109,11 +109,9 @@ void CctrlTokenIterSetCur(Cctrl *cc, List *cur);
 void CctrlTokenRewind(Cctrl *cc);
 void CctrlTokenExpect(Cctrl *cc, long expected);
 
-/* Does a list scan */
-Ast *CctrlFindFunctionDef(Cctrl *cc, char *fname, int len);
-Ast *CctrlFindFuncParam(Cctrl *cc, char *name, int len);
 Ast *CctrlGetVar(Cctrl *cc, char *varname, int len);
 int CctrlIsKeyword(Cctrl *cc, char *name, int len);
 AstType *CctrlGetKeyWord(Cctrl *cc, char *name, int len);
+long CctrlGetLineno(Cctrl *cc);
 
 #endif // !CCTRL_H

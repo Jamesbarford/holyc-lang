@@ -544,6 +544,7 @@ U8 *StrPrintJoin(U8 *_dst, U8 *fmt,I64 argc,I64 *argv)
   F64 farg;
   I64 ch, sp = 0, intarg, U8arg, len, flags, tlen,dec_len,aux_fmt_num;
   U8 *ptr, *strarg, *tmp, *dst, buf[256];
+  CDate cdt;
 
   if (_dst == NULL) {
     dst = MAlloc(STR_LEN);
@@ -603,16 +604,16 @@ U8 *StrPrintJoin(U8 *_dst, U8 *fmt,I64 argc,I64 *argv)
         }
 
         case 'T': {
-          strarg = cast<U8 *>(argv[sp++]);
-          strarg = MPrintTime(strarg);
+          cdt = cast<CDate>(argv[sp++]);
+          strarg = MPrintTime(cdt);
           OutStr(strarg,&dst,&ptr,tlen,flags);
           Free(strarg);
           break;
         }
 
         case 'D': {
-          strarg = cast<U8 *>(argv[sp++]);
-          strarg = MPrintDate(strarg);
+          cdt = cast<CDate>(argv[sp++]);
+          strarg = MPrintDate(cdt);
           OutStr(strarg,&dst,&ptr,tlen,flags);
           Free(strarg);
           break;

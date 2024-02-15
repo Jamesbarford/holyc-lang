@@ -150,7 +150,7 @@ int lex(lexer *l, lexeme *le);
 List *lexToLexemes(Dict *macro_defs, lexer *l);
 List *lexUntil(Dict *macro_defs, lexer *l, char to);
 void lexemePrint(lexeme *le);
-char *tokenTypeToString(int tk_type);
+char *lexemeTypeToString(int tk_type);
 char *lexemePunctToString(long op);
 char *lexemeToString(lexeme *tok);
 void lexemePrintList(List *tokens);

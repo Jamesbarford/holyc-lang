@@ -173,22 +173,15 @@ int TokenIdentIs(lexeme *tok, char *ident, int len) {
                && !memcmp(tok->start,ident,len);
 }
 
-char *tokenTypeToString(int tk_type) {
+char *lexemeTypeToString(int tk_type) {
     switch (tk_type) {
-    case TK_IDENT:
-        return "TK_IDENT";
-    case TK_PUNCT:
-        return "TK_PUNCT";
-    case TK_I64:
-        return "TK_I64";
-    case TK_F64:
-        return "TK_F64";
-    case TK_EOF:
-        return "TK_EOF";
-    case TK_CHAR_CONST:
-        return "TK_CHAR_CONST";
-    case TK_STR:
-        return "TK_STR";
+    case TK_IDENT: return "TK_IDENT";
+    case TK_PUNCT: return "TK_PUNCT";
+    case TK_I64:   return "TK_I64";
+    case TK_F64:   return "TK_F64";
+    case TK_EOF:   return "TK_EOF";
+    case TK_CHAR_CONST: return "TK_CHAR_CONST";
+    case TK_STR:   return "TK_STR";
     }
     return "UNKNOWN";
 }
@@ -227,7 +220,6 @@ char *lexemeToString(lexeme *tok) {
     }
     aoStr *str = aoStrNew();
     char *tmp;
-    aoStrCatPrintf(str,"Line: %d\tType: ",tok->line);
     switch (tok->tk_type) {
         case TK_IDENT:
             aoStrCatPrintf(str,"TK_IDENT\t %.*s",tok->len,tok->start);
@@ -303,13 +295,14 @@ char *lexemeToString(lexeme *tok) {
                 case KW_DO:          aoStrCatPrintf(str,"do");      break;
                 case KW_STATIC:      aoStrCatPrintf(str,"static");  break;
                 default:
-                    loggerPanic("Keyword %.*s: is not defined at line: %d\n",
-                            tok->len,tok->start,tok->line);
+                    loggerPanic("line %d: Keyword %.*s: is not defined\n",
+                            tok->line,tok->len,tok->start);
             }
             return aoStrMove(str);
         }
     }
-    loggerPanic("Unexpected type: %d\n", tok->tk_type);
+    loggerPanic("line %d: Unexpected type %s\n",
+            tok->line,lexemeTypeToString(tok->tk_type));
 }
 
 /* Print one lexeme */
@@ -377,7 +370,7 @@ static int countNumberLen(lexer *l, char *ptr, int *isfloat, int *ishex,
         case 'E':
             if (!*ishex) {
                 if (seen_e) {
-                    loggerWarning("Hex and seen e\n");
+                    loggerWarning("line %d: Hex and seen e\n", l->lineno);
                     *err = 1;
                     return -1;
                 }
@@ -387,7 +380,7 @@ static int countNumberLen(lexer *l, char *ptr, int *isfloat, int *ishex,
         case 'x':
         case 'X':
             if (*ishex) {
-                loggerWarning("seen x\n");
+                loggerWarning("line %d: seen x\n", l->lineno);
                 *err = 1;
                 return -1;
             }
@@ -407,7 +400,7 @@ static int countNumberLen(lexer *l, char *ptr, int *isfloat, int *ishex,
         /* Anything else is invalid */
         default:
             if (!isHex(*ptr)) {
-                loggerWarning("Number errored with char: '%c'\n", *ptr);
+                loggerWarning("line %d: Number errored with char: '%c'\n",l->lineno,*ptr);
                 *err = 1;
                 return -1;
             }
@@ -419,14 +412,14 @@ static int countNumberLen(lexer *l, char *ptr, int *isfloat, int *ishex,
     /* Floating point hex does not exist */
     if (*isfloat && *ishex) {
         *err = 1;
-        loggerWarning("LEX error is float and ishex\n");
+        loggerWarning("line %d: LEX error is float and ishex\n",l->lineno);
         return -1;
     }
 
     /* Exponent hex does not exist */
     if (*ishex && seen_e) {
         *err = 1;
-        loggerWarning("LEX error seen_e and ishex\n");
+        loggerWarning("line %d: lexer seen_e and ishex\n", l->lineno);
         return -1;
     }
 
@@ -635,8 +628,7 @@ unsigned long lexCharConst(lexer *l) {
     }
 
     if (ch != '\'' && lexPeek(l) != '\'') {
-        loggerPanic("Char const limited to 8 characters! at line: %d\n",
-                l->lineno);
+        loggerPanic("line %d: Char const limited to 8 characters!\n",l->lineno);
     }
 
     /* Consume next character if it is the end of the char const */
@@ -699,7 +691,8 @@ int lex(lexer *l, lexeme *le) {
         case 'A' ... 'Z':
         case '_':
             if ((tk_type = lexIdentifier(l, ch)) == -1) {
-                loggerPanic("Lex error while lexing lexIdentifier\n");
+                loggerPanic("line %d: Lex error while lexing lexIdentifier\n",
+                        l->lineno);
                 goto error;
             }
 
@@ -711,7 +704,8 @@ int lex(lexer *l, lexeme *le) {
 
         case '0' ... '9':
             if ((tk_type = lexNumeric(l,0)) == -1) {
-                loggerPanic("Lex error while lexing lexNumeric\n");
+                loggerPanic("line %d: Lex error while lexing lexNumeric\n",
+                        l->lineno);
                 goto error;
             }
             le->len = l->ptr - start;
@@ -909,7 +903,8 @@ int lex(lexer *l, lexeme *le) {
             if (lexPeekMatch(l,'.')) {
                 if (isNum(lexPeek(l))) {
                     if ((tk_type = lexNumeric(l,1)) == -1) {
-                        loggerPanic("Lex error while lexing lexNumeric\n");
+                        loggerPanic("line %d: Lex error while lexing lexNumeric\n",
+                                l->lineno);
                         goto error;
                     }
                     le->len = l->ptr - start;
@@ -925,8 +920,8 @@ int lex(lexer *l, lexeme *le) {
                         lexemeAssignOp(le,start,3,TK_ELLIPSIS,l->lineno);
                         return 1;
                     }
-                    loggerPanic(".. is an invalid token sequence at line: %d\n"
-                            , l->lineno);
+                    loggerPanic("line %d: .. is an invalid token sequence\n",
+                            l->lineno);
                 }
             }
             lexemeAssignOp(le,start,1,ch,l->lineno);
@@ -953,7 +948,7 @@ int lex(lexer *l, lexeme *le) {
         }
     }
 error:
-    loggerPanic("Lexer error\n");
+    loggerPanic("line %d: Lexer error\n", l->lineno);
     return 0;
 }
 
@@ -996,8 +991,8 @@ void lexInclude(lexer *l, char *builtin_root) {
         include_path = aoStrDupRaw(next.start, next.len);
     } else {
         loggerPanic(
-                "Syntax is: #include \"<value>\" got: %s\n",
-                lexemeToString(&next));
+                "line %d: Syntax is: #include \"<value>\" got: %s\n",
+                next.line,lexemeToString(&next));
     }
 
     if (!lexHasFile(l, include_path)) {
@@ -1017,7 +1012,7 @@ lexeme *lexDefine(Dict *macro_defs, lexer *l) {
     /* <ident> <value> */
     lex(l, &next);
     if (next.tk_type != TK_IDENT) {
-        loggerPanic("Syntax is: #define <TK_IDENT> <value> at line: %d\n",next.line);
+        loggerPanic("line %d: Syntax is: #define <TK_IDENT> <value>\n",next.line);
     }
     ident = aoStrDupRaw(next.start, next.len);
     /* A define must be on one line a \n determines the end of a define */
@@ -1049,11 +1044,10 @@ lexeme *lexDefine(Dict *macro_defs, lexer *l) {
     } while (!TokenPunctIs(&next,'\n') && !TokenPunctIs(&next,'\0'));
     /* Turn off the flag */
     l->flags &= ~CCF_ACCEPT_NEWLINES;
-    l->lineno++;
 
     if (tk_type == -1) {
-        loggerPanic("Error while parsing #define %s at line %d, #define either be a numerical expression or a string\n",
-                ident->data,next.line);
+        loggerPanic("line %d: Error while parsing #define %s; #define either be a numerical expression or a string\n",
+                next.line,ident->data);
     }
 
     start = macro_tokens->next->value;
@@ -1069,8 +1063,8 @@ lexeme *lexDefine(Dict *macro_defs, lexer *l) {
         expanded->tk_type = tk_type;
         if (tk_type == TK_STR) {
             if (ast->kind != TK_STR && ast->kind != AST_STRING) {
-                loggerPanic("#define %s expected string but got: %s at line: %d\n",
-                        ident->data,AstKindToString(ast->kind),next.line);
+                loggerPanic("line %d: #define %s expected string but got: %s\n",
+                        next.line,ident->data,AstKindToString(ast->kind));
             }
             if (ast->kind == AST_STRING) {
                 /* Copy as we will free the AST which will free the string*/
@@ -1098,8 +1092,7 @@ void lexUndef(Dict *macro_defs, lexer *l) {
 
     lex(l, &next);
     if (next.tk_type != TK_IDENT) {
-        loggerPanic(
-                "Syntax is: #undef <TK_IDENT> at line: %d\n",next.line);
+        loggerPanic("line %d: Syntax is: #undef <TK_IDENT>\n",next.line);
     }
     tmp_len = snprintf(tmp,sizeof(tmp),"%.*s",
             next.len,next.start);
@@ -1167,12 +1160,13 @@ void lexExpandAndCollect(lexer *l, Dict *macro_defs, List *tokens, char *builtin
                         break;
                     }
                     default:
-                       loggerPanic("Invalid #<keyword> '%.*s' at line: %d\n",next.len,next.start,next.line);
+                       loggerPanic("line %d: Invalid #<keyword> '%.*s'\n",
+                               next.line,next.len,next.start);
 
                 }
             } else if (TokenIdentIs(&next,"error",5)) {
                 lex(l,&next);
-                loggerPanic("%.*s",next.len,next.start);
+                loggerPanic("line %d: %.*s",next.line,next.len,next.start);
             } 
         } else {
             if (should_collect) {
@@ -1229,7 +1223,7 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
                     case KW_ASM:
                         lex(l,&next);
                         if (!TokenPunctIs(&next,'{')) {
-                            loggerPanic("asm '{' expected at line: %d. Got: %s\n",
+                            loggerPanic("line %d: asm '{' expected Got: %s\n",
                                     next.line, lexemeToString(&next));
                         }
                         copy = lexemeCopy(&le);
@@ -1260,7 +1254,7 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
                         case KW_IF_DEF:
                             lex(l, &next);
                             if (next.tk_type != TK_IDENT) {
-                                loggerPanic("Syntax is: #ifdef <TK_IDENT> at line:%d\n",next.line);
+                                loggerPanic("line %d: Syntax is: #ifdef <TK_IDENT>\n",next.line);
                             }
                             macro = DictGetLen(macro_defs,next.start,next.len);
                             if ((bilt->kind == KW_IF_DEF && macro) || (bilt->kind == KW_IF_NDEF && !macro))  {
@@ -1270,7 +1264,8 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
                             }
                             break;
                         default:
-                            loggerPanic("#%.*s invalid at line: %d\n",next.len,next.start, next.line);
+                            loggerPanic("line %d: #%.*s invalid \n",next.line,
+                                    next.len,next.start);
                     }
                 }
             }

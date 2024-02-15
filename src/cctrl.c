@@ -196,22 +196,6 @@ Cctrl *CctrlNew(void) {
     return cc;
 }
 
-Ast *CctrlFindFunctionDef(Cctrl *cc, char *fname, int len) {
-    List *it = cc->ast_list->next;
-    Ast *ast = NULL;
-    while (it != cc->ast_list) {
-        ast = it->value;
-        if (ast->kind == AST_FUNC || ast->kind == AST_FUNPTR) {
-            if (ast->fname->len == len && 
-                memcmp(fname,ast->fname->data,len) == 0) {
-                return ast;
-            }
-        }
-        it = it->next;
-    }
-    return NULL;
-}
-
 void CctrlInitTokenIter(Cctrl *cc, List *tokens) {
     cc->tkit->tokens = tokens;
     ListPrepend(tokens,lexemeSentinal());
@@ -324,6 +308,12 @@ AstType *CctrlGetKeyWord(Cctrl *cc, char *name, int len) {
         return type;
     }
     return NULL;
+}
+
+long CctrlGetLineno(Cctrl *cc) {
+    lexeme *tok = CctrlTokenPeek(cc);
+    if (tok) return tok->line;
+    return -1;
 }
 
 int CctrlIsKeyword(Cctrl *cc, char *name, int len) {

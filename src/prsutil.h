@@ -19,7 +19,6 @@ int align(int n, int m);
 
 /* Is the lexeme both of type TK_PUNCT and does 'ch' match */
 int ParseIsFunctionCall(Ast *ast);
-int TokenMatchFlag(lexeme *tok, long flags);
 AstType *ParseGetType(Cctrl *cc, lexeme *tok);
 int ParseIsKeyword(lexeme *tok, Cctrl *cc);
 long EvalIntConstExpr(Ast *ast);

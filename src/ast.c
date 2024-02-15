@@ -63,9 +63,10 @@ Ast *AstBinaryOp(long operation, Ast *left, Ast *right) {
     Ast *ast = AstNew();
     ast->type = AstGetResultType(operation,left->type,right->type);  
     if (ast->type == NULL) {
-        loggerPanic("Could not derive type for: %s %s using op: %s\n",
+        loggerPanic("Incompatiable operands: %s: "ESC_GREEN"%s %s"ESC_RESET"\n",
                 AstKindToString(operation),
-                AstToString(left),AstToString(right));
+                AstToString(left),
+                AstToString(right));
     }
     ast->kind = operation;
     if (operation != '=' &&
@@ -689,6 +690,7 @@ start_routine:
         ptr2 = ptr1;
         ptr1 = tmp;
     }
+
     if (ptr2->kind == AST_TYPE_POINTER || ptr2->kind == AST_TYPE_FUNC) {
         if (op == '=') {
             return ptr1;
@@ -756,8 +758,6 @@ start_routine:
     }
 
 error:
-    loggerWarning("Incompatiable operands: %c: <%s> <%s>\n",
-            (char)op, AstTypeToString(ptr1), AstTypeToString(ptr2));
     return NULL;
 }
 
@@ -848,7 +848,7 @@ char *AstTypeToString(AstType *type) {
         return aoStrMove(str);
 
     case AST_TYPE_POINTER: {
-        aoStrCatPrintf(str, "*%s", AstTypeToString(type->ptr));
+        aoStrCatPrintf(str, "%s*", AstTypeToString(type->ptr));
         return aoStrMove(str);
     }
 
@@ -860,7 +860,6 @@ char *AstTypeToString(AstType *type) {
     case AST_TYPE_UNION:
     case AST_TYPE_CLASS: {
         /* class and union are very similar, for now they can live together */
-        char *storage_type = NULL;
         char *clsname;
         if (type->clsname) {
             clsname = type->clsname->data;
@@ -868,21 +867,7 @@ char *AstTypeToString(AstType *type) {
             clsname = "anonymous";
         }
 
-        if (type->kind == AST_TYPE_CLASS) {
-            if (type->is_intrinsic) {
-                storage_type = "intrinsic class";
-            } else {
-                storage_type = "class";
-            }
-        } else {
-            if (type->is_intrinsic) {
-                storage_type = "intrinsic union";
-            } else {
-                storage_type = "union";
-            }
-        }
-
-        aoStrCatPrintf(str, "<%s_def> %s",storage_type,clsname);
+        aoStrCatPrintf(str, "%s",clsname);
         return aoStrMove(str);
     }
 
@@ -898,6 +883,49 @@ char *AstTypeToString(AstType *type) {
     default:
         loggerPanic("Unknown type: %d\n", type->kind);
     }
+}
+
+char *AstTypeToColorString(AstType *type) {
+    char *str = AstTypeToString(type);
+    aoStr *buf = aoStrNew();
+    aoStrCatPrintf(buf,"\033[0;32m%s\033[0m",str);
+    free(str);
+    return aoStrMove(buf);
+}
+
+char *AstFunctionNameToString(AstType *rettype, char *fname, int len) {
+    aoStr *str = aoStrNew();
+    char *tmp = AstTypeToColorString(rettype);
+    aoStrCatPrintf(str,"%s %*.s()",tmp,len,fname);
+    free(tmp);
+    return aoStrMove(str);
+}
+
+char *AstFunctionToString(Ast *func) {
+    aoStr *str = aoStrNew();
+    char *tmp;
+    Ast *param;
+        
+    tmp = AstTypeToColorString(func->type->rettype);
+    aoStrCatPrintf(str,"%s %s(",tmp,func->fname->data);
+    free(tmp);
+
+    List *params = func->params;
+    if (ListEmpty(params)) {
+        tmp = AstTypeToColorString(ast_void_type);
+        aoStrCatPrintf(str,"%s",tmp);
+        free(tmp);
+    } else {
+        ListForEach(params) {
+            param = it->value;
+            tmp = AstTypeToString(param->type);
+            if (it->next != params) aoStrCatPrintf(str,"%s, ",tmp);
+            else                    aoStrCatPrintf(str,"%s",tmp); 
+            free(tmp);
+        }
+    }
+    aoStrPutChar(str,')');
+    return aoStrMove(str);
 }
 
 void _AstToString(aoStr *str, Ast *ast, int depth) {

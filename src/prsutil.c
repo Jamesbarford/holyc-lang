@@ -10,24 +10,6 @@ int align(int n, int m) {
     }
     return n - rem + m;
 }
-/* Can handle matching ';', '(', ',', '(', '->', '.', '[', ']' */
-int TokenMatchFlag(lexeme *tok, long flags) {
-    if (tok == NULL) {
-        loggerPanic("NULL token passed to TokenMatchFlag\n");
-    }
-
-    if ((tok->i64 == ';' &&      (flags & PUNCT_TERM_SEMI))   ||
-        (tok->i64 == ',' &&      (flags & PUNCT_TERM_COMMA))  ||
-        (tok->i64 == ')' &&      (flags & PUNCT_TERM_RPAREN)) ||
-        (tok->i64 == '(' &&      (flags & PUNCT_TERM_LPAREN)) ||
-        (tok->i64 == TK_ARROW && (flags & PUNCT_TERM_ARROW))  ||
-        (tok->i64 == '.' &&      (flags & PUNCT_TERM_DOT))    ||
-        (tok->i64 == '[' &&      (flags & PUNCT_TERM_LSQR))   ||
-        (tok->i64 == ']' &&      (flags & PUNCT_TERM_RSQR))) {
-        return 1;
-    }
-    return 0;
-}
 
 inline int ParseIsFloatOrInt(Ast *ast) {
     return AstIsIntType(ast->type) || 
@@ -47,29 +29,29 @@ inline int ParseIsFunctionCall(Ast *ast) {
 
 void AssertIsFloat(Ast *ast, long lineno) {
     if (ast && !AstIsFloatType(ast->type)) {
-        loggerPanic("Expected float type got %s at line %ld\n",
-                AstTypeToString(ast->type),lineno);
+        loggerPanic("line %ld: Expected float type got %s\n",
+                lineno,AstTypeToString(ast->type));
     }
 }
 
 void AssertIsInt(Ast *ast, long lineno) {
     if (ast && !AstIsIntType(ast->type)) {
-        loggerPanic("Expected int type got %s at line %ld\n",
-                AstTypeToString(ast->type),lineno);
+        loggerPanic("line %ld: Expected int type got %s\n",
+                lineno, AstTypeToString(ast->type));
     }
 }
 
 void AssertIsFloatOrInt(Ast *ast, long lineno) {
     if (!ParseIsFloatOrInt(ast)) {
-        loggerPanic("Expected float got %s at line %ld\n",
-                AstTypeToString(ast->type),lineno);
+        loggerPanic("line %ld: Expected float got %s\n",
+                lineno, AstTypeToString(ast->type));
     }
 }
 
 void AssertIsPointer(Ast *ast, long lineno) {
     if (!ast || ast->type->kind != AST_TYPE_POINTER) {
-        loggerPanic("Expected float got %s at line %ld\n",
-                AstTypeToString(ast->type),lineno);
+        loggerPanic("line %ld: Expected float got %s\n",
+                lineno,AstTypeToString(ast->type));
     }
 }
 
@@ -81,9 +63,8 @@ void AssertTokenIsTerminator(lexeme *tok, long terminator_flags) {
     }
 
     if (tok->tk_type != TK_PUNCT) {
-        loggerPanic("Expected token of type TK_PUNCT, got type: %s, line: %d\n",
-                lexemeToString(tok),
-                tok->line);
+        loggerPanic("line %d: Expected token of type TK_PUNCT, got type: %s\n",
+                tok->line,lexemeTypeToString(tok->tk_type));
     }
 
     if ((tok->i64 == ';' && (terminator_flags & PUNCT_TERM_SEMI)) ||
@@ -92,9 +73,23 @@ void AssertTokenIsTerminator(lexeme *tok, long terminator_flags) {
         return;
     }
 
-    loggerPanic("Expected terminating token with flags: 0x%lX, got: %s, line: %d\n",
-            terminator_flags, 
-            lexemeToString(tok), tok->line);
+    if ((terminator_flags & PUNCT_TERM_SEMI) &&
+        (terminator_flags & PUNCT_TERM_COMMA)) {
+        loggerPanic("line %d: Expected ';' or ',' got: %s\n",
+                tok->line, lexemePunctToString(tok->i64));
+    } else if ((terminator_flags & PUNCT_TERM_SEMI)) {
+        loggerPanic("line %d: Expected ';' got: %s\n",
+                tok->line, lexemePunctToString(tok->i64));
+    } else if ((terminator_flags & PUNCT_TERM_COMMA)) {
+        loggerPanic("line %d: Expected ',' got: %s\n",
+                tok->line, lexemePunctToString(tok->i64));
+    } else if (terminator_flags & PUNCT_TERM_RPAREN) {
+        loggerPanic("line %d: Expected ')' got: %s\n",
+                tok->line, lexemePunctToString(tok->i64));
+    } else {
+        loggerPanic("line %d: Expected terminating token with flags: 0x%lX, got: %s\n",
+                tok->line, terminator_flags, lexemeToString(tok));
+    }
 }
 
 AstType *ParseGetType(Cctrl *cc, lexeme *tok) {
@@ -203,7 +198,7 @@ void AssertLValue(Ast *ast, long lineno) {
     case AST_DEFAULT_PARAM:
         return;
     default:
-        loggerPanic("Expected lvalue, got: %s at line: %ld\n", AstToString(ast),lineno);
+        loggerPanic("line %ld: Expected lvalue, got: %s\n",lineno,AstToString(ast));
     }
 }
 

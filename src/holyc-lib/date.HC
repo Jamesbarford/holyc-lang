@@ -150,7 +150,7 @@ CDate Struct2Date(CDateStruct *_ds)
   return cdt;
 }
 
-I64 FirstDayOfMon(I64 i)
+I32 FirstDayOfMon(I64 i)
 {//First day of month, given 32-bit day since AD 0.
   CDateStruct ds;
   CDate cdt=0;
@@ -176,7 +176,7 @@ I64 LastDayOfMon(I64 i)
   return cdt.date-1;
 }
 
-I64 FirstDayOfYear(I64 i)
+I32 FirstDayOfYear(I64 i)
 {//First day of year, given 32-bit day since AD 0.
   CDateStruct ds;
   CDate cdt=0;

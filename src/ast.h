@@ -327,7 +327,10 @@ aoStr *AstNormaliseFunctionName(char *fname);
 
 /* For debugging */
 char *AstTypeToString(AstType *type);
+char *AstTypeToColorString(AstType *type);
 char *AstKindToString(int kind);
+char *AstFunctionToString(Ast *func);
+char *AstFunctionNameToString(AstType *rettype, char *fname, int len);
 char *AstToString(Ast *ast);
 void AstPrint(Ast *ast);
 void AstTypePrint(AstType *type);

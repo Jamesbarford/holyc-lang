@@ -119,7 +119,7 @@ public Bool FileWrite(U8 *filename, U8 *buf, I64 size,
   return TRUE;
 }
 
-public U0 Cd(U8 *path)
+public I32 Cd(U8 *path)
 {
   return chdir(path);
 }
