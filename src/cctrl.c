@@ -310,12 +310,6 @@ AstType *CctrlGetKeyWord(Cctrl *cc, char *name, int len) {
     return NULL;
 }
 
-long CctrlGetLineno(Cctrl *cc) {
-    lexeme *tok = CctrlTokenPeek(cc);
-    if (tok) return tok->line;
-    return -1;
-}
-
 int CctrlIsKeyword(Cctrl *cc, char *name, int len) {
     return CctrlGetKeyWord(cc,name,len) != NULL;
 }

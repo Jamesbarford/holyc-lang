@@ -4,7 +4,7 @@
 /* While this is possible, it is quite difficult to read */
 
 extern "c" U0 *malloc(U64 size);
-extern "c" U0 free(U8 *ptr);
+extern "c" U0 free(U0 *ptr);
 extern "c" I64 strncmp(U8 *s1, U8 *s2, I64 n);
 
 I64 correct = 0;

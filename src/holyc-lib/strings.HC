@@ -641,7 +641,7 @@ U8 *StrPrintJoin(U8 *_dst, U8 *fmt,I64 argc,I64 *argv)
 
           if (n > 17) {
             n -= 17;
-            farg *=pow(10,-n);
+            farg *=pow(10.0,-n);
           } else {
             n = 0;
           }

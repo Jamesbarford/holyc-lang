@@ -4,7 +4,7 @@ extern "c" I64 strcmp(U8 *p,U8*p2);
 
 class Example
 {
-  U0 (*fn)(U8 *name);
+  U0 *(*fn)(U8 *name);
 };
 
 U8 *Identity(U8 *chars)
@@ -21,9 +21,9 @@ Bool Test2()
 
   e->fn = &Identity;
 
-  U0 (*fn)(U8 *arg);
-  U0 (*fn2)(U8 *arg);
-  U0 (*fn3)(U8 *arg) = &Identity;
+  U8 *(*fn)(U8 *arg);
+  U8 *(*fn2)(U8 *arg);
+  U8 *(*fn3)(U8 *arg) = &Identity;
   fn = &Identity;
   fn2 = fn;
 
@@ -40,9 +40,9 @@ Bool Test3()
 {
   I64 correct, tests;
   Example *e = MAlloc(sizeof(Example));
-  U0 (*fn)(U8 *arg);
-  U0 (*fn2)(U8 *arg);
-  U0 (*fn3)(U8 *arg);
+  U8 *(*fn)(U8 *arg);
+  U8 *(*fn2)(U8 *arg);
+  U8 *(*fn3)(U8 *arg);
 
   fn = e->fn = fn2 = fn3 = &Identity;
   correct = 0;
@@ -59,7 +59,7 @@ Bool Test3()
 
 Bool Test4()
 { // You need to add a '&'
-  U0 (*fn)(U8 *arg) = &Identity;
+  U0 *(*fn)(U8 *arg) = &Identity;
   if (!strcmp(fn("hey"),"hey")) {
     return TRUE;
   }
@@ -68,7 +68,7 @@ Bool Test4()
 
 Bool Test5()
 { // You need to add a '&'
-  U0 (*fn)(U8 *arg) = &Identity;
+  U0 *(*fn)(U8 *arg) = &Identity;
   auto _ptr = fn;
   if (!strcmp(_ptr("hey"),"hey")) {
     return TRUE;

@@ -112,6 +112,5 @@ void CctrlTokenExpect(Cctrl *cc, long expected);
 Ast *CctrlGetVar(Cctrl *cc, char *varname, int len);
 int CctrlIsKeyword(Cctrl *cc, char *name, int len);
 AstType *CctrlGetKeyWord(Cctrl *cc, char *name, int len);
-long CctrlGetLineno(Cctrl *cc);
 
 #endif // !CCTRL_H

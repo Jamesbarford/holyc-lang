@@ -347,12 +347,12 @@ static void lexSkipCodeComment(lexer *l) {
         }
     } else if (*l->ptr == '*') {
         while ((*l->ptr != '\0' && *(l->ptr + 1) != '\0')) {
+            if (*l->ptr == '\n') {
+                l->lineno++;
+            }
             if (*l->ptr == '*' && *(l->ptr + 1) == '/') {
                 l->ptr += 2;
                 break;
-            }
-            if (*l->ptr == '\n') {
-                l->lineno++;
             }
             l->ptr++;
         }
@@ -461,6 +461,9 @@ long lexInStr(lexer *l, unsigned char *buf, long size, int *done,
 
     while (i < size - 1) {
         ch = lexNextChar(l);
+        if (ch == '\n') {
+            l->lineno++;
+        }
         if (escape_quotes && (ch == '"' && lexPeek(l) == '"')) {
             ch = lexNextChar(l);
             buf[i++] = '\0';
@@ -599,7 +602,11 @@ unsigned long lexCharConst(lexer *l) {
                 case '`':  char_const |= (unsigned long)'`'  << ((unsigned long)idx); break;
                 case '\"': char_const |= (unsigned long)'\"' << ((unsigned long)idx); break;
                 case 'd':  char_const |= (unsigned long)'$'  << ((unsigned long)idx); break;
-                case 'n':  char_const |= (unsigned long)'\n' << ((unsigned long)idx); break;
+                case 'n':  {
+                    char_const |= (unsigned long)'\n' << ((unsigned long)idx);
+                    l->lineno++;
+                    break;
+                }
                 case 'r':  char_const |= (unsigned long)'\r' << ((unsigned long)idx); break;
                 case 't':  char_const |= (unsigned long)'\t' << ((unsigned long)idx); break;
                 case 'x':
@@ -676,6 +683,7 @@ int lex(lexer *l, lexeme *le) {
         ch = lexNextChar(l);
 
         switch (ch) {
+        case '\r':
         case '\n':
             l->lineno++;
             if (l->flags & CCF_ACCEPT_NEWLINES) {

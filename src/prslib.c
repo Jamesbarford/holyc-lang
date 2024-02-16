@@ -377,9 +377,9 @@ List *ParseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
         } else {
             /* Does a distinctly adequate job of type checking function parameters */
             if (param && param->kind != AST_DEFAULT_PARAM) {
-                if ((check = AstGetResultType('=',param->type,ast->type)) == NULL) {
-                    Ast *func = DictGetLen(cc->global_env,fname,len);
-                    char *fstring, *expected, *got;
+                if ((check = AstTypeCheck(param->type,ast)) == NULL) {
+                    Ast *func = findFunctionDecl(cc,fname,len);
+                    char *fstring, *expected, *got, *ast_str;
                     if (func) {
                         fstring = AstFunctionToString(func);
                     } else {
@@ -388,11 +388,13 @@ List *ParseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
 
                     expected = AstTypeToColorString(param->type);
                     got = AstTypeToColorString(ast->type);
-                    loggerWarning("line %ld: %s incompatiable function argument %s got %s\n",
-                            CctrlGetLineno(cc),fstring,expected,got);
+                    ast_str = AstLValueToString(ast);
+                    loggerWarning("line %ld: %s incompatiable function argument %s got %s %s\n",
+                            cc->lineno,fstring,expected,got,ast_str);
                     free(fstring);
                     free(expected);
                     free(got);
+                    free(ast_str);
                 }
             }
             ListAppend(argv,ast);
