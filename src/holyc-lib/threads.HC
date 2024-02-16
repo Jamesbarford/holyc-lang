@@ -80,13 +80,13 @@ class ThreadPool
   U0 *priv_data;
 };
 
-public extern "c" I64 pthread_create(pthread_t *th, U0 *thread_attr=NULL, 
+public extern "c" I64 pthread_create(pthread_t **th, U0 *thread_attr=NULL, 
 		U0 (*function_ptr)(U0 *argv), U0 *argv=NULL);
 public extern "c" I32 pthread_mutex_init(MutexLock *lk, MutexLockattr *mutex_attr=NULL);
 public extern "c" I32 pthread_mutex_destroy(MutexLock *lk);
 public extern "c" I32 pthread_mutex_lock(MutexLock *lk);
 public extern "c" I32 pthread_mutex_unlock(MutexLock *lk);
-public extern "c" I32 pthread_join(pthread_t th, U0 *ptr=NULL);
+public extern "c" I32 pthread_join(pthread_t *th, U0 *ptr=NULL);
 public extern "c" I32 pthread_cond_broadcast(ThreadCond *cond);
 public extern "c" I32 pthread_cond_destroy(ThreadCond *cond);
 public extern "c" I32 pthread_cond_init(ThreadCond *cond,

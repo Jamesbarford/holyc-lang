@@ -652,6 +652,7 @@ Ast *ParseContinueStatement(Cctrl *cc) {
 Ast *ParseReturnStatement(Cctrl *cc) {
     Ast *retval = ParseExpr(cc,16);
     AstType *check;
+    long lineno = cc->lineno;
     CctrlTokenExpect(cc,';');
     /* A best attempt at trying to get the return type of a function */
     if (cc->tmp_rettype->kind == AST_TYPE_AUTO) {
@@ -665,23 +666,27 @@ Ast *ParseReturnStatement(Cctrl *cc) {
         return AstReturn(retval,cc->tmp_rettype);
     }
 
-    AstType *t = AstGetResultType('=', check, cc->tmp_rettype);
+    AstType *t = AstTypeCheck(cc->tmp_rettype,retval);
     if (!t) {
         Ast *func = DictGet(cc->global_env,cc->tmp_fname->data);
-        char *fstring, *expected, *got;
+        char *fstring, *expected, *got, *ast_str;
+
         if (func) {
             fstring = AstFunctionToString(func);
         } else {
             fstring = AstFunctionNameToString(cc->tmp_rettype,
                     cc->tmp_fname->data,cc->tmp_fname->len);
         }
+
         expected = AstTypeToColorString(cc->tmp_rettype);
         got = AstTypeToColorString(check);
-        loggerWarning("line %ld: %s expected return type %s got %s\n",
-                CctrlGetLineno(cc),fstring,expected,got);
+        ast_str = AstLValueToString(retval);
+        loggerWarning("line %ld: %s expected return type %s got %s %s\n",
+                lineno,fstring,expected,got,ast_str);
         free(fstring);
         free(expected);
         free(got);
+        free(ast_str);
     }
     return AstReturn(retval,cc->tmp_rettype);
 }
@@ -959,8 +964,8 @@ Ast *ParseCompoundStatement(Cctrl *cc) {
         if (CctrlIsKeyword(cc,tok->start,tok->len)) {
             base_type = ParseBaseDeclSpec(cc);
             while (1) {
-                peek = CctrlTokenPeek(cc);
                 next_type = ParsePointerType(cc,base_type);
+                peek = CctrlTokenPeek(cc);
                 
                 if (!TokenPunctIs(peek,'(')) {
                     /* A normal variable */

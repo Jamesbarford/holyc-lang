@@ -315,6 +315,7 @@ AstType *AstClassType(Dict *fields, aoStr *clsname, int size, int is_intrinsic);
 Ast *AstCast(Ast *var, AstType *to);
 
 AstType *AstGetResultType(long op, AstType *a, AstType *b);
+AstType *AstTypeCheck(AstType *expected, Ast *ast);
 
 aoStr *AstMakeLabel(void);
 aoStr *AstMakeTmpName(void);
@@ -332,6 +333,7 @@ char *AstKindToString(int kind);
 char *AstFunctionToString(Ast *func);
 char *AstFunctionNameToString(AstType *rettype, char *fname, int len);
 char *AstToString(Ast *ast);
+char *AstLValueToString(Ast *ast);
 void AstPrint(Ast *ast);
 void AstTypePrint(AstType *type);
 void AstKindPrint(int kind);

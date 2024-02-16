@@ -70,7 +70,7 @@ extern "c" F64 fma(F64 f1, F64 f2, F64 f3);
 
 F64 Pow(F64 a, I64 b)
 {
-  if (b == 0) return 1;
+  if (b == 0) return 1.0;
   F64 result = 1.0;
   if (b < 0) {
     a = 1 / a;

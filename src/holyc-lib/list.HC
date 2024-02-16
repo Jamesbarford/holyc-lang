@@ -34,7 +34,7 @@ U0 ListPrepend(List *head, U0 *value)
 Bool ListEmpty(List *l)
 {
   if (l == NULL) return TRUE;
-  return l->next == l;
+  return (l->next == l);
 }
 
 U0 ListAppend(List *head, U0 *value)
