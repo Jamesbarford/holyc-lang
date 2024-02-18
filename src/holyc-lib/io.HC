@@ -1,5 +1,5 @@
-#include <defs.HH>
-#include <memory.HC>
+#include "./defs.HH"
+#include "./memory.HC"
 
 /* command values */
 #define F_DUPFD         0               /* duplicate file descriptor */

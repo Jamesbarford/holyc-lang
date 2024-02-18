@@ -37,3 +37,4 @@ U0 Main()
   PrintResult(correct == 10, 1);
   "====\n";
 }
+Main;

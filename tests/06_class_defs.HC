@@ -1,4 +1,3 @@
-#include <system.HC>
 #include "testhelper.HC"
 
 class Class1

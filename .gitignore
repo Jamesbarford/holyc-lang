@@ -1,4 +1,7 @@
 .env
+*.a
+*.so
+*.dylib
 *.o
 *.db
 *.txt

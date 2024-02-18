@@ -574,7 +574,11 @@ static int ParseGetPriority(lexeme *tok) {
     switch (tok->i64) {
     case '.': case '[': case TK_ARROW:
         return 1;
-    case '!': case '~': case TK_PLUS_PLUS: case TK_MINUS_MINUS: 
+    case '!': case '~': 
+    case TK_PLUS_PLUS: 
+    case TK_MINUS_MINUS: 
+    case TK_PRE_PLUS_PLUS:
+    case TK_PRE_MINUS_MINUS:
         return 2;
 
     case '*': case '/': case '%':
@@ -953,15 +957,13 @@ Ast *ParseUnaryExpr(Cctrl *cc) {
     }
 
     if (TokenPunctIs(tok, TK_PLUS_PLUS)) {
-        Ast *operand = ParseExpr(cc,16);
-        // Ast *operand = ParseUnaryExpr(cc);
+        Ast *operand = ParseUnaryExpr(cc);
         return AstUnaryOperator(operand->type,
                 TK_PRE_PLUS_PLUS,operand);
     }
 
     if (TokenPunctIs(tok, TK_MINUS_MINUS)) {
-        Ast *operand = ParseExpr(cc,16);
-        // Ast *operand = ParseUnaryExpr(cc);
+        Ast *operand = ParseUnaryExpr(cc);
         return AstUnaryOperator(operand->type,
                 TK_PRE_MINUS_MINUS,operand);
     }

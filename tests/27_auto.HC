@@ -1,5 +1,3 @@
-#include <memory.HC>
-#include <strings.HC>
 #include "testhelper.HC"
 
 class Person

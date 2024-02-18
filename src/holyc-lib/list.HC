@@ -1,5 +1,5 @@
-#include <defs.HH>
-#include <memory.HC>
+#include "./defs.HH"
+#include "./memory.HC"
 
 class List
 {

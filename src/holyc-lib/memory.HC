@@ -1,4 +1,4 @@
-#include <defs.HH>
+#include "./defs.HH"
 /* Yup we can mix #define's and assembly */
 #define ALIGN_16 0xFFFFFFFFFFFFFFF0
 
@@ -156,7 +156,7 @@ public extern "c" U0 *memmove(U0 *__dst, U0 *__src, U64 __len);
 public _extern _MALLOC U0 *MAlloc(I64 size);
 public _extern _FREE U0 Free(U0 *ptr);
 public _extern _REALLOC U0 *ReAlloc(U0 *ptr, U64 new_size);
-public _extern _CALLOC U0 *CAlloc(U0 *ptr, U64 new_size);
+public _extern _CALLOC U0 *CAlloc(U64 new_size);
 public _extern _MSIZE U64 MSize(U0 *ptr);
 public _extern _MALLOC_ALIGN16 U0 *MAlloc16(I64 size);
 public _extern _FREE_ALIGNED U0 Free16(U0 *ptr);

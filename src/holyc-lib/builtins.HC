@@ -1,7 +1,7 @@
-#include <defs.HH>
-#include <memory.HC>
-#include <system.HC>
-#include <strings.HC>
+#include "./defs.HH"
+#include "./memory.HC"
+#include "./system.HC"
+#include "./strings.HC"
 
 /* Yup we can mix #define's and assembly */
 #define ALIGN_16 0xFFFFFFFFFFFFFFF0
