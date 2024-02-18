@@ -28,6 +28,7 @@ typedef struct hccOpts {
     char *asm_outfile;
     char *obj_outfile;
     char *lib_name;
+    char *clibs;
 } hccOpts;
 
 typedef struct hccLib {
@@ -181,8 +182,8 @@ void emitFile(aoStr *asmbuf, hccOpts *opts) {
     hccLib lib;
     if (opts->emit_object) {
         writeAsmToTmp(asmbuf);
-        aoStrCatPrintf(cmd, "gcc -c %s -lm -lpthread -lc -ltos -o ./%s",
-                ASM_TMP_FILE,opts->obj_outfile);
+        aoStrCatPrintf(cmd, "gcc -c %s -lm -lpthread -lc -ltos %s -o ./%s",
+                ASM_TMP_FILE,opts->clibs,opts->obj_outfile);
         system(cmd->data);
     } else if (opts->asm_outfile && opts->assemble_only) {
         int fd = open(opts->asm_outfile, O_CREAT|O_RDWR|O_TRUNC, 0666);
@@ -203,10 +204,14 @@ void emitFile(aoStr *asmbuf, hccOpts *opts) {
         system(lib.install_cmd);
     } else {
         writeAsmToTmp(asmbuf);
-        aoStrCatPrintf(cmd, "gcc -L/usr/local/lib %s -lm -lpthread -lc -ltos -o ./a.out", ASM_TMP_FILE);
+        aoStrCatPrintf(cmd, "gcc -L/usr/local/lib %s -lm -lpthread -lc -ltos %s -o ./a.out", 
+                ASM_TMP_FILE,opts->clibs);
         system(cmd->data);
         remove(ASM_TMP_FILE);
 
+    }
+    if (strnlen(opts->clibs,10) > 1) {
+        free(opts->clibs);
     }
     aoStrRelease(cmd);
     aoStrRelease(asmbuf);
@@ -222,6 +227,7 @@ void usage(void) {
             "  -S       emit assembly only\n"
             "  -obj     emit an objectfile\n"
             "  -lib     emit a dynamic and static library\n"
+            "  -clibs   link c libraries like: -clibs=`-lSDL2 -lxml2 -lcurl...`\n"
             "  -g       add comments to assembly\n"
             "  --help   print this message\n");
     exit(1);
@@ -252,6 +258,24 @@ void parseCliOptions(hccOpts *opts, int argc, char **argv) {
             i++;
         } else if (!strncmp(argv[i],"-obj",4)) {
             opts->emit_object = 1;
+        } else if (!strncmp(argv[i],"-clibs",6)) {
+            const char *error = "Invalid compile command, -clibs must be followed "
+                "by a list of libraries in single quotes for example "
+                "-clibs=\'-lxml2 -lsqlite3 ....\'.";
+            char *ptr = argv[i];
+            ptr += 6;
+            loggerDebug("%s\n",ptr);
+            if (*ptr != '=' && *(ptr + 1) != '\'') {
+                loggerPanic("%s got '%c'\n", error, *ptr);
+            }
+            aoStr *str = aoStrNew();
+            ptr++;
+            loggerDebug("%s\n",ptr);
+            while (*ptr != '\0' && *ptr != '\'') {
+                aoStrPutChar(str,*ptr);
+                ptr++;
+            }
+            opts->clibs = aoStrMove(str);
         } else if (!strncmp(argv[i],"-g",2)) {
             opts->asm_debug_comments = 1;
             loggerPanic("--g not implemented\n");
@@ -274,6 +298,7 @@ int main(int argc, char **argv) {
     
 
     memset(&opts,0,sizeof(opts));
+    opts.clibs = "";
     /* now parse cli options */
     parseCliOptions(&opts,argc,argv);
 
