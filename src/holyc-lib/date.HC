@@ -1,6 +1,6 @@
-#include <math.HC>
-#include <defs.HH>
-#include <memory.HC>
+#include "./math.HC"
+#include "./defs.HH"
+#include "./memory.HC"
 
 #define CDATE_YEAR_DAYS		365.24225
 #define CDATE_YEAR_DAYS_INT	36524225

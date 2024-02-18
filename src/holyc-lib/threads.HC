@@ -1,5 +1,5 @@
-#include <list.HC>
-#include <memory.HC>
+#include "./memory.HC"
+#include "./list.HC"
 
 #define __MUTEX_LOCK_PADDING__   56
 #define __MUTEX_LOCK_ATTR_SIZE__ 8

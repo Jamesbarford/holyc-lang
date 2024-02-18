@@ -1,10 +1,10 @@
-#include <defs.HH>
-#include <system.HC>
-#include <memory.HC>
-#include <strings.HC>
+#include "./defs.HH"
+#include "./memory.HC"
+#include "./system.HC"
+#include "./strings.HC"
 
 #define HT_LOAD 0.60
-#define HT_DELETED I64_MAX 
+#define HT_DELETED 0x7fffffffffffffff
 #define HT_PROBE_1 1
 #define HT_PROBE_3 3
 

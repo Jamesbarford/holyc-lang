@@ -1,6 +1,7 @@
 #ifndef LEXER_H
 #define LEXER_H
 
+#include "aostr.h"
 #include "dict.h"
 #include "list.h"
 
@@ -127,9 +128,16 @@ typedef struct lexeme {
     };
 } lexeme;
 
+typedef struct lexFile {
+    aoStr *filename; /* name of the file */
+    char *ptr; /* Where we are in the file */
+    int lineno; /* line number in the file */
+} lexFile;
+
 typedef struct lexer {
     int tk_type;
     char *ptr;
+    char *start;
     char cur_ch;
     char *cur_str;
     long cur_strlen;
@@ -138,14 +146,19 @@ typedef struct lexer {
     int lineno;
     int flags;
     int ishex;
+    char *builtin_root;
     List *files;
+    List *all_source;/* This saves all of the files we see so we can free them later */
+    Dict *seen_files;
     Dict *symbol_table;
+    lexFile *cur_file;
 } lexer;
 
 lexeme *lexemeTokNew(char *start, int len, int line, long ch);
 lexeme *lexemeNew(char *start, int len);
 lexeme *lexemeSentinal(void);
 void lexerInit(lexer *l, char *source);
+void lexPushFile(lexer *l, aoStr *filename);
 int lex(lexer *l, lexeme *le);
 List *lexToLexemes(Dict *macro_defs, lexer *l);
 List *lexUntil(Dict *macro_defs, lexer *l, char to);
@@ -155,6 +168,7 @@ char *lexemePunctToString(long op);
 char *lexemeToString(lexeme *tok);
 void lexemePrintList(List *tokens);
 void lexemeListRelease(List *tokens);
+void lexReleaseAllFiles(lexer *l);
 int TokenPunctIs(lexeme *tok, long ch);
 int TokenIdentIs(lexeme *tok, char *ident, int len);
 

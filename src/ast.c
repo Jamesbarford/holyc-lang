@@ -794,7 +794,13 @@ check_type:
     } else if (e->kind == AST_TYPE_POINTER && a->kind != AST_TYPE_POINTER) {
         goto out;
     } else if (a->kind == AST_TYPE_POINTER && e->kind != AST_TYPE_POINTER) {
-        goto out;
+        /* this is a generic pointer */
+        if (e->kind == AST_TYPE_VOID && expected->kind == AST_TYPE_POINTER) {
+            ret = expected;
+            goto out;
+        } else {
+            goto out;
+        }
     } else if (e->kind == AST_TYPE_POINTER && a->kind == AST_TYPE_POINTER) {
         e = e->ptr;
         a = a->ptr;
@@ -819,7 +825,7 @@ check_type:
         } else if (e->kind == AST_TYPE_CLASS && e->is_intrinsic && AstIsIntType(a)) {
             ret = e;
             goto out;
-        }
+        } 
     }
 
 out:

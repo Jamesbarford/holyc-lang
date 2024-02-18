@@ -1,5 +1,3 @@
-#include <defs.HH>
-#include <memory.HC>
 #include "testhelper.HC"
 
 class BaseClass

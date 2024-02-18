@@ -1,28 +1,28 @@
 #include "testhelper.HC"
 
-class ListNode
+class TestListNode
 {
   I64 value;
-  ListNode *next, *tail;
+  TestListNode *next, *tail;
 };
 
-class List
+class TestList
 {
   I64 size;
-  ListNode *root;
+  TestListNode *root;
 };
 
-List *ListNew()
+TestList *TestListNew()
 {
-  List *ll = MAlloc(sizeof(List));
+  TestList *ll = MAlloc(sizeof(TestList));
   ll->size = 0;
   ll->root = NULL;
   return ll;
 }
 
-U0 ListAdd(List *ll, I64 value)
+U0 TestListAdd(TestList *ll, I64 value)
 {
-  ListNode *ln = MAlloc(sizeof(ListNode));
+  TestListNode *ln = MAlloc(sizeof(TestListNode));
   ln->value = value;
   ln->next = ll->root;
   ll->root = ln;
@@ -33,12 +33,12 @@ U0 Main()
 {
   "Test - Linked list recusive definition class: ";
   I64 correct = 0, test_cases = 5;
-  List *ll = ListNew();
-  ListNode *ln;
-  ListAdd(ll,1);
-  ListAdd(ll,2);
-  ListAdd(ll,3);
-  ListAdd(ll,4);
+  TestList *ll = TestListNew();
+  TestListNode *ln;
+  TestListAdd(ll,1);
+  TestListAdd(ll,2);
+  TestListAdd(ll,3);
+  TestListAdd(ll,4);
   ln = ll->root;
 
   if (ln->value == 4) {

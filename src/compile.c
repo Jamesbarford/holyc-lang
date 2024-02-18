@@ -1,8 +1,6 @@
-#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "aostr.h"
 #include "ast.h"
@@ -14,26 +12,6 @@
 #include "list.h"
 #include "parser.h"
 #include "util.h"
-
-char *readfile(char *path) {
-    char *buf;
-    int fd;
-
-    if ((fd = open(path, O_RDONLY, 0644)) == -1) {
-        loggerPanic("Failed to open file: %s\n", path);
-    }
- 
-    int len = lseek(fd, 0, SEEK_END);
-    lseek(fd, 0, SEEK_SET);
-
-    buf = malloc(sizeof(char) * len);
-    if (read(fd, buf, len) != len) {
-        loggerPanic("Failed to read whole file\n");
-    }
-    buf[len-1] = '\0';
-    close(fd);
-    return buf;
-}
 
 void CompilePrintTokens(Cctrl *cc) {
     if (!cc->tkit->tokens || 
@@ -84,50 +62,33 @@ aoStr *CompileToAsm(Cctrl *cc) {
     return asmbuf;
 }
 
-int CompileToAst(Cctrl *cc, char *filepath, int lexer_flags) {
-    List *tokens, *next_tokens, *code_list;
+int CompileToAst(Cctrl *cc, char *entrypath, int lexer_flags) {
+    List *tokens;
     lexer l;
-    aoStr *file_path;
-    char *src, *strpath;
+    aoStr *builtin_path;
     Dict *seen_files;
 
     seen_files = DictNew(&default_table_type);
     tokens = ListNew();
-    code_list = ListNew();
+    builtin_path = aoStrNew();
 
     lexerInit(&l,NULL);
-
-    ListAppend(l.files,aoStrDupRaw(filepath,strlen(filepath)));
     l.flags |= lexer_flags;
+    l.seen_files = seen_files;
+    l.lineno = 1;
 
-    while ((file_path = ListPop(l.files)) != NULL) {
-        if (DictGetLen(seen_files,file_path->data,file_path->len) != NULL) {
-            aoStrRelease(file_path);
-            continue;
-        }
+    /* library files */
+    aoStrCatPrintf(builtin_path, "%s/tos.HH",l.builtin_root);
+    lexPushFile(&l,aoStrDupRaw(entrypath,strlen(entrypath)));
+    /* the structure is a stack so this will get popped first */
+    lexPushFile(&l,builtin_path);
 
-        src = readfile(file_path->data);
-        ListAppend(code_list,src);
-        l.ptr = src;
-        l.lineno = 1;
-        next_tokens = lexToLexemes(cc->macro_defs,&l);
-
-        if (!next_tokens || next_tokens->next == next_tokens) {
-            ListRelease(next_tokens, NULL);
-            continue;
-        }
-
-        /* Get one massive list of all of the tokens, in order of how
-         * they arrived in #include's */
-        strpath = aoStrMove(file_path);
-        ListMergePrepend(tokens,next_tokens);
-        DictSet(seen_files,strpath,strpath);
-    }
-
+    tokens = lexToLexemes(cc->macro_defs,&l);
     DictRelease(seen_files);
     CctrlInitTokenIter(cc,tokens);
     ParseToAst(cc);
-    ListRelease(code_list,free);
+    lexReleaseAllFiles(&l);
+    // ListRelease(code_list,free);
     ListRelease(l.files,NULL);
     lexemeListRelease(tokens);
     return 1;

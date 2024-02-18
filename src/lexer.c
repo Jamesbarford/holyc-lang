@@ -4,6 +4,7 @@
 #include <string.h>
 #include <pwd.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 #include "aostr.h"
 #include "ast.h"
@@ -86,6 +87,13 @@ static LexerTypes lexer_types[] = {
 #define isNumTerminator(ch) (!isNum(ch) && !isHex(ch) && ch != '.' && ch != 'x' \
         && ch != 'X')
 
+char *lexGetBuiltInRoot(void) {
+    struct passwd *pwd = getpwuid(getuid());
+    aoStr *full_path = aoStrNew();
+    aoStrCatPrintf(full_path, "%s/.holyc-lib", pwd->pw_dir);
+    return aoStrMove(full_path);
+}
+
 lexeme *lexemeNew(char *start, int len) {
     lexeme *le = malloc(sizeof(lexeme));
     le->start = start;
@@ -144,10 +152,13 @@ void lexerInit(lexer *l, char *source) {
     l->cur_i64 = 0;
     l->cur_str = NULL;
     l->cur_strlen = 0;
+    l->cur_file = NULL;
     l->flags = 0;
     l->ishex = 0;
     l->files = ListNew();
+    l->all_source = ListNew();
     l->symbol_table = DictNew(&default_table_type);
+    l->builtin_root = lexGetBuiltInRoot();
     DictSetFreeKey(l->symbol_table, NULL);
     if (macro_proccessor == NULL) {
         macro_proccessor = CcMacroProcessor(NULL);
@@ -315,12 +326,30 @@ void lexemePrint(lexeme *le) {
 }
 
 static char lexNextChar(lexer *l) {
-    char ch = *l->ptr;
-    if (ch == '\0') {
-        return '\0';
+    l->start = l->ptr;
+    lexFile *lex_file;
+    char ch = '\0';
+    if (l->ptr) {
+        ch = *l->ptr;
     }
-    l->cur_ch = ch;
-    l->ptr++;
+    if (ch == '\0') {
+        if (ListEmpty(l->files)) return '\0';
+        if ((lex_file = ListPop(l->files)) == NULL) {
+            return '\0';
+        }
+        l->cur_file = lex_file;
+        l->ptr = lex_file->ptr; 
+        l->lineno = lex_file->lineno;
+        ch = *l->ptr;
+        l->cur_ch = ch;
+        l->start = l->ptr;
+        l->ptr++;
+        return ch;
+    } else {
+        l->cur_ch = ch;
+        l->start = l->ptr;
+        l->ptr++;
+    }
     return ch;
 }
 
@@ -335,6 +364,52 @@ static int lexPeekMatch(lexer *l, char expected) {
 
 static char lexPeek(lexer *l) {
     return *l->ptr;
+}
+
+/* Read an entire file to a mallocated buffer */
+char *lexReadfile(char *path) {
+    char *buf;
+    int fd,rbytes,len,size;
+
+    if ((fd = open(path, O_RDONLY, 0644)) == -1) {
+        loggerPanic("Failed to open file: %s\n", path);
+    }
+ 
+    len = lseek(fd, 0, SEEK_END);
+    lseek(fd, 0, SEEK_SET);
+
+    buf = malloc(sizeof(char) * len);
+    size = 0;
+
+    while ((rbytes = read(fd,buf,len)) != 0) {
+        size += rbytes;
+    }
+
+    if (size != len) {
+        loggerPanic("Failed to read whole file\n");
+    }
+
+    buf[len-1] = '\0';
+    close(fd);
+    return buf;
+}
+
+void lexPushFile(lexer *l, aoStr *filename) {
+    /* We need to save what we are currently lexing and 
+     * make the file we've just seen the file we want to lex */
+    lexFile *f = malloc(sizeof(lexFile));
+    char *src = lexReadfile(filename->data);
+    f->ptr = src;
+    f->lineno = 1;
+    f->filename = filename;
+    DictSet(l->seen_files,filename->data,filename);
+    if (l->cur_file) {
+        ListAppend(l->files,l->cur_file);
+    }
+    l->cur_file = f;
+    l->ptr = f->ptr;
+    l->lineno = f->lineno;
+    l->start = f->ptr;
 }
 
 static void lexSkipCodeComment(lexer *l) {
@@ -679,8 +754,8 @@ int lex(lexer *l, lexeme *le) {
     int tk_type;
 
     while (1) {
-        start = l->ptr;
         ch = lexNextChar(l);
+        start = l->start;
 
         switch (ch) {
         case '\r':
@@ -960,25 +1035,11 @@ error:
     return 0;
 }
 
-char *lexGetBuiltInRoot(void) {
-    struct passwd *pwd = getpwuid(getuid());
-    aoStr *full_path = aoStrNew();
-    aoStrCatPrintf(full_path, "%s/.holyc-lib", pwd->pw_dir);
-    return aoStrMove(full_path);
-}
-
 int lexHasFile(lexer *l, aoStr *file) {
-    aoStr *tmp;
-    for (List *it = l->files->next; it != l->files; it = it->next) {
-        tmp = it->value;
-        if (!aoStrCmp(tmp,file)) {
-            return 1;
-        }
-    }
-    return 0;
+    return DictGet(l->seen_files,file->data) != NULL;
 }
 
-void lexInclude(lexer *l, char *builtin_root) {
+void lexInclude(lexer *l) {
     aoStr *ident, *include_path;
     lexeme next;
 
@@ -993,7 +1054,7 @@ void lexInclude(lexer *l, char *builtin_root) {
         } while (next.i64 != '>');
         include_path = aoStrNew();
         aoStrCatPrintf(include_path, "%s/%s",
-                builtin_root, ident->data);
+                l->builtin_root, ident->data);
         aoStrRelease(ident);
     } else if (next.tk_type == TK_STR) {
         include_path = aoStrDupRaw(next.start, next.len);
@@ -1003,8 +1064,9 @@ void lexInclude(lexer *l, char *builtin_root) {
                 next.line,lexemeToString(&next));
     }
 
-    if (!lexHasFile(l, include_path)) {
-        ListAppend(l->files, include_path);
+    if (!lexHasFile(l,include_path)) {
+        lexPushFile(l,include_path);
+        //List(l->files, include_path);
     } else {
         aoStrRelease(include_path);
     }
@@ -1108,7 +1170,7 @@ void lexUndef(Dict *macro_defs, lexer *l) {
     DictDelete(macro_defs,tmp);
 }
 
-void lexExpandAndCollect(lexer *l, Dict *macro_defs, List *tokens, char *builtin_root, int should_collect) {
+void lexExpandAndCollect(lexer *l, Dict *macro_defs, List *tokens, int should_collect) {
     lexeme next,*macro;
     LexerTypes *bilt;
     int endif_count = 1;
@@ -1121,7 +1183,7 @@ void lexExpandAndCollect(lexer *l, Dict *macro_defs, List *tokens, char *builtin
                 switch (bilt->kind) {
                     case KW_INCLUDE: {
                         if (should_collect) {
-                            lexInclude(l,builtin_root);
+                            lexInclude(l);
                         }
                         break;
                     }
@@ -1192,10 +1254,9 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
 
     int ok;
     lexeme le,next,*copy,*macro;
-    char *builtin_root, prevous_to;
+    char prevous_to;
 
     prevous_to = to;
-    builtin_root = lexGetBuiltInRoot();
     tokens = ListNew();
     macro_proccessor->macro_defs = macro_defs;
 
@@ -1254,7 +1315,7 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
             if (lex(l,&next) && next.tk_type == TK_IDENT) {
                 if ((bilt = DictGetLen(l->symbol_table,next.start,next.len)) != NULL) {
                     switch (bilt->kind) {
-                        case KW_INCLUDE: lexInclude(l,builtin_root); break;
+                        case KW_INCLUDE: lexInclude(l); break;
                         case KW_DEFINE: copy = lexDefine(macro_defs,l); break;
                         case KW_UNDEF: lexUndef(macro_defs, l); break;
 
@@ -1266,9 +1327,9 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
                             }
                             macro = DictGetLen(macro_defs,next.start,next.len);
                             if ((bilt->kind == KW_IF_DEF && macro) || (bilt->kind == KW_IF_NDEF && !macro))  {
-                                lexExpandAndCollect(l,macro_defs,tokens,builtin_root,1);
+                                lexExpandAndCollect(l,macro_defs,tokens,1);
                             } else {
-                                lexExpandAndCollect(l,macro_defs,tokens,builtin_root,0);
+                                lexExpandAndCollect(l,macro_defs,tokens,0);
                             }
                             break;
                         default:
@@ -1282,7 +1343,6 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
             ListAppend(tokens, copy);
         }
     }
-    free(builtin_root);
     return tokens;
 }
 
@@ -1301,10 +1361,19 @@ void lexemeListRelease(List *tokens) {
     ListRelease(tokens,lexemeFree);
 }
 
+static void lexReleaseLexFile(lexFile *lex_file) {
+    aoStrRelease(lex_file->filename);
+    free(lex_file->ptr);
+    free(lex_file);
+}
+
+void lexReleaseAllFiles(lexer *l) {
+    ListRelease(l->all_source,
+            ((void (*))&lexReleaseLexFile));
+}
+
 void lexemePrintList(List *tokens) {
-    List *it = tokens->next;
-    while (it != tokens) {
+    ListForEach(tokens) {
         lexemePrint(it->value);
-        it = it->next;
     }
 }

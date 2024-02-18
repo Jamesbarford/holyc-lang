@@ -1,8 +1,8 @@
-#include <math.HC>
-#include <defs.HH>
-#include <date.HC>
-#include <memory.HC>
-#include <io.HC>
+#include "./math.HC"
+#include "./defs.HH"
+#include "./date.HC"
+#include "./memory.HC"
+#include "./io.HC"
 
 extern "c" U0 exit(I32 code);
 extern "c" F64 strtod(U8 *nptr, U8 **endptr);
@@ -31,8 +31,8 @@ extern "c" U64 strxfrm(U8 *__s1, U8 *__s2, U64 __n);
 
 U8 *StrPrint(U8 *dst,U8 *fmt,...);
 U8 *StrPrintJoin(U8 *_dst, U8 *fmt,I64 argc,I64 *argv);
-U8 *MPrintTime(CDate cdt);
 U8 *MPrintDate(CDate cdt);
+U8 *MPrintTime(CDate cdt);
 U8 *MPrintTimestampNow();
 I64 StrOcc(U8 *src, I64 ch);
 
@@ -270,7 +270,7 @@ public Bool IsDotC(U8 *filename)
     return FALSE;
 }
 
-U0 SPutChar(U8 **_dst,U8 ch,U8 **_buf)
+public U0 SPutChar(U8 **_dst,U8 ch,U8 **_buf)
 { // @TempleOS
   I64 i;
   U8 *dst=*_dst,*buf;
@@ -290,7 +290,7 @@ U0 SPutChar(U8 **_dst,U8 ch,U8 **_buf)
   *_dst=dst;
 }
 
-U0 OutStr(U8 *instr,U8 **_buf,U8 **_dst,I64 len,I64 flags)
+public U0 OutStr(U8 *instr,U8 **_buf,U8 **_dst,I64 len,I64 flags)
 {// @TempleOS
  // instr -> in string
  // _buf  -> the underlying buffer 
@@ -327,7 +327,7 @@ U0 OutStr(U8 *instr,U8 **_buf,U8 **_dst,I64 len,I64 flags)
   }
 }
 
-I64 StrOcc(U8 *src, I64 ch)
+public I64 StrOcc(U8 *src, I64 ch)
 {// @TempleOS - Count occurrences of a char.
   I64 i=0;
   if (!src) return 0;
@@ -337,7 +337,7 @@ I64 StrOcc(U8 *src, I64 ch)
   return i;
 }
 
-U8 *StrFirstOcc(U8 *src,U8 *marker)
+public U8 *StrFirstOcc(U8 *src,U8 *marker)
 {//@TempleOS - Point to 1st occurrence of marker set in str.
   I64 ch;
   while ((ch=*src++) && !StrOcc(marker,ch));
@@ -364,7 +364,7 @@ U8 *StrFirstRem(U8 *src,U8 *marker,U8 *dst=NULL)
   return res;
 }
 
-U8 *StrLastOcc(U8 *src,U8 *marker)
+public U8 *StrLastOcc(U8 *src,U8 *marker)
 {// @TempleOS - Point to last occurrence of market set in str.
   I64 ch;
   U8 *res=NULL;
@@ -374,7 +374,7 @@ U8 *StrLastOcc(U8 *src,U8 *marker)
   return res;
 }
 
-U8 *StrLastRem(U8 *src,U8 *marker,U8 *dst=NULL)
+public U8 *StrLastRem(U8 *src,U8 *marker,U8 *dst=NULL)
 {// @TempleOS - Remove last str segment and place in dst buf or NULL.
   U8 *ptr;
   if ((ptr=StrLastOcc(src,marker)) != NULL) {
@@ -389,7 +389,7 @@ U8 *StrLastRem(U8 *src,U8 *marker,U8 *dst=NULL)
   return dst;
 }
 
-U0 StrReverse(U8 *buf, I64 length)
+public U0 StrReverse(U8 *buf, I64 length)
 { // Reverse a string inplace
   I64 start = 0, end = length - 1;
   while (start < end) {
@@ -401,7 +401,7 @@ U0 StrReverse(U8 *buf, I64 length)
   }
 }
 
-I64 I64ToStr(U8 *buf, I64 num, Bool *_is_neg=NULL, I64 _len=5000)
+public I64 I64ToStr(U8 *buf, I64 num, Bool *_is_neg=NULL, I64 _len=5000)
 { // puts num in the buf, returns the length of the number
   I64 i = 0;
 
@@ -439,7 +439,7 @@ I64 I64ToStr(U8 *buf, I64 num, Bool *_is_neg=NULL, I64 _len=5000)
   return i;
 }
 
-U64 U64ToStr(U8 *dst, U64 num, I64 len=5000)
+public U64 U64ToStr(U8 *dst, U64 num, I64 len=5000)
 {
   I64 i = 0;
   if (num == 0) {

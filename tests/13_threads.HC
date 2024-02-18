@@ -1,5 +1,3 @@
-#include <memory.HC>
-#include <threads.HC>
 #include "testhelper.HC"
 
 #define THREAD_COUNT 5

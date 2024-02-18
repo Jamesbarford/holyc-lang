@@ -80,8 +80,7 @@ void aoStrRepeatChar(aoStr *buf, char ch, int times) {
 int aoStrCmp(aoStr *b1, aoStr *b2) {
     size_t l1 = b1->len;
     size_t l2 = b2->len;
-    size_t min = l1 < l2 ? l1 : l2;
-    return memcmp(b1->data, b2->data, min);
+    return l1==l2&&!memcmp(b1->data, b2->data, l1);
 }
 
 aoStr *aoStrDupRaw(char *s, size_t len) {
