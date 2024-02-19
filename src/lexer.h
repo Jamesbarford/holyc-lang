@@ -106,6 +106,7 @@
 #define KW_DEFAULT      64
 #define KW_DO           66
 #define KW_STATIC       67
+#define KW_ELIF_DEF     68
 
 /* Compiler Flags*/
 #define CCF_ESCAPE_STRING_NEWLINES (1ULL << 40)

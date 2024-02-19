@@ -9,3 +9,4 @@
 #include "./threads.HC"
 #include "./csv.HC"
 #include "./hashtable.HC"
+#include "./dir.HC"
