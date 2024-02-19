@@ -288,7 +288,6 @@ Dict *ParseClassOffsets(int *real_size, List *fields, AstType *base_class,
     ListForEach(fields) {
         field = it->value;
         if (field->clsname == NULL && ParseIsClassOrUnion(field->kind)) {
-            offset += CalcPadding(offset,field->size);
             ParseFlattenAnnonymous(field,fields_dict,offset,0);
             offset += field->size;
             continue;
@@ -301,7 +300,6 @@ Dict *ParseClassOffsets(int *real_size, List *fields, AstType *base_class,
                     field->fields = fields_dict;
                 }
             }
-            offset += CalcPadding(offset,field->size);
             field->offset = offset;
             offset += field->size;
         }

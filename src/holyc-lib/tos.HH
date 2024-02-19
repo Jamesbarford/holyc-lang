@@ -532,7 +532,8 @@ class Dirent
   U8   type;     /* file type, see below */
   I8   name[DIR_MAXPATHLEN]; /* entry name (up to MAXPATHLEN bytes) */
 };
-
+public _extern _opendir$INODE64 cDIR *opendir(U8 *dirname);
+public _extern _readdir$INODE64 Dirent *readdir(cDIR *dir);
 #elifdef IS_LINUX
 #define DIR_MAXPATHLEN (256)
 
@@ -544,11 +545,11 @@ class Dirent
   U8   type;     /* file type, see below */
   I8   name[DIR_MAXPATHLEN]; /* entry name (up to MAXPATHLEN bytes) */
 };
+public cDIR *opendir(U8 *dirname);
+public Dirent *readdir(cDIR *dir);
 #endif
 
-public extern "c" cDIR *opendir(U8 *dirname);
 public extern "c" I32 closedir(cDIR *dir);
 public extern "c" U0 rewinddir(cDIR *dir);
 public extern "c" U0 seekdir(cDIR *dir, I64 pos);
 public extern "c" I64 telldir(cDIR *dir);
-public extern "c" Dir *readdir(cDIR *dir);
