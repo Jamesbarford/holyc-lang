@@ -521,9 +521,8 @@ static Ast *ParseIdentifierOrFunction(Cctrl *cc, char *name, int len,
 }
 
 static Ast *ParsePrimary(Cctrl *cc) {
-    lexeme *tok; 
     Ast *ast;
-    lexeme *prev;
+    lexeme *prev,*tok;
     int can_call_function = 1;
     CctrlTokenRewind(cc);
 
@@ -552,13 +551,21 @@ static Ast *ParsePrimary(Cctrl *cc) {
         return AstF64Type(tok->f64);
     case TK_CHAR_CONST:
         return AstCharType(tok->i64);
-    case TK_STR:
-        ast = AstString(tok->start, tok->len);
+    case TK_STR: {
+        aoStr *str = aoStrNew();
+        CctrlTokenRewind(cc);
+        /* Concatinate adjacent strings together */
+        while ((tok = CctrlTokenGet(cc)) != NULL && tok->tk_type == TK_STR) {
+            aoStrCatPrintf(str,"%.*s",tok->len,tok->start);
+        }
+        CctrlTokenRewind(cc);
+        ast = AstString(str->data, str->len);
         if (cc->strings) {
             ListAppend(cc->strings, ast);
         }
+        free(str);
         return ast;
-
+    }
     case TK_PUNCT:
         CctrlTokenRewind(cc);
         return NULL;

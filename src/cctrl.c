@@ -67,6 +67,7 @@ static void CctrlAddBuiltinMacros(Cctrl *cc) {
 
     le = lexemeSentinal();
     if (IS_BSD)        DictSet(cc->macro_defs,"IS_BSD",le);
+    if (IS_MACOS)      DictSet(cc->macro_defs,"IS_MACOS",le);
     else if (IS_LINUX) DictSet(cc->macro_defs,"IS_LINUX",le);
     
     if (IS_X86_64)      {

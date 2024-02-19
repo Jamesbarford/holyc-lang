@@ -454,6 +454,7 @@ public U8 *MPrintQ(U8 *ptr,I64 flags = 0);
 public U8 *MStrPrint(U8 *fmt,...);
 public U8 *CatPrint(U8 *_dst,U8 *fmt,...);
 public Bool Str2CDateStruct(U8 *strdate, U8 *format, CDateStruct *t);
+public Bool WildMatch(U8 *test_str, U8 *wild_str);
 public CDate StrToCDate(U8 *_str, U8 *fmt);
 
 #define F_DUPFD         0               /* duplicate file descriptor */
@@ -506,3 +507,49 @@ public U8 *FileRead(U8 *path, I64 *_size=NULL);
 public Bool FileWrite(U8 *filename, U8 *buf, I64 size,
     I64 flags=O_CREAT|O_RDWR);
 public I32 Cd(U8 *path);
+
+#define DT_UNKNOWN       0
+#define DT_FIFO          1
+#define DT_CHR           2
+#define DT_DIR           4
+#define DT_BLK           6
+#define DT_REG           8
+#define DT_LNK          10
+#define DT_SOCK         12
+#define DT_WHT          14
+
+class cDIR {};
+
+#ifdef IS_MACOS
+#define DIR_MAXPATHLEN (1024)
+
+class Dirent
+{ 
+  U64  ino;
+  U64  off; 
+  U16  reclen;   /* length of this record */
+  U16   namlen;   /* length of string in d_name */
+  U8   type;     /* file type, see below */
+  I8   name[DIR_MAXPATHLEN]; /* entry name (up to MAXPATHLEN bytes) */
+};
+public _extern _opendir$INODE64 cDIR *opendir(U8 *dirname);
+public _extern _readdir$INODE64 Dirent *readdir(cDIR *dir);
+#elifdef IS_LINUX
+#define DIR_MAXPATHLEN (256)
+
+class Dirent
+{
+  U64  ino;      /* file number of entry */ 
+  U64  seekoff;  /* seek offset (optional, used by servers) */ 
+  U16  reclen;   /* length of this record */
+  U8   type;     /* file type, see below */
+  I8   name[DIR_MAXPATHLEN]; /* entry name (up to MAXPATHLEN bytes) */
+};
+public cDIR *opendir(U8 *dirname);
+public Dirent *readdir(cDIR *dir);
+#endif
+
+public extern "c" I32 closedir(cDIR *dir);
+public extern "c" U0 rewinddir(cDIR *dir);
+public extern "c" U0 seekdir(cDIR *dir, I64 pos);
+public extern "c" I64 telldir(cDIR *dir);

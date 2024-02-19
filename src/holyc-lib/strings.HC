@@ -29,12 +29,13 @@ extern "c" U8 *strstr(U8 *__big, U8 *__little);
 extern "c" U8 *strtok(U8 *__str, U8 *__sep);
 extern "c" U64 strxfrm(U8 *__s1, U8 *__s2, U64 __n);
 
-U8 *StrPrint(U8 *dst,U8 *fmt,...);
-U8 *StrPrintJoin(U8 *_dst, U8 *fmt,I64 argc,I64 *argv);
-U8 *MPrintDate(CDate cdt);
-U8 *MPrintTime(CDate cdt);
-U8 *MPrintTimestampNow();
-I64 StrOcc(U8 *src, I64 ch);
+public U8 *StrPrint(U8 *dst,U8 *fmt,...);
+public U8 *StrPrintJoin(U8 *_dst, U8 *fmt,I64 argc,I64 *argv);
+public U8 *MPrintDate(CDate cdt);
+public U8 *MPrintTime(CDate cdt);
+public U8 *MPrintTimestampNow();
+public I64 StrOcc(U8 *src, I64 ch);
+public Bool WildMatch(U8 *test_str, U8 *wild_str);
 
 #define STR_LEN 256
 
@@ -1043,4 +1044,43 @@ CDate StrToCDate(U8 *_str, U8 *fmt)
   }
   cdt = Struct2Date(&ds);
   return cdt;
+}
+
+Bool WildMatch(U8 *test_str, U8 *wild_str)
+{// @TempleOS Wildcard match with '*' and '?'.
+  I64 ch1, ch2;
+  U8 *fall_back_src = NULL, *fall_back_wild = NULL;
+  while (TRUE) {
+    if (!(ch1 = *test_str++)) {
+      if (*wild_str && *wild_str != '*')
+        return FALSE;
+      else
+        return TRUE;
+    } else {
+      if (!(ch2 = *wild_str++))
+        return FALSE;
+      else {
+        if (ch2 == '*') {
+          fall_back_wild = wild_str - 1;
+          fall_back_src = test_str;
+          if (!(ch2 = *wild_str++)) {
+            return TRUE;
+          }
+          while (ch2 != ch1) {
+            if (!(ch1 = *test_str++)) {
+              return FALSE;
+            }
+          }
+        } else if (ch2 != '?' && ch1 != ch2) {
+          if (fall_back_wild) {
+            wild_str = fall_back_wild;
+            test_str = fall_back_src;
+            fall_back_wild = NULL;
+            fall_back_src = NULL;
+          } else
+            return FALSE;
+        }
+      }
+    }
+  }
 }

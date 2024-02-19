@@ -57,6 +57,7 @@ static LexerTypes lexer_types[] = {
     {"define", KW_DEFINE},
     {"ifndef", KW_IF_NDEF},
     {"ifdef", KW_IF_DEF},
+    {"elifdef", KW_ELIF_DEF},
     {"endif", KW_ENDIF},
     {"elif", KW_ELIF},
     {"defined", KW_DEFINED},
@@ -298,6 +299,7 @@ char *lexemeToString(lexeme *tok) {
                 case KW_ELIF:        aoStrCatPrintf(str,"elif");    break;
                 case KW_IF_NDEF:     aoStrCatPrintf(str,"ifndef");  break;
                 case KW_IF_DEF:      aoStrCatPrintf(str,"ifdef");   break;
+                case KW_ELIF_DEF:    aoStrCatPrintf(str,"elifdef");   break;
                 case KW_ENDIF:       aoStrCatPrintf(str,"endif");   break;
                 case KW_DEFINED:     aoStrCatPrintf(str,"defined"); break;
                 case KW_UNDEF:       aoStrCatPrintf(str,"undef");   break;
@@ -752,6 +754,7 @@ int lexNumeric(lexer *l, int _isfloat) {
 int lex(lexer *l, lexeme *le) {
     char ch, *start;
     int tk_type;
+    LexerTypes *type;
 
     while (1) {
         ch = lexNextChar(l);
@@ -783,6 +786,12 @@ int lex(lexer *l, lexeme *le) {
             le->len = l->cur_strlen;
             le->tk_type = tk_type;
             le->line = l->lineno;
+
+            if ((type = DictGetLen(l->symbol_table,le->start,le->len)) != NULL) {
+                le->tk_type = TK_KEYWORD;
+                le->i64 = type->kind;
+                type = NULL;
+            }
             return 1;
 
         case '0' ... '9':
@@ -1172,15 +1181,14 @@ void lexUndef(Dict *macro_defs, lexer *l) {
 
 void lexExpandAndCollect(lexer *l, Dict *macro_defs, List *tokens, int should_collect) {
     lexeme next,*macro;
-    LexerTypes *bilt;
     int endif_count = 1;
 
     do {
         if (!lex(l,&next)) break;
         if (TokenPunctIs(&next,'#')) {
             lex(l,&next);
-            if ((bilt = DictGetLen(l->symbol_table,next.start,next.len)) != NULL) {
-                switch (bilt->kind) {
+            if (next.tk_type == TK_KEYWORD) {
+                switch (next.i64) {
                     case KW_INCLUDE: {
                         if (should_collect) {
                             lexInclude(l);
@@ -1196,6 +1204,14 @@ void lexExpandAndCollect(lexer *l, Dict *macro_defs, List *tokens, int should_co
                     case KW_UNDEF: {
                         if (should_collect) {
                             lexUndef(macro_defs, l);
+                        }
+                        break;
+                    }
+                    case KW_ELIF_DEF: {
+                        lex(l,&next);
+                        should_collect = 0;
+                        if ((macro = DictGetLen(macro_defs,next.start,next.len)) != NULL) {
+                            should_collect = 1;
                         }
                         break;
                     }
@@ -1250,7 +1266,6 @@ done:
 
 List *lexUntil(Dict *macro_defs, lexer *l, char to) {
     List *tokens; 
-    LexerTypes *bilt;
 
     int ok;
     lexeme le,next,*copy,*macro;
@@ -1274,37 +1289,36 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
             to = prevous_to;
             continue;
         }
+
+        if (le.tk_type == TK_KEYWORD) {
+            switch (le.i64) {
+                case KW_ASM:
+                    lex(l,&next);
+                    if (!TokenPunctIs(&next,'{')) {
+                        loggerPanic("line %d: asm '{' expected Got: %s\n",
+                                next.line, lexemeToString(&next));
+                    }
+                    copy = lexemeCopy(&le);
+                    ListAppend(tokens, copy);
+                    copy = lexemeCopy(&next);
+                    ListAppend(tokens, copy);
+
+                    l->flags |= (CCF_MULTI_COLON|CCF_ACCEPT_NEWLINES|CCF_ASM_BLOCK);
+
+                    to = '}';
+                    continue;
+                default:
+                    copy = lexemeCopy(&le);
+                    ListAppend(tokens, copy);
+                    continue;
+            }
+        }
         
         if (le.tk_type == TK_IDENT) {
             if ((macro = DictGetLen(macro_defs,le.start,le.len)) != NULL) {
                 copy = lexemeCopy(macro);
                 ListAppend(tokens, copy);
                 continue;
-            } else if ((bilt = DictGetLen(l->symbol_table,le.start,le.len)) != NULL) {
-                le.tk_type = TK_KEYWORD;
-                le.i64 = bilt->kind;
-
-
-                /* Build in seeing assembly into the lexer, feels less bad than doing 
-                 * multiple passes and fast forwarding to '}'. Which is what I was 
-                 * previously doing */
-                switch (le.i64) {
-                    case KW_ASM:
-                        lex(l,&next);
-                        if (!TokenPunctIs(&next,'{')) {
-                            loggerPanic("line %d: asm '{' expected Got: %s\n",
-                                    next.line, lexemeToString(&next));
-                        }
-                        copy = lexemeCopy(&le);
-                        ListAppend(tokens, copy);
-                        copy = lexemeCopy(&next);
-                        ListAppend(tokens, copy);
-
-                        l->flags |= (CCF_MULTI_COLON|CCF_ACCEPT_NEWLINES|CCF_ASM_BLOCK);
-
-                        to = '}';
-                        continue;
-                }
             }
             copy = lexemeCopy(&le);
             ListAppend(tokens, copy);
@@ -1312,30 +1326,28 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
         }
 
         if (l->flags & CCF_PRE_PROC && TokenPunctIs(&le, '#')) {
-            if (lex(l,&next) && next.tk_type == TK_IDENT) {
-                if ((bilt = DictGetLen(l->symbol_table,next.start,next.len)) != NULL) {
-                    switch (bilt->kind) {
-                        case KW_INCLUDE: lexInclude(l); break;
-                        case KW_DEFINE: copy = lexDefine(macro_defs,l); break;
-                        case KW_UNDEF: lexUndef(macro_defs, l); break;
+            if (lex(l,&next) && next.tk_type == TK_KEYWORD) {
+                switch (next.i64) {
+                    case KW_INCLUDE: lexInclude(l); break;
+                    case KW_DEFINE: copy = lexDefine(macro_defs,l); break;
+                    case KW_UNDEF: lexUndef(macro_defs, l); break;
 
-                        case KW_IF_NDEF:
-                        case KW_IF_DEF:
-                            lex(l, &next);
-                            if (next.tk_type != TK_IDENT) {
-                                loggerPanic("line %d: Syntax is: #ifdef <TK_IDENT>\n",next.line);
-                            }
-                            macro = DictGetLen(macro_defs,next.start,next.len);
-                            if ((bilt->kind == KW_IF_DEF && macro) || (bilt->kind == KW_IF_NDEF && !macro))  {
-                                lexExpandAndCollect(l,macro_defs,tokens,1);
-                            } else {
-                                lexExpandAndCollect(l,macro_defs,tokens,0);
-                            }
-                            break;
-                        default:
-                            loggerPanic("line %d: #%.*s invalid \n",next.line,
-                                    next.len,next.start);
-                    }
+                    case KW_IF_NDEF:
+                    case KW_IF_DEF:
+                        lex(l, &next);
+                        if (next.tk_type != TK_IDENT) {
+                            loggerPanic("line %d: Syntax is: #ifdef <TK_IDENT>\n",next.line);
+                        }
+                        macro = DictGetLen(macro_defs,next.start,next.len);
+                        if ((next.i64 == KW_IF_DEF && macro) || (next.i64 == KW_IF_NDEF && !macro))  {
+                            lexExpandAndCollect(l,macro_defs,tokens,1);
+                        } else {
+                            lexExpandAndCollect(l,macro_defs,tokens,0);
+                        }
+                        break;
+                    default:
+                        loggerPanic("line %d: #%.*s invalid \n",next.line,
+                                next.len,next.start);
                 }
             }
         } else {
