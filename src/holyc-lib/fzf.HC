@@ -1,3 +1,5 @@
+/* This code has been adapted from a C fzf implementation:
+ * https://github.com/nvim-telescope/telescope-fzf-native.nvim */
 #define FZF_CASE_SMART   0
 #define FZF_CASE_IGNORE  1
 #define FZF_CASE_RESPECT 2
@@ -18,96 +20,95 @@
 #define FZF_CHAR_LETTER   3
 #define FZF_CHAR_NUMBER   4
 
-public class FzFI16
-{
-  I16 *data;
-  U64 size;
-  U64 cap;
-  Bool allocated;
-};
-
-public class FzFI32
-{
-  I32 *data;
-  U64 size;
-  U64 cap;
-  Bool allocated;
-};
-
 public class FzFPosition
 {
-  U32 *data;
-  U64 size;
-  U64 cap;
+  I64 *data;
+  I64 size;
+  I64 cap;
+  I64 score;
 };
 
-public class FzFResult
+class FzFI16
 {
-  I32 start;
-  I32 end;
-  I32 score;
+  I16 *data;
+  I64 size;
+  I64 cap;
+  Bool allocated;
 };
 
-public class FzFSlab
+class FzFI32
+{
+  I32 *data;
+  I64 size;
+  I64 cap;
+  Bool allocated;
+};
+
+class FzFResult
+{
+  I64 start;
+  I64 end;
+  I64 score;
+};
+
+class FzFSlab
 {
   FzFI16 i16;
   FzFI32 i32;
 };
 
-public class FzFSlabConfig
+class FzFSlabConfig
 {
-  U64 size_16;
-  U64 size_32;
+  I64 size_16;
+  I64 size_32;
 };
 
-public class FzFString
+class FzFString
 {
   U8 *data;
-  U64 size;
+  I64 size;
 };
 
-public class FzFTerm
+class FzFTerm
 {
   Bool inv;
   Bool case_sensitive;
   U8 *ptr;
   U0 *text;
-  FzFResult *(*fn)(FzFResult *res, Bool case_sensitive, Bool normalise,
+  FzFResult *(*fn)(FzFResult *res, Bool case_sensitive,
       FzFString *text, FzFString *pattern, FzFPosition *pos, FzFSlab *slab);
 };
 
-public class FzFTermSet 
+class FzFTermSet 
 {
   FzFTerm *ptr;
   List *terms;
-  U64 size;
-  U64 cap;
+  I64 size;
+  I64 cap;
 };
 
-public class FzFPattern
+class FzFPattern
 {
   FzFTermSet **ptr;
-  U64 size;
-  U64 cap;
+  I64 size;
+  I64 cap;
   Bool only_inv;
 };
 
-U0 FzFFuzzyMatchV1(FzFResult *res, Bool case_sensitive, Bool normalize,
+U0 FzFFuzzyMatchV1(FzFResult *res, Bool case_sensitive,
     FzFString *text, FzFString *pattern,
     FzFPosition *pos, FzFSlab *slab);
 
-FzFPattern *FzFParsePattern(I32 case_mode, Bool normalize,
-    U8 *pattern, Bool fuzzy);
+FzFPattern *FzFParsePattern(I32 case_mode,U8 *pattern, Bool fuzzy=TRUE);
 
 U0 FzFPatternRelease(FzFPattern *pattern);
 
-I32 FzFGetScore(U8 *text, FzFPattern *pattern,
-    FzFSlab *slab);
+I32 FzFGetScore(U8 *text, FzFPattern *pattern, FzFSlab *slab);
 
-FzFPosition *FzFPosArray(U64 len);
-FzFPosition *FzFGetPositions(U8 *text, FzFPattern *pattern,
-    FzFSlab *slab);
-U0 FzFPositionsRelease(FzFPosition *pos);
+FzFPosition *FzFPosArray(I64 len);
+FzFPosition *FzFGetPositions(U8 *text, FzFPattern *pattern,FzFSlab *slab);
+
+public U0 FzFPositionRelease(FzFPosition *pos);
 
 FzFSlab *FzFSlabNew(FzFSlabConfig *config);
 FzFSlab *FzFDefaultSlab();
@@ -116,43 +117,43 @@ U0 FzFSlabRelease(FzFSlab *slab);
 class FzFI16Slice
 {
   I16 *data;
-  U64 size;
+  I64 size;
 };
 
 class FzFI32Slice
 {
   I32 *data;
-  U64 size;
+  I64 size;
 };
 
 class FzFStrSlice 
 {
   U8 *data;
-  U64 size;
+  I64 size;
 };
 
-U0 slice_i16(FzFI16Slice *s, I16 *input, U64 from, U64 to)
+U0 slice_i16(FzFI16Slice *s, I16 *input, I64 from, I64 to)
 {
   s->data = input+from;
   s->size = to-from;
 }
 
-U0 slice_i16_right(FzFI16Slice *s, I16 *input, U64 to)
+U0 slice_i16_right(FzFI16Slice *s, I16 *input, I64 to)
 {
   slice_i16(s,input,0,to);
 }
 
-U0 slice_i32(FzFI32Slice *s, I32 *input, U64 from, U64 to) {
+U0 slice_i32(FzFI32Slice *s, I32 *input, I64 from, I64 to) {
   s->data = input+from;
   s->size = to-from;
 }
 
-U0 slice_str(FzFStrSlice *s, U8 *input, U64 from, U64 to) {
+U0 slice_str(FzFStrSlice *s, U8 *input, I64 from, I64 to) {
   s->data = input+from;
   s->size = to-from;
 }
 
-U0 slice_str_right(FzFStrSlice *s, U8 *input, U64 to)
+U0 slice_str_right(FzFStrSlice *s, U8 *input, I64 to)
 {
   slice_str(s, input, 0, to);
 }
@@ -173,11 +174,12 @@ Bool IsSpace(U8 ch)
     ch == '\r';
 }
 
-U64 leading_whitespaces(FzFString *str)
+I64 leading_whitespaces(FzFString *str)
 {
-  U64 whitespaces = 0;
-  for (U64 i = 0; i < str->size; i++) {
-    if (!IsSpace(cast<U8>(str->data[i]))) {
+  I64 whitespaces = 0;
+  for (I64 i = 0; i < str->size; i++) {
+    U8 ch = str->data[i](U8);
+    if (!IsSpace(ch)) {
       break;
     }
     whitespaces++;
@@ -185,10 +187,10 @@ U64 leading_whitespaces(FzFString *str)
   return whitespaces;
 }
 
-U64 trailing_whitespaces(FzFString *str) {
-  U64 whitespaces = 0;
-  for (U64 i = str->size - 1; i >= 0; i--) {
-    if (!IsSpace(cast<U8>(str->data[i]))) {
+I64 trailing_whitespaces(FzFString *str) {
+  I64 whitespaces = 0;
+  for (I64 i = str->size - 1; i >= 0; i--) {
+    if (!IsSpace(str->data[i](U8))) {
       break;
     }
     whitespaces++;
@@ -197,20 +199,20 @@ U64 trailing_whitespaces(FzFString *str) {
 }
 
 U0 copy_runes(FzFString *src, FzFI32 *destination) {
-  for (U64 i = 0; i < src->size; i++) {
-    destination->data[i] = cast<I32>(src->data[i]);
+  for (I64 i = 0; i < src->size; i++) {
+    destination->data[i] = src->data[i](I32);
   }
 }
 
 U0 copy_into_i16(FzFI16Slice *src, FzFI16 *dest) {
-  for (U64 i = 0; i < src->size; i++) {
+  for (I64 i = 0; i < src->size; i++) {
     dest->data[i] = src->data[i];
   }
 }
 
-U8 *trim_whitespace_left(U8 *str, U64 *_len) {
+U8 *trim_whitespace_left(U8 *str, I64 *_len) {
   auto len = *_len;
-  for (U64 i = 0; i < len; i++) {
+  for (I64 i = 0; i < len; i++) {
     if (str[0] == ' ') {
       len--;
       str++;
@@ -222,8 +224,8 @@ U8 *trim_whitespace_left(U8 *str, U64 *_len) {
   return str;
 }
 
-Bool has_suffix(U8 *str, U64 len, U8 *suffix,
-    U64 suffix_len) {
+Bool has_suffix(U8 *str, I64 len, U8 *suffix,
+    I64 suffix_len) {
   FzFStrSlice s;
   slice_str(&s, str, len - suffix_len, len);
   return len >= suffix_len && !StrNCmp(s.data, suffix, suffix_len);
@@ -245,11 +247,11 @@ U8 *str_replace(U8 *orig, U8 *rep, U8 *with) {
 
   U8 *result,*ins,*tmp;
 
-  U64 len_rep = StrLen(rep);
-  U64 len_front = 0;
-  U64 len_orig = StrLen(orig);
-  U64 len_with = StrLen(with);
-  U64 count = 0;
+  I64 len_rep = StrLen(rep);
+  I64 len_front = 0;
+  I64 len_orig = StrLen(orig);
+  I64 len_with = StrLen(with);
+  I64 count = 0;
 
   if (len_rep == 0) {
     return NULL;
@@ -267,11 +269,10 @@ U8 *str_replace(U8 *orig, U8 *rep, U8 *with) {
 
   while (count--) {
     ins = strstr(orig, rep);
-    len_front = cast<U64>(ins - orig);
+    len_front = ins - orig;
     tmp = StrNCpy(orig, len_front) + len_front;
     StrCpy(tmp,with);
-    tmp + len_with;
-    //tmp = strcpy(tmp, with) + len_with;
+    tmp += len_with;
     orig += len_front + len_rep;
     len_orig -= len_front + len_rep;
   }
@@ -280,7 +281,7 @@ U8 *str_replace(U8 *orig, U8 *rep, U8 *with) {
   return result;
 }
 
-U8 *str_tolower(U8 *str, U64 size) {
+U8 *str_tolower(U8 *str, I64 size) {
   U8 *lower = MAlloc((size+1)*sizeof(U8));
   for (I64 i = 0; i < size; ++i) {
     lower[i] = ToLower(str[i]);
@@ -294,24 +295,19 @@ I16 max16(I16 a, I16 b) {
   return b;
 }
 
-U64 min64u(U64 a, U64 b) {
-  if (a > b) return a;
-  return b;
-}
-
-FzFPosition *FzFPosArray(U64 len) {
+FzFPosition *FzFPosArray(I64 len) {
   FzFPosition *pos = MAlloc(sizeof(FzFPosition));
   pos->size = 0;
   pos->cap = len;
   if (len > 0) {
-    pos->data = MAlloc(len * sizeof(U32));
+    pos->data = MAlloc(len * sizeof(I64));
   } else {
     pos->data = NULL;
   }
   return pos;
 }
 
-U0 resize_pos(FzFPosition *pos, U64 add_len, U64 comp) {
+U0 resize_pos(FzFPosition *pos, I64 add_len, I64 comp) {
   if (!pos) {
     return;
   }
@@ -321,11 +317,11 @@ U0 resize_pos(FzFPosition *pos, U64 add_len, U64 comp) {
     } else {
       pos->cap += 1;
     }
-    pos->data = ReAlloc(pos->data, sizeof(U32) * pos->cap);
+    pos->data = ReAlloc(pos->data, sizeof(I64) * pos->cap);
   }
 }
 
-U0 append_pos(FzFPosition *pos, U64 value) {
+U0 append_pos(FzFPosition *pos, I64 value) {
   if (pos) {
     resize_pos(pos, pos->cap, 10);
     pos->data[pos->size] = value;
@@ -333,7 +329,7 @@ U0 append_pos(FzFPosition *pos, U64 value) {
   }
 }
 
-U0 insert_range(FzFPosition *pos, U64 start, U64 end) {
+U0 insert_range(FzFPosition *pos, I64 start, I64 end) {
   if (!pos) {
     return;
   }
@@ -344,13 +340,13 @@ U0 insert_range(FzFPosition *pos, U64 start, U64 end) {
   }
 
   resize_pos(pos, diff, diff);
-  for (U64 i = start; i < end; i++) {
+  for (I64 i = start; i < end; i++) {
     pos->data[pos->size] = i;
     pos->size++;
   }
 }
 
-U0 alloc16(FzFI16 *f, U64 *offset, FzFSlab *slab, U64 size) {
+U0 alloc16(FzFI16 *f, I64 *offset, FzFSlab *slab, I64 size) {
   if (slab != NULL && slab->i16.cap > *offset + size) {
     FzFI16Slice slice;
     slice_i16(&slice,slab->i16.data, *offset,
@@ -368,7 +364,7 @@ U0 alloc16(FzFI16 *f, U64 *offset, FzFSlab *slab, U64 size) {
   f->allocated = TRUE;
 }
 
-U0 alloc32(FzFI32 *f, U64 *offset, FzFSlab *slab, U64 size) {
+U0 alloc32(FzFI32 *f, I64 *offset, FzFSlab *slab, I64 size) {
   if (slab != NULL && slab->i32.cap > *offset + size) {
     FzFI16Slice slice;
     slice_i32(&slice,slab->i32.data, *offset,
@@ -393,7 +389,8 @@ I32 char_cls_of_ascii(U8 ch) {
   return FZF_CHAR_NON_WORD;
 }
 
-I32 char_cls_of(U8 ch) {
+I32 char_cls_of(U8 ch)
+{
   return char_cls_of_ascii(ch);
 }
 
@@ -411,7 +408,7 @@ I16 bonus_for(I32 prev_cls, I32 cls) {
   return 0;
 }
 
-I16 bonus_at(FzFString *input, U64 idx) {
+I16 bonus_at(FzFString *input, I64 idx) {
   if (idx == 0) {
     return FZF_BONUS_BOUNDARY;
   }
@@ -423,7 +420,7 @@ I16 bonus_at(FzFString *input, U64 idx) {
 I32 try_skip(FzFString *input, Bool case_sensitive, U8 b, I32 from)
 {
   FzFStrSlice slice;
-  slice_str(&slice, input->data, from(U64), input->size);
+  slice_str(&slice, input->data, from(I64), input->size);
   FzFString byte_array;
   byte_array.data = slice.data;
   byte_array.size = slice.size;
@@ -435,7 +432,7 @@ I32 try_skip(FzFString *input, Bool case_sensitive, U8 b, I32 from)
   if (!case_sensitive && ('a' <= b <= 'z')) {
     if (idx > 0) {
       FzFStrSlice tmp;
-      slice_str_right(&tmp, byte_array.data, idx(U64));
+      slice_str_right(&tmp, byte_array.data, idx(I64));
       byte_array.data = tmp.data;
       byte_array.size = tmp.size;
     }
@@ -452,10 +449,10 @@ I32 try_skip(FzFString *input, Bool case_sensitive, U8 b, I32 from)
 }
 
 I32 ascii_fuzzy_index(FzFString *input, U8 *pattern,
-    U64 size, Bool case_sensitive)
+    I64 size, Bool case_sensitive)
 {
   I32 first_idx = 0, idx = 0;
-  for (U64 pidx = 0; pidx < size; pidx++) {
+  for (I64 pidx = 0; pidx < size; pidx++) {
     idx = try_skip(input, case_sensitive, pattern[pidx], idx);
     if (idx < 0) {
       return -1;
@@ -469,15 +466,13 @@ I32 ascii_fuzzy_index(FzFString *input, U8 *pattern,
   return first_idx;
 }
 
-I32 FzFCalculateScore(Bool case_sensitive, Bool normalize,
-    FzFString *text, FzFString *pattern,
-    U64 sidx, U64 eidx, FzFPosition *pos) {
-  "CALL: FzFCalculateScore(%d, %d, tex:%p, pat:%p, s:%zu, e:%zu, %p);\n",
-  case_sensitive,normalize,text,pattern,sidx,eidx,pos;
+I32 FzFCalculateScore(Bool case_sensitive, FzFString *text, FzFString *pattern,
+    I64 sidx, I64 eidx, FzFPosition *pos)
+{
   auto M = pattern->size;
 
-  U64 pidx = 0;
-  I32 score = 0, consecutive = 0;
+  I64 pidx = 0;
+  I64 score = 0, consecutive = 0;
   Bool in_gap = FALSE;
   I16 first_bonus = 0;
 
@@ -486,7 +481,7 @@ I32 FzFCalculateScore(Bool case_sensitive, Bool normalize,
   if (sidx > 0) {
     prev_cls = char_cls_of(text->data[sidx - 1]);
   }
-  for (U64 idx = sidx; idx < eidx; idx++) {
+  for (I64 idx = sidx; idx < eidx; idx++) {
     U8 c = text->data[idx];
     I32 cls = char_cls_of(c);
     if (!case_sensitive) {
@@ -527,11 +522,9 @@ I32 FzFCalculateScore(Bool case_sensitive, Bool normalize,
   return score;
 }
 
-U0 FzFPrefixMatch(FzFResult *res, Bool case_sensitive, Bool normalise,
-    FzFString *text, FzFString *pattern,
-    FzFPosition *pos, FzFSlab *slab)
+U0 FzFPrefixMatch(FzFResult *res, Bool case_sensitive, FzFString *text,
+    FzFString *pattern, FzFPosition *pos, FzFSlab *slab)
 {
-  "CALL: FzFPrefixMatch\n";
   I64 M,trimmed_len,start,end;
   I32 score;
   U8 c;
@@ -554,9 +547,8 @@ U0 FzFPrefixMatch(FzFResult *res, Bool case_sensitive, Bool normalise,
 
   res->end = trimmed_len + M;
   res->start = trimmed_len;
-  res->score = FzFCalculateScore(case_sensitive,
-      normalise,text,pattern,res->start,
-      res->end,NULL);
+  res->score = FzFCalculateScore(case_sensitive,text,pattern,res->start,
+                                 res->end,NULL);
   insert_range(pos,res->start,res->end);
   return;
 
@@ -566,7 +558,7 @@ no_match:
   res->score = 0;
 }
 
-U0 FzFSuffixMatch(FzFResult *res, Bool case_sensitive, Bool normalise,
+U0 FzFSuffixMatch(FzFResult *res, Bool case_sensitive,
     FzFString *text, FzFString *pattern,
     FzFPosition *pos, FzFSlab *slab)
 {
@@ -590,22 +582,23 @@ U0 FzFSuffixMatch(FzFResult *res, Bool case_sensitive, Bool normalise,
 
   res->start = trimmed_len - M;
   res->end = trimmed_len;
-  res->score = FzFCalculateScore(case_sensitive,normalise,text,pattern,start,end,NULL);
+  res->score = FzFCalculateScore(case_sensitive,text,pattern,res->start,
+      res->end,NULL);
+
   insert_range(pos,res->start,res->end);
   return;
 
 no_match:
-  res->start = start;
-  res->end = end;
-  res->score = score;
+  res->start = -1;
+  res->end = -1;
+  res->score = 0;
   return;
 }
 
-U0 FzFEqNaiveMatch(FzFResult *res, Bool case_sensitive, Bool normalise,
-    FzFString *text, FzFString *pattern,
-    FzFPosition *pos, FzFSlab *slab)
+U0 FzFEqNaiveMatch(FzFResult *res, Bool case_sensitive, FzFString *text,
+    FzFString *pattern, FzFPosition *pos, FzFSlab *slab)
 {
-  U64 M,N;
+  I64 M,N;
   I64 trimmed_len,trimmed_end_len,start,end,best_bonus,bonus,pidx;
   I32 best_pos,score;
   U8 c;
@@ -648,7 +641,7 @@ U0 FzFEqNaiveMatch(FzFResult *res, Bool case_sensitive, Bool normalise,
     auto bp = best_pos;
     start = bp + 1;
     end = bp + 1;
-    score = FzFCalculateScore(case_sensitive,normalise,text,pattern,start,end,NULL);
+    score = FzFCalculateScore(case_sensitive,text,pattern,start,end,NULL);
     insert_range(pos,start,end);
     res->start = start;
     res->end = end;
@@ -662,9 +655,8 @@ no_match:
   res->score = 0;
 }
 
-U0 FzFEqMatch(FzFResult *res, Bool case_sensitive, Bool normalise,
-    FzFString *text, FzFString *pattern,
-    FzFPosition *pos, FzFSlab *slab)
+U0 FzFEqMatch(FzFResult *res, Bool case_sensitive, FzFString *text,
+    FzFString *pattern, FzFPosition *pos, FzFSlab *slab)
 {
   auto M = pattern->size;
   I64 trimmed_len,trimmed_end_len,start,end;
@@ -715,13 +707,13 @@ out:
   res->score = score;
 }
 
-U0 FzFFuzzyMatchV1(FzFResult *res, Bool case_sensitive, Bool normalize,
-    FzFString *text, FzFString *pattern,
-    FzFPosition *pos, FzFSlab *slab) {
-  "CALL_v1\n";
-
+U0 FzFFuzzyMatchV1(FzFResult *res, Bool case_sensitive, FzFString *text,
+    FzFString *pattern, FzFPosition *pos, FzFSlab *slab)
+{
   auto M = pattern->size;
   auto N = text->size;
+  I64 start, end;
+
   if (M == 0) {
     return;
   }
@@ -732,9 +724,9 @@ U0 FzFFuzzyMatchV1(FzFResult *res, Bool case_sensitive, Bool normalize,
     return;
   }
 
-  I32 pidx = 0,sidx = -1, eidx = -1;
+  I64 pidx = 0,sidx = -1, eidx = -1;
 
-  for (U64 idx = 0; idx < N; idx++) {
+  for (I64 idx = 0; idx < N; idx++) {
     U8 c = text->data[idx];
     if (!case_sensitive) {
       c = ToLower(c);
@@ -752,10 +744,10 @@ U0 FzFFuzzyMatchV1(FzFResult *res, Bool case_sensitive, Bool normalize,
   }
 
   if (sidx >= 0 && eidx >= 0) {
-    U64 start = sidx(U64);
-    U64 end = eidx(U64);
+    start = sidx;
+    end = eidx;
     pidx--;
-    for (U64 idx = end - 1; idx >= start; idx--) {
+    for (I64 idx = end - 1; idx >= start; idx--) {
       U8 c = text->data[idx];
       if (!case_sensitive) {
         c = ToLower(c);
@@ -769,7 +761,7 @@ U0 FzFFuzzyMatchV1(FzFResult *res, Bool case_sensitive, Bool normalize,
       }
     }
 
-    auto score = FzFCalculateScore(case_sensitive, normalize, text,
+    auto score = FzFCalculateScore(case_sensitive, text,
         pattern, start, end, pos);
     res->start = start;
     res->end = end;
@@ -805,21 +797,20 @@ U0 append_pattern(FzFPattern *pattern, FzFTermSet *value) {
   if (pattern->cap == 0) {
     pattern->cap = 1;
     pattern->ptr = MAlloc(sizeof(FzFTermSet *));
-  } else if (pattern->size + 1 > pattern->cap) {
+  } else if (pattern->size + 1 >= pattern->cap) {
     pattern->cap *= 2;
-    pattern->ptr = ReAlloc(pattern->ptr,
-        sizeof(FzFTermSet *) * pattern->cap);
+    pattern->ptr = ReAlloc(pattern->ptr, sizeof(FzFTermSet *) * pattern->cap);
   }
   pattern->ptr[pattern->size] = value;
   pattern->size++;
 }
 
-FzFPattern *FzFParsePattern(I32 case_mode, Bool normalize,
-    U8 *pattern, Bool fuzzy) {
+FzFPattern *FzFParsePattern(I32 case_mode, U8 *pattern, Bool fuzzy=TRUE)
+{
   FzFPattern *pat_obj = CAlloc(sizeof(FzFPattern));
   FzFTerm term;
 
-  U64 pat_len = StrLen(pattern);
+  I64 pat_len = StrLen(pattern);
   if (pat_len == 0) {
     return pat_obj;
   }
@@ -840,7 +831,7 @@ FzFPattern *FzFParsePattern(I32 case_mode, Bool normalize,
   Bool switch_set = FALSE;
   Bool after_bar = FALSE;
   while (ptr != NULL) {
-    FzFResult *(*fn)(FzFResult *res, Bool _case_sensitive, Bool _normalize,
+    FzFResult *(*fn)(FzFResult *res, Bool _case_sensitive,
         FzFString *_text, FzFString *_pattern,
         FzFPosition *_pos, FzFSlab *_slab) = &FzFFuzzyMatchV1;
 
@@ -945,7 +936,7 @@ FzFPattern *FzFParsePattern(I32 case_mode, Bool normalize,
     }
   }
   Bool only = TRUE;
-  for (U64 i = 0; i < pat_obj->size; i++) {
+  for (I64 i = 0; i < pat_obj->size; i++) {
     FzFTermSet *term_set = pat_obj->ptr[i];
     if (term_set->size > 1) {
       only = FALSE;
@@ -965,9 +956,9 @@ FzFPattern *FzFParsePattern(I32 case_mode, Bool normalize,
 
 U0 FzFPatternRelease(FzFPattern *pattern) {
   if (pattern->ptr) {
-    for (U64 i = 0; i < pattern->size; i++) {
+    for (I64 i = 0; i < pattern->size; i++) {
       FzFTermSet *term_set = pattern->ptr[i];
-      for (U64 j = 0; j < term_set->size; j++) {
+      for (I64 j = 0; j < term_set->size; j++) {
         FzFTerm *term = &term_set->ptr[j];
         Free(term->ptr);
         Free(term->text);
@@ -982,8 +973,9 @@ U0 FzFPatternRelease(FzFPattern *pattern) {
   }
 }
 
-I32 FzFGetScore(U8 *text, FzFPattern *pattern, FzFSlab *slab) {
-  if (pattern->ptr == NULL) {
+I64 FzFGetScore(U8 *text, FzFPattern *pattern, FzFSlab *slab)
+{
+  if (pattern->ptr == NULL || text == NULL) {
     return 1;
   }
 
@@ -992,13 +984,12 @@ I32 FzFGetScore(U8 *text, FzFPattern *pattern, FzFSlab *slab) {
   input.size = StrLen(text);
 
   if (pattern->only_inv) {
-    I32 final = 0;
-    for (U64 i = 0; i < pattern->size; i++) {
+    I64 final = 0;
+    for (I64 i = 0; i < pattern->size; i++) {
       FzFTermSet *term_set = pattern->ptr[i];
       FzFTerm *term = &term_set->ptr[0];
       FzFResult res;
-      term->fn(&res,term->case_sensitive,FALSE,&input,
-          cast<FzFString*>(term->text),NULL,slab);
+      term->fn(&res,term->case_sensitive,&input,term->text(FzFString *),NULL,slab);
 
       final += res.score; 
     }
@@ -1008,17 +999,16 @@ I32 FzFGetScore(U8 *text, FzFPattern *pattern, FzFSlab *slab) {
     return 1;
   }
 
-  I32 total_score = 0;
-  for (U64 i = 0; i < pattern->size; i++) {
+  I64 total_score = 0;
+  for (I64 i = 0; i < pattern->size; i++) {
     FzFTermSet *term_set = pattern->ptr[i];
-    I32 current_score = 0;
+    I64 current_score = 0;
     Bool matched = FALSE;
-    for (U64 j = 0; j < term_set->size; j++) {
+    for (I64 j = 0; j < term_set->size; j++) {
       FzFTerm *term = &term_set->ptr[j];
       FzFString *fzf_str = term->text;
       FzFResult res;
-      term->fn(&res,term->case_sensitive,FALSE,&input,
-          fzf_str,NULL,slab);
+      term->fn(&res,term->case_sensitive,&input,fzf_str,NULL,slab);
 
       if (res.start >= 0) {
         if (term->inv) {
@@ -1045,7 +1035,7 @@ I32 FzFGetScore(U8 *text, FzFPattern *pattern, FzFSlab *slab) {
   return total_score;
 }
 
-U0 FzFPositionsRelease(FzFPosition *pos) {
+U0 FzFPositionRelease(FzFPosition *pos) {
   if (pos) {
     if (pos->data) {
       Free(pos->data);
@@ -1056,37 +1046,45 @@ U0 FzFPositionsRelease(FzFPosition *pos) {
 
 FzFPosition *FzFGetPositions(U8 *text, FzFPattern *pattern, FzFSlab *slab)
 {
-  if (pattern->ptr == NULL) {
+  FzFString input;
+  FzFResult res;
+  FzFPosition *all_pos;
+  FzFTermSet *term_set;
+  FzFString *fzf_str;
+  FzFTerm *term;
+  Bool matched;
+
+  if (pattern->ptr == NULL || text == NULL) {
     return NULL;
   }
 
-  FzFString input;
   input.data = text;
   input.size = StrLen(text);
-  FzFPosition *all_pos = FzFPosArray(0);
-  FzFResult res;
+  all_pos = FzFPosArray(0);
 
-  for (U64 i = 0; i < pattern->size; i++) {
-    FzFTermSet *term_set = pattern->ptr[i];
-    Bool matched = FALSE;
-    for (U64 j = 0; j < term_set->size; j++) {
-      FzFTerm *term = &term_set->ptr[j];
-      auto fzf_str = cast<FzFString *>(term->text);
+  for (I64 i = 0; i < pattern->size; i++) {
+    term_set = pattern->ptr[i];
+    matched = FALSE;
+
+    for (I64 j = 0; j < term_set->size; j++) {
+      term = &term_set->ptr[j];
+      fzf_str = term->text(FzFString *);
+
       if (term->inv) {
-        term->fn(&res,term->case_sensitive,FALSE,&input,fzf_str,NULL,slab);
+        term->fn(&res,term->case_sensitive,&input,fzf_str,NULL,slab);
         if (res.start < 0) {
           matched = TRUE;
         }
         continue;
       }
-      term->fn(&res,term->case_sensitive,FALSE,&input,fzf_str,all_pos,slab);
+      term->fn(&res,term->case_sensitive,&input,fzf_str,all_pos,slab);
       if (res.start >= 0) {
         matched = TRUE;
         break;
       }
     }
     if (!matched) {
-      FzFPositionsRelease(all_pos);
+      FzFPositionRelease(all_pos);
       return NULL;
     }
   }
@@ -1125,4 +1123,21 @@ U0 FzFSlabRelease(FzFSlab *slab)
     Free(slab->i32.data);
     Free(slab);
   }
+}
+
+public FzFPosition *FzF(U8 *text, U8 *seq, I32 case_mode=FZF_CASE_SMART, Bool fuzzy=TRUE)
+{
+  auto slab = FzFDefaultSlab;
+  auto pattern = FzFParsePattern(case_mode,seq,fuzzy);
+  if (!pattern) {
+    return NULL;
+  }
+  auto score = FzFGetScore(text,pattern,slab);
+  auto pos = FzFGetPositions(text,pattern,slab);
+  if (pos) {
+    pos->score = score;
+  }
+  FzFPatternRelease(pattern);
+  FzFSlabRelease(slab);
+  return pos;
 }

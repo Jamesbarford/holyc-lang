@@ -554,3 +554,19 @@ public extern "c" I32 closedir(cDIR *dir);
 public extern "c" U0 rewinddir(cDIR *dir);
 public extern "c" U0 seekdir(cDIR *dir, I64 pos);
 public extern "c" I64 telldir(cDIR *dir);
+
+#define FZF_CASE_SMART   0
+#define FZF_CASE_IGNORE  1
+#define FZF_CASE_RESPECT 2
+
+public class FzFPosition
+{
+  I64 *data;
+  I64 size;
+  I64 cap;
+  I64 score;
+};
+
+public FzFPosition *FzF(U8 *text, U8 *pattern,I32 case_mode=FZF_CASE_SMART,
+    Bool fuzzy=TRUE);
+public U0 FzFPositionRelease(FzFPosition *pos);
