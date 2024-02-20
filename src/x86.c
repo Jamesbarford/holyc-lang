@@ -133,8 +133,8 @@ char *AsmGetMovWithSign(AstType *type) {
     }
 }
 
-char *AsmGetPtrMove(int kind) {
-    switch (kind) {
+char *AsmGetPtrMove(AstType *type) {
+    switch (type->kind) {
         case AST_TYPE_ARRAY: return "leaq";
         default:             return "mov";
     }
@@ -425,7 +425,7 @@ void AsmLoadDeref(aoStr *buf, AstType *result, AstType *op_type, int off) {
             AstKindToString(result->kind),
             AstKindToString(op_type->kind));
 
-    ptr_mov = AsmGetPtrMove(op_type->kind);
+    ptr_mov = AsmGetPtrMove(op_type);
 
     if (op_type->kind == AST_TYPE_FLOAT) {
         if (off) aoStrCatPrintf(buf, "%s   %d(%%rax), %%xmm1\n\t",  ptr_mov, off);
@@ -437,8 +437,17 @@ void AsmLoadDeref(aoStr *buf, AstType *result, AstType *op_type, int off) {
             aoStrCatPrintf(buf, "mov    $0, %%ecx\n\t");
         }
 
-        if (off) aoStrCatPrintf(buf, "%s   %d(%%rax), %%%s\n\t",  ptr_mov, off, reg);
-        else     aoStrCatPrintf(buf,"%s   (%%rax), %%%s\n\t", ptr_mov, reg);
+        switch (op_type->kind) {
+            case AST_TYPE_CHAR:
+                if (off) aoStrCatPrintf(buf,"movzbl   %d(%%rax), %%ecx\n\t", off);
+                else     aoStrCatPrintf(buf,"movzbl   (%%rax), %%ecx\n\t");
+                aoStrCatPrintf(buf,"movzbl   %%cl, %%ecx\n\t");
+                break;
+            default:
+                if (off) aoStrCatPrintf(buf,"%s   %d(%%rax), %%%s\n\t",  ptr_mov, off, reg);
+                else     aoStrCatPrintf(buf,"%s   (%%rax), %%%s\n\t", ptr_mov, reg);
+        }
+
 
         /* Move back for the next recursive call */
         aoStrCatPrintf(buf,"movq   %%%s, %%rax\n\t", reg);
@@ -1517,7 +1526,7 @@ void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
                                         "movq   (%%%s), %%xmm0\n\t", reg);
                 } else {
                     // reg = AsmGetIntReg(result,'c');
-                    char *mov = AsmGetPtrMove(result->kind);
+                    char *mov = AsmGetPtrMove(result);
                     aoStrCatPrintf(buf, "movq   %%rax, %%rcx\n\t"
                                         "%s   (%%%s), %%rax\n\t",mov, reg);
                 }
