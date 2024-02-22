@@ -5,10 +5,16 @@
  * the result is the same.
  */
 
+class Foo
+{
+  I32 x;
+};
+
 class Ptr
 {
   I64 x,y;
   I64 (*fn)(I64 x);
+  U0 *priv;
 };
 
 I64 Add2(I64 x)
@@ -69,10 +75,24 @@ Bool CallingAFunctionPointerPart2(U0 *_ptr)
   return ptr->fn(5)(I32) == 7;
 }
 
+Bool CastingClassMember(Ptr *p)
+{
+  Foo *foo = p->priv(Foo *);
+  return foo->x == 32;
+}
+
+Bool CastingArray()
+{
+  U64 arr[3] = {1,2,3};
+  return arr[0](I32) == 1 && 
+         arr[1](I16) == 2 && 
+         arr[2](I8) == 3;
+}
+
 U0 Main()
 {
   "Test - Type casting:\n";
-  I64 correct = 0, tests = 7;
+  I64 correct = 0, tests = 9;
   Ptr *p = MAlloc(sizeof(Ptr));
   p->x = 10;
   p->y = 11;
@@ -85,6 +105,12 @@ U0 Main()
   if (VaradicTest()) ++correct;
   if (CallingAFunctionPointer(p)) ++correct;
   if (CallingAFunctionPointerPart2(p)) ++correct;
+  if (CastingArray()) ++correct;
+  Foo *foo = MAlloc(sizeof(Foo));
+  foo->x = 32;
+  p->priv = foo;
+  if (CastingClassMember(p)) ++correct;
+  Free(foo);
 
   PrintResult(correct,tests);
   "=====\n";
