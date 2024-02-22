@@ -300,9 +300,9 @@ Dict *ParseClassOffsets(int *real_size, List *fields, AstType *base_class,
                     field->fields = fields_dict;
                 }
             }
-            int padding = CalcPadding(offset,field->size);
-            field->offset = offset + padding;
-            offset += (field->size + padding);
+            offset += CalcPadding(offset,field->size);
+            field->offset = offset;
+            offset += (field->size);
         }
 
         if (field->clsname) {
