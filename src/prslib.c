@@ -579,7 +579,7 @@ static Ast *ParsePrimary(Cctrl *cc) {
 
 static int ParseGetPriority(lexeme *tok) {
     switch (tok->i64) {
-    case '.': case '[': case TK_ARROW:
+    case '.': case '[': case TK_ARROW: case '(':
         return 1;
     case '!': case '~': 
     case TK_PLUS_PLUS: 
@@ -733,6 +733,7 @@ Ast *ParseExpr(Cctrl *cc, int prec) {
             AssertLValue(LHS,cc->lineno);
             AstType *type = ParseDeclSpec(cc);
             LHS = AstCast(LHS,type);
+            CctrlTokenExpect(cc,')');
             continue;
         }
 

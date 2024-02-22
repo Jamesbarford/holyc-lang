@@ -1341,7 +1341,7 @@ Ast *ParseToplevelDef(Cctrl *cc, int *is_global) {
                     continue;
                 default:
                     loggerPanic("line %ld: %s can only prefix a class\n",
-                            cc->lineno,AstTypeToString(type));
+                            cc->lineno,lexemeToString(name));
             }
         }
 

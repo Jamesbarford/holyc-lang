@@ -234,7 +234,7 @@ char *lexemeToString(lexeme *tok) {
     char *tmp;
     switch (tok->tk_type) {
         case TK_IDENT:
-            aoStrCatPrintf(str,"TK_IDENT\t %.*s",tok->len,tok->start);
+            aoStrCatPrintf(str,"TK_IDENT\t%.*s",tok->len,tok->start);
             return aoStrMove(str);
         case TK_CHAR_CONST:
             aoStrCatPrintf(str,"TK_CHAR_CONST\t%x",tok->i64);
@@ -532,6 +532,7 @@ long lexInStr(lexer *l, unsigned char *buf, long size, int *done,
     long i = 0, j = 0, k = 0, ch = 0;
     *done = 1;
 
+    escape_quotes = 0;
     if (escape_quotes) {
         ch = lexNextChar(l);
     }

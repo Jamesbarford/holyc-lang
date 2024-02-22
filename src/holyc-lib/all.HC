@@ -11,3 +11,4 @@
 #include "./hashtable.HC"
 #include "./dir.HC"
 #include "./stat.HC"
+#include "./fzf.HC"

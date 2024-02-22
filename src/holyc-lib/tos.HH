@@ -395,6 +395,7 @@ extern "c" I32 strncmp(U8 *__s1, U8 *__s2, U64 __n);
 extern "c" U8 *strncpy(U8 *__dst, U8 *__src, U64 __n);
 extern "c" U8 *strpbrk(U8 *__s, U8 *__u8set);
 extern "c" U8 *strrchr(U8 *__s, I32 __c);
+extern "c" U8 *strdup(U8 *__s);
 extern "c" U64 strspn(U8 *__s, U8 *__u8set);
 extern "c" U8 *strstr(U8 *__big, U8 *__little);
 extern "c" U8 *strtok(U8 *__str, U8 *__sep);
@@ -532,7 +533,6 @@ public extern "c" I32 closedir(cDIR *dir);
 public extern "c" U0 rewinddir(cDIR *dir);
 public extern "c" U0 seekdir(cDIR *dir, I64 pos);
 public extern "c" I64 telldir(cDIR *dir);
-
 /* XXX: Normalise stat ? */
 #ifdef IS_MACOS
 public class cTimespec {
@@ -605,3 +605,19 @@ public extern "c" I32 rmdir(U8 *dirname);
 public I32 RmDir(U8 *path, Bool flags=0);
 public I32 Rm(U8 *path, Bool flags=0)
 public I32 MkDir(U8 *path, I32 mode=MKDIR_DEFAULT, Bool recurse=FALSE);
+
+#define FZF_CASE_SMART   0
+#define FZF_CASE_IGNORE  1
+#define FZF_CASE_RESPECT 2
+
+public class FzFPosition
+{
+  I64 *data;
+  I64 size;
+  I64 cap;
+  I64 score;
+};
+
+public FzFPosition *FzF(U8 *text, U8 *pattern,I32 case_mode=FZF_CASE_SMART,
+    Bool fuzzy=TRUE);
+public U0 FzFPositionRelease(FzFPosition *pos);
