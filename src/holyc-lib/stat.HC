@@ -1,11 +1,10 @@
-#include <tos.HH>
-
 #define RM_RECURSE  0x1
 #define RM_VERBOSE  0x2
 #define RM_FORCE    0x4
 #define INTERNAL_RM_DIRECORY 0x6
 
-static I32 MkDirIfNotExist(U8 *path, I32 mode=MKDIR_DEFAULT) {
+static I32 MkDirIfNotExist(U8 *path, I32 mode=MKDIR_DEFAULT)
+{
   cStat st;
   if (stat(path, &st) != 0) {
     if (mkdir(path, mode) != 0) {
@@ -17,9 +16,6 @@ static I32 MkDirIfNotExist(U8 *path, I32 mode=MKDIR_DEFAULT) {
   }
   return 0;
 }
-
-public extern "c" I32 unlink(U8 *pathname);
-public extern "c" I32 rmdir(U8 *dirname);
 
 public I32 RmDir(U8 *path, Bool flags=0)
 {
@@ -47,7 +43,6 @@ public I32 RmDir(U8 *path, Bool flags=0)
   result = 0;
   while (!result && (ent = readdir(dir))) {
     r2 = -1;
-    "%s\n",ent->name;
     if (!StrCmp(ent->name,".") || !StrCmp(ent->name,"..")) {
       continue;
     }
@@ -57,12 +52,21 @@ public I32 RmDir(U8 *path, Bool flags=0)
       if (ent->type & DT_DIR) {
         r2 = RmDir(buf,flags);
       } else if (ent->type & DT_REG) {
-        r2 = unlink(buf);
+
+        if ((r2 = unlink(buf)) == 0 && flags & RM_VERBOSE) {
+          "Rm: %s\n",buf;
+        } else {
+          "Error Rm: %s\n",buf;
+        }
       } else if (!stat(buf,&st)) {
           if ((st.st_mode & S_IFMT) == S_IFDIR) {
             r2 = RmDir(path,flags);
           } else {
-            r2 = unlink(buf);
+            if ((r2 = unlink(buf)) == 0 && flags & RM_VERBOSE) {
+              "Rm: %s\n",buf;
+            } else {
+              "Error Rm: %s\n",buf;
+            }
           }
         }
       } else {
@@ -77,18 +81,26 @@ public I32 RmDir(U8 *path, Bool flags=0)
   }
   closedir(dir);
 
-  if (!result) {
+  if (!result && path) {
     result = rmdir(path);
+    if (flags & RM_VERBOSE) {
+      if (result == 0) {
+      "RmDir %s\n",path;
+      } else {
+        "ERROR: RmDir %s\n",path;
+      }
+    }
   }
 
   return result;
 }
 
 public I32 Rm(U8 *path, Bool flags=0)
-{ /* Remove a file or directory */
-  I32 is_verbose = flags & RM_VERBOSE, result;
-  if (is_verbose) flags &= ~RM_VERBOSE;
+{ /* DANGER Remove a file or directory, this is powerful but can cause a world 
+   * of pain */
+  I32 result;
   cStat st;
+
   if (stat(path,&st) == -1) {
     return -1;
   }
@@ -99,7 +111,7 @@ public I32 Rm(U8 *path, Bool flags=0)
 
   if (flags == 0) {
     result = unlink(path);
-    if (is_verbose) {
+    if (flags & RM_VERBOSE) {
       "Rm '%s'";
       if (result != 0) " failed\n";
       else             "\n";
@@ -117,11 +129,11 @@ public I32 Rm(U8 *path, Bool flags=0)
     return RmDir(path,flags);
   } 
   return 0;
-
 }
 
 public I32 MkDir(U8 *path, I32 mode=MKDIR_DEFAULT, Bool recurse=FALSE)
-{
+{ /* Make a directory, by default does not recurse folder permissions are: 
+   * drwxr-xr-x */
   Bool relative = TRUE;
   U8 *ptr,tmp[DIR_MAXPATHLEN];
   I64 i;
@@ -154,10 +166,4 @@ public I32 MkDir(U8 *path, I32 mode=MKDIR_DEFAULT, Bool recurse=FALSE)
     }
   }
   return TRUE;
-}
-
-U0 Main()
-{
-  MkDir("./hello/world/how/are",,TRUE);
-  Rm("./hello",(RM_RECURSE|RM_FORCE|RM_VERBOSE));
 }

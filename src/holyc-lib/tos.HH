@@ -597,3 +597,11 @@ public extern "c" I32 rmdir(U8 *dirname);
 #define S_ISGID 0x400     /* [XSI] set group id on execution */
 #define S_ISVTX 0x200     /* [XSI] directory restricted delete */
 #define MKDIR_DEFAULT (S_ISUID|S_IRWXU|S_IRWXG|S_IROTH|S_IXOTH)
+
+#define RM_RECURSE  0x1
+#define RM_VERBOSE  0x2
+#define RM_FORCE    0x4
+
+public I32 RmDir(U8 *path, Bool flags=0);
+public I32 Rm(U8 *path, Bool flags=0)
+public I32 MkDir(U8 *path, I32 mode=MKDIR_DEFAULT, Bool recurse=FALSE);
