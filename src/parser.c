@@ -260,7 +260,7 @@ int CalcPadding(int offset, int size) {
 Dict *ParseClassOffsets(int *real_size, List *fields, AstType *base_class,
         aoStr *clsname, int is_intrinsic)
 {
-    int offset;
+    int offset,size,padding;
     AstType *field;
     Dict *fields_dict = DictNew(&default_table_type);
     
@@ -300,7 +300,14 @@ Dict *ParseClassOffsets(int *real_size, List *fields, AstType *base_class,
                     field->fields = fields_dict;
                 }
             }
-            offset += CalcPadding(offset,field->size);
+            /* Align to the type not the size of the array */
+            if (field->kind == AST_TYPE_ARRAY) {
+                size = field->ptr->size;
+            } else {
+                size = field->size;
+            }
+            padding = CalcPadding(offset,size);
+            offset += (padding);
             field->offset = offset;
             offset += (field->size);
         }
@@ -310,7 +317,7 @@ Dict *ParseClassOffsets(int *real_size, List *fields, AstType *base_class,
         }
     }
 
-    *real_size = align(offset, 8);
+    *real_size = offset + CalcPadding(offset, 8);
     return fields_dict;
 }
 
