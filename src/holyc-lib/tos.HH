@@ -1,13 +1,13 @@
-/* All prototypes and classes for all functions and classes provided 
+/* All prototypes and classes for all functions and classes provided
  * by the library */
-#define SF_ARG1	8
-#define SF_ARG2	16
-#define SF_ARG3	24
-#define SF_ARG4	32
-#define SF_ARG5	40
-#define SF_ARG6	48
-#define SF_ARG7	52
-#define SF_ARG8	56
+#define SF_ARG1 8
+#define SF_ARG2 16
+#define SF_ARG3 24
+#define SF_ARG4 32
+#define SF_ARG5 40
+#define SF_ARG6 48
+#define SF_ARG7 52
+#define SF_ARG8 56
 
 #define TRUE  1
 #define FALSE 0
@@ -29,11 +29,11 @@
 #define I8_MAX  0x7F
 #define I8_MIN  0xFFFFFF80
 
-public class List
-{
+public class List {
   U0 *value;
   List *next, *prev;
 };
+
 public U0 ListInit(List *l);
 public List *ListNew();
 public U0 ListPrepend(List *head, U0 *value);
@@ -48,7 +48,6 @@ public I64 ListCount(List *ll);
 public U0 ListMergePrepend(List *l1, List *l2);
 public U0 ListMergeAppend(List *l1, List *l2);
 
-
 #define CSV_EOF   0
 #define CSV_ROW   1
 #define CSV_FIELD 2
@@ -62,68 +61,62 @@ public extern "c" I64 write(I32 __fd, U0 *__buf, U64 __nbyte);
 public extern "c" I64 lseek(I32 __fd, I64 __offset, I32 __whence);
 public extern "c" I32 chdir(U8 *path);
 
-public class CsvParser
-{
+public class CsvParser {
   U8 *csv;
-  U64 len,off,row_off,nrows,nfields;
+  U64 len, off, row_off, nrows, nfields;
   I64 state;
 };
 
-public class CsvSlice
-{
-  U64 idx,off,len;
+public class CsvSlice {
+  U64 idx, off, len;
 };
 public U0 CsvParserInit(CsvParser *p, U8 *csv, U64 len);
 public I64 CsvParse(CsvParser *p, CsvSlice *s)
 
-#define CDATE_YEAR_DAYS		365.24225
-#define CDATE_YEAR_DAYS_INT	36524225
-#define CDATE_BASE_DAY_OF_WEEK	0
+#define CDATE_YEAR_DAYS        365.24225
+#define CDATE_YEAR_DAYS_INT    36524225
+#define CDATE_BASE_DAY_OF_WEEK 0
 
 public class timeval
 { // c compatability
-  I64 tv_sec;   /* seconds since Jan. 1, 1970 */
-  I32 tv_usec;  /* and microseconds */
+  I64 tv_sec;        /* seconds since Jan. 1, 1970 */
+  I32 tv_usec;         /* and microseconds */
 };
 
-public class tm
-{ // c compatability
-	I32	tm_sec;		/* seconds after the minute [0-60] */
-	I32	tm_min;		/* minutes after the hour [0-59] */
-	I32	tm_hour;	/* hours since midnight [0-23] */
-	I32	tm_mday;	/* day of the month [1-31] */
-	I32	tm_mon;		/* months since January [0-11] */
-	I32	tm_year;	/* years since 1900 */
-	I32	tm_wday;	/* days since Sunday [0-6] */
-	I32	tm_yday;	/* days since January 1 [0-365] */
-	I32	tm_isdst;	/* Daylight Savings Time flag */
-	I64 tm_gmtoff;	/* offset from UTC in seconds */
-	I8  *tm_zone;	/* timezone abbreviation */
+public class tm 
+{     // c compatability
+  I32 tm_sec;  /* seconds after the minute [0-60] */
+  I32 tm_min;  /* minutes after the hour [0-59] */
+  I32 tm_hour;   /* hours since midnight [0-23] */
+  I32 tm_mday;   /* day of the month [1-31] */
+  I32 tm_mon;  /* months since January [0-11] */
+  I32 tm_year;   /* years since 1900 */
+  I32 tm_wday;   /* days since Sunday [0-6] */
+  I32 tm_yday;   /* days since January 1 [0-365] */
+  I32 tm_isdst;  /* Daylight Savings Time flag */
+  I64 tm_gmtoff; /* offset from UTC in seconds */
+  I8 *tm_zone;   /* timezone abbreviation */
 };
 
 public extern "c" tm *localtime(I64 *clock);
 public extern "c" I32 gettimeofday(timeval *tp, U0 *tzp);
 
-public I64 class CDate
-{
+public I64 class CDate {
   U32 time;
   I32 date;
 };
 
-public class CDateStruct
-{
-  U64 sec10000,sec100,sec,min,hour,
-	day_of_week,day_of_mon,mon;
+public class CDateStruct {
+  U64 sec10000, sec100, sec, min, hour, day_of_week, day_of_mon, mon;
   I32 year;
   I64 zone_diff;
 };
-
 
 public U64 NowMilliseconds();
 public U0 NowDateTimeStruct(CDateStruct *_ds);
 public I64 YearStartDate(I64 year);
 public I64 DayOfWeek(I64 i);
-public U0 Date2Struct(CDateStruct *_ds,CDate cdt);
+public U0 Date2Struct(CDateStruct *_ds, CDate cdt);
 public CDate Struct2Date(CDateStruct *_ds);
 public I32 FirstDayOfMon(I64 i);
 public I64 LastDayOfMon(I64 i);
@@ -131,63 +124,60 @@ public I32 FirstDayOfYear(I64 i);
 public I64 LastDayOfYear(I64 i);
 public CDate Now();
 
-#define HT_LOAD 0.60
+#define HT_LOAD  0.60
 #define HT_DELETED 0x7fffffffffffffff
 #define HT_PROBE_1 1
 #define HT_PROBE_3 3
 
-public class MapIndex
-{
+public class MapIndex {
   I64 capacity;
   I64 len;
   I64 *entries;
 };
 
-public class IntMapNode
-{
+public class IntMapNode {
   I64 key;
   U0 *value;
 };
 
-public class StrMapNode
-{
+public class StrMapNode {
   U8 *key;
   I64 key_len;
   U0 *value;
 };
 
-public class IntMap
-{
-  U64 size;     /* How many entries are in the hashtable */
+public class IntMap {
+  U64 size;   /* How many entries are in the hashtable */
   U64 capacity; /* How much capacity we have in the entries array */
-  U64 mask;     /* Used for hashing, as the capacity is always a power of 2
-                 * we can use fast modulo of `<int> & capacity-1`. */
-  MapIndex *indexes; /* Where all of the values are in the entries array, in 
-                      * insertion order. Means we can iterate over the HashTable 
-                      * quickly at the cost of memory */
-  U64 threashold; /* rebuild threashold */
+  U64 mask;   /* Used for hashing, as the capacity is always a power of 2
+           * we can use fast modulo of `<int> & capacity-1`. */
+  MapIndex *indexes; /* Where all of the values are in the entries array, in
+            * insertion order. Means we can iterate over the
+            * HashTable quickly at the cost of memory */
+  U64 threashold;  /* rebuild threashold */
   U0 (*_free_value)(U0 *value); /* User defined callback for freeing values */
-  IntMapNode **entries; /* All of the entries, XXX: could this be IntMapNode *entries? */
+  IntMapNode **entries; /* All of the entries, XXX: could this be IntMapNode
+               *entries? */
 };
 
-public class StrMap
-{
-  U64 size;     /* How many entries are in the hashtable */
+public class StrMap {
+  U64 size;   /* How many entries are in the hashtable */
   U64 capacity; /* How much capacity we have in the entries array */
-  U64 mask;     /* Used for hashing, as the capacity is always a power of 2
-                 * we can use fast modulo of `<int> & capacity-1`. */
-  MapIndex *indexes; /* Where all of the values are in the entries array, in 
-                      * insertion order. Means we can iterate over the HashTable 
-                      * quickly at the cost of memory */
-  U64 threashold; /* rebuild threashold */
-  U0 (*_free_value)(U0 *_value); /* User defined callback for freeing values */
+  U64 mask;   /* Used for hashing, as the capacity is always a power of 2
+           * we can use fast modulo of `<int> & capacity-1`. */
+  MapIndex *indexes; /* Where all of the values are in the entries array, in
+            * insertion order. Means we can iterate over the
+            * HashTable quickly at the cost of memory */
+  U64 threashold;  /* rebuild threashold */
+  U0 (*_free_value)(U0 *_value);        /* User defined callback for freeing values */
   U0 (*_free_key)(U0 *_key); /* User defined callback for freeing keys */
-  StrMapNode **entries; /* All of the entries, XXX: could this be IntMapNode *entries? */
+  StrMapNode **entries; /* All of the entries, XXX: could this be IntMapNode
+               *entries? */
 };
 
 public Bool StrMapSet(StrMap *map, U8 *key, U0 *value);
 public U0 *StrMapGet(StrMap *map, U8 *key);
-public StrMap *StrMapNew(U64 capacity=1<<8);
+public StrMap *StrMapNew(U64 capacity = 1 << 8);
 public U0 StrMapSetFreeValue(StrMap *map, U0 (*_free_value)(U0 *value));
 public U0 StrMapSetFreeKey(StrMap *map, U0 (*_free_key)(U0 *key));
 public U0 StrMapRelease(StrMap *map);
@@ -195,7 +185,7 @@ public Bool StrMapResize(StrMap *map, U64 size);
 
 public Bool IntMapSet(IntMap *map, I64 key, U0 *value);
 public U0 *IntMapGet(IntMap *map, I64 key);
-public IntMap *IntMapNew(U64 capacity=1<<8);
+public IntMap *IntMapNew(U64 capacity = 1 << 8);
 public U0 IntMapSetFreeValue(IntMap *map, U0 (*_free_value)(U0 *value));
 public U0 IntMapRelease(IntMap *map);
 public Bool IntMapResize(IntMap *map, U64 size);
@@ -206,22 +196,19 @@ public Bool IntMapResize(IntMap *map, U64 size);
 #define __THREAD_CONDATTR_SIZE__ 8
 #define __THREAD_SIZE__          8176
 
-/* This I _think_ is specific to MacOS implementation of pthreads 
+/* This I _think_ is specific to MacOS implementation of pthreads
  * It does work on linux though. */
-public class MutexLock 
-{
+public class MutexLock {
   I64 __sig;
   I8 __opaque[__MUTEX_LOCK_PADDING__];
 };
 
-public class MutexLockattr
-{
+public class MutexLockattr {
   I64 __sig;
   I8 __opaque[__MUTEX_LOCK_ATTR_SIZE__];
 };
 
-public class ThreadCond
-{
+public class ThreadCond {
   I64 __sig;
   I8 __opaque[__THREAD_COND_SIZE__];
 };
@@ -231,45 +218,39 @@ public class ThreadCondattr {
   I8 __opaque[__THREAD_CONDATTR_SIZE__];
 };
 
-public class pthread_handler_rec
-{
+public class pthread_handler_rec {
   U0 (*__routine)(U0 *__arg); // Routine to call
-  U0 *__arg;                  // Argument to pass
+  U0 *__arg;          // Argument to pass
   pthread_handler_rec *__next;
 };
 
-public class pthread_t 
-{
+public class pthread_t {
   I64 __sig;
-  pthread_handler_rec  *__cleanup_stack;
+  pthread_handler_rec *__cleanup_stack;
   I8 __opaque[__THREAD_SIZE__];
 };
 
-public class ThreadWorker
-{
+public class ThreadWorker {
   pthread_t *th;
   I32 id;
 };
 
-public class ThreadSemaphore
-{
+public class ThreadSemaphore {
   ThreadCond cond;
   MutexLock lk;
   I32 val;
-}; 
+};
 
-public class ThreadWorkerJob
-{
+public class ThreadWorkerJob {
   U0 *(*callback)(U0 *priv_data, U0 *argv);
   U0 *argv;
   ThreadWorkerJob *next;
 };
 
-public class ThreadPool
-{
-  U64 worker_count,alive_threads,active_threads;
+public class ThreadPool {
+  U64 worker_count, alive_threads, active_threads;
   Bool run;
-  ThreadCond has_work,no_work;
+  ThreadCond has_work, no_work;
   MutexLock lock, qlock;
   ThreadSemaphore *sem;
   ThreadWorker *workers;
@@ -277,29 +258,30 @@ public class ThreadPool
   U0 *priv_data;
 };
 
-public extern "c" I64 pthread_create(pthread_t **th, U0 *thread_attr=NULL,
-    		U0 *(*function_ptr)(U0 *argv), U0 *argv=NULL);
-public extern "c" I32 pthread_mutex_init(MutexLock *lk, MutexLockattr *mutex_attr=NULL);
+public extern "c" I64 pthread_create(pthread_t **th, U0 *thread_attr = NULL,
+                U0 *(*function_ptr)(U0 *argv), U0 *argv = NULL);
+public extern "c" I32 pthread_mutex_init(MutexLock *lk,
+                  MutexLockattr *mutex_attr = NULL);
 public extern "c" I32 pthread_mutex_destroy(MutexLock *lk);
 public extern "c" I32 pthread_mutex_lock(MutexLock *lk);
 public extern "c" I32 pthread_mutex_unlock(MutexLock *lk);
-public extern "c" I32 pthread_join(pthread_t *th, U0 *ptr=NULL);
+public extern "c" I32 pthread_join(pthread_t *th, U0 *ptr = NULL);
 public extern "c" I32 pthread_cond_broadcast(ThreadCond *cond);
 public extern "c" I32 pthread_cond_destroy(ThreadCond *cond);
-public extern "c" I32 pthread_cond_init(ThreadCond *cond,
-    		ThreadCondattr *attr=NULL);
+public extern "c" I32 pthread_cond_init(ThreadCond *cond, ThreadCondattr *attr = NULL);
 public extern "c" I32 pthread_cond_signal(ThreadCond *cond);
 public extern "c" I32 pthread_cond_wait(ThreadCond *cond, MutexLock *lk);
-public extern "c" I32 pthread_exit(U0 *data=NULL);
+public extern "c" I32 pthread_exit(U0 *data = NULL);
 public extern "c" I32 pthread_detach(pthread_t *th);
 ThreadPool *ThreadPoolNew(I64 worker_count);
-public U0 ThreadPoolEnqueue(ThreadPool *pool, U0 *argv, U0 (*callback)(U0 *priv_data, U0 *argv));
+public U0 ThreadPoolEnqueue(ThreadPool *pool, U0 *argv,
+           U0 (*callback)(U0 *priv_data, U0 *argv));
 public U0 ThreadPoolWait(ThreadPool *pool);
 public ThreadPool *ThreadPoolNew(I64 worker_count);
 public U0 ThreadPoolStop(ThreadPool *pool);
 public U0 ThreadPoolRelease(ThreadPool *pool);
 
-public _extern _EXIT U0 Exit(I64 exit_code=EXIT_FAIL);
+public _extern _EXIT U0 Exit(I64 exit_code = EXIT_FAIL);
 public _extern _WRITE I64 Write(I64 fd, U8 *buf, I64 len);
 public _extern _SYSTEM I64 System(U8 *command);
 
@@ -317,8 +299,8 @@ public extern "c" F64 cosh(F64 f1);
 public extern "c" F64 sinh(F64 f1);
 public extern "c" F64 tanh(F64 f1);
 public extern "c" F64 exp(F64 f1);
-public extern "c" F64 exp2(F64 f1); 
-public extern "c" F64 expm1(F64 f1); 
+public extern "c" F64 exp2(F64 f1);
+public extern "c" F64 expm1(F64 f1);
 public extern "c" F64 log(F64 f1);
 public extern "c" F64 log10(F64 f1);
 public extern "c" F64 log2(F64 f1);
@@ -373,19 +355,18 @@ public _extern _FREE_ALIGNED U0 Free16(U0 *ptr);
 public _extern _MEMCPY U0 *MemCpy(U0 *dst, U0 *src, I64 len);
 public _extern _MEMSET U0 *MemSet(U0 *dst, I32 ch, I64 len);
 
-
 #define STR_LEN 256
 
-#define PRTF_PAD_ZERO     0x001
-#define PRTF_LEFT_JUSTIFY 0x002
-#define PRTF_TRUNCATE     0x004
-#define PRTF_COMMA        0x008
-#define PRTF_DOLLAR       0x010
-#define PRTF_SLASH        0x020
-#define PRTF_QUESTION     0x040
-#define PRTF_AUX_FMT_NUM  0x080
-#define PRTF_DECIMAL      0x100
-#define PRTF_NEG          0x200
+#define PRTF_PAD_ZERO        0x001
+#define PRTF_LEFT_JUSTIFY    0x002
+#define PRTF_TRUNCATE        0x004
+#define PRTF_COMMA           0x008
+#define PRTF_DOLLAR          0x010
+#define PRTF_SLASH           0x020
+#define PRTF_QUESTION        0x040
+#define PRTF_AUX_FMT_NUM     0x080
+#define PRTF_DECIMAL         0x100
+#define PRTF_NEG             0x200
 #define PRTF_NEG_E           0x400
 #define PRTF_NEG_AUX_FMT_NUM 0x800
 
@@ -396,9 +377,9 @@ public _extern _MEMSET U0 *MemSet(U0 *dst, I32 ch, I64 len);
 #define CH_SPACE       0x20
 
 extern "c" F64 strtod(U8 *nptr, U8 **endptr);
-extern "c" I64 strtoll(U8 *nptr, U8 **endptr, I64 base=10);
-extern "c" U64 strtoul(U8 *nptr, U8 **endptr, I64 base=10);
-extern "c" I64 snprintf(I8 *nptr, U64 len, I8 *fmt,...);
+extern "c" I64 strtoll(U8 *nptr, U8 **endptr, I64 base = 10);
+extern "c" U64 strtoul(U8 *nptr, U8 **endptr, I64 base = 10);
+extern "c" I64 snprintf(I8 *nptr, U64 len, I8 *fmt, ...);
 extern "c" I64 strlen(U8 *s);
 extern "c" I64 strnlen(U8 *s, I64 size);
 extern "c" U8 *strcat(U8 *__s1, U8 *__s2);
@@ -429,73 +410,73 @@ public _extern _TOLOWER U8 ToLower(U8 ch);
 public _extern _TOUPPER U8 ToUpper(U8 ch);
 public U8 *StrNCpy(U8 *buf, I64 len);
 public U8 *FileExtDot(U8 *src);
-public U8 *FileExtRem(U8 *src,U8 *dst=NULL);
+public U8 *FileExtRem(U8 *src, U8 *dst = NULL);
 public Bool IsDotZ(U8 *filename);
 public Bool IsDotC(U8 *filename);
-public U0 SPutChar(U8 **_dst,U8 ch,U8 **_buf);
-public U0 OutStr(U8 *instr,U8 **_buf,U8 **_dst,I64 len,I64 flags);
+public U0 SPutChar(U8 **_dst, U8 ch, U8 **_buf);
+public U0 OutStr(U8 *instr, U8 **_buf, U8 **_dst, I64 len, I64 flags);
 public I64 StrOcc(U8 *src, I64 ch);
-public U8 *StrFirstOcc(U8 *src,U8 *marker);
-public U8 *StrLastOcc(U8 *src,U8 *marker);
-public U8 *StrLastRem(U8 *src,U8 *marker,U8 *dst=NULL);
+public U8 *StrFirstOcc(U8 *src, U8 *marker);
+public U8 *StrLastOcc(U8 *src, U8 *marker);
+public U8 *StrLastRem(U8 *src, U8 *marker, U8 *dst = NULL);
 public U0 StrReverse(U8 *buf, I64 length);
-public I64 I64ToStr(U8 *buf, I64 num, Bool *_is_neg=NULL, I64 _len=5000);
-public U64 U64ToStr(U8 *dst, U64 num, I64 len=5000);
+public I64 I64ToStr(U8 *buf, I64 num, Bool *_is_neg = NULL, I64 _len = 5000);
+public U64 U64ToStr(U8 *dst, U64 num, I64 len = 5000);
 public U8 *StrMergeJoin(I64 argc, U64 *argv);
 public U8 *StrMerge(...);
-public U8 *StrPrint(U8 *dst,U8 *fmt,...);
-public U8 *StrPrintJoin(U8 *_dst, U8 *fmt,I64 argc,I64 *argv);
+public U8 *StrPrint(U8 *dst, U8 *fmt, ...);
+public U8 *StrPrintJoin(U8 *_dst, U8 *fmt, I64 argc, I64 *argv);
 public U8 *MPrintDate(CDate cdt);
 public U8 *MPrintTime(CDate cdt);
 public U8 *MPrintTimestampNow();
 public U8 *StrNew(U8 *buf);
-public U8 *StrFirstRem(U8 *src,U8 *marker,U8 *dst=NULL);
+public U8 *StrFirstRem(U8 *src, U8 *marker, U8 *dst = NULL);
 public I64 StrIntToHex(U8 *dst, I64 num);
-public U8 *MPrintQ(U8 *ptr,I64 flags = 0);
-public U8 *MStrPrint(U8 *fmt,...);
-public U8 *CatPrint(U8 *_dst,U8 *fmt,...);
+public U8 *MPrintQ(U8 *ptr, I64 flags = 0);
+public U8 *MStrPrint(U8 *fmt, ...);
+public U8 *CatPrint(U8 *_dst, U8 *fmt, ...);
 public Bool Str2CDateStruct(U8 *strdate, U8 *format, CDateStruct *t);
 public Bool WildMatch(U8 *test_str, U8 *wild_str);
 public CDate StrToCDate(U8 *_str, U8 *fmt);
 
-#define F_DUPFD         0               /* duplicate file descriptor */
-#define F_GETFD         1               /* get file descriptor flags */
-#define F_SETFD         2               /* set file descriptor flags */
-#define F_GETFL         3               /* get file status flags */
-#define F_SETFL         4               /* set file status flags */
-#define F_GETOWN        5               /* get SIGIO/SIGURG proc/pgrp */
-#define F_SETOWN        6               /* set SIGIO/SIGURG proc/pgrp */
-#define F_GETLK         7               /* get record locking information */
-#define F_SETLK         8               /* set record locking information */
-#define F_SETLKW        9               /* F_SETLK; wait if blocked */
+#define F_DUPFD  0 /* duplicate file descriptor */
+#define F_GETFD  1 /* get file descriptor flags */
+#define F_SETFD  2 /* set file descriptor flags */
+#define F_GETFL  3 /* get file status flags */
+#define F_SETFL  4 /* set file status flags */
+#define F_GETOWN 5 /* get SIGIO/SIGURG proc/pgrp */
+#define F_SETOWN 6 /* set SIGIO/SIGURG proc/pgrp */
+#define F_GETLK  7 /* get record locking information */
+#define F_SETLK  8 /* set record locking information */
+#define F_SETLKW 9 /* F_SETLK; wait if blocked */
 
-#define F_FLUSH_DATA    40
-#define F_CHKCLEAN      41              /* Used for regression test */
-#define F_PREALLOCATE   42              /* Preallocate storage */
-#define F_SETSIZE       43              /* Truncate a file. Equivalent to calling truncate(2) */
-#define F_RDADVISE      44              /* Issue an advisory read async with no copy to user */
-#define F_RDAHEAD       45              /* turn read ahead off/on for this fd */
+#define F_FLUSH_DATA  40
+#define F_CHKCLEAN    41 /* Used for regression test */
+#define F_PREALLOCATE 42 /* Preallocate storage */
+#define F_SETSIZE     43 /* Truncate a file. Equivalent to calling truncate(2) */
+#define F_RDADVISE    44 /* Issue an advisory read async with no copy to user */
+#define F_RDAHEAD     45 /* turn read ahead off/on for this fd */
 
-#define FD_CLOEXEC      1               /* close-on-exec flag */
+#define FD_CLOEXEC 1 /* close-on-exec flag */
 
 /* record locking flags (F_GETLK, F_SETLK, F_SETLKW) */
-#define F_RDLCK         1               /* shared or read lock */
-#define F_UNLCK         2               /* unlock */
-#define F_WRLCK         3               /* exclusive or write lock */
+#define F_RDLCK 1 /* shared or read lock */
+#define F_UNLCK 2 /* unlock */
+#define F_WRLCK 3 /* exclusive or write lock */
 
-#define O_RDONLY        0x0000          /* open for reading only */
-#define O_WRONLY        0x0001          /* open for writing only */
-#define O_RDWR          0x0002          /* open for reading and writing */
-#define O_ACCMODE       0x0003          /* mask for above modes */
-#define O_CREAT         0x00000200      /* create if nonexistant */
-#define O_TRUNC         0x00000400      /* truncate to zero length */
-#define O_EXCL          0x00000800      /* error if already exists */
+#define O_RDONLY  0x0000   /* open for reading only */
+#define O_WRONLY  0x0001   /* open for writing only */
+#define O_RDWR    0x0002   /* open for reading and writing */
+#define O_ACCMODE 0x0003   /* mask for above modes */
+#define O_CREAT   0x00000200 /* create if nonexistant */
+#define O_TRUNC   0x00000400 /* truncate to zero length */
+#define O_EXCL    0x00000800 /* error if already exists */
 
-#define SEEK_SET        0       /* set file offset to offset */
-#define SEEK_CUR        1       /* set file offset to current plus offset */
-#define SEEK_END        2       /* set file offset to EOF plus offset */
+#define SEEK_SET 0 /* set file offset to offset */
+#define SEEK_CUR 1 /* set file offset to current plus offset */
+#define SEEK_END 2 /* set file offset to EOF plus offset */
 
-public extern "c" I32 open(U8 *__name, I32 flags, ...); 
+public extern "c" I32 open(U8 *__name, I32 flags, ...);
 public extern "c" I32 creat(U8 *__name, U16 __flags);
 public extern "c" I32 fcntl(I32 __fd, I32 __flags, ...);
 public extern "c" I32 close(I32 __fd);
@@ -504,47 +485,45 @@ public extern "c" I64 write(I32 __fd, U0 *__buf, U64 __nbyte);
 public extern "c" I64 lseek(I32 __fd, I64 __offset, I32 __whence);
 public extern "c" I32 chdir(U8 *path);
 
-public U8 *FileRead(U8 *path, I64 *_size=NULL);
-public Bool FileWrite(U8 *filename, U8 *buf, I64 size,
-    I64 flags=O_CREAT|O_RDWR);
+public U8 *FileRead(U8 *path, I64 *_size = NULL);
+public Bool FileWrite(U8 *filename, U8 *buf, I64 size, I64 flags = O_CREAT | O_RDWR);
 public I32 Cd(U8 *path);
 
-#define DT_UNKNOWN       0
-#define DT_FIFO          1
-#define DT_CHR           2
-#define DT_DIR           4
-#define DT_BLK           6
-#define DT_REG           8
-#define DT_LNK          10
-#define DT_SOCK         12
-#define DT_WHT          14
+#define DT_UNKNOWN 0
+#define DT_FIFO    1
+#define DT_CHR     2
+#define DT_DIR     4
+#define DT_BLK     6
+#define DT_REG     8
+#define DT_LNK     10
+#define DT_SOCK    12
+#define DT_WHT     14
 
 class cDIR {};
 
 #ifdef IS_MACOS
 #define DIR_MAXPATHLEN (1024)
 
-class Dirent
-{ 
-  U64  ino;
-  U64  off; 
-  U16  reclen;   /* length of this record */
-  U16   namlen;   /* length of string in d_name */
-  U8   type;     /* file type, see below */
-  I8   name[DIR_MAXPATHLEN]; /* entry name (up to MAXPATHLEN bytes) */
+class Dirent {
+  U64 ino;
+  U64 off;
+  U16 reclen;        /* length of this record */
+  U16 namlen;        /* length of string in d_name */
+  U8 type;         /* file type, see below */
+  I8 name[DIR_MAXPATHLEN]; /* entry name (up to MAXPATHLEN bytes) */
 };
 public _extern _opendir$INODE64 cDIR *opendir(U8 *dirname);
 public _extern _readdir$INODE64 Dirent *readdir(cDIR *dir);
+
 #elifdef IS_LINUX
 #define DIR_MAXPATHLEN (256)
 
-class Dirent
-{
-  U64  ino;      /* file number of entry */ 
-  U64  seekoff;  /* seek offset (optional, used by servers) */ 
-  U16  reclen;   /* length of this record */
-  U8   type;     /* file type, see below */
-  I8   name[DIR_MAXPATHLEN]; /* entry name (up to MAXPATHLEN bytes) */
+class Dirent {
+  U64 ino;         /* file number of entry */
+  U64 seekoff;       /* seek offset (optional, used by servers) */
+  U16 reclen;        /* length of this record */
+  U8 type;         /* file type, see below */
+  I8 name[DIR_MAXPATHLEN]; /* entry name (up to MAXPATHLEN bytes) */
 };
 public cDIR *opendir(U8 *dirname);
 public Dirent *readdir(cDIR *dir);
@@ -554,6 +533,78 @@ public extern "c" I32 closedir(cDIR *dir);
 public extern "c" U0 rewinddir(cDIR *dir);
 public extern "c" U0 seekdir(cDIR *dir, I64 pos);
 public extern "c" I64 telldir(cDIR *dir);
+/* XXX: Normalise stat ? */
+#ifdef IS_MACOS
+public class cTimespec {
+  I64 tv_sec;
+  I64 tv_nsec;
+};
+
+public class cStat {
+  I32 st_dev;
+  U16 st_mode;
+  U16 st_nlink;
+  U64 st_ino;
+  U32 st_uid;
+  U32 st_gid;
+  I32 st_rdev;
+  cTimespec st_atimespec;
+  cTimespec st_mtimespec;
+  cTimespec st_ctimespec;
+  cTimespec st_birthtimespec;
+  I64 st_size;
+  I64 st_blocks;
+  I32 st_blksize;
+  U32 st_flags;
+  U32 st_gen;
+  I32 st_lspare;
+  I64 st_qspare[2];
+};
+public _extern _stat$INODE64 I32 stat(U8 *pathname, cStat *st);
+public _extern _lstat$INODE64 I32 lstat(U8 *pathname, cStat *st);
+public _extern _fstat$INODE64 I32 fstat(I32 fd, cStat *st);
+#endif
+
+public extern "c" I32 mkdir(U8 *dirname, I32 mode = 438);
+public extern "c" I32 unlink(U8 *pathname);
+public extern "c" I32 rmdir(U8 *dirname);
+
+#define S_IFMT      0xF000 /* [XSI] type of file mask */
+#define S_IFIFO     0x1000     /* [XSI] named pipe (fifo) */
+#define S_IFCHR     0x2000     /* [XSI] character special */
+#define S_IFDIR     0x4000     /* [XSI] directory */
+#define S_IFBLK     0x6000     /* [XSI] block special */
+#define S_IFREG     0x8000     /* [XSI] regular */
+#define S_IFLNK     0xa000     /* [XSI] symbolic link */
+#define S_IFSOCK    0xc000     /* [XSI] socket */
+
+#define S_IRWXU 0x1c0     /* [XSI] RWX mask for owner */
+#define S_IRUSR 0x100     /* [XSI] R for owner */
+#define S_IWUSR 0x80      /* [XSI] W for owner */
+#define S_IXUSR 0x40      /* [XSI] X for owner */
+/* Read, write, execute/search by group */
+#define S_IRWXG 0x38      /* [XSI] RWX mask for group */
+#define S_IRGRP 0x20      /* [XSI] R for group */
+#define S_IWGRP 0x10      /* [XSI] W for group */
+#define S_IXGRP 0x8       /* [XSI] X for group */
+/* Read, write, execute/search by others */
+#define S_IRWXO 0x7       /* [XSI] RWX mask for other */
+#define S_IROTH 0x4       /* [XSI] R for other */
+#define S_IWOTH 0x2       /* [XSI] W for other */
+#define S_IXOTH 0x1       /* [XSI] X for other */
+
+#define S_ISUID 0x800     /* [XSI] set user id on execution */
+#define S_ISGID 0x400     /* [XSI] set group id on execution */
+#define S_ISVTX 0x200     /* [XSI] directory restricted delete */
+#define MKDIR_DEFAULT (S_ISUID|S_IRWXU|S_IRWXG|S_IROTH|S_IXOTH)
+
+#define RM_RECURSE  0x1
+#define RM_VERBOSE  0x2
+#define RM_FORCE    0x4
+
+public I32 RmDir(U8 *path, Bool flags=0);
+public I32 Rm(U8 *path, Bool flags=0)
+public I32 MkDir(U8 *path, I32 mode=MKDIR_DEFAULT, Bool recurse=FALSE);
 
 #define FZF_CASE_SMART   0
 #define FZF_CASE_IGNORE  1
