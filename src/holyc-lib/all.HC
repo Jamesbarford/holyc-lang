@@ -10,3 +10,4 @@
 #include "./csv.HC"
 #include "./hashtable.HC"
 #include "./dir.HC"
+#include "./stat.HC"
