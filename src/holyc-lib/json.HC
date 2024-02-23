@@ -1,3 +1,6 @@
+/* Source code Heavily inspired from: 
+ * https://github.com/Jamesbarford/easy-json - A json parser I wrote a while ago 
+ */
 #define JSON_NO_FLAGS     (0x0)
 
 /* Do not parse numbers, treat them as strings */
@@ -322,7 +325,7 @@ static Bool JsonParseBool(JsonParser *p)
       goto error;
     }
     /* check next 3 characters for 'rue' */
-    if (!StrNCmp(p->buffer+p->offset,"true", 4)) {
+    if (!StrNCmp(p->buffer+p->offset,"true",4)) {
       retval = TRUE;
     }
     JsonUnsafeAdvanceBy(p, 4);
@@ -334,7 +337,7 @@ static Bool JsonParseBool(JsonParser *p)
     }
 
     /* check next 4 characters for 'alse' */
-    if (!StrNCmp(p->buffer+p->offset,"false", 5)) {
+    if (!StrNCmp(p->buffer+p->offset,"false",5)) {
       retval = FALSE;
     }
     JsonUnsafeAdvanceBy(p, 5);
@@ -353,13 +356,14 @@ error:
  * 1: success
  * -1: error
  */
-static I32 JsonParseNull(JsonParser *p) {
+static I32 JsonParseNull(JsonParser *p)
+{
   I32 retval = -1;
   if (!JsonCanAdvanceBy(p, 4)) {
     p->error = JSON_CANNOT_ADVANCE;
     return -1;
   }
-  if (!StrNCmp(p->buffer + p->offset, "null", 4)) {
+  if (!StrNCmp(p->buffer + p->offset,"null",4)) {
     retval = 1;
   }
   JsonUnsafeAdvanceBy(p, 4);
@@ -439,6 +443,7 @@ static U8 *JsonParseString(JsonParser *p)
           case 'r': str[len++] = '\r'; break;
           case 't': str[len++] = '\t'; break;
           case 'u': {
+            /* XXX: handle unicode */
             p->error = JSON_INVALID_ESCAPE_CHARACTER;
             goto err;
           }
@@ -526,10 +531,23 @@ static U0 JsonToStringInternal(Json *J, JsonStringBuilder *js)
 
 public U8 *JsonToString(Json *json)
 {// Json to string
+  U8 *buf = MAlloc(sizeof(U8)*1<<10);
+  I64 len = 0;
   JsonStringBuilder sb;
   sb.len = 0;
-  sb.buf = MAlloc(sizeof(U8)*1<<9);
+  sb.buf = buf;
+  if (json->type == JSON_ARRAY) {
+    buf[len++] = '[';
+  } else {
+    buf[len++] = '{';
+  }
   JsonToStringInternal(json,&sb);
+  if (json->type == JSON_ARRAY) {
+    buf[len++] = ']';
+  } else {
+    buf[len++] = '}';
+  }
+  buf[len] = '\0';
   return sb.buf;
 }
 
@@ -752,6 +770,7 @@ static Bool JsonParseValue(JsonParser *p)
 
 Json *JsonParseWithLenAndFlags(U8 *raw, I64 len, I32 flags)
 {
+  auto J = JsonNew();
   JsonParser p;
   p.flags = flags;
   p.offset = 0;
@@ -761,7 +780,6 @@ Json *JsonParseWithLenAndFlags(U8 *raw, I64 len, I32 flags)
   p.J = NULL;
   p.ptr = NULL;
   p.error = JSON_OK; 
-  auto J = JsonNew();
   p.J = J;
 
   JsonAdvanceWhitespace(&p);
@@ -1039,8 +1057,7 @@ static Json *JsonObjectAt(Json *j, U8 *name)
  * Json *J = JsonParse(myJson_string);
  * Json *width = JsonSelect(J,".foo.bar[*].baz",4);
  * Json *height = JsonSelect(J,".tv.type[4].*","name");
- * Json *price = JsonSelect(J,".clothes.shirt[4].price_*", price_type
- *                          == EUR ? "eur" : "usd");
+ * Json *price = JsonSelect(J,".clothes.shirt[4].price_*", <some_variable>);
  *
  * You can also include a :<type> specifier, typically at the end, to verify the
  * type of the final JSON object selected. If the type doesn't match, the
@@ -1070,8 +1087,6 @@ public Json *JsonSelect(Json *j, U8 *fmt, ...)
    * There was an issue in CJSON that rejected this contribution.
    * https://github.com/DaveGamble/cJSON/issues/553
    *
-   * It is offered here as a separate compilable unit.
-   *
    * The fmt string is parsed, the JSON path is built and the
    * appropriate action is performed depending on the type of the selector
    * (Array, Object or Type Check). If a wildcard "*" is found, the next
@@ -1098,7 +1113,7 @@ public Json *JsonSelect(Json *j, U8 *fmt, ...)
       switch (next) {
         case JSON_SEL_ARRAY:
           idx = strtoll(path, &end)(I64);
-          if (idx == 0 && *end != '\0') {
+          if ((idx == 0 && *end != '\0') || idx < 0) {
             goto fail;
           }
 
@@ -1121,7 +1136,7 @@ public Json *JsonSelect(Json *j, U8 *fmt, ...)
         }
 
         case JSON_SEL_INVALD:
-           goto fail;
+         goto fail;
       }
     } else if (next != JSON_SEL_INVALD) {
       if (*ptr != '*') {

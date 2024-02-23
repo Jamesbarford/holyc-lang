@@ -890,7 +890,7 @@ U8 *CatLenPrint(U8 *_dst, I64 *_len, U8 *fmt, ...)
   U8 *s2 = StrPrintJoin(NULL,fmt,argc,argv);
   I64 s2len = StrLen(s2);
   I64 size = MSize(_dst);
-  if (size - s2len < 0) {
+  if (len + s2len >= size) {
     _dst = ReAlloc(_dst,(size*2)+s2len);
   }
   MemCpy(_dst+len,s2,s2len);
