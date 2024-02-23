@@ -159,7 +159,7 @@ SqlCtx *SqlCtxNew(U8 *dbname, Bool printerror=FALSE)
   if (ok != SQLITE_OK) {
     if (printerror) {
       U8 *s = sqlite3_errmsg(db);
-      printf("NOT OK: %s\n", s);
+      "NOT OK: %s\n", s;
     }
     return NULL;
   }
@@ -332,7 +332,8 @@ Bool SqlQuery(SqlCtx *ctx, U8 *sql, SqlParam *params=NULL, I32 param_count=0)
   return result == SQLITE_DONE || result == SQLITE_ROW;
 }
 
-static Bool SqlIterGeneric(SqlRow *row, I32 free_row) {
+static Bool SqlIterGeneric(SqlRow *row, I32 free_row)
+{
   if (row->stmt == NULL) {
     return FALSE;
   }
