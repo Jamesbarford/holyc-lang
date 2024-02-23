@@ -2,6 +2,8 @@ set cindent
 set filetype=HC
 set syntax=c
 
+syn keyword cTypeUnhighlighted bool char short int float double unsigned signed const void
+
 syn keyword cType     _extern extern inline static U0 Bool I8 U8 I16 U16 I32 U32 I64 U64 F64 auto atomic
 syn keyword cRepeat   while for do
 syn keyword cConstant NULL FALSE TRUE EXIT_FAIL EXIT_OK I64_MIN I64_MAX U64_MAX U8_MAX I8_MAX I8_MIN STDOUT STDERR __BUFSIZ__ STDIN

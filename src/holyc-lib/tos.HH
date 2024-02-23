@@ -1,5 +1,7 @@
 /* All prototypes and classes for all functions and classes provided
  * by the library */
+/* XXX: now we have a JSON parser it should be easier to generate this code, 
+ * JSON might be easier to maintain than this ever growing header file? */
 #define SF_ARG1 8
 #define SF_ARG2 16
 #define SF_ARG3 24
@@ -749,8 +751,8 @@ class SqlParam
   I64 type;
   union 
   {
-    I64 integer;
-    F64 floating;
+    I64 int;
+    F64 f64;
     U8 *str;
     class 
     {
@@ -771,11 +773,12 @@ class SqlColumn
 {
   I64 len;
   I64 type;
-  union {
-    I64 integer;
+  union
+  {
+    I64 int;
     U8 *str;
     U0 *blob;
-    F64 floating;
+    F64 f64;
   };
 };
 
@@ -843,7 +846,6 @@ public extern "c" I32 sqlite3_column_bytes16(sqlite3_stmt *stmt, I32 iCol);
 public extern "c" I32 sqlite3_column_type(sqlite3_stmt *stmt, I32 iCol);
 public extern "c" Bool sqlite3_open(U8 *dbname, sqlite3 **db);
 public extern "c" U8 *sqlite3_errmsg(sqlite3 *db);
-
 
 public SqlCtx *SqlCtxNew(U8 *dbname, Bool printerror=FALSE);
 public U0 SqlRelease(SqlCtx *ctx);
