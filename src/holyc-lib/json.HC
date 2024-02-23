@@ -534,20 +534,10 @@ public U8 *JsonToString(Json *json)
   U8 *buf = MAlloc(sizeof(U8)*1<<10);
   I64 len = 0;
   JsonStringBuilder sb;
-  sb.len = 0;
   sb.buf = buf;
-  if (json->type == JSON_ARRAY) {
-    buf[len++] = '[';
-  } else {
-    buf[len++] = '{';
-  }
+  sb.len = len;
   JsonToStringInternal(json,&sb);
-  if (json->type == JSON_ARRAY) {
-    buf[len++] = ']';
-  } else {
-    buf[len++] = '}';
-  }
-  buf[len] = '\0';
+  sb.buf[sb.len] = '\0';
   return sb.buf;
 }
 
