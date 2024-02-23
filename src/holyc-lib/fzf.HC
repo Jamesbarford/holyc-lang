@@ -139,13 +139,6 @@ I32 index_byte(FzFString *string, U8 b) {
   return -1;
 }
 
-Bool IsSpace(U8 ch)
-{ // XXX: extract to strings.HC
-  return ch == ' ' || ch == '\t' || 
-         ch == '\n' || ch == '\v' || ch == '\f' ||
-         ch == '\r';
-}
-
 I64 leading_whitespaces(FzFString *str)
 { // XXX: extract to strings.HC
   I64 whitespaces = 0;
