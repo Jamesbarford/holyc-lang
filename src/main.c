@@ -72,14 +72,14 @@ ln -sf ./tos.0.0.1.dylib ./tos.dylib
     snprintf(lib->dylib_name,LIB_BUFSIZ,"%s.dylib",name);
     snprintf(lib->dylib_version_name,LIB_BUFSIZ,"%s.0.0.1.dylib",name);
     aoStrCatPrintf(
-            dylibcmd, "cc -dynamiclib -Wl,-install_name,%s/%s -o %s -lm -lc -lpthread", 
+            dylibcmd, "cc -dynamiclib -Wl,-install_name,%s/%s -o %s -lm -lc -lpthread -lsqlite3",
             LIB_PATH, name, lib->dylib_version_name,lib->dylib_name);
 #elif IS_LINUX
     snprintf(lib->stylib_name,LIB_BUFSIZ,"%s.a",name);
     snprintf(lib->dylib_name,LIB_BUFSIZ,"%s.so",name);
     snprintf(lib->dylib_minor_name,LIB_BUFSIZ,"%s.so.0.0.1",name);
     aoStrCatPrintf(
-            dylibcmd, "cc -shared -Wl,-so_name,%s/%s -o %s -lm -lc -lpthread", 
+            dylibcmd, "cc -shared -Wl,-so_name,%s/%s -o %s -lm -lc -lpthread -lsqlite3",
             LIB_PATH,name,lib->dylib_minor_name,lib->dylib_name);
 #else
 #error "System not supported"
@@ -182,7 +182,7 @@ void emitFile(aoStr *asmbuf, hccOpts *opts) {
     hccLib lib;
     if (opts->emit_object) {
         writeAsmToTmp(asmbuf);
-        aoStrCatPrintf(cmd, "gcc -c %s -lm -lpthread -lc -ltos %s -o ./%s",
+        aoStrCatPrintf(cmd, "gcc -c %s -lm -lpthread -lc -ltos -lsqlite3 %s -o ./%s",
                 ASM_TMP_FILE,opts->clibs,opts->obj_outfile);
         system(cmd->data);
     } else if (opts->asm_outfile && opts->assemble_only) {
@@ -204,7 +204,7 @@ void emitFile(aoStr *asmbuf, hccOpts *opts) {
         system(lib.install_cmd);
     } else {
         writeAsmToTmp(asmbuf);
-        aoStrCatPrintf(cmd, "gcc -L/usr/local/lib %s -lm -lpthread -lc -ltos %s -o ./a.out", 
+        aoStrCatPrintf(cmd, "gcc -L/usr/local/lib %s -lm -lpthread -lc -ltos -lsqlite3 %s -o ./a.out", 
                 ASM_TMP_FILE,opts->clibs);
         system(cmd->data);
         remove(ASM_TMP_FILE);
@@ -261,7 +261,7 @@ void parseCliOptions(hccOpts *opts, int argc, char **argv) {
         } else if (!strncmp(argv[i],"-clibs",6)) {
             const char *error = "Invalid compile command, -clibs must be followed "
                 "by a list of libraries in single quotes for example "
-                "-clibs=\'-lxml2 -lsqlite3 ....\'.";
+                "-clibs=\'-lxml2 ....\'.";
             char *ptr = argv[i];
             ptr += 6;
             loggerDebug("%s\n",ptr);

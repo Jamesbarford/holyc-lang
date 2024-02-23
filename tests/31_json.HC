@@ -58,4 +58,5 @@ U0 Main()
 
   JsonRelease(j);
   PrintResult(correct,tests);
+  "====\n";
 }
