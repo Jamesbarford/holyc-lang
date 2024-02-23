@@ -13,3 +13,4 @@
 #include "./stat.HC"
 #include "./fzf.HC"
 #include "./json.HC"
+#include "./sqllite.HC"
