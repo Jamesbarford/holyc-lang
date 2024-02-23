@@ -209,6 +209,13 @@ public _extern _STRCPY U0 StrCpy(U8 *dst, U8 *src);
 public _extern _TOLOWER U8 ToLower(U8 ch);
 public _extern _TOUPPER U8 ToUpper(U8 ch);
 
+public Bool IsSpace(U8 ch)
+{
+  return ch == ' ' || ch == '\t' || 
+         ch == '\n' || ch == '\v' || ch == '\f' ||
+         ch == '\r';
+}
+
 public U8 *StrNCpy(U8 *buf, I64 len)
 {
   U8 *str = MAlloc(sizeof(U8)*len+1);
@@ -725,7 +732,7 @@ U8 *StrPrintJoin(U8 *_dst, U8 *fmt,I64 argc,I64 *argv)
             if (intarg < 0) {
               idx = 1;
             }
-            len = U64ToStr(buf,uintarg);
+            len = I64ToStr(buf,intarg);
           } else {
             len = U64ToStr(buf,uintarg);
           }
@@ -877,9 +884,25 @@ U8 *CatPrint(U8 *_dst,U8 *fmt,...)
   return s;
 }
 
-U8 days[] =
+U8 *CatLenPrint(U8 *_dst, I64 *_len, U8 *fmt, ...)
+{
+  I64 len = *_len;
+  U8 *s2 = StrPrintJoin(NULL,fmt,argc,argv);
+  I64 s2len = StrLen(s2);
+  I64 size = MSize(_dst);
+  if (len + s2len >= size) {
+    _dst = ReAlloc(_dst,(size*2)+s2len);
+  }
+  MemCpy(_dst+len,s2,s2len);
+  len+=s2len;
+  _dst[len] = '\0';
+  *_len = len;
+  return _dst;
+}
+
+I64 days[] =
 { 'sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat' };
-U8 months[] =
+I64 months[] =
 { 'jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec' };
 /* similar to strptime  */
 Bool Str2CDateStruct(U8 *strdate, U8 *format, CDateStruct *t)

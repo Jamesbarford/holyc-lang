@@ -12,3 +12,4 @@
 #include "./dir.HC"
 #include "./stat.HC"
 #include "./fzf.HC"
+#include "./json.HC"

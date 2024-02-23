@@ -22,8 +22,8 @@ syntax region cAsm start="\<asm\>\s*{" end="}" contains=cAsmLabel,cAsmFunction,c
 syntax match cAsmLabel "@@\d\+" contained
 syntax match cAsmFunction /^\s*\(\w\+::\)/ contained
 syntax match cAsmOp "\<\(MOV\|PUSH\|POP\|LEA\|TEST\
-            \|CLD\|REP\|J\|LOD\|STOSB\|DEC\|RET\|CMP\|INC\|SCASB\|XCHG\
-            \|CLI\|BT\|PAUSE\)\S*\>" contained
+            \|CLD\|REP\|LOD\|STOSB\|DEC\|RET\|CMP\|INC\|SCASB\|XCHG\
+            \|CLI\|BT\|PAUSE\|JMP\|JZ\|JNZ\|JE\|JNE\|JB\|JBE\|JA\|JAE\)\S*\>" contained
 syntax match cAsmCall "\<\(CALL\)\S*\>" contained
 syntax match cAsmMath "\<\(ADD\|SUB\|XOR\|OR\|AND\|MUL\
             \|NOT\|MOD\|DIV\|SHL\|SHR\)\S*\>" contained
@@ -34,8 +34,9 @@ hi def link cAsmOp cType
 hi def link cAsmMath cOperator
 hi def link cAsmCall cOperator 
 
-syntax region _HCString start=+"+ end=+"+ contains=HCStringFormat
+syntax region _HCString start=+"+ skip=+\\\\\|\\"+ end=+"+ contains=HCStringEscape,HCStringFormat
 
+syntax match HCStringEscape /\\./ contained
 syntax match HCStringFormat /%\(\d\+\$\)\=[-+' #0*]*\(\d*\|\*\|\*\d\+\$\)\(\.\(\d*\|\*\|\*\d\+\$\)\)\=\([hlLjzt]\|ll\|hh\)\=\([aAbdiuoxXDOUfFeEgGcCsSpn]\|\[\^\=.[^]]*\]\)/ contained
 syntax match HCStringFormat /%%/ contained
 syntax match HCStringFormat /\\[nrvtb'\\]/ contained

@@ -10,11 +10,10 @@
 #include "lexer.h"
 #include "util.h"
 
-AstType *ast_u8_type = &(AstType){.kind = AST_TYPE_CHAR, .size = 8, .ptr = NULL,.issigned=0};
-AstType *ast_i8_type = &(AstType){.kind = AST_TYPE_CHAR, .size = 8, .ptr = NULL,.issigned=1};
+AstType *ast_u8_type = &(AstType){.kind = AST_TYPE_CHAR, .size = 1, .ptr = NULL,.issigned=0};
+AstType *ast_i8_type = &(AstType){.kind = AST_TYPE_CHAR, .size = 1, .ptr = NULL,.issigned=1};
 AstType *ast_int_type = &(AstType){.kind = AST_TYPE_INT, .size = 8, .ptr = NULL,.issigned=1};
 AstType *ast_uint_type = &(AstType){.kind = AST_TYPE_INT, .size = 8, .ptr = NULL,.issigned=0};
-AstType *ast_int32_type = &(AstType){.kind = AST_TYPE_INT, .size = 4, .ptr = NULL,.issigned=1};
 
 AstType *ast_float_type = &(AstType){.kind = AST_TYPE_FLOAT, .size = 8, .ptr = NULL,.issigned=0};
 AstType *ast_void_type = &(AstType){.kind = AST_TYPE_VOID, .size = 0, .ptr = NULL,.issigned=0};

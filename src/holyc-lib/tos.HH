@@ -385,6 +385,7 @@ extern "c" I64 strnlen(U8 *s, I64 size);
 extern "c" U8 *strcat(U8 *__s1, U8 *__s2);
 extern "c" U8 *strchr(U8 *__s, I32 __c);
 extern "c" I32 strcmp(U8 *__s1, U8 *__s2);
+extern "c" I32 strcasecmp(U8 *__s1, U8 *__s2);
 extern "c" I32 strcoll(U8 *__s1, U8 *__s2);
 extern "c" U8 *strcpy(U8 *__dst, U8 *__src);
 extern "c" U64 strcspn(U8 *__s, U8 *__u8set);
@@ -408,6 +409,7 @@ public _extern _STRCMP I64 StrCmp(U8 *s1, U8 *s2);
 public _extern _STRCPY U0 StrCpy(U8 *dst, U8 *src);
 public _extern _TOLOWER U8 ToLower(U8 ch);
 public _extern _TOUPPER U8 ToUpper(U8 ch);
+public Bool IsSpace(U8 ch);
 public U8 *StrNCpy(U8 *buf, I64 len);
 public U8 *FileExtDot(U8 *src);
 public U8 *FileExtRem(U8 *src, U8 *dst = NULL);
@@ -435,6 +437,7 @@ public I64 StrIntToHex(U8 *dst, I64 num);
 public U8 *MPrintQ(U8 *ptr, I64 flags = 0);
 public U8 *MStrPrint(U8 *fmt, ...);
 public U8 *CatPrint(U8 *_dst, U8 *fmt, ...);
+public U8 *CatLenPrint(U8 *_dst, I64 *_len, U8 *fmt, ...);
 public Bool Str2CDateStruct(U8 *strdate, U8 *format, CDateStruct *t);
 public Bool WildMatch(U8 *test_str, U8 *wild_str);
 public CDate StrToCDate(U8 *_str, U8 *fmt);
@@ -621,3 +624,78 @@ public class FzFPosition
 public FzFPosition *FzF(U8 *text, U8 *pattern,I32 case_mode=FZF_CASE_SMART,
     Bool fuzzy=TRUE);
 public U0 FzFPositionRelease(FzFPosition *pos);
+
+#define JSON_STRNUM_FLAG (0x1)
+
+#define JSON_STRING 0
+#define JSON_FLOAT  1
+#define JSON_INT    2
+#define JSON_STRNUM 3
+#define JSON_ARRAY  4
+#define JSON_OBJECT 5
+#define JSON_BOOL   6
+#define JSON_NULL   7
+
+class JsonState
+{
+  U8 ch;
+  I64 offset;
+  I64 error;
+};
+
+class Json {};
+
+class Json
+{
+  JsonState *state;
+  Json *next;
+  I64 type;
+  U8 *key;
+  union
+  {
+    Json *array;
+    Json *object;
+    U8 *str;
+    Bool boolean;
+    U8 *strnum;
+    F64 f64;
+    I64 int;
+  };
+};
+#define JSON_OK 0
+#define JSON_INVALID_UTF16 1
+#define JSON_INVALID_UTF16_SURROGATE 2
+#define JSON_INVALID_HEX 3
+#define JSON_INVALID_STRING_NOT_TERMINATED 4
+#define JSON_INVALID_NUMBER 5
+#define JSON_INVALID_DECIMAL 6
+#define JSON_INVALID_SIGN 7
+#define JSON_INVALID_JSON_TYPE_CHAR 8
+#define JSON_INVALID_BOOL 9
+#define JSON_INVALID_TYPE 10
+#define JSON_CANNOT_ADVANCE 11
+#define JSON_CANNOT_START_PARSE 12
+#define JSON_INVALID_KEY_TERMINATOR_CHARACTER 13
+#define JSON_INVALID_KEY_VALUE_SEPARATOR 14
+#define JSON_INVALID_ARRAY_CHARACTER 15
+#define JSON_INVALID_ESCAPE_CHARACTER 16
+#define JSON_EOF 17
+
+public U8 *JsonToString(Json *j);
+public U8 *JsonToString(Json *json);
+public U0 JsonRelease(Json *J);
+public Json *JsonParseWithLenAndFlags(U8 *raw, I64 len,
+    I32 flags);
+/* Raw string, with option length of the string and 
+ * flags */
+public Json *JsonParse(U8 *raw, I64 len=-1, I64 flags=0);
+public U8 *JsonGetStrerror(Json *json);
+public U0 JsonPrintError(json *J);
+public Bool JsonIsObject(Json *j);
+public Bool JsonIsArray(Json *j);
+public Bool JsonIsNull(Json *j);
+public Bool JsonIsBool(Json *j);
+public Bool JsonIsString(Json *j);
+public Bool JsonIsInt(Json *j);
+public Bool JsonIsFloat(Json *j);
+public Json *JsonSelect(Json *j, U8 *fmt, ...);

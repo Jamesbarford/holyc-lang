@@ -550,7 +550,9 @@ static Ast *ParsePrimary(Cctrl *cc) {
     case TK_F64:
         return AstF64Type(tok->f64);
     case TK_CHAR_CONST:
-        return AstCharType(tok->i64);
+        ast = AstCharType(tok->i64);
+        ast->type = ast_uint_type;
+        return ast;
     case TK_STR: {
         aoStr *str = aoStrNew();
         CctrlTokenRewind(cc);
