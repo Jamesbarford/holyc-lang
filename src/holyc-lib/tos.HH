@@ -848,15 +848,17 @@ public extern "c" Bool sqlite3_open(U8 *dbname, sqlite3 **db);
 public extern "c" U8 *sqlite3_errmsg(sqlite3 *db);
 
 public SqlCtx *SqlCtxNew(U8 *dbname, Bool printerror=FALSE);
-public U0 SqlRelease(SqlCtx *ctx);
+public U0 SqlCtxRelease(SqlCtx *ctx);
 public SqlPreparedStmt *SqlPrepare(SqlCtx *ctx, U8 *Sql);
 public U0 SqlFinalizePrepared(SqlPreparedStmt *pstmt);
 /* Unsafe */ 
 public U8 *SqlExecRaw(SqlCtx *ctx, U8 *sql);
-public I32 SqlExecPrepared(SqlPreparedStmt *pstmt, SqlRow *row, SqlParam *params);
-public I32 SqlSelect(SqlCtx *ctx, SqlRow *row, U8 *stmt,
-    SqlParam *params, I32 count);
-public I32 SqlQuery(SqlCtx *ctx, U8 *Sql, SqlParam *params, I32 param_count);
+public I32 SqlExecPrepared(SqlPreparedStmt *pstmt, SqlRow *row,
+    SqlParam *params);
+public Bool SqlSelect(SqlCtx *ctx, SqlRow *row, U8 *sql,
+    SqlParam *params=NULL, I32 param_count=0);
+public Bool SqlQuery(SqlCtx *ctx, U8 *sql, SqlParam *params=NULL,
+    I32 param_count=0);
 public I32 SqlIter(SqlRow *row);
 public I64 SqlIterPrepared(SqlRow *row);
 public U0 SqlRowRelease(SqlRow *row);

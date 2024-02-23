@@ -170,7 +170,7 @@ SqlCtx *SqlCtxNew(U8 *dbname, Bool printerror=FALSE)
   return ctx;
 }
 
-U0 SqlRelease(SqlCtx *ctx)
+U0 SqlCtxRelease(SqlCtx *ctx)
 {
   sqlite3_close(ctx->conn);
   Free(ctx);
@@ -264,7 +264,6 @@ static I32 SqlExecQuery(SqlCtx *ctx, SqlRow *row, U8 *sql, SqlParam *params,
   rc = sqlite3_prepare_v2(ctx->conn, sql, -1, &stmt, NULL);
 
   if (rc != SQLITE_OK) {
-    "QUERY not ok: %s\n", sql;
     goto err;
   }
 
@@ -320,14 +319,17 @@ U0 SqlRowRelease(SqlRow *row)
   row->stmt = NULL;
 }
 
-I32 SqlSelect(SqlCtx *ctx, SqlRow *row, U8 *stmt, SqlParam *params, I32 param_count)
+Bool SqlSelect(SqlCtx *ctx, SqlRow *row, U8 *sql, SqlParam *params=NULL,
+    I32 param_count=0)
 {
-  return SqlExecQuery(ctx, row, stmt, params, param_count);
+  auto result = SqlExecQuery(ctx,row,sql,params,param_count);
+  return result == SQLITE_DONE || result == SQLITE_ROW;
 }
 
-I32 SqlQuery(SqlCtx *ctx, U8 *sql, SqlParam *params, I32 param_count)
+Bool SqlQuery(SqlCtx *ctx, U8 *sql, SqlParam *params=NULL, I32 param_count=0)
 {
-  return SqlExecQuery(ctx, NULL, sql, params, param_count) == SQLITE_DONE;
+  auto result = SqlExecQuery(ctx,NULL,sql,params,param_count);
+  return result == SQLITE_DONE || result == SQLITE_ROW;
 }
 
 static Bool SqlIterGeneric(SqlRow *row, I32 free_row) {
@@ -344,29 +346,31 @@ static Bool SqlIterGeneric(SqlRow *row, I32 free_row) {
     }
   }
 
+  /* XXX: MAlloc's and Free's on each call which is a bit expensive seeing 
+   * as this function will be called in a loop */
   Free(row->col);
   row->cols = sqlite3_data_count(row->stmt);
   row->col = MAlloc(row->cols * sizeof(SqlColumn));
 
   for (auto i = 0; i < row->cols; i++) {
-    row->col[i].type = sqlite3_column_type(row->stmt, i);
+    row->col[i].type = sqlite3_column_type(row->stmt,i);
     switch (row->col[i].type) {
       case SQLITE_INTEGER:
-        row->col[i].int = sqlite3_column_int64(row->stmt, i);
+        row->col[i].int = sqlite3_column_int64(row->stmt,i);
         break;
       case SQLITE_FLOAT:
-        row->col[i].f64 = sqlite3_column_double(row->stmt, i);
+        row->col[i].f64 = sqlite3_column_double(row->stmt,i);
         break;
       case SQLITE3_TEXT:
-        row->col[i].str = sqlite3_column_text(row->stmt, i)(U8 *);
-        row->col[i].len = sqlite3_column_bytes(row->stmt, i);
+        row->col[i].str = sqlite3_column_text(row->stmt,i)(U8 *);
+        row->col[i].len = sqlite3_column_bytes(row->stmt,i);
         break;
       case SQLITE_BLOB:
-        row->col[i].blob = sqlite3_column_blob(row->stmt, i)(U0 *);
-        row->col[i].len = sqlite3_column_bytes(row->stmt, i);
+        row->col[i].blob = sqlite3_column_blob(row->stmt,i)(U0 *);
+        row->col[i].len = sqlite3_column_bytes(row->stmt,i);
         break;
       default:
-        // You may want to handle this case differently
+        /* XXX: You may want to handle this case differently */
         row->col[i].str = NULL;
         row->col[i].int = 0;
         row->col[i].f64 = 0;
@@ -385,4 +389,3 @@ I64 SqlIterPrepared(SqlRow *row)
 {
   return SqlIterGeneric(row,0);
 }
-
