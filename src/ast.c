@@ -1040,6 +1040,7 @@ static char *AstFunctionToStringInternal(Ast *func, AstType *type) {
     switch (func->kind) {
         case AST_FUNCALL:
         case AST_FUNPTR_CALL:
+        case AST_ASM_FUNCALL:
             strparams = AstParamsToString(func->args);
             break;
 
