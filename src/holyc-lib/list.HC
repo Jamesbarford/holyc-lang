@@ -1,6 +1,8 @@
 #include "./defs.HH"
 #include "./memory.HC"
 
+class List {};
+
 class List
 {
   U0 *value;
@@ -51,7 +53,7 @@ U0 ListAppend(List *head, U0 *value)
 U0 *ListDeque(U0 *l)
 {
   if (!l) return NULL;
-  List *ll = cast<List *>(l);
+  List *ll = l(List *);
   if (ll->next == ll) {
     return NULL;
   }
@@ -79,7 +81,7 @@ U0 ListInsertValueBefore(List *ll, U0 *value)
 }
 
 U0 *ListPop(U0 *l) {
-  List *ll = cast<List *>(l);
+  List *ll = l(List *);
   if (ll->next == ll) {
     return NULL;
   }

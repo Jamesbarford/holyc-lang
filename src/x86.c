@@ -612,7 +612,17 @@ void AsmAssign(Cctrl *cc, aoStr *buf, Ast *variable) {
     if (variable->kind == AST_DEFAULT_PARAM) {
         variable = variable->declvar;
     }
+    AstType *tmp;
     switch (variable->kind) {
+    case AST_CAST:
+        tmp = variable->operand->type;
+        AsmCast(buf,variable->operand->type,variable->type);
+        tmp = variable->operand->type;
+        variable->operand->type = AstTypeCopy(variable->type);
+        free(tmp);
+        AsmAssign(cc,buf,variable->operand);
+        break;
+
     case AST_DEREF: 
         AsmAssignDeref(cc,buf, variable);
         break;
@@ -2048,12 +2058,15 @@ int AsmFunctionInit(Cctrl *cc, aoStr *buf, Ast *func) {
                         fname, fname);
 
 
-    int new_offset = 0;
+    int new_offset = 0, alignment = 0;
     /* Now assign offsets */
     ListForEach(func->locals) {
         ast_tmp = it->value;
         /* Calculate how much stackspace is required for locals */
-        locals += align(ast_tmp->type->size, 8);
+        alignment = align(ast_tmp->type->size, 8);
+        //locals += alignment;
+        //new_offset -= alignment;
+        locals += alignment;
         new_offset -= ast_tmp->type->size;
         switch (ast_tmp->kind) {
             case AST_DEFAULT_PARAM:

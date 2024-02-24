@@ -915,7 +915,8 @@ char *AstTypeToString(AstType *type) {
         return aoStrMove(str);
     
     case AST_TYPE_CHAR:
-        aoStrCatPrintf(str, "U8");
+        if (type->issigned) aoStrCatPrintf(str, "I8");
+        else                aoStrCatPrintf(str, "U8");
         return aoStrMove(str);
 
     case AST_TYPE_FLOAT:
@@ -1455,8 +1456,9 @@ void _AstToString(aoStr *str, Ast *ast, int depth) {
             break;
 
         case AST_CAST:
-            aoStrCatPrintf(str, "<cast> %s -> %s\n",
+            aoStrCatPrintf(str, "<cast> %s %s -> %s\n",
                     AstTypeToString(ast->operand->type),
+                    AstLValueToString(ast->operand),
                     AstTypeToString(ast->type));
             break;
 
