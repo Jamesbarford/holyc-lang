@@ -317,15 +317,6 @@ public U0 StrMapSetFreeKey(StrMap *map, U0 (*_free_key)(U0 *key));
 public U0 StrMapRelease(StrMap *map);
 public Bool StrMapResize(StrMap *map, U64 size);
 
-U64 StrMapHashFunction(U8 *key, I64 key_len, U64 mask)
-{ 
-  U64 hash = 0;
-  for (I64 i = 0; i < key_len; ++i) {
-    hash = ((hash << 5) - hash) + key[i];
-  }
-  return hash & mask;
-}
-
 StrMap *StrMapNew(U64 capacity)
 {
   StrMap *map = MAlloc(sizeof(StrMap));
@@ -362,7 +353,7 @@ StrMapNode *StrMapNodeNew(U8 *key, I64 key_len, U0 *value)
 static U64 StrMapGetNextIdx(StrMap *map, U8 *key, I64 key_len, Bool *_is_free)
 {// Finds the next avalible slot and marks it in the bit vector as set
   U64 mask = map->mask;
-  U64 idx = StrMapHashFunction(key,key_len,mask);
+  U64 idx = StrHash(key) & mask;
   U64 probe = 1;
   StrMapNode *cur;
   *_is_free = FALSE;
@@ -493,7 +484,7 @@ public Bool StrMapDelete(StrMap *map, U8 *key)
   StrMapNode **entries = map->entries;
   StrMapNode *cur;
   mask = map->mask;
-  idx = StrMapHashFunction(key,len,mask);
+  idx = StrHash(key) & mask;
   probe = 1;
   U0 (*free_value)(U0 *_val) = map->_free_value;
   U0 (*free_key)(U0 *_key) = map->_free_key;
@@ -521,7 +512,7 @@ public U0 *StrMapGet(StrMap *map, U8 *key)
 
   mask = map->mask;
   probe = 1;
-  idx = StrMapHashFunction(key,len,mask);
+  idx = StrHash(key) & mask;
   while ((cur = entries[idx])) {
     if (cur->key == NULL) {
       return NULL;

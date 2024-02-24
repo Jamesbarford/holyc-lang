@@ -595,6 +595,14 @@ long lexInStr(lexer *l, unsigned char *buf, long size, int *done,
                 buf[i++] = '\\';
                 buf[i++] = 't';
                 break;
+            case 'v':
+                buf[i++] = '\\';
+                buf[i++] = 'v';
+                break;
+            case 'f':
+                buf[i++] = '\\';
+                buf[i++] = 'f';
+                break;
             case 'x':
             case 'X':
                 j = 0;
@@ -687,6 +695,8 @@ unsigned long lexCharConst(lexer *l) {
                 }
                 case 'r':  char_const |= (unsigned long)'\r' << ((unsigned long)idx); break;
                 case 't':  char_const |= (unsigned long)'\t' << ((unsigned long)idx); break;
+                case 'v':  char_const |= (unsigned long)'\v' << ((unsigned long)idx); break;
+                case 'f':  char_const |= (unsigned long)'\f' << ((unsigned long)idx); break;
                 case 'x':
                 case 'X':
                     for (int i = 0; i < 2; ++i) {

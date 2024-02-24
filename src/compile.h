@@ -11,5 +11,6 @@ void CompileAssembleToFile(aoStr *asmbuf, char *filename);
 aoStr *CompileFile(Cctrl *cc, char *file_path);
 void CompilePrintTokens(Cctrl *cc);
 void CompilePrintAst(Cctrl *cc);
+int CompileToAst(Cctrl *cc, char *entrypath, int lexer_flags);
 
 #endif // !COMPILE_H

@@ -184,6 +184,9 @@ public U0 StrMapSetFreeValue(StrMap *map, U0 (*_free_value)(U0 *value));
 public U0 StrMapSetFreeKey(StrMap *map, U0 (*_free_key)(U0 *key));
 public U0 StrMapRelease(StrMap *map);
 public Bool StrMapResize(StrMap *map, U64 size);
+public Bool StrMapIter(StrMap *map, I64 *_idx, StrMapNode **_node);
+public Bool StrMapValueIter(StrMap *map, I64 *_idx, U0 **_value);
+public Bool StrMapKeyIter(StrMap *map, I64 *_idx, U8 **_key);
 
 public Bool IntMapSet(IntMap *map, I64 key, U0 *value);
 public U0 *IntMapGet(IntMap *map, I64 key);
@@ -191,6 +194,9 @@ public IntMap *IntMapNew(U64 capacity = 1 << 8);
 public U0 IntMapSetFreeValue(IntMap *map, U0 (*_free_value)(U0 *value));
 public U0 IntMapRelease(IntMap *map);
 public Bool IntMapResize(IntMap *map, U64 size);
+public Bool IntMapIter(IntMap *map, I64 *_idx, IntMapNode **_node);
+public Bool IntMapValueIter(IntMap *map, I64 *_idx, U0 **_value);
+public Bool IntMapKeyIter(IntMap *map, I64 *_idx, I64 *_key);
 
 #define __MUTEX_LOCK_PADDING__   56
 #define __MUTEX_LOCK_ATTR_SIZE__ 8
@@ -411,7 +417,8 @@ public _extern _STRCMP I64 StrCmp(U8 *s1, U8 *s2);
 public _extern _STRCPY U0 StrCpy(U8 *dst, U8 *src);
 public _extern _TOLOWER U8 ToLower(U8 ch);
 public _extern _TOUPPER U8 ToUpper(U8 ch);
-public Bool IsSpace(U8 ch);
+public _extern _ISSPACE Bool IsSpace(U8 ch);
+public _extern _STRHASH U64 StrHash(U8 *str);
 public U8 *StrNCpy(U8 *buf, I64 len);
 public U8 *FileExtDot(U8 *src);
 public U8 *FileExtRem(U8 *src, U8 *dst = NULL);
@@ -683,7 +690,6 @@ class Json
 #define JSON_INVALID_ESCAPE_CHARACTER 16
 #define JSON_EOF 17
 
-public U8 *JsonToString(Json *j);
 public U8 *JsonToString(Json *json);
 public U0 JsonRelease(Json *J);
 public Json *JsonParseWithLenAndFlags(U8 *raw, I64 len,

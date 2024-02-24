@@ -25,19 +25,19 @@ void CompilePrintTokens(Cctrl *cc) {
 void CompilePrintAst(Cctrl *cc) {
     List *it;
     Ast *ast;
-    DictNode *dn;
+    //DictNode *dn;
     char *tmp;
 
     printf("AST: \n");
-    for (int i = 0; i < cc->clsdefs->capacity; ++i) {
-        dn = cc->clsdefs->body[i];
-        while (dn) {
-            tmp = AstTypeToString(dn->val);
-            printf("%s\n", tmp);
-            free(tmp);
-            dn = dn->next;
-        }
-    }
+    //for (int i = 0; i < cc->clsdefs->capacity; ++i) {
+    //    dn = cc->clsdefs->body[i];
+    //    while (dn) {
+    //        tmp = AstTypeToString(dn->val);
+    //        printf("%s\n", tmp);
+    //        free(tmp);
+    //        dn = dn->next;
+    //    }
+    //}
 
     it = cc->ast_list->next;
     while (it != cc->ast_list) {
@@ -45,9 +45,15 @@ void CompilePrintAst(Cctrl *cc) {
         if (ast == NULL) {
             printf("here\n");
         }
-        tmp = AstToString(ast);
-        printf("%s\n", tmp);
-        free(tmp);
+
+        if (ast->kind != AST_FUN_PROTO &&
+            ast->kind != AST_EXTERN_FUNC && 
+            ast->kind != AST_ASM_FUNC_BIND)
+        {
+            tmp = AstToString(ast);
+            printf("%s\n", tmp);
+            free(tmp);
+        }
         it = it->next;
     }
 }

@@ -301,9 +301,9 @@ int main(int argc, char **argv) {
     opts.clibs = "";
     /* now parse cli options */
     parseCliOptions(&opts,argc,argv);
-
+    
     cc = CctrlNew();
-    asmbuf = CompileFile(cc,opts.infile);
+    CompileToAst(cc,opts.infile,CCF_PRE_PROC);
 
     if (opts.print_tokens) {
         CompilePrintTokens(cc);
@@ -312,6 +312,13 @@ int main(int argc, char **argv) {
     if (opts.print_ast) {
         CompilePrintAst(cc);
     }
+
+    if (opts.print_tokens || opts.print_ast) {
+        return 0;
+    }
+
+    asmbuf = CompileToAsm(cc);
+
 
     emitFile(asmbuf, &opts);
 }

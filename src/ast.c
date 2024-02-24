@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "aostr.h"
 #include "ast.h"
@@ -244,6 +245,7 @@ Ast *AstFunction(AstType *type, char *fname, int len, List *params, Ast *body,
     ast->locals = locals;
     ast->body = body;
     ast->has_var_args = has_var_args;
+    ast->paramtypes = NULL;
     return ast;
 }
 static void AstFreeFunction(Ast *ast) {
@@ -960,6 +962,9 @@ char *AstTypeToString(AstType *type) {
 
 char *AstTypeToColorString(AstType *type) {
     char *str = AstTypeToString(type);
+    if (!isatty(STDOUT_FILENO)) {
+        return str;
+    }
     aoStr *buf = aoStrNew();
     aoStrCatPrintf(buf,"\033[0;32m%s\033[0m",str);
     free(str);
@@ -974,16 +979,35 @@ char *AstFunctionNameToString(AstType *rettype, char *fname, int len) {
     return aoStrMove(str);
 }
 
-char *AstFunctionToString(Ast *func) {
+char *AstParamTypesToString(List *paramtypes) {
+    aoStr *str = aoStrNew();
+    char *tmp;
+    AstType *param;
+    if (ListEmpty(paramtypes)) {
+        tmp = AstTypeToColorString(ast_void_type);
+        aoStrCatPrintf(str,"%s",tmp);
+        free(tmp);
+    } else {
+        ListForEach(paramtypes) {
+            param = it->value;
+            if (param->kind == AST_VAR_ARGS) {
+                if (it->next != paramtypes) aoStrCatPrintf(str,"..., ");
+                else                        aoStrCatPrintf(str,"..."); 
+            } else {
+                tmp = AstTypeToString(param);
+                if (it->next != paramtypes) aoStrCatPrintf(str,"%s, ",tmp);
+                else                        aoStrCatPrintf(str,"%s",tmp); 
+                free(tmp);
+            }
+        }
+    }
+    return aoStrMove(str);
+}
+
+static char *AstParamsToString(List *params) {
     aoStr *str = aoStrNew();
     char *tmp;
     Ast *param;
-        
-    tmp = AstTypeToColorString(func->type->rettype);
-    aoStrCatPrintf(str,"%s %s(",tmp,func->fname->data);
-    free(tmp);
-
-    List *params = func->params;
     if (ListEmpty(params)) {
         tmp = AstTypeToColorString(ast_void_type);
         aoStrCatPrintf(str,"%s",tmp);
@@ -1002,8 +1026,34 @@ char *AstFunctionToString(Ast *func) {
             }
         }
     }
-    aoStrPutChar(str,')');
     return aoStrMove(str);
+}
+
+static char *AstFunctionToStringInternal(Ast *func, AstType *type) {
+    aoStr *str = aoStrNew();
+    char *tmp,*strparams;
+
+    tmp = AstTypeToColorString(type);
+    aoStrCatPrintf(str,"%s %s",tmp,func->fname->data);
+    free(tmp);
+
+    switch (func->kind) {
+        case AST_FUNCALL:
+        case AST_FUNPTR_CALL:
+            strparams = AstParamsToString(func->args);
+            break;
+
+        case AST_FUNC:
+            strparams = AstParamsToString(func->params);
+            break;
+    }
+
+    aoStrCatPrintf(str,"(%s)",strparams);
+    return aoStrMove(str);
+}
+
+char *AstFunctionToString(Ast *func) {
+    return AstFunctionToStringInternal(func,func->type->rettype);
 }
 
 void _AstToString(aoStr *str, Ast *ast, int depth) {
@@ -1050,36 +1100,36 @@ void _AstToString(aoStr *str, Ast *ast, int depth) {
             aoStrCatPrintf(str, "<string> \"%s\"", escaped->data);
             aoStrRelease(escaped);
             break;
-        
-        case AST_LVAR:
-            tmp = AstTypeToString(ast->type);
-            aoStrCatPrintf(str, "<lvar> %s %s\n", tmp,
-                    ast->lname->data);
-            free(tmp);
-            break;
-        
-        case AST_DECL:
-            tmp = AstTypeToString(ast->declvar->type);
-            if (ast->declvar->kind == AST_FUNPTR) {
-                aoStrCatPrintf(str,"<decl> %s %s\n", tmp, ast->declvar->fname->data);
-            } else {
-                aoStrCatPrintf(str,"<decl> %s %s\n", tmp, ast->declvar->lname->data);
-            }
-            free(tmp);
-            if (ast->declinit) {
-                _AstToString(str,ast->declinit,depth+1);
-                AstStringEndStmt(str);
-            }
-            break;
+    
+    case AST_LVAR:
+        tmp = AstTypeToString(ast->type);
+        aoStrCatPrintf(str, "<lvar> %s %s\n", tmp,
+                ast->lname->data);
+        free(tmp);
+        break;
+    
+    case AST_DECL:
+        tmp = AstTypeToString(ast->declvar->type);
+        if (ast->declvar->kind == AST_FUNPTR) {
+            aoStrCatPrintf(str,"<decl> %s %s\n", tmp, ast->declvar->fname->data);
+        } else {
+            aoStrCatPrintf(str,"<decl> %s %s\n", tmp, ast->declvar->lname->data);
+        }
+        free(tmp);
+        if (ast->declinit) {
+            _AstToString(str,ast->declinit,depth+1);
+            AstStringEndStmt(str);
+        }
+        break;
 
-        case AST_GVAR:
-            aoStrCatPrintf(str, "<gvar> %s", ast->gname->data);
-            break;
-        
-        case AST_ASM_FUNCALL: {
-            tmp = AstTypeToString(ast->type);
-            aoStrCatPrintf(str, "<asm_function_call> %s %s\n", 
-                    tmp, ast->fname->data);
+    case AST_GVAR:
+        aoStrCatPrintf(str, "<gvar> %s", ast->gname->data);
+        break;
+    
+    case AST_ASM_FUNCALL: {
+        tmp = AstFunctionToStringInternal(ast,ast->type);
+        aoStrCatPrintf(str, "<asm_function_call> %s\n", 
+                    tmp);
             free(tmp);
             depth++;
             node = ast->args->next;
@@ -1117,9 +1167,8 @@ void _AstToString(aoStr *str, Ast *ast, int depth) {
         }
 
         case AST_FUNCALL: {
-            tmp = AstTypeToString(ast->type);
-            aoStrCatPrintf(str, "<function_call> %s %s\n",tmp,
-                    ast->fname->data);
+            tmp = AstFunctionToStringInternal(ast,ast->type);
+            aoStrCatPrintf(str, "<function_call> %s \n",tmp);
             depth++;
             free(tmp);
             node = ast->args->next;
@@ -1191,8 +1240,8 @@ void _AstToString(aoStr *str, Ast *ast, int depth) {
         }
 
         case AST_FUNC: {
-            tmp = AstTypeToString(ast->type);
-            aoStrCatPrintf(str, "<function_def> %s %s\n", tmp, ast->fname->data);
+            tmp = AstFunctionToString(ast);
+            aoStrCatPrintf(str, "<function_def> %s\n", tmp);
             free(tmp);
             node = ast->params->next;
             while (node != ast->params) {
@@ -1519,18 +1568,19 @@ char *AstKindToString(int kind) {
     case TK_OR_EQU:          return "|=";
     case TK_XOR_EQU:         return "^=";
     case '+':
-    case AST_OP_ADD:     return "AST_OP_ADD";
-    case '-':            return "AST_OP_SUB";
-    case '*':            return "AST_OP_MUL";
-    case '<':            return "AST_OP_LT";
-    case '>':            return "AST_OP_GT";
-    case '/':            return "AST_OP_DIV";
-    case '&':            return "AST_OP_AND";
-    case '|':            return "AST_OP_OR";
-    case '=':            return "AST_OP_ASSIGN";
+    case AST_OP_ADD:     return "+";
+    case '-':            return "-";
+    case '*':            return "*";
+    case '~':            return "~";
+    case '<':            return "<";
+    case '>':            return ">";
+    case '/':            return "/";
+    case '&':            return "&";
+    case '|':            return "|";
+    case '=':            return "=";
     case '!':            return "!";
-    case '%':            return "AST_OP_MOD";
-    case '^':            return "AST_XOR";
+    case '%':            return "%";
+    case '^':            return "^";
     default:
         loggerPanic("Cannot find kind: %d\n", kind);
     }

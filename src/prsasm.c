@@ -71,6 +71,7 @@ void PrsAsmImm(Cctrl *cc, aoStr *buf, lexeme *tok) {
             }
             break;
 
+        case TK_CHAR_CONST:
         case TK_I64:
             next = CctrlTokenPeek(cc);
             if (!TokenPunctIs(next,'[')) {
@@ -172,6 +173,7 @@ Ast *PrsAsmToATT(Cctrl *cc) {
 
     while (!TokenPunctIs(tok, '}')) {
         switch (tok->tk_type) {
+            case TK_CHAR_CONST:
             case TK_I64: {
                 switch (count) {
                     case 1:
