@@ -62,7 +62,7 @@ Ast *ParseDeclArrayInitInt(Cctrl *cc, AstType *type) {
                 tok->line);
     }
 
-    if (type->ptr->kind == AST_TYPE_CHAR  && tok->tk_type == TK_STR) {
+    if (type->ptr->kind == AST_TYPE_CHAR && tok->tk_type == TK_STR) {
         return AstString(tok->start,tok->len);
     }
 
@@ -263,6 +263,11 @@ Dict *ParseClassOffsets(int *real_size, List *fields, AstType *base_class,
     int offset,size,padding;
     AstType *field;
     Dict *fields_dict = DictNew(&default_table_type);
+
+    /* XXX: Assumes the class definition will be made later */
+    if (ListEmpty(fields)) {
+        return fields_dict;
+    }
     
     if (base_class) {
         offset = base_class->size;
@@ -896,8 +901,10 @@ Ast *ParseStatement(Cctrl *cc) {
                 return ret;
             }
 
-            /* It is possible to do: 
-             * static_cast<Obj *>(_ptr)->x = 10;
+            /**
+             * XXX: DELETE cast<>
+             * It is possible to do: 
+             * cast<Obj *>(_ptr)->x = 10;
              * */
             case KW_CAST: {
                 CctrlTokenRewind(cc);

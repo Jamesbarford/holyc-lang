@@ -233,7 +233,10 @@ AstType *ParseBaseDeclSpec(Cctrl *cc) {
     }
 
     if (tok->tk_type == TK_KEYWORD || tok->tk_type == TK_IDENT) {
-        type = ParseGetType(cc, tok);
+        if ((type = ParseGetType(cc, tok)) == NULL) {
+            loggerPanic("line %ld: Type %.*s not found\n",cc->lineno,
+                    tok->len,tok->start);
+        }
     } else {
         loggerPanic("line %ld: Declaration or specfier must be an itentifier got: %s\n",
                 cc->lineno,
@@ -732,7 +735,9 @@ Ast *ParseExpr(Cctrl *cc, int prec) {
         }
 
         if (TokenPunctIs(tok,'(')) {
-            AssertLValue(LHS,cc->lineno);
+            /* XXX: Should this check still be here ? Not sure as 
+             * casting _anything_ makes sense */
+            // AssertLValue(LHS,cc->lineno);
             AstType *type = ParseDeclSpec(cc);
             LHS = AstCast(LHS,type);
             CctrlTokenExpect(cc,')');

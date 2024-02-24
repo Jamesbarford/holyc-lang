@@ -1,5 +1,6 @@
 #include "testhelper.HC"
 
+class TestListNode;
 class TestListNode
 {
   I64 value;

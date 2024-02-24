@@ -31,7 +31,9 @@
 #define I8_MAX  0x7F
 #define I8_MIN  0xFFFFFF80
 
-public class List {
+public class List;
+public class List
+{
   U0 *value;
   List *next, *prev;
 };
@@ -226,13 +228,16 @@ public class ThreadCondattr {
   I8 __opaque[__THREAD_CONDATTR_SIZE__];
 };
 
-public class pthread_handler_rec {
+public class pthread_handler_rec;
+public class pthread_handler_rec
+{
   U0 (*__routine)(U0 *__arg); // Routine to call
   U0 *__arg;          // Argument to pass
   pthread_handler_rec *__next;
 };
 
-public class pthread_t {
+public class pthread_t
+{
   I64 __sig;
   pthread_handler_rec *__cleanup_stack;
   I8 __opaque[__THREAD_SIZE__];
@@ -243,12 +248,15 @@ public class ThreadWorker {
   I32 id;
 };
 
-public class ThreadSemaphore {
+public class ThreadSemaphore
+{
   ThreadCond cond;
   MutexLock lk;
   I32 val;
 };
 
+
+public class ThreadWorkerJob;
 public class ThreadWorkerJob {
   U0 *(*callback)(U0 *priv_data, U0 *argv);
   U0 *argv;
@@ -422,6 +430,8 @@ public _extern _STRHASH U64 StrHash(U8 *str);
 public U8 *StrNCpy(U8 *buf, I64 len);
 public U8 *FileExtDot(U8 *src);
 public U8 *FileExtRem(U8 *src, U8 *dst = NULL);
+public U8 *StrTrimStart(U8 *str, I64 str_len=-1, I64 *_new_len=NULL);
+public U8 *StrTrimEnd(U8 *str, I64 str_len=-1, I64 *_new_len=NULL);
 public Bool IsDotZ(U8 *filename);
 public Bool IsDotC(U8 *filename);
 public U0 SPutChar(U8 **_dst, U8 ch, U8 **_buf);
@@ -652,8 +662,7 @@ class JsonState
   I64 error;
 };
 
-class Json {};
-
+public class Json;
 class Json
 {
   JsonState *state;
@@ -698,7 +707,7 @@ public Json *JsonParseWithLenAndFlags(U8 *raw, I64 len,
  * flags */
 public Json *JsonParse(U8 *raw, I64 len=-1, I64 flags=0);
 public U8 *JsonGetStrerror(Json *json);
-public U0 JsonPrintError(json *J);
+public U0 JsonPrintError(Json *J);
 public Bool JsonIsObject(Json *j);
 public Bool JsonIsArray(Json *j);
 public Bool JsonIsNull(Json *j);

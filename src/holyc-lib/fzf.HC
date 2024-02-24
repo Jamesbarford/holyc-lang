@@ -130,9 +130,9 @@ U0 slice_str_right(FzFStrSlice *s, U8 *input, I64 to)
   slice_str(s, input, 0, to);
 }
 
-I32 index_byte(FzFString *string, U8 b) {
-  for (auto i = 0; i < string->size; i++) {
-    if (string->data[i] == b) {
+I32 index_byte(FzFString *str, U8 b) {
+  for (auto i = 0; i < str->size; i++) {
+    if (str->data[i] == b) {
       return i(I32);
     }
   }
@@ -143,8 +143,7 @@ I64 leading_whitespaces(FzFString *str)
 { // XXX: extract to strings.HC
   I64 whitespaces = 0;
   for (I64 i = 0; i < str->size; i++) {
-    U8 ch = str->data[i](U8);
-    if (!IsSpace(ch)) {
+    if (!IsSpace(str->data[i](U8))) {
       break;
     }
     whitespaces++;
@@ -162,21 +161,6 @@ I64 trailing_whitespaces(FzFString *str)
     whitespaces++;
   }
   return whitespaces;
-}
-
-U8 *trim_whitespace_left(U8 *str, I64 *_len)
-{ // XXX: extract to strings.HC
-  auto len = *_len;
-  for (I64 i = 0; i < len; i++) {
-    if (str[0] == ' ') {
-      len--;
-      str++;
-    } else {
-      break;
-    }
-  }
-  *_len = len;
-  return str;
 }
 
 Bool has_suffix(U8 *str, I64 len, U8 *suffix, I64 suffix_len)
@@ -420,7 +404,7 @@ I32 FzFCalculateScore(Bool case_sensitive, FzFString *text, FzFString *pattern,
         bonus = max16(max16(bonus, first_bonus), FZF_BONUS_CONSECUTIVE);
       }
       if (pidx == 0) {
-        score += cast<I32>(bonus * FZF_BONUS_FIRST_CHAR_MULTIPLIER);
+        score += (bonus * FZF_BONUS_FIRST_CHAR_MULTIPLIER)(I32);
       } else {
         score += bonus(I32);
       }
@@ -660,7 +644,7 @@ U0 FzFFuzzyMatchV1(FzFResult *res, Bool case_sensitive, FzFString *text,
       }
       pidx++;
       if (pidx == M) {
-        eidx = cast<I32>(idx + 1);
+        eidx = (idx + 1)(I32);
         break;
       }
     }
@@ -739,7 +723,7 @@ FzFPattern *FzFParsePattern(I32 case_mode, U8 *pattern, Bool fuzzy=TRUE)
     return pat_obj;
   }
 
-  pattern = trim_whitespace_left(pattern, &pat_len);
+  pattern = StrTrimStart(pattern,pat_len,&pat_len);
   while (has_suffix(pattern, pat_len, " ", 1) &&
       !has_suffix(pattern, pat_len, "\\ ", 2)) {
     pattern[pat_len - 1] = 0;

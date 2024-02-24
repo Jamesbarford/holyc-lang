@@ -4,7 +4,6 @@
 #include "./memory.HC"
 #include "./io.HC"
 
-extern "c" U0 exit(I32 code);
 extern "c" F64 strtod(U8 *nptr, U8 **endptr);
 extern "c" I64 strtoll(U8 *nptr, U8 **endptr, I64 base=10);
 extern "c" U64 strtoul(U8 *nptr, U8 **endptr, I64 base=10);
@@ -40,15 +39,15 @@ public Bool WildMatch(U8 *test_str, U8 *wild_str);
 #define STR_LEN 256
 
 #define PRTF_PAD_ZERO        0x001
-#define PRTF_LEFT_JUSTIFY	   0x002
-#define PRTF_TRUNCATE		     0x004
-#define PRTF_COMMA		       0x008
+#define PRTF_LEFT_JUSTIFY	 0x002
+#define PRTF_TRUNCATE		 0x004
+#define PRTF_COMMA		     0x008
 #define PRTF_DOLLAR          0x010
-#define PRTF_SLASH		       0x020
-#define PRTF_QUESTION		     0x040
-#define PRTF_AUX_FMT_NUM	   0x080
-#define PRTF_DECIMAL		     0x100
-#define PRTF_NEG		         0x200
+#define PRTF_SLASH		     0x020
+#define PRTF_QUESTION		 0x040
+#define PRTF_AUX_FMT_NUM	 0x080
+#define PRTF_DECIMAL		 0x100
+#define PRTF_NEG		     0x200
 #define PRTF_NEG_E           0x400
 #define PRTF_NEG_AUX_FMT_NUM 0x800
 
@@ -56,7 +55,7 @@ public Bool WildMatch(U8 *test_str, U8 *wild_str);
 #define CH_ESC         0x1B
 #define CH_SHIFT_ESC   0x1C
 #define CH_SHIFT_SPACE 0x1F
-#define CH_SPACE	     0x20
+#define CH_SPACE	   0x20
 
 #define TIMESTAMP_FMT "%d-%02d-%02d %02d:%02d:%02d"
 
@@ -439,6 +438,61 @@ public U8 *StrLastRem(U8 *src,U8 *marker,U8 *dst=NULL)
   return dst;
 }
 
+public U8 *StrTrimStart(U8 *str, I64 str_len=-1, I64 *_new_len=NULL)
+{ // Mutates the string, removes whitespace at the start
+  // of the string, MSize calls are still safe
+  I64 new_len,len,j;
+
+  len = StrLen(str);
+  j = 0;
+
+  while (TRUE) {
+    if (IsSpace(str[j])) ++j;
+    else break;
+  }
+
+  new_len = len-j;
+  if (_new_len) {
+    *_new_len = new_len;
+  }
+  if (new_len == len) {
+    return str;
+  }
+  memmove(str,str+j,new_len);
+  str[new_len] = '\0';
+  return str;
+}
+
+public U8 *StrTrimEnd(U8 *str, I64 str_len=-1, I64 *_new_len=NULL)
+{ // Mutates the string, removes whitespace at the end 
+  // of the string, MSize calls are still safe
+  I64 new_len,len,i;
+
+  if (str_len == -1) {
+    len = StrLen(str);
+  } else {
+    len = str_len;
+  }
+  i = len-1;
+
+  while (TRUE) {
+    if (IsSpace(str[i])) --i;
+    else break;
+  }
+  i++;
+
+  new_len = i;
+  if (_new_len) {
+    *_new_len = new_len;
+  }
+  if (new_len == len) {
+    return str;
+  }
+  memmove(str,str,new_len);
+  str[new_len] = '\0';
+  return str;
+}
+
 public U0 StrReverse(U8 *buf, I64 length)
 { // Reverse a string inplace
   I64 start = 0, end = length - 1;
@@ -672,7 +726,7 @@ U8 *StrPrintJoin(U8 *_dst, U8 *fmt,I64 argc,I64 *argv)
         /* Presently there is only F64 */
         case 'f': {
           "Floats not supported\n";
-          exit(1);
+          Exit(1);
           F64 n;
           U64 m;
           I64 k = 0, idx = 0;

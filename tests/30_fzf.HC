@@ -12,6 +12,7 @@ Bool _TestStrings(U8 **strings, U8 *pattern, I32 expected_matches, I32 case_mode
       FzFPositionRelease(res);
     }
   }
+  "pattern: %s -> expected=%d got=%d ok=%d\n",pattern, expected_matches,matches, matches == expected_matches;
   return matches == expected_matches;
 }
 

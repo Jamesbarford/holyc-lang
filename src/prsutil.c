@@ -196,6 +196,7 @@ void AssertLValue(Ast *ast, long lineno) {
     case AST_CLASS_REF:
     case AST_FUNPTR:
     case AST_DEFAULT_PARAM:
+    case AST_CAST:
         return;
     default:
         loggerPanic("line %ld: Expected lvalue, got: %s\n",lineno,AstToString(ast));
