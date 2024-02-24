@@ -735,7 +735,9 @@ Ast *ParseExpr(Cctrl *cc, int prec) {
         }
 
         if (TokenPunctIs(tok,'(')) {
-            //AssertLValue(LHS,cc->lineno);
+            /* XXX: Should this check still be here ? Not sure as 
+             * casting _anything_ makes sense */
+            // AssertLValue(LHS,cc->lineno);
             AstType *type = ParseDeclSpec(cc);
             LHS = AstCast(LHS,type);
             CctrlTokenExpect(cc,')');

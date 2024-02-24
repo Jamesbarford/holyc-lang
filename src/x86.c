@@ -2064,8 +2064,6 @@ int AsmFunctionInit(Cctrl *cc, aoStr *buf, Ast *func) {
         ast_tmp = it->value;
         /* Calculate how much stackspace is required for locals */
         alignment = align(ast_tmp->type->size, 8);
-        //locals += alignment;
-        //new_offset -= alignment;
         locals += alignment;
         new_offset -= ast_tmp->type->size;
         switch (ast_tmp->kind) {
