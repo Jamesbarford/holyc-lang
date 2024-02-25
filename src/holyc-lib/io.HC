@@ -35,6 +35,9 @@
 #define O_TRUNC         0x00000400      /* truncate to zero length */
 #define O_EXCL          0x00000800      /* error if already exists */
 
+#define O_NONBLOCK      0x00000004      /* no delay */
+#define O_APPEND        0x00000008      /* set append mode */
+
 #define SEEK_SET        0       /* set file offset to offset */
 #define SEEK_CUR        1       /* set file offset to current plus offset */
 #define SEEK_END        2       /* set file offset to EOF plus offset */
@@ -50,6 +53,13 @@ extern "c" I64 read(I32 __fd, U0 *__buf, U64 __nbyte);
 extern "c" I64 write(I32 __fd, U0 *__buf, U64 __nbyte);
 extern "c" I64 lseek(I32 __fd, I64 __offset, I32 __whence);
 extern "c" I32 chdir(U8 *path);
+
+class iovec
+{
+  U0 *iov_base;      /* [XSI] Base address of I/O memory region */
+  U64 iov_len;       /* [XSI] Size of region iov_base points to */
+};
+
 
 public U8 *FileRead(U8 *path, I64 *_size=NULL)
 {

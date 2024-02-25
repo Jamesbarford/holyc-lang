@@ -54,8 +54,7 @@ class JsonState
   I64 error;
 };
 
-class Json {};
-
+class Json;
 class Json
 {
   JsonState *state;
@@ -893,6 +892,9 @@ static U8 *JsonGetStrerrorInternal(I32 error, U8 ch, I64 offset)
  * advisable to use this for debugging purposes only as it calls malloc */
 U8 *JsonGetStrerror(Json *json)
 {
+  if (!json) {
+    return StrPrint(NULL, "Json is NULL");
+  }
   if (json->state->error != JSON_OK) {
     U8 *str = JsonGetStrerrorInternal(json->state->error,json->state->ch,
         json->state->offset);
@@ -902,7 +904,8 @@ U8 *JsonGetStrerror(Json *json)
 }
 
 /* Print the error to stdout */
-U0 JsonPrintError(Json *json) {
+U0 JsonPrintError(Json *json)
+{
   U8 *str_error = JsonGetStrerror(json);
   if (str_error) {
     "%s\n";
@@ -910,6 +913,12 @@ U0 JsonPrintError(Json *json) {
   } else {
     "No errors\n";
   }
+}
+
+public Bool JsonOk(Json *j)
+{
+  if (!j) return FALSE;
+  return j->state && j->state->error == JSON_OK;
 }
 
 Bool JsonIsObject(Json *j)

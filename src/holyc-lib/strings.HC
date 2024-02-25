@@ -922,8 +922,9 @@ public U8 *StrMergeJoin(I64 argc, U64 *argv)
 {
   U8 *buf = MAlloc(256), *dst = buf;
   for (I64 i = 0; i < argc; ++i) {
-    OutStr(argv[i](U8*),&buf,&dst,0,0);
+    OutStr(cast<U8*>(argv[i]),&buf,&dst,0,0);
   }
+  *dst='\0';
   return buf;
 }
 

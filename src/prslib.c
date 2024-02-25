@@ -17,7 +17,15 @@ void ParseAssignAuto(Cctrl *cc, Ast *ast) {
     if (ast->declinit == NULL) {
         loggerPanic("line %ld: auto must have an initaliser\n", cc->lineno);
     }
+
     if (ast->declinit->kind == AST_FUNC) {
+        ast->declvar->type = AstMakeFunctionType(
+                ast->declinit->type->rettype,
+                ast->declinit->params);
+        ast->declvar->type->has_var_args = ast->declinit->type->has_var_args;
+        ast->declvar->type->rettype->has_var_args = ast->declinit->type->has_var_args;
+    //return AstMakeFunctionType(rettype,params);
+        return;
         loggerPanic("line %ld: auto with functions is not yet supported\n",
                 cc->lineno);
     }
@@ -343,7 +351,11 @@ List *ParseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
     if (decl) {
         rettype = decl->type->rettype;
         if (decl->kind == AST_FUNPTR) {
-            params = ((Ast *)decl)->type->params;
+            if (decl->params == NULL) {
+                params = ((Ast *)decl)->type->params;
+            } else {
+                params = decl->params;
+            }
         } else {
             params = decl->params;
         }
@@ -502,9 +514,20 @@ static Ast *ParseIdentifierOrFunction(Cctrl *cc, char *name, int len,
             loggerPanic("line %ld: Cannot find variable: %.*s\n",
                     cc->lineno,len,name);
         }
-        /* Function calls with no arguments are 'Function;' */
-        if (can_call_function && ast->kind == AST_FUNC) {
-            return AstFunctionCall(ast->type->rettype,ast->fname->data,ast->fname->len,ListNew(),ListNew());
+
+        if (can_call_function) {
+            /* Function calls with no arguments are 'Function;' */
+            if ((TokenPunctIs(tok,';') || TokenPunctIs(tok,',') || 
+                TokenPunctIs(tok,')'))  
+                    && ParseIsFunction(ast)) {
+                if (ast->kind == AST_ASM_FUNC_BIND || ast->kind == AST_ASM_FUNCDEF) {
+                    return AstAsmFunctionCall(ast->type->rettype,
+                            aoStrDup(ast->asmfname),ListNew(),ListNew());
+                } else {
+                    return AstFunctionCall(ast->type->rettype,
+                            ast->fname->data,ast->fname->len,ListNew(),ListNew());
+                }
+            }
         }
         return ast;
     }
@@ -957,7 +980,7 @@ Ast *ParseUnaryExpr(Cctrl *cc) {
     if (TokenPunctIs(tok, '&')) {
         Ast *operand = ParseUnaryExpr(cc);
         /* We do not take the address of a function */
-        if (operand->kind == AST_FUNC) {
+        if (ParseIsFunction(operand)) {
             return operand;
         }
         return AstUnaryOperator(AstMakePointerType(operand->type),
