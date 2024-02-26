@@ -41,15 +41,12 @@ U0 PointerArray()
   I64 j = 1, correct = 0, tests = 2;
   Point *arr = MAlloc(sizeof(Point *) * 10);
   
-  arr[0].x = 10;
-  if (arr[0].x == 10) {
-    correct++;
-  }
-
   arr[8].y = 420;
-  if (arr[8].y == 420) {
-    correct++;
-  }
+  arr[0].x = 10;
+
+  if (arr[0].x == 10) correct++;
+  if (arr[8].y == 420) correct++;
+
   Free(arr);
   PrintResult(correct,tests);
 }

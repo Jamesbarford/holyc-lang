@@ -3,7 +3,6 @@
 #define FZF_CASE_SMART   0
 #define FZF_CASE_IGNORE  1
 #define FZF_CASE_RESPECT 2
-#define FZF_UNICODE_MAXASCII 0x7f
 
 #define FZF_SCORE_MATCH 16
 #define FZF_SCORE_GAP_START -3

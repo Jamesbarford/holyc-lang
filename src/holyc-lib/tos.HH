@@ -361,15 +361,15 @@ public U64 ModU64(U64 *k, U64 m);
 public extern "c" U0 *memchr(U0 *__s, I32 __c, U64 __n);
 public extern "c" I32 memcmp(U0 *__s1, U0 *__s2, U64 __n);
 public extern "c" U0 *memmove(U0 *__dst, U0 *__src, U64 __len);
-public _extern _MALLOC U0 *MAlloc(I64 size);
+public extern "c" U0 free(U0 *ptr);
+public extern "c" U0 *malloc(U0 *ptr);
+public _extern _MALLOC U0 *MAlloc(U64 size);
 public _extern _FREE U0 Free(U0 *ptr);
 public _extern _REALLOC U0 *ReAlloc(U0 *ptr, U64 new_size);
 public _extern _CALLOC U0 *CAlloc(U64 new_size);
 public _extern _MSIZE U64 MSize(U0 *ptr);
-public _extern _MALLOC_ALIGN16 U0 *MAlloc16(I64 size);
-public _extern _FREE_ALIGNED U0 Free16(U0 *ptr);
-public _extern _MEMCPY U0 *MemCpy(U0 *dst, U0 *src, I64 len);
-public _extern _MEMSET U0 *MemSet(U0 *dst, I32 ch, I64 len);
+public _extern _MEMCPY U0 *MemCpy(U0 *dst, U0 *src, U64 len);
+public _extern _MEMSET U0 *MemSet(U0 *dst, I32 ch, U64 len);
 
 #define STR_LEN 256
 
