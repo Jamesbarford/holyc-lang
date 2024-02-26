@@ -108,7 +108,7 @@ AstType *ParseFunctionPointerType(Cctrl *cc,
     *fnptr_name_len = fname->len;
     CctrlTokenExpect(cc,')');
     CctrlTokenExpect(cc,'(');
-    params = ParseParams(cc,')',&has_var_args);
+    params = ParseParams(cc,')',&has_var_args,0);
     return AstMakeFunctionType(rettype,params);
 }
 
@@ -140,9 +140,7 @@ Ast *ParseDefaultFunctionParam(Cctrl *cc, Ast *var) {
     return AstFunctionDefaultParam(var,init);
 }
 
-List *ParseParams(Cctrl *cc, long terminator,
-        int *has_var_args)
-{
+List *ParseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
     List *params = ListNew();
     lexeme *tok, *pname;
     AstType *type;
@@ -209,11 +207,21 @@ List *ParseParams(Cctrl *cc, long terminator,
         tok = CctrlTokenGet(cc);
         if (TokenPunctIs(tok, '=')) {
             var = ParseDefaultFunctionParam(cc,var);
-            DictSet(cc->localenv,var->declvar->lname->data,var);
+            if (store) {
+                if (!DictSet(cc->localenv,var->declvar->lname->data,var)) {
+                    loggerPanic("line: %ld variable %s already declared\n",
+                            cc->lineno,AstLValueToString(var));
+                }
+            }
             tok = CctrlTokenGet(cc);
         } else {
-            DictSet(cc->localenv,var->lname->data,var);
-        }
+            if (store) {
+                if (!DictSet(cc->localenv,var->lname->data,var)) {
+                    loggerPanic("line: %ld variable %s already declared\n",
+                            cc->lineno,AstLValueToString(var));
+                }
+            }
+       }
 
         if (cc->tmp_locals) {
             ListAppend(cc->tmp_locals, var);

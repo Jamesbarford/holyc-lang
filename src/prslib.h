@@ -6,7 +6,7 @@
 Ast *ParseUnaryExpr(Cctrl *cc);
 Ast *ParseExpr(Cctrl *cc, int prec);
 Ast *ParseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator);
-List *ParseParams(Cctrl *cc, long terminator, int *has_var_args);
+List *ParseParams(Cctrl *cc, long terminator, int *has_var_args, int store);
 void ParseDeclInternal(Cctrl *cc, lexeme **tok, AstType **type);
 void ParseAssignAuto(Cctrl *cc, Ast *ast);
 AstType *ParseReturnAuto(Cctrl *cc, Ast *retval);
