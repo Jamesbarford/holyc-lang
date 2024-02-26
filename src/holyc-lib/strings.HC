@@ -621,6 +621,14 @@ U8 *MPrintQ(U8 *ptr,I64 flags = 0)
 	  SPutChar(_dst,'\\',_buf);
 	  SPutChar(_dst,'t',_buf);
 	  break;
+	case '\v':
+	  SPutChar(_dst,'\\',_buf);
+	  SPutChar(_dst,'v',_buf);
+	  break;
+	case '\f':
+	  SPutChar(_dst,'\\',_buf);
+	  SPutChar(_dst,'f',_buf);
+	  break;
 	case '"':
 	case '\\':
 	  SPutChar(_dst,'\\',_buf);
@@ -740,7 +748,7 @@ U8 *StrPrintJoin(U8 *_dst, U8 *fmt,I64 argc,I64 *argv)
             dec_len = 0;
           }
           idx = dec_len;
-          F64 n,m;
+          // F64 m;
           n = log10(farg);
 
           if (n > 17) {
@@ -922,9 +930,8 @@ public U8 *StrMergeJoin(I64 argc, U64 *argv)
 {
   U8 *buf = MAlloc(256), *dst = buf;
   for (I64 i = 0; i < argc; ++i) {
-    OutStr(cast<U8*>(argv[i]),&buf,&dst,0,0);
+    OutStr(argv[i](U8*),&buf,&dst,0,0);
   }
-  *dst='\0';
   return buf;
 }
 
