@@ -1,8 +1,7 @@
 #include "./defs.HH"
 #include "./memory.HC"
 
-class List {};
-
+class List;
 class List
 {
   U0 *value;
