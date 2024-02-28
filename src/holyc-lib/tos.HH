@@ -461,50 +461,54 @@ public Bool Str2CDateStruct(U8 *strdate, U8 *format, CDateStruct *t);
 public Bool WildMatch(U8 *test_str, U8 *wild_str);
 public CDate StrToCDate(U8 *_str, U8 *fmt);
 
-#define F_DUPFD  0
-#define F_GETFD  1
-#define F_SETFD  2
-#define F_GETFL  3
-#define F_SETFL  4
-#define F_GETOWN 5
-#define F_SETOWN 6
-#define F_GETLK  7
-#define F_SETLK  8
-#define F_SETLKW 9
+#define F_DUPFD         0  /* Duplicate a file descriptor */
+#define F_GETFD         1  /* Retrieve file descriptor flags */
+#define F_SETFD         2  /* Assign flags to file descriptor */
+#define F_GETFL         3  /* Get file status flags */
+#define F_SETFL         4  /* Assign file status flags */
+#define F_GETOWN        5  /* Retrieve SIGIO/SIGURG process/group */
+#define F_SETOWN        6  /* Set SIGIO/SIGURG process/group */
+#define F_GETLK         7  /* Query record locking info */
+#define F_SETLK         8  /* Set record locking info without waiting */
+#define F_SETLKW        9  /* Set record locking info with waiting */
 
-#define F_FLUSH_DATA  40
-#define F_CHKCLEAN    41
-#define F_PREALLOCATE 42
-#define F_SETSIZE     43
-#define F_RDADVISE    44
-#define F_RDAHEAD     45
+#define F_FLUSH_DATA   40  /* Commit data to disk */
+#define F_CHKCLEAN     41  /* Verify file is not modified */
+#define F_PREALLOCATE  42  /* Allocate space for file in advance */
+#define F_SETSIZE      43  /* Adjust file size */
+#define F_RDADVISE     44  /* Suggest read behavior */
+#define F_RDAHEAD      45  /* Enable read ahead */
 
-#define FD_CLOEXEC 1
+#define FD_CLOEXEC      1  /* Close file descriptor on exec */
 
-/* record locking flags */
-#define F_RDLCK 1
-#define F_UNLCK 2
-#define F_WRLCK 3
+/* Record locking flags */
+#define F_RDLCK         1  /* Establish a read lock */
+#define F_UNLCK         2  /* Remove a lock */
+#define F_WRLCK         3  /* Establish a write lock */
 
-#define O_RDONLY  0x0000     /* open for reading only */
-#define O_WRONLY  0x0001     /* open for writing only */
-#define O_RDWR    0x0002     /* open for reading and writing */
-#define O_ACCMODE 0x0003     /* mask for above modes */
-#define O_CREAT   0x00000200 /* create if nonexistant */
-#define O_TRUNC   0x00000400 /* truncate to zero length */
-#define O_EXCL    0x00000800 /* error if already exists */
+#define O_RDONLY    0x0000    /* Open exclusively for reading */
+#define O_WRONLY    0x0001    /* Open exclusively for writing */
+#define O_RDWR      0x0002    /* Open for reading and writing */
+#define O_ACCMODE   0x0003    /* Mask to extract access modes */
+#define O_CREAT     0x00000200 /* Create file if it doesn't exist */
+#define O_TRUNC     0x00000400 /* Truncate existing file to zero length */
+#define O_EXCL      0x00000800 /* Error if file already exists */
 
-#define O_NONBLOCK      0x00000004      /* no delay */
-#define O_APPEND        0x00000008      /* set append mode */
+#define O_NONBLOCK  0x00000004 /* Non-blocking mode */
+#define O_APPEND    0x00000008 /* Append data to the end of the file */
 
-#define SEEK_SET 0 /* set file offset to offset */
-#define SEEK_CUR 1 /* set file offset to current plus offset */
-#define SEEK_END 2 /* set file offset to EOF plus offset */
+#define SEEK_SET    0 /* Set offset to specified value */
+#define SEEK_CUR    1 /* Set offset to current position plus value */
+#define SEEK_END    2 /* Set offset to size of file plus value */
 
+/*
+ * The iovec class represents a buffer in memory, with a base address and a length.
+ * It's typically used for scatter-gather I/O operations to manage multiple buffers.
+ */
 class iovec
 {
-  U0 *iov_base;
-  U64 iov_len;
+  U0 *iov_base;  /* Pointer to data buffer */
+  U64 iov_len;   /* Length of the buffer */
 };
 
 public extern "c" I32 open(U8 *__name, I32 flags, ...);
@@ -520,15 +524,15 @@ public U8 *FileRead(U8 *path, I64 *_size = NULL);
 public Bool FileWrite(U8 *filename, U8 *buf, I64 size, I64 flags = O_CREAT | O_RDWR);
 public I32 Cd(U8 *path);
 
-#define DT_UNKNOWN 0
-#define DT_FIFO    1
-#define DT_CHR     2
-#define DT_DIR     4
-#define DT_BLK     6
-#define DT_REG     8
-#define DT_LNK     10
-#define DT_SOCK    12
-#define DT_WHT     14
+#define DT_UNKNOWN 0  /* Type not determined */
+#define DT_FIFO    1  /* FIFO/pipe */
+#define DT_CHR     2  /* Character device */
+#define DT_DIR     4  /* Directory */
+#define DT_BLK     6  /* Block device */
+#define DT_REG     8  /* Regular file */
+#define DT_LNK    10  /* Symbolic link */
+#define DT_SOCK   12  /* Socket */
+#define DT_WHT    14  /* Whiteout */
 
 class cDIR;
 
@@ -600,38 +604,40 @@ public extern "c" I32 mkdir(U8 *dirname, I32 mode = 438);
 public extern "c" I32 unlink(U8 *pathname);
 public extern "c" I32 rmdir(U8 *dirname);
 
-#define S_IFMT      0xF000
-#define S_IFIFO     0x1000
-#define S_IFCHR     0x2000
-#define S_IFDIR     0x4000
-#define S_IFBLK     0x6000
-#define S_IFREG     0x8000
-#define S_IFLNK     0xa000
-#define S_IFSOCK    0xc000
+#define S_IFMT      0xF000  /* Bit mask for the file type bit fields */
+#define S_IFIFO     0x1000  /* FIFO or pipe */
+#define S_IFCHR     0x2000  /* Character device */
+#define S_IFDIR     0x4000  /* Directory */
+#define S_IFBLK     0x6000  /* Block device */
+#define S_IFREG     0x8000  /* Regular file */
+#define S_IFLNK     0xA000  /* Symbolic link */
+#define S_IFSOCK    0xC000  /* Socket */
 
-#define S_IRWXU 0x1c0
-#define S_IRUSR 0x100
-#define S_IWUSR 0x80 
-#define S_IXUSR 0x40 
-/* Read, write, execute/search by group */
+#define S_IRWXU 0x1C0  /* Permission: user (owner) can read, write, execute */
+#define S_IRUSR 0x100  /* Permission: user (owner) can read */
+#define S_IWUSR 0x80   /* Permission: user (owner) can write */
+#define S_IXUSR 0x40   /* Permission: user (owner) can execute */
+
+/* Permissions: group can read, write, execute */
 #define S_IRWXG 0x38
-#define S_IRGRP 0x20
-#define S_IWGRP 0x10
-#define S_IXGRP 0x8 
-/* Read, write, execute/search by others */
+#define S_IRGRP 0x20   /* Permission: group can read */
+#define S_IWGRP 0x10   /* Permission: group can write */
+#define S_IXGRP 0x8    /* Permission: group can execute */
+
+/* Permissions: others can read, write, execute */
 #define S_IRWXO 0x7
-#define S_IROTH 0x4
-#define S_IWOTH 0x2
-#define S_IXOTH 0x1
+#define S_IROTH 0x4    /* Permission: others can read */
+#define S_IWOTH 0x2    /* Permission: others can write */
+#define S_IXOTH 0x1    /* Permission: others can execute */
 
-#define S_ISUID 0x800
-#define S_ISGID 0x400
-#define S_ISVTX 0x200
-#define MKDIR_DEFAULT (S_ISUID|S_IRWXU|S_IRWXG|S_IROTH|S_IXOTH)
+#define S_ISUID 0x800  /* Set user ID on execution */
+#define S_ISGID 0x400  /* Set group ID on execution */
+#define S_ISVTX 0x200  /* Save swapped text after use (sticky) */
+#define MKDIR_DEFAULT (S_ISUID|S_IRWXU|S_IRWXG|S_IROTH|S_IXOTH) /* Default mkdir permission */
 
-#define RM_RECURSE  0x1
-#define RM_VERBOSE  0x2
-#define RM_FORCE    0x4
+#define RM_RECURSE  0x1  /* Remove directories and their contents recursively */
+#define RM_VERBOSE  0x2  /* Verbosely list files processed */
+#define RM_FORCE    0x4  /* Force removal, ignore nonexistent files and arguments */
 
 public I32 RmDir(U8 *path, Bool flags=0);
 public I32 Rm(U8 *path, Bool flags=0)
@@ -886,192 +892,239 @@ public I32 SqlIter(SqlRow *row);
 public I64 SqlIterPrepared(SqlRow *row);
 public U0 SqlRowRelease(SqlRow *row);
 
-/* Sockets */
-#define SOL_SOCKET      0xffff          /* options for socket level */
+/* Socket options level */
+#define SOL_SOCKET      0xffff          /* Socket-level options */
 
 /*
  * Address families.
  */
-#define AF_UNSPEC       0               /* unspecified */
-#define AF_UNIX         1               /* local to host (pipes) */
-#define AF_INET         2               /* internetwork: UDP, TCP, etc. */
-#define AF_INET6        30              /* IPv6 */
+#define AF_UNSPEC       0               /* Unspecified */
+#define AF_UNIX         1               /* Local communication (unix pipes) */
+#define AF_INET         2               /* Internet IPv4 */
+#define AF_INET6        30              /* Internet IPv6 */
 
-#define SOCK_STREAM     1               /* stream socket */
-#define SOCK_DGRAM      2               /* datagram socket */
-#define SOCK_RAW        3               /* raw-protocol interface */
-#define SOCK_SEQPACKET  5               /* sequenced packet stream */
+/* Socket types */
+#define SOCK_STREAM     1               /* Stream (connection-oriented) socket */
+#define SOCK_DGRAM      2               /* Datagram (connectionless) socket */
+#define SOCK_RAW        3               /* Raw protocol interface */
+#define SOCK_SEQPACKET  5               /* Sequenced packet stream */
 
 /*
- * Option flags per-socket.
+ * Per-socket option flags.
  */
-#define SO_DEBUG        0x0001          /* turn on debugging info recording */
-#define SO_ACCEPTCONN   0x0002          /* socket has had listen() */
-#define SO_REUSEADDR    0x0004          /* allow local address reuse */
-#define SO_KEEPALIVE    0x0008          /* keep connections alive */
-#define SO_DONTROUTE    0x0010          /* just use interface addresses */
-#define SO_BROADCAST    0x0020          /* permit sending of broadcast msgs */
-#define SO_LINGER       0x1080          /* linger on close if data present (in seconds) */
-#define SO_OOBINLINE    0x0100          /* leave received OOB data in line */
-#define SO_REUSEPORT    0x0200          /* allow local address & port reuse */
-#define SO_TIMESTAMP    0x0400          /* timestamp received dgram traffic */
-#define SO_TIMESTAMP_MONOTONIC  0x0800  /* Monotonically increasing timestamp on rcvd dgram */
+#define SO_DEBUG        0x0001          /* Enable debugging information */
+#define SO_ACCEPTCONN   0x0002          /* Socket has had listen() applied */
+#define SO_REUSEADDR    0x0004          /* Allow reuse of local addresses */
+#define SO_KEEPALIVE    0x0008          /* Keep connections active */
+#define SO_DONTROUTE    0x0010          /* Route packets through local interfaces */
+#define SO_BROADCAST    0x0020          /* Allow broadcast messages */
+#define SO_LINGER       0x1080          /* Linger on close if data is present */
+#define SO_OOBINLINE    0x0100          /* Leave out-of-band data inline */
+#define SO_REUSEPORT    0x0200          /* Allow reuse of local ports */
+#define SO_TIMESTAMP    0x0400          /* Timestamp incoming datagrams */
+#define SO_TIMESTAMP_MONOTONIC  0x0800  /* Use monotonic timestamps for datagrams */
 
+/* Protocols */
+#define IPPROTO_IP              0               /* Placeholder for IP */
+#define IPPROTO_IPV6            41              /* IPv6 protocol */
 
-#define IPPROTO_IP              0               /* dummy for IP */
-#define IPPROTO_IPV6            41              /* IP6 header */
+/* TCP options */
+#define TCP_NODELAY             0x01    /* Disable Nagle's algorithm */
+#define TCP_MAXSEG              0x02    /* Set maximum segment size */
+#define TCP_NOPUSH              0x04    /* Disable push on final write */
+#define TCP_NOOPT               0x08    /* Disable TCP options */
+#define TCP_KEEPALIVE           0x10    /* Set keepalive idle time */
+#define TCP_CONNECTIONTIMEOUT   0x20    /* Set connection timeout */
+#define PERSIST_TIMEOUT         0x40    /* Timeout for persist state */
+#define TCP_RXT_CONNDROPTIME    0x80    /* Connection drop time for retransmissions */
+#define TCP_RXT_FINDROP         0x100   /* Drop connection after retransmitting FIN */
+#define TCP_KEEPINTVL           0x101   /* Interval between keepalives */
+#define TCP_KEEPCNT             0x102   /* Number of keepalives before close */
+#define TCP_SENDMOREACKS        0x103   /* Acknowledge every other packet */
+#define TCP_ENABLE_ECN          0x104   /* Enable Explicit Congestion Notification */
+#define TCP_FASTOPEN            0x105   /* TCP Fast Open */
+#define TCP_CONNECTION_INFO     0x106   /* TCP connection state info */
 
-#define TCP_NODELAY             0x01    /* don't delay send to coalesce packets */
-#define TCP_MAXSEG              0x02    /* set maximum segment size */
-#define TCP_NOPUSH              0x04    /* don't push last block of write */
-#define TCP_NOOPT               0x08    /* don't use TCP options */
-#define TCP_KEEPALIVE           0x10    /* idle time used when SO_KEEPALIVE is enabled */
-#define TCP_CONNECTIONTIMEOUT   0x20    /* connection timeout */
-#define PERSIST_TIMEOUT         0x40    /* time after which a connection in
-	                                 *  persist timeout will terminate.
-	                                 *  see draft-ananth-tcpm-persist-02.txt
-	                                 */
-#define TCP_RXT_CONNDROPTIME    0x80    /* time after which tcp retransmissions will be
-	                                 * stopped and the connection will be dropped
-	                                 */
-#define TCP_RXT_FINDROP         0x100   /* when this option is set, drop a connection
-	                                 * after retransmitting the FIN 3 times. It will
-	                                 * prevent holding too many mbufs in socket
-	                                 * buffer queues.
-	                                 */
-#define TCP_KEEPINTVL           0x101   /* interval between keepalives */
-#define TCP_KEEPCNT             0x102   /* number of keepalives before close */
-#define TCP_SENDMOREACKS        0x103   /* always ack every other packet */
-#define TCP_ENABLE_ECN          0x104   /* Enable ECN on a connection */
-#define TCP_FASTOPEN            0x105   /* Enable/Disable TCP Fastopen on this socket */
-#define TCP_CONNECTION_INFO     0x106   /* State of TCP connection */
+#define INET6_ADDRSTRLEN        46      /* Length of string form of IPv6 address */
 
-#define INET6_ADDRSTRLEN        46
+/* Address info flags */
+#define AI_PASSIVE     0x00000001 /* Suitable for bind() */
+#define AI_CANONNAME   0x00000002 /* Request canonical name */
+#define AI_NUMERICHOST 0x00000004 /* Numeric host address string */
+#define AI_NUMERICSERV 0x00001000 /* Numeric service address string */
+#define AI_UNUSABLE    0x10000000 /* Include unusable addresses */
 
-#define	AI_PASSIVE	0x00000001 /* get address to use bind() */
-#define	AI_CANONNAME	0x00000002 /* fill ai_canonname */
-#define	AI_NUMERICHOST	0x00000004 /* prevent host name resolution */
-#define	AI_NUMERICSERV	0x00001000 /* prevent service name resolution */
-#define	AI_UNUSABLE	0x10000000 /* return addresses even if unusable (i.e. opposite of AI_DEFAULT) */
-
+/*
+ * The hostent class represents an entry from the database of host names and addresses.
+ * It includes the official name of the host, aliases, the type of address, the length of the address,
+ * and a list of addresses for the host.
+ */
 public class hostent
 {
-  U8	*h_name;	/* official name of host */
-  U8	**h_aliases;	/* alias list */
-  I32 h_addrtype;	/* host address type */
-  I32 h_length;	/* length of address */
-  U8	**h_addr_list;	/* list of addresses from name server */
+  U8	*h_name;	/* Official name of the host */
+  U8	**h_aliases;	/* Null-terminated array of alternate names for the host */
+  I32 h_addrtype;	/* Type of address; typically AF_INET */
+  I32 h_length;		/* Length of each address in bytes */
+  U8	**h_addr_list;	/* Null-terminated array of addresses for the host */
 };
 
 /*
- * Assumption here is that a network number
- * fits in an unsigned long -- probably a poor one.
+ * The netent class provides details about a network including its name, aliases, address type,
+ * and the network number. The assumption is that a network number can fit in an unsigned long.
  */
 public class netent
 {
-  U8  *n_name;      /* official name of net */
-  U8  **n_aliases;  /* alias list */
-  I32 n_addrtype;   /* net address type */
-  U32 n_net;        /* network # */
+  U8  *n_name;      /* Official name of the network */
+  U8  **n_aliases;  /* Null-terminated array of alternate names for the network */
+  I32 n_addrtype;   /* Type of address for the network */
+  U32 n_net;        /* Network number */
 };
 
+/*
+ * The servent class encapsulates information about a service provided over the network,
+ * including its official name, aliases, port number, and the protocol used.
+ */
 public class servent
 {
-  U8 *s_name;	  /* official service name */
-  U8 **s_aliases; /* alias list */
-  I32 s_port;     /* port # */
-  U8 *s_proto;    /* protocol to use */
+  U8 *s_name;	  /* Official name of the service */
+  U8 **s_aliases; /* Null-terminated array of alternate names for the service */
+  I32 s_port;     /* Port number associated with the service */
+  U8 *s_proto;    /* Name of the protocol to use with this service */
 };
 
+/*
+ * The protoent class contains information about a given protocol, such as its name,
+ * aliases, and the protocol number.
+ */
 public class protoent
 {
-  U8  *p_name;     /* official protocol name */
-  U8  **p_aliases; /* alias list */
-  I32 p_proto;     /* protocol # */
+  U8  *p_name;     /* Official name of the protocol */
+  U8  **p_aliases; /* Null-terminated array of alternate names for the protocol */
+  I32 p_proto;     /* Protocol number */
 };
 
+/*
+ * The sockaddr class is a generic descriptor for socket address information,
+ * including length, family, and actual address data.
+ */
 public class sockaddr
 {
-  U8 sa_len;
-  U8 sa_family;
-  U8 sa_data[14];
+  U8 sa_len;       /* Length of the structure */
+  U8 sa_family;    /* Address family */
+  U8 sa_data[14];  /* Actual address information */
 };
 
+/*
+ * The in_addr class represents an IPv4 Internet address,
+ * stored as an unsigned long.
+ */
 public class in_addr
 {
-  U32 s_addr;
+  U32 s_addr; /* IPv4 address */
 };
 
+/*
+ * The sockaddr_in class represents an IPv4 socket address,
+ * including length, family, port, address, and padding to match the size of sockaddr.
+ */
 public class sockaddr_in
 {
-  U8 sin_len;
-  U8 sin_family;
-  U16 sin_port;
-  in_addr sin_addr;
-  U8 sin_zero[8];
+  U8 sin_len;         /* Length of the structure */
+  U8 sin_family;      /* Address family, AF_INET */
+  U16 sin_port;       /* Port number */
+  in_addr sin_addr;   /* IPv4 address */
+  U8 sin_zero[8];     /* Padding to make structure the same size as sockaddr */
 };
 
+/*
+ * The in6_addr class is used to store an IPv6 address,
+ * with three different representations for convenience.
+ */
 public class in6_addr
 {
   union
   {
-    U8   __u6_addr8[16];
-    U16  __u6_addr16[8];
-    U32  __u6_addr32[4];
-  };                    /* 128-bit IP6 address */
+    U8   __u6_addr8[16];  /* 16 bytes of IPv6 address */
+    U16  __u6_addr16[8];  /* 8 shorts of IPv6 address */
+    U32  __u6_addr32[4];  /* 4 ints of IPv6 address */
+  };                      /* Represents a 128-bit IPv6 address */
 };
 
+/*
+ * The sockaddr_in6 class represents an IPv6 socket address,
+ * including length, family, port, flow information, the IPv6 address,
+ * and the scope zone index for link-local addresses.
+ */
 public class sockaddr_in6
 {
-  U8  sin6_len;        /* length of this struct(sa_family_t) */
-  U8  sin6_family;     /* AF_INET6 (sa_family_t) */
-  I64 sin6_port;      /* Transport layer port # (in_port_t) */
-  U32 sin6_flowinfo;  /* IP6 flow information */
-  in6_addr sin6_addr; /* IP6 address */
-  U32 sin6_scope_id;  /* scope zone index */
+  U8  sin6_len;        /* Length of this struct */
+  U8  sin6_family;     /* Address family, AF_INET6 */
+  I64 sin6_port;       /* Transport layer port number */
+  U32 sin6_flowinfo;   /* IPv6 flow information */
+  in6_addr sin6_addr;  /* IPv6 address */
+  U32 sin6_scope_id;   /* Scope zone index */
 };
 
-public class addrinfo;
+/*
+ * The addrinfo class is used for domain name resolution,
+ * containing flags, family, socket type, protocol, address length,
+ * canonical name, address, and pointer to the next in list.
+ */
 public class addrinfo
 {
-  I32 ai_flags;	/* AI_PASSIVE, AI_CANONNAME, AI_NUMERICHOST */
-  I32 ai_family;	/* PF_xxx */
-  I32 ai_socktype;	/* SOCK_xxx */
-  I32 ai_protocol;	/* 0 or IPPROTO_xxx for IPv4 and IPv6 */
-  U32 ai_addrlen;	/* length of ai_addr */
-  U8  *ai_canonname;	/* canonical name for hostname */
-  sockaddr *ai_addr;	/* binary address */
-  addrinfo *ai_next;	/* next structure in linked list */
+  I32 ai_flags;	     /* Input flags */
+  I32 ai_family;     /* Address family */
+  I32 ai_socktype;   /* Socket type */
+  I32 ai_protocol;   /* Protocol for the socket */
+  U32 ai_addrlen;    /* Length of the address */
+  U8  *ai_canonname; /* Canonical name for the host */
+  sockaddr *ai_addr; /* Binary address */
+  addrinfo *ai_next; /* Next structure in the linked list */
 };
+
 
 #define _SS_PAD1SIZE (6)
 #define _SS_PAD2SIZE (112)
 
+/*
+ * The sockaddr_storage class is designed to accommodate all supported address families,
+ * ensuring sufficient storage and proper alignment. It's used where a socket address
+ * structure's size and family are known, but the exact type is not.
+ */
 public class sockaddr_storage
 {
-  U8  ss_len;         /* address length */
-  U8  ss_family;      /* [XSI] address family */
-  U8  __ss_pad1[_SS_PAD1SIZE];
-  I64 __ss_align;     /* force structure storage alignment */
-  U8  __ss_pad2[_SS_PAD2SIZE];
+  U8  ss_len;         /* Total length of the address */
+  U8  ss_family;      /* Address family (AF_*) */
+  U8  __ss_pad1[_SS_PAD1SIZE]; /* Padding to achieve alignment */
+  I64 __ss_align;     /* Force alignment of the structure */
+  U8  __ss_pad2[_SS_PAD2SIZE]; /* Additional padding to reach desired size */
 };
 
+/*
+ * The msghdr class is used with message-based socket operations (sendmsg, recvmsg).
+ * It includes an optional socket address, scatter/gather array, ancillary data,
+ * and flags for received messages.
+ */
 public class msghdr
 {
-  U8    *msg_name;      /* [XSI] optional address */
-  I64   msg_namelen;    /* [XSI] size of address */
-  iovec *msg_iov;       /* [XSI] scatter/gather array */
-  I32   msg_iovlen;     /* [XSI] # elements in msg_iov */
-  U0    *msg_control;   /* [XSI] ancillary data, see below */
-  I64   msg_controllen; /* [XSI] ancillary data buffer len */
-  I32   msg_flags;      /* [XSI] flags on received message */
+  U8    *msg_name;      /* Optional address */
+  I64   msg_namelen;    /* Size of the address */
+  iovec *msg_iov;       /* Scatter/gather array of buffers */
+  I32   msg_iovlen;     /* Number of elements in msg_iov */
+  U0    *msg_control;   /* Ancillary data */
+  I64   msg_controllen; /* Length of ancillary data buffer */
+  I32   msg_flags;      /* Flags on received message */
 };
 
+/*
+ * The sockaddr_un class specifies a local socket address for Unix domain sockets.
+ * It includes the address length, family, and path.
+ */
 public class sockaddr_un
 {
-  U8 sun_len;        /* sockaddr len including null */
-  U8 sun_family;     /* [XSI] AF_UNIX */
-  U8 sun_path[104];  /* [XSI] path name (gag) */
+  U8 sun_len;        /* Length of the sockaddr including null */
+  U8 sun_family;     /* Address family: AF_UNIX */
+  U8 sun_path[104];  /* Path name */
 };
 
 public extern "c" I32 setsockopt(I32 __sockfd, I32 __level, I32 __option_name,
