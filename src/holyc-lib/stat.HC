@@ -131,7 +131,7 @@ public I32 Rm(U8 *path, Bool flags=0)
   return 0;
 }
 
-public I32 MkDir(U8 *path, I32 mode=MKDIR_DEFAULT, Bool recurse=FALSE)
+public Bool MkDir(U8 *path, I32 mode=MKDIR_DEFAULT, Bool recurse=FALSE)
 { /* Make a directory, by default does not recurse folder permissions are: 
    * drwxr-xr-x */
   Bool relative = TRUE;

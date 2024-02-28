@@ -461,35 +461,35 @@ public Bool Str2CDateStruct(U8 *strdate, U8 *format, CDateStruct *t);
 public Bool WildMatch(U8 *test_str, U8 *wild_str);
 public CDate StrToCDate(U8 *_str, U8 *fmt);
 
-#define F_DUPFD  0 /* duplicate file descriptor */
-#define F_GETFD  1 /* get file descriptor flags */
-#define F_SETFD  2 /* set file descriptor flags */
-#define F_GETFL  3 /* get file status flags */
-#define F_SETFL  4 /* set file status flags */
-#define F_GETOWN 5 /* get SIGIO/SIGURG proc/pgrp */
-#define F_SETOWN 6 /* set SIGIO/SIGURG proc/pgrp */
-#define F_GETLK  7 /* get record locking information */
-#define F_SETLK  8 /* set record locking information */
-#define F_SETLKW 9 /* F_SETLK; wait if blocked */
+#define F_DUPFD  0
+#define F_GETFD  1
+#define F_SETFD  2
+#define F_GETFL  3
+#define F_SETFL  4
+#define F_GETOWN 5
+#define F_SETOWN 6
+#define F_GETLK  7
+#define F_SETLK  8
+#define F_SETLKW 9
 
 #define F_FLUSH_DATA  40
-#define F_CHKCLEAN    41 /* Used for regression test */
-#define F_PREALLOCATE 42 /* Preallocate storage */
-#define F_SETSIZE     43 /* Truncate a file. Equivalent to calling truncate(2) */
-#define F_RDADVISE    44 /* Issue an advisory read async with no copy to user */
-#define F_RDAHEAD     45 /* turn read ahead off/on for this fd */
+#define F_CHKCLEAN    41
+#define F_PREALLOCATE 42
+#define F_SETSIZE     43
+#define F_RDADVISE    44
+#define F_RDAHEAD     45
 
-#define FD_CLOEXEC 1 /* close-on-exec flag */
+#define FD_CLOEXEC 1
 
-/* record locking flags (F_GETLK, F_SETLK, F_SETLKW) */
-#define F_RDLCK 1 /* shared or read lock */
-#define F_UNLCK 2 /* unlock */
-#define F_WRLCK 3 /* exclusive or write lock */
+/* record locking flags */
+#define F_RDLCK 1
+#define F_UNLCK 2
+#define F_WRLCK 3
 
-#define O_RDONLY  0x0000   /* open for reading only */
-#define O_WRONLY  0x0001   /* open for writing only */
-#define O_RDWR    0x0002   /* open for reading and writing */
-#define O_ACCMODE 0x0003   /* mask for above modes */
+#define O_RDONLY  0x0000     /* open for reading only */
+#define O_WRONLY  0x0001     /* open for writing only */
+#define O_RDWR    0x0002     /* open for reading and writing */
+#define O_ACCMODE 0x0003     /* mask for above modes */
 #define O_CREAT   0x00000200 /* create if nonexistant */
 #define O_TRUNC   0x00000400 /* truncate to zero length */
 #define O_EXCL    0x00000800 /* error if already exists */
@@ -503,8 +503,8 @@ public CDate StrToCDate(U8 *_str, U8 *fmt);
 
 class iovec
 {
-  U0 *iov_base;      /* [XSI] Base address of I/O memory region */
-  U64 iov_len;       /* [XSI] Size of region iov_base points to */
+  U0 *iov_base;
+  U64 iov_len;
 };
 
 public extern "c" I32 open(U8 *__name, I32 flags, ...);
@@ -530,7 +530,7 @@ public I32 Cd(U8 *path);
 #define DT_SOCK    12
 #define DT_WHT     14
 
-class cDIR {};
+class cDIR;
 
 #ifdef IS_MACOS
 #define DIR_MAXPATHLEN (1024)
@@ -600,33 +600,33 @@ public extern "c" I32 mkdir(U8 *dirname, I32 mode = 438);
 public extern "c" I32 unlink(U8 *pathname);
 public extern "c" I32 rmdir(U8 *dirname);
 
-#define S_IFMT      0xF000 /* [XSI] type of file mask */
-#define S_IFIFO     0x1000     /* [XSI] named pipe (fifo) */
-#define S_IFCHR     0x2000     /* [XSI] character special */
-#define S_IFDIR     0x4000     /* [XSI] directory */
-#define S_IFBLK     0x6000     /* [XSI] block special */
-#define S_IFREG     0x8000     /* [XSI] regular */
-#define S_IFLNK     0xa000     /* [XSI] symbolic link */
-#define S_IFSOCK    0xc000     /* [XSI] socket */
+#define S_IFMT      0xF000
+#define S_IFIFO     0x1000
+#define S_IFCHR     0x2000
+#define S_IFDIR     0x4000
+#define S_IFBLK     0x6000
+#define S_IFREG     0x8000
+#define S_IFLNK     0xa000
+#define S_IFSOCK    0xc000
 
-#define S_IRWXU 0x1c0     /* [XSI] RWX mask for owner */
-#define S_IRUSR 0x100     /* [XSI] R for owner */
-#define S_IWUSR 0x80      /* [XSI] W for owner */
-#define S_IXUSR 0x40      /* [XSI] X for owner */
+#define S_IRWXU 0x1c0
+#define S_IRUSR 0x100
+#define S_IWUSR 0x80 
+#define S_IXUSR 0x40 
 /* Read, write, execute/search by group */
-#define S_IRWXG 0x38      /* [XSI] RWX mask for group */
-#define S_IRGRP 0x20      /* [XSI] R for group */
-#define S_IWGRP 0x10      /* [XSI] W for group */
-#define S_IXGRP 0x8       /* [XSI] X for group */
+#define S_IRWXG 0x38
+#define S_IRGRP 0x20
+#define S_IWGRP 0x10
+#define S_IXGRP 0x8 
 /* Read, write, execute/search by others */
-#define S_IRWXO 0x7       /* [XSI] RWX mask for other */
-#define S_IROTH 0x4       /* [XSI] R for other */
-#define S_IWOTH 0x2       /* [XSI] W for other */
-#define S_IXOTH 0x1       /* [XSI] X for other */
+#define S_IRWXO 0x7
+#define S_IROTH 0x4
+#define S_IWOTH 0x2
+#define S_IXOTH 0x1
 
-#define S_ISUID 0x800     /* [XSI] set user id on execution */
-#define S_ISGID 0x400     /* [XSI] set group id on execution */
-#define S_ISVTX 0x200     /* [XSI] directory restricted delete */
+#define S_ISUID 0x800
+#define S_ISGID 0x400
+#define S_ISVTX 0x200
 #define MKDIR_DEFAULT (S_ISUID|S_IRWXU|S_IRWXG|S_IROTH|S_IXOTH)
 
 #define RM_RECURSE  0x1
@@ -635,7 +635,7 @@ public extern "c" I32 rmdir(U8 *dirname);
 
 public I32 RmDir(U8 *path, Bool flags=0);
 public I32 Rm(U8 *path, Bool flags=0)
-public I32 MkDir(U8 *path, I32 mode=MKDIR_DEFAULT, Bool recurse=FALSE);
+public Bool MkDir(U8 *path, I32 mode=MKDIR_DEFAULT, Bool recurse=FALSE);
 
 #define FZF_CASE_SMART   0
 #define FZF_CASE_IGNORE  1
