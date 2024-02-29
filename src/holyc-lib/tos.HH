@@ -362,7 +362,7 @@ public extern "c" U0 *memchr(U0 *__s, I32 __c, U64 __n);
 public extern "c" I32 memcmp(U0 *__s1, U0 *__s2, U64 __n);
 public extern "c" U0 *memmove(U0 *__dst, U0 *__src, U64 __len);
 public extern "c" U0 free(U0 *ptr);
-public extern "c" U0 *malloc(U0 *ptr);
+public extern "c" U0 *malloc(U64 size);
 public _extern _MALLOC U0 *MAlloc(U64 size);
 public _extern _FREE U0 Free(U0 *ptr);
 public _extern _REALLOC U0 *ReAlloc(U0 *ptr, U64 new_size);
@@ -1070,6 +1070,7 @@ public class sockaddr_in6
  * containing flags, family, socket type, protocol, address length,
  * canonical name, address, and pointer to the next in list.
  */
+class addrinfo;
 public class addrinfo
 {
   I32 ai_flags;	     /* Input flags */
