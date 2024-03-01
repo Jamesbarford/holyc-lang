@@ -9,9 +9,10 @@
 
 aoStr *aoStrAlloc(size_t capacity) {
     aoStr *buf = malloc(sizeof(aoStr));
-    buf->capacity = capacity + 10;
+    capacity += 10;
+    buf->capacity = capacity;
     buf->len = 0;
-    buf->data = malloc(sizeof(char) * buf->capacity);
+    buf->data = malloc(sizeof(char) * capacity);
     return buf;
 }
 
@@ -132,7 +133,7 @@ void aoStrCatPrintf(aoStr *b, const char *fmt, ...) {
         bufferlen = fmt_len;
     }
     int len = 0;
-    char *buf = (char *)malloc(sizeof(char) * bufferlen);
+    char *buf = (char *)malloc(sizeof(char) * bufferlen+1);
 
     while (1) {
         va_copy(copy, ap);
@@ -146,7 +147,7 @@ void aoStrCatPrintf(aoStr *b, const char *fmt, ...) {
 
         if (((size_t)len) >= bufferlen) {
             free(buf);
-            bufferlen = ((size_t)len) + 1;
+            bufferlen = ((size_t)len) + 2;
             buf = malloc(bufferlen);
             if (buf == NULL) {
                 return;

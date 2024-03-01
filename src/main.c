@@ -72,24 +72,28 @@ ln -sf ./tos.0.0.1.dylib ./tos.dylib
     snprintf(lib->dylib_name,LIB_BUFSIZ,"%s.dylib",name);
     snprintf(lib->dylib_version_name,LIB_BUFSIZ,"%s.0.0.1.dylib",name);
     aoStrCatPrintf(
-            dylibcmd, "cc -dynamiclib -Wl,-install_name,%s/%s -o %s -lm -lc -lpthread -lsqlite3",
+            dylibcmd, "cc -dynamiclib -Wl,-install_name,%s/%s -o %s -lpthread -lsqlite3 -lc -lm",
             LIB_PATH, name, lib->dylib_version_name,lib->dylib_name);
-#elif IS_LINUX
-    snprintf(lib->stylib_name,LIB_BUFSIZ,"%s.a",name);
-    snprintf(lib->dylib_name,LIB_BUFSIZ,"%s.so",name);
-    snprintf(lib->dylib_minor_name,LIB_BUFSIZ,"%s.so.0.0.1",name);
-    aoStrCatPrintf(
-            dylibcmd, "cc -shared -Wl,-so_name,%s/%s -o %s -lm -lc -lpthread -lsqlite3",
-            LIB_PATH,name,lib->dylib_minor_name,lib->dylib_name);
-#else
-#error "System not supported"
-#endif
-    aoStrCatPrintf(installcmd, "cp -pPR ./%s /usr/local/lib/lib%s && "
+    aoStrCatPrintf(installcmd,
+            "cp -pPR ./%s /usr/local/lib/lib%s && "
             "cp -pPR ./%s /usr/local/lib/lib%s && "
             "ln -sf /usr/local/lib/%s /usr/local/lib/%s",
             lib->dylib_name,lib->dylib_version_name,
             lib->stylib_name,lib->stylib_name,
             lib->dylib_version_name,lib->dylib_name);
+#elif IS_LINUX
+    snprintf(lib->stylib_name,LIB_BUFSIZ,"%s.a",name);
+    snprintf(lib->dylib_name,LIB_BUFSIZ,"%s.so",name);
+    snprintf(lib->dylib_version_name,LIB_BUFSIZ,"%s.so.0.0.1",name);
+    aoStrCatPrintf(
+            dylibcmd, "gcc -fPIC -shared -Wl,-soname,%s/%s -o %s -lpthread -lsqlite3 -lc -lm",
+            LIB_PATH,name,lib->dylib_name,lib->dylib_name);
+    aoStrCatPrintf(installcmd,
+            "cp -pPR ./%s /usr/local/lib/lib%s",
+            lib->stylib_name,lib->stylib_name);
+#else
+#error "System not supported"
+#endif
     aoStrCatPrintf(stylibcmd,"ar rcs %s %s",lib->stylib_name,opts->obj_outfile);
     aoStrCatPrintf(dylibcmd," -o %s %s",lib->dylib_name,opts->obj_outfile);
     lib->install_cmd = aoStrMove(installcmd);
@@ -182,7 +186,7 @@ void emitFile(aoStr *asmbuf, hccOpts *opts) {
     hccLib lib;
     if (opts->emit_object) {
         writeAsmToTmp(asmbuf);
-        aoStrCatPrintf(cmd, "gcc -c %s -lm -lpthread -lc -ltos -lsqlite3 %s -o ./%s",
+        aoStrCatPrintf(cmd, "gcc -c %s -lpthread -ltos -lsqlite3 -lc -lm %s -o ./%s",
                 ASM_TMP_FILE,opts->clibs,opts->obj_outfile);
         system(cmd->data);
     } else if (opts->asm_outfile && opts->assemble_only) {
@@ -192,27 +196,35 @@ void emitFile(aoStr *asmbuf, hccOpts *opts) {
     } else if (opts->emit_dylib) {
         writeAsmToTmp(asmbuf);
         hccLibInit(&lib,opts,opts->lib_name);
-        aoStrCatPrintf(cmd, "gcc -c %s -fPIC -o ./%s",
+        aoStrCatPrintf(cmd, "gcc -fPIC -c %s -lpthread -lsqlite3 -lc -lm -o ./%s",
                 ASM_TMP_FILE,opts->obj_outfile);
         fprintf(stderr,"%s\n",cmd->data);
         system(cmd->data);
         fprintf(stderr,"%s\n",lib.stylib_cmd);
         system(lib.stylib_cmd);
+
+#if IS_MACOS
         fprintf(stderr,"%s\n",lib.dylib_cmd);
         system(lib.dylib_cmd);
+#endif /* ifdef  IS_MACOS */
+
         fprintf(stderr,"%s\n",lib.install_cmd);
         system(lib.install_cmd);
     } else {
         writeAsmToTmp(asmbuf);
-        aoStrCatPrintf(cmd, "gcc -L/usr/local/lib %s -lm -lpthread -lc -ltos -lsqlite3 %s -o ./a.out", 
-                ASM_TMP_FILE,opts->clibs);
+        if (opts->clibs) {
+            aoStrCatPrintf(cmd, "gcc -L/usr/local/lib %s -lpthread -ltos -lsqlite3 %s -lc -lm -o ./a.out", 
+                    ASM_TMP_FILE,opts->clibs);
+        } else {
+            aoStrCatPrintf(cmd, "gcc -L/usr/local/lib %s -lpthread -ltos -lsqlite3 -lc -lm -o ./a.out", 
+                    ASM_TMP_FILE);
+        }
         system(cmd->data);
-        remove(ASM_TMP_FILE);
-
     }
     if (strnlen(opts->clibs,10) > 1) {
         free(opts->clibs);
     }
+    remove(ASM_TMP_FILE);
     aoStrRelease(cmd);
     aoStrRelease(asmbuf);
 }

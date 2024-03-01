@@ -4,7 +4,7 @@
 
 class ThreadArgs
 {
-  MutexLock *lk;
+  pthread_mutex_t *lk;
   pthread_t *th;
   I64 id;
   I64 *ptr;
@@ -26,7 +26,7 @@ Bool pthread_test()
   I64 correct = 0, tests = 1;
   ThreadArgs thread_args[THREAD_COUNT];
 
-  MutexLock lk;
+  pthread_mutex_t lk;
   pthread_mutex_init(&lk);
 
   I64 x = 0;
@@ -64,7 +64,7 @@ Bool ThreadPoolTest()
   ThreadArgs *arg = MAlloc(sizeof(ThreadArgs));
   ThreadPool *pool = ThreadPoolNew(10);
 
-  MutexLock lk;
+  pthread_mutex_t lk;
   pthread_mutex_init(&lk);
 
   arg->id = 1;

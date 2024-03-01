@@ -1,6 +1,7 @@
 #include "./memory.HC"
 #include "./list.HC"
 
+#ifdef IS_MACOS
 #define __MUTEX_LOCK_PADDING__   56
 #define __MUTEX_LOCK_ATTR_SIZE__ 8
 
@@ -8,32 +9,32 @@
 #define __THREAD_CONDATTR_SIZE__ 8
 #define __THREAD_SIZE__          8176
 
-
-/* This I _think_ is specific to MacOS implementation of pthreads 
- * It does work on linux though. */
-class MutexLock 
+/* MACOS definitions */
+class pthread_mutex_t 
 {
   I64 __sig;
   I8 __opaque[__MUTEX_LOCK_PADDING__];
 };
 
-class MutexLockattr
+class pthread_mutexattr_t
 {
   I64 __sig;
   I8 __opaque[__MUTEX_LOCK_ATTR_SIZE__];
 };
 
-class ThreadCond
+class pthread_cond_t
 {
   I64 __sig;
   I8 __opaque[__THREAD_COND_SIZE__];
 };
 
-class ThreadCondattr {
+class pthread_condattr_t
+{
   I64 __sig;
   I8 __opaque[__THREAD_CONDATTR_SIZE__];
 };
 
+class pthread_handler_rec;
 class pthread_handler_rec
 {
   U0 (*__routine)(U0 *__arg); // Routine to call
@@ -48,6 +49,96 @@ class pthread_t
   I8 __opaque[__THREAD_SIZE__];
 };
 
+#elifdef IS_LINUX /* Linux definitions, this needs to be auto generated */
+
+#define __SIZEOF_PTHREAD_MUTEX_T   40
+#define __SIZEOF_PTHREAD_ATTR_T    56
+#define __SIZEOF_PTHREAD_RWLOCK_T  56
+#define __SIZEOF_PTHREAD_BARRIER_T 32
+
+#define __SIZEOF_PTHREAD_MUTEXATTR_T   4
+#define __SIZEOF_PTHREAD_COND_T        48
+#define __SIZEOF_PTHREAD_CONDATTR_T    4
+#define __SIZEOF_PTHREAD_RWLOCKATTR_T  8
+#define __SIZEOF_PTHREAD_BARRIERATTR_T 4
+
+union pthread_mutexattr_t
+{
+  I8  __size[__SIZEOF_PTHREAD_MUTEXATTR_T];
+  I32 __align;
+};
+
+union pthread_condattr_t
+{
+  I8  __size[__SIZEOF_PTHREAD_CONDATTR_T];
+  I32 __align;
+};
+
+union pthread_attr_t
+{
+  I8  __size[__SIZEOF_PTHREAD_ATTR_T];
+  I64 __align;
+};
+
+
+/* this is the spiritual equivilent of typedef  */ 
+public U64 class pthread_t;
+
+class __pthread_list_t;
+class __pthread_list_t
+{
+  __pthread_list_t *__prev;
+  __pthread_list_t *__next;
+};
+
+class __pthread_mutex_s
+{
+  I32 __lock;
+  U32 __count;
+  I32 __owner;
+  U32 __nusers;
+  I32 __kind;
+  I16 __spins;
+  I16 __elision;
+  __pthread_list_t __list;
+};
+
+union pthread_mutex_t 
+{
+  __pthread_mutex_s __data;
+  I32 __size[__SIZEOF_PTHREAD_MUTEX_T];
+  I64 __align;
+};
+
+union __atomic_wide_counter
+{
+  U64 __value64;
+  class
+  {
+    U32 __low;
+    U32 __high;
+  };
+};
+
+class __pthread_cond_s
+{
+  __atomic_wide_counter __wseg;
+  __atomic_wide_counter __g1_start;
+  U32 __g_regs[2];
+  U32 __g_size[2];
+  U32 __g1_orig_size;
+  U32 __wrefs;
+  U32 __g_signals[2];
+};
+
+union pthread_cond_t
+{
+  __pthread_cond_s __data;
+  I8  __size[__SIZEOF_PTHREAD_COND_T];
+  I64 __align;
+};
+#endif
+
 class ThreadWorker
 {
   pthread_t *th;
@@ -56,8 +147,8 @@ class ThreadWorker
 
 class ThreadSemaphore
 {
-  ThreadCond cond;
-  MutexLock lk;
+  pthread_cond_t cond;
+  pthread_mutex_t lk;
   I32 val;
 }; 
 
@@ -72,8 +163,8 @@ class ThreadPool
 {
   U64 worker_count,alive_threads,active_threads;
   Bool run;
-  ThreadCond has_work,no_work;
-  MutexLock lock, qlock;
+  pthread_cond_t has_work,no_work;
+  pthread_mutex_t lock, qlock;
   ThreadSemaphore *sem;
   ThreadWorker *workers;
   List *jobs;
@@ -82,17 +173,17 @@ class ThreadPool
 
 public extern "c" I64 pthread_create(pthread_t **th, U0 *thread_attr=NULL, 
 		U0 (*function_ptr)(U0 *argv), U0 *argv=NULL);
-public extern "c" I32 pthread_mutex_init(MutexLock *lk, MutexLockattr *mutex_attr=NULL);
-public extern "c" I32 pthread_mutex_destroy(MutexLock *lk);
-public extern "c" I32 pthread_mutex_lock(MutexLock *lk);
-public extern "c" I32 pthread_mutex_unlock(MutexLock *lk);
+public extern "c" I32 pthread_mutex_init(pthread_mutex_t *lk, pthread_mutexattr_t *mutex_attr=NULL);
+public extern "c" I32 pthread_mutex_destroy(pthread_mutex_t *lk);
+public extern "c" I32 pthread_mutex_lock(pthread_mutex_t *lk);
+public extern "c" I32 pthread_mutex_unlock(pthread_mutex_t *lk);
 public extern "c" I32 pthread_join(pthread_t *th, U0 *ptr=NULL);
-public extern "c" I32 pthread_cond_broadcast(ThreadCond *cond);
-public extern "c" I32 pthread_cond_destroy(ThreadCond *cond);
-public extern "c" I32 pthread_cond_init(ThreadCond *cond,
-		ThreadCondattr *attr=NULL);
-public extern "c" I32 pthread_cond_signal(ThreadCond *cond);
-public extern "c" I32 pthread_cond_wait(ThreadCond *cond, MutexLock *lk);
+public extern "c" I32 pthread_cond_broadcast(pthread_cond_t *cond);
+public extern "c" I32 pthread_cond_destroy(pthread_cond_t *cond);
+public extern "c" I32 pthread_cond_init(pthread_cond_t *cond,
+		pthread_condattr_t *attr=NULL);
+public extern "c" I32 pthread_cond_signal(pthread_cond_t *cond);
+public extern "c" I32 pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *lk);
 public extern "c" I32 pthread_exit(U0 *data=NULL);
 public extern "c" I32 pthread_detach(pthread_t *th);
 
@@ -141,6 +232,7 @@ U0 ThreadPoolWait(ThreadPool *pool)
 {//Wait for all jobs in the queue to be complete
   pthread_mutex_lock(&pool->lock);
   while (!ListEmpty(pool->jobs) || pool->active_threads != 0) {
+    "listcnt: %d active: %d\n",ListCount(pool->jobs),pool->active_threads;
     pthread_cond_wait(&pool->no_work,&pool->lock);
   }
   pthread_mutex_unlock(&pool->lock);
@@ -172,6 +264,7 @@ static U0 *ThreadPoolMain(U0 *argv)
       pthread_cond_signal(&pool->no_work);
     }
     pthread_mutex_unlock(&pool->lock);
+
   }
   pool->worker_count--;
   if (pool->active_threads == 0) {
@@ -237,18 +330,20 @@ U0 ThreadPoolStop(ThreadPool *pool)
 U0 ThreadPoolRelease(ThreadPool *pool)
 {// abrubtly stop the pool, destroy conditions, locks and free structures
   if (pool) {
-    auto sem = pool->sem;
-    pool->run = 0;
+    auto sem_cond = &pool->sem->cond;
+    auto sem_lock = &pool->sem->lk;
+    pool->run = FALSE;
     ThreadPoolStop(pool);
+
     pthread_cond_destroy(&pool->has_work);
     pthread_cond_destroy(&pool->no_work);
     pthread_mutex_destroy(&pool->lock);
     pthread_mutex_destroy(&pool->qlock);
 
-    pthread_cond_destroy(&sem->cond);
-    pthread_mutex_destroy(&sem->lk);
-
+    pthread_cond_destroy(sem_cond);
+    pthread_mutex_destroy(sem_lock);
     ListRelease(pool->jobs,NULL);
+
     Free(pool->workers);
     Free(pool->sem);
     Free(pool);

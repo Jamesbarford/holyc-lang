@@ -26,13 +26,14 @@ Currently the this will compile x86_64 assembly and works on linux and intel
 macs.
 
 ## Building
-Run `make`, then run `make install` this will install the compiler and holyc
-libraries for strings, hashtables, io, maths etc... see ./src/holyc-lib/
+Run `make`, then run `make install` (`sudo make install` on linux) this will 
+install the compiler and holyc libraries for strings, hashtables, io, maths 
+etc... see ./src/holyc-lib/
  
 ## Differences
 - `auto` key word for type inference, an addition which makes it easier
   to write code.
-- `cast<type>` for casting as well as post-fix type casting.
+- `cast<type>` can be used for casting as well as post-fix type casting.
 - `break` and `continue` allowed in loops.
 - You can call any libc code with `extern "c" <type> <function_name>`
 

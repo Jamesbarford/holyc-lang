@@ -200,61 +200,157 @@ public Bool IntMapIter(IntMap *map, I64 *_idx, IntMapNode **_node);
 public Bool IntMapValueIter(IntMap *map, I64 *_idx, U0 **_value);
 public Bool IntMapKeyIter(IntMap *map, I64 *_idx, I64 *_key);
 
+/* THREADS ==========*/
+#ifdef IS_MACOS
 #define __MUTEX_LOCK_PADDING__   56
 #define __MUTEX_LOCK_ATTR_SIZE__ 8
+
 #define __THREAD_COND_SIZE__     40
 #define __THREAD_CONDATTR_SIZE__ 8
 #define __THREAD_SIZE__          8176
 
-/* This I _think_ is specific to MacOS implementation of pthreads
- * It does work on linux though. */
-public class MutexLock {
+/* MACOS definitions */
+class pthread_mutex_t 
+{
   I64 __sig;
   I8 __opaque[__MUTEX_LOCK_PADDING__];
 };
 
-public class MutexLockattr {
+class pthread_mutexattr_t
+{
   I64 __sig;
   I8 __opaque[__MUTEX_LOCK_ATTR_SIZE__];
 };
 
-public class ThreadCond {
+class pthread_cond_t
+{
   I64 __sig;
   I8 __opaque[__THREAD_COND_SIZE__];
 };
 
-public class ThreadCondattr {
+class pthread_condattr_t
+{
   I64 __sig;
   I8 __opaque[__THREAD_CONDATTR_SIZE__];
 };
 
-public class pthread_handler_rec;
-public class pthread_handler_rec
+class pthread_handler_rec;
+class pthread_handler_rec
 {
   U0 (*__routine)(U0 *__arg); // Routine to call
-  U0 *__arg;          // Argument to pass
+  U0 *__arg;                  // Argument to pass
   pthread_handler_rec *__next;
 };
 
-public class pthread_t
+class pthread_t 
 {
   I64 __sig;
-  pthread_handler_rec *__cleanup_stack;
+  pthread_handler_rec  *__cleanup_stack;
   I8 __opaque[__THREAD_SIZE__];
 };
 
-public class ThreadWorker {
+#elifdef IS_LINUX /* Linux definitions, this needs to be auto generated */
+
+#define __SIZEOF_PTHREAD_MUTEX_T   40
+#define __SIZEOF_PTHREAD_ATTR_T    56
+#define __SIZEOF_PTHREAD_RWLOCK_T  56
+#define __SIZEOF_PTHREAD_BARRIER_T 32
+
+#define __SIZEOF_PTHREAD_MUTEXATTR_T   4
+#define __SIZEOF_PTHREAD_COND_T        48
+#define __SIZEOF_PTHREAD_CONDATTR_T    4
+#define __SIZEOF_PTHREAD_RWLOCKATTR_T  8
+#define __SIZEOF_PTHREAD_BARRIERATTR_T 4
+
+union pthread_mutexattr_t
+{
+  I8  __size[__SIZEOF_PTHREAD_MUTEXATTR_T];
+  I32 __align;
+};
+
+union pthread_condattr_t
+{
+  I8  __size[__SIZEOF_PTHREAD_CONDATTR_T];
+  I32 __align;
+};
+
+union pthread_attr_t
+{
+  I8  __size[__SIZEOF_PTHREAD_ATTR_T];
+  I64 __align;
+};
+
+
+/* this is the spiritual equivilent of typedef  */ 
+public U64 class pthread_t;
+
+class __pthread_list_t;
+class __pthread_list_t
+{
+  __pthread_list_t *__prev;
+  __pthread_list_t *__next;
+};
+
+class __pthread_mutex_s
+{
+  I32 __lock;
+  U32 __count;
+  I32 __owner;
+  U32 __nusers;
+  I32 __kind;
+  I16 __spins;
+  I16 __elision;
+  __pthread_list_t __list;
+};
+
+union pthread_mutex_t 
+{
+  __pthread_mutex_s __data;
+  I32 __size[__SIZEOF_PTHREAD_MUTEX_T];
+  I64 __align;
+};
+
+union __atomic_wide_counter
+{
+  U64 __value64;
+  class
+  {
+    U32 __low;
+    U32 __high;
+  };
+};
+
+class __pthread_cond_s
+{
+  __atomic_wide_counter __wseg;
+  __atomic_wide_counter __g1_start;
+  U32 __g_regs[2];
+  U32 __g_size[2];
+  U32 __g1_orig_size;
+  U32 __wrefs;
+  U32 __g_signals[2];
+};
+
+union pthread_cond_t
+{
+  __pthread_cond_s __data;
+  I8 __size[__SIZEOF_PTHREAD_COND_T];
+  I64 __align;
+};
+#endif
+
+class ThreadWorker
+{
   pthread_t *th;
   I32 id;
 };
 
-public class ThreadSemaphore
+class ThreadSemaphore
 {
-  ThreadCond cond;
-  MutexLock lk;
+  pthread_cond_t cond;
+  pthread_mutex_t lk;
   I32 val;
-};
-
+}; 
 
 public class ThreadWorkerJob;
 public class ThreadWorkerJob {
@@ -266,8 +362,8 @@ public class ThreadWorkerJob {
 public class ThreadPool {
   U64 worker_count, alive_threads, active_threads;
   Bool run;
-  ThreadCond has_work, no_work;
-  MutexLock lock, qlock;
+  pthread_cond_t has_work, no_work;
+  pthread_mutex_t lock, qlock;
   ThreadSemaphore *sem;
   ThreadWorker *workers;
   List *jobs;
@@ -276,17 +372,17 @@ public class ThreadPool {
 
 public extern "c" I64 pthread_create(pthread_t **th, U0 *thread_attr = NULL,
                 U0 *(*function_ptr)(U0 *_argv), U0 *argv = NULL);
-public extern "c" I32 pthread_mutex_init(MutexLock *lk,
-                  MutexLockattr *mutex_attr = NULL);
-public extern "c" I32 pthread_mutex_destroy(MutexLock *lk);
-public extern "c" I32 pthread_mutex_lock(MutexLock *lk);
-public extern "c" I32 pthread_mutex_unlock(MutexLock *lk);
+public extern "c" I32 pthread_mutex_init(pthread_mutex_t *lk,
+                  pthread_mutexattr_t *mutex_attr = NULL);
+public extern "c" I32 pthread_mutex_destroy(pthread_mutex_t *lk);
+public extern "c" I32 pthread_mutex_lock(pthread_mutex_t *lk);
+public extern "c" I32 pthread_mutex_unlock(pthread_mutex_t *lk);
 public extern "c" I32 pthread_join(pthread_t *th, U0 *ptr = NULL);
-public extern "c" I32 pthread_cond_broadcast(ThreadCond *cond);
-public extern "c" I32 pthread_cond_destroy(ThreadCond *cond);
-public extern "c" I32 pthread_cond_init(ThreadCond *cond, ThreadCondattr *attr = NULL);
-public extern "c" I32 pthread_cond_signal(ThreadCond *cond);
-public extern "c" I32 pthread_cond_wait(ThreadCond *cond, MutexLock *lk);
+public extern "c" I32 pthread_cond_broadcast(pthread_cond_t *cond);
+public extern "c" I32 pthread_cond_destroy(pthread_cond_t *cond);
+public extern "c" I32 pthread_cond_init(pthread_cond_t *cond, pthread_condattr_t *attr = NULL);
+public extern "c" I32 pthread_cond_signal(pthread_cond_t *cond);
+public extern "c" I32 pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *lk);
 public extern "c" I32 pthread_exit(U0 *data = NULL);
 public extern "c" I32 pthread_detach(pthread_t *th);
 ThreadPool *ThreadPoolNew(I64 worker_count);
@@ -572,12 +668,13 @@ public extern "c" U0 rewinddir(cDIR *dir);
 public extern "c" U0 seekdir(cDIR *dir, I64 pos);
 public extern "c" I64 telldir(cDIR *dir);
 /* XXX: Normalise stat ? */
-#ifdef IS_MACOS
-public class cTimespec {
+public class cTimespec
+{
   I64 tv_sec;
   I64 tv_nsec;
 };
 
+#ifdef IS_MACOS
 public class cStat {
   I32 st_dev;
   U16 st_mode;
@@ -601,6 +698,29 @@ public class cStat {
 public _extern _stat$INODE64 I32 stat(U8 *pathname, cStat *st);
 public _extern _lstat$INODE64 I32 lstat(U8 *pathname, cStat *st);
 public _extern _fstat$INODE64 I32 fstat(I32 fd, cStat *st);
+#elifdef IS_LINUX
+class cStat
+{
+  U64 st_dev;
+  U64 st_ino;
+  U64 st_nlink;
+  U32 st_mode;
+  U32 st_uid;
+  U32 st_gid;
+  I32 __pad0;
+  U64 st_rdev;
+  I64 st_size;
+  I64 st_blksize;
+  I64 st_blocks;
+  cTimespec st_atim;
+  cTimespec st_mtim;
+  cTimespec st_ctim;
+  I64 __glibc_reserved[3];
+};
+
+public extern "c" I32 stat(U8 *pathname, cStat *st);
+public extern "c" I32 lstat(U8 *pathname, cStat *st);
+public extern "c" I32 fstat(I32 fd, cStat *st);
 #endif
 
 public extern "c" I32 mkdir(U8 *dirname, I32 mode = 438);

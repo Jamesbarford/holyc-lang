@@ -633,7 +633,7 @@ static void AstFreeCast(Ast *ast) {
 
 aoStr *AstNormaliseFunctionName(char *fname) {
     aoStr *newfn = aoStrNew();
-#ifdef IS_BSD
+#if IS_BSD
     if (fname[0] != '_') {
         aoStrPutChar(newfn, '_');
     }

@@ -108,7 +108,8 @@ U0 ListRelease(List *ll, U0 (*FreeValue)(U0 *arg))
 
 I64 ListCount(List *ll)
 {
-  List *node = ll->next;
+  if (ll == ll->next) return 0;
+  auto node = ll->next;
   I64 count = 0;
   while (node != ll) {
     count++;

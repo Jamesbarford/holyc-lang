@@ -8,7 +8,7 @@
 #define DT_SOCK         12
 #define DT_WHT          14
 
-class cDIR {};
+class cDIR;
 
 #ifdef IS_MACOS
 #define DIR_MAXPATHLEN 1024

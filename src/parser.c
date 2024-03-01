@@ -1116,6 +1116,7 @@ Ast *ParseExternFunctionProto(Cctrl *cc, AstType *rettype, char *fname, int len)
     List *params;
     lexeme *tok;
     cc->localenv = DictNewWithParent(cc->localenv);
+    cc->tmp_locals = NULL;
 
     params = ParseParams(cc,')', &has_var_args,1);
     tok = CctrlTokenGet(cc);
@@ -1135,6 +1136,8 @@ Ast *ParseFunctionOrDef(Cctrl *cc, AstType *rettype, char *fname, int len) {
     int has_var_args = 0;
     CctrlTokenExpect(cc,'(');
     cc->localenv = DictNewWithParent(cc->localenv);
+    cc->tmp_locals = ListNew();
+
     List *params = ParseParams(cc,')',&has_var_args,1);
     lexeme *tok = CctrlTokenGet(cc);
     if (TokenPunctIs(tok, '{')) {
