@@ -24,6 +24,9 @@ converting the AST to x86_64 assembly code which is fed into gcc to assemble.
 ## Compatability
 Currently the this will compile x86_64 assembly and works on linux and intel
 macs.
+This has been tested on an intel mac and linux ubuntu on amd. Most `x86_64`
+architectures should be supported. Creating an `IR` and compiling to `ARM`
+is high on the TODO list.
 
 ## Building
 Run `make`, then run `make install` (`sudo make install` on linux) this will 
@@ -38,8 +41,11 @@ etc... see ./src/holyc-lib/
 - You can call any libc code with `extern "c" <type> <function_name>`
 
 ## Bugs
-This is a non exhuastive list of things that are buggy
+This is a non exhuastive list of things that are buggy, if you find somethings
+please open an issue or open a pr.
 - using `%f` for string formatting floats not work
+- memory management for the compiler is virtually non-existant, presently all
+  the tokens are made before compiling which is very slow.
 - line number in error messages is sometimes off and does not report the file
 - function pointers in a parameter list have to come at the end
 - Variable arguments are all passed on the stack

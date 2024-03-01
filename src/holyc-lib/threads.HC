@@ -232,7 +232,6 @@ U0 ThreadPoolWait(ThreadPool *pool)
 {//Wait for all jobs in the queue to be complete
   pthread_mutex_lock(&pool->lock);
   while (!ListEmpty(pool->jobs) || pool->active_threads != 0) {
-    "listcnt: %d active: %d\n",ListCount(pool->jobs),pool->active_threads;
     pthread_cond_wait(&pool->no_work,&pool->lock);
   }
   pthread_mutex_unlock(&pool->lock);
