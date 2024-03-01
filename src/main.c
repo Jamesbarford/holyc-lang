@@ -53,19 +53,6 @@ int hccLibInit(hccLib *lib, hccOpts *opts, char *name) {
     aoStr *dylibcmd = aoStrNew();
     aoStr *stylibcmd = aoStrNew();
     aoStr *installcmd = aoStrNew();
-
-    /*
-     *
-     *
-     *cp -pPR ./tos.dylib /usr/local/lib/tos.0.0.1.dylib
-cp -pPR ./tos.a /usr/local/lib/
-cp ../../holyc-lang-website/website/lexer.HC ./scripts/
-cp ./tos.HH /usr/local/include/
-cp ./holyc-lib/tos.HH ~/.holyc-lib/
-cp /Users/jamesbarford-evans/.holyc-lib/tos.HH ./holyc-lib/
-ln -sf ./tos.0.0.1.dylib ./tos.dylib
-     *
-     * */
     
 #if IS_BSD
     snprintf(lib->stylib_name,LIB_BUFSIZ,"%s.a",name);
@@ -196,7 +183,7 @@ void emitFile(aoStr *asmbuf, hccOpts *opts) {
     } else if (opts->emit_dylib) {
         writeAsmToTmp(asmbuf);
         hccLibInit(&lib,opts,opts->lib_name);
-        aoStrCatPrintf(cmd, "gcc -fPIC -c %s -lpthread -lsqlite3 -lc -lm -o ./%s",
+        aoStrCatPrintf(cmd, "gcc -fPIC -c %s -o ./%s",
                 ASM_TMP_FILE,opts->obj_outfile);
         fprintf(stderr,"%s\n",cmd->data);
         system(cmd->data);
