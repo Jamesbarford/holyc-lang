@@ -228,7 +228,7 @@ void usage(void) {
             "  -obj     emit an objectfile\n"
             "  -lib     emit a dynamic and static library\n"
             "  -clibs   link c libraries like: -clibs=`-lSDL2 -lxml2 -lcurl...`\n"
-            "  -g       add comments to assembly\n"
+            "  -g       not implemented\n"
             "  --help   print this message\n");
     exit(1);
 }
