@@ -329,8 +329,8 @@ U0 ThreadPoolStop(ThreadPool *pool)
 U0 ThreadPoolRelease(ThreadPool *pool)
 {// abrubtly stop the pool, destroy conditions, locks and free structures
   if (pool) {
-    auto sem_cond = &pool->sem->cond;
-    auto sem_lock = &pool->sem->lk;
+    pthread_cond_t *sem_cond = &(pool->sem->cond);
+    auto sem = pool->sem;
     pool->run = FALSE;
     ThreadPoolStop(pool);
 
@@ -339,12 +339,12 @@ U0 ThreadPoolRelease(ThreadPool *pool)
     pthread_mutex_destroy(&pool->lock);
     pthread_mutex_destroy(&pool->qlock);
 
+    pthread_mutex_destroy(&sem->lk);
     pthread_cond_destroy(sem_cond);
-    pthread_mutex_destroy(sem_lock);
     ListRelease(pool->jobs,NULL);
 
     Free(pool->workers);
-    Free(pool->sem);
+    Free(sem);
     Free(pool);
   }
 }
