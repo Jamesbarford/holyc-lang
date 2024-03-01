@@ -297,6 +297,9 @@ public ThreadPool *ThreadPoolNew(I64 worker_count);
 public U0 ThreadPoolStop(ThreadPool *pool);
 public U0 ThreadPoolRelease(ThreadPool *pool);
 
+public extern "c" I32 wait(I32 *statloc);
+public extern "c" I32 waitpid(I32 pid, I32 *statlock, I32 options);
+public extern "c" I32 fork();
 public _extern _EXIT U0 Exit(I64 exit_code = EXIT_FAIL);
 public _extern _WRITE I64 Write(I64 fd, U8 *buf, I64 len);
 public _extern _SYSTEM I64 System(U8 *command);

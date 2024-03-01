@@ -45,8 +45,8 @@ install-syntax-nvim:
 install:
 	install -c -m 555 $(TARGET) $(PREFIX)/bin
 	mkdir -p $(BUILT_IN_LOCATION)
-	cd ./holyc-lib && hcc -lib tos ./all.HC
 	cp $(LIB_SRC)/tos.HH $(BUILT_IN_LOCATION)/tos.HH
+	cd ./holyc-lib && hcc -lib tos ./all.HC
 
 prsasm-test:
 	gcc -O0 -g -DPRSASM_TEST ./prsasm.c ./cctrl.c ./dict.c ./ast.c ./aostr.c ./list.c ./lexer.c ./prsutil.c
