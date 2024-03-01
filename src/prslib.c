@@ -226,6 +226,7 @@ List *ParseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
         if (cc->tmp_locals) {
             ListAppend(cc->tmp_locals, var);
         }
+
         ListAppend(params, var);
 
         if (TokenPunctIs(tok,terminator)) {

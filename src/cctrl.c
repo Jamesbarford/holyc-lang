@@ -129,6 +129,7 @@ Cctrl *CcMacroProcessor(Dict *macro_defs) {
     Cctrl *cc = malloc(sizeof(Cctrl));
     cc->tkit = malloc(sizeof(TokenIter));
     cc->macro_defs = macro_defs;
+    cc->strings = ListNew();
     return cc;
 }
 

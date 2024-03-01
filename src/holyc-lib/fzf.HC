@@ -507,7 +507,8 @@ U0 FzFEqNaiveMatch(FzFResult *res, Bool case_sensitive, FzFString *text,
 
   M = pattern->size;
   N = text->size;
-  pidx = bonus = best_bonus = 0;
+  pidx = bonus = 0;
+  best_pos = best_bonus = -1;
 
 
   if (M == 0)
@@ -520,6 +521,7 @@ U0 FzFEqNaiveMatch(FzFResult *res, Bool case_sensitive, FzFString *text,
   for (I64 i = 0; i < N; ++i) {
     c = text->data[i];
     if (!case_sensitive) c = ToLower(c);
+
     if (c == pattern->data[pidx]) {
       if (pidx == 0) {
         bonus = bonus_at(text,i);

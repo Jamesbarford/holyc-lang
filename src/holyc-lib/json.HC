@@ -479,7 +479,7 @@ err:
 static U0 JsonToStringInternal(Json *J, JsonStringBuilder *js)
 {
   if (J == NULL) {
-    js->buf = CatLenPrint(js->buf,&js->len,"");
+    js->buf = CatLenPrint(js->buf,&js->len,"(nil)");
     return;
   }
 

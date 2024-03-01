@@ -76,7 +76,7 @@ int CompileToAst(Cctrl *cc, char *entrypath, int lexer_flags) {
 
     seen_files = DictNew(&default_table_type);
     tokens = ListNew();
-    builtin_path = aoStrNew();
+    builtin_path = aoStrDupRaw("/usr/local/include/tos.HH",25); //aoStrNew();
 
     lexerInit(&l,NULL);
     l.flags |= lexer_flags;
@@ -84,7 +84,6 @@ int CompileToAst(Cctrl *cc, char *entrypath, int lexer_flags) {
     l.lineno = 1;
 
     /* library files */
-    aoStrCatPrintf(builtin_path, "%s/tos.HH",l.builtin_root);
     lexPushFile(&l,aoStrDupRaw(entrypath,strlen(entrypath)));
     /* the structure is a stack so this will get popped first */
     lexPushFile(&l,builtin_path);
@@ -94,6 +93,7 @@ int CompileToAst(Cctrl *cc, char *entrypath, int lexer_flags) {
     CctrlInitTokenIter(cc,tokens);
     ParseToAst(cc);
     lexReleaseAllFiles(&l);
+    aoStrRelease(builtin_path);
     // ListRelease(code_list,free);
     ListRelease(l.files,NULL);
     lexemeListRelease(tokens);

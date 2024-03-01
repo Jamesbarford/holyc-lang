@@ -428,8 +428,8 @@ void AsmLoadDeref(aoStr *buf, AstType *result, AstType *op_type, int off) {
     ptr_mov = AsmGetPtrMove(op_type);
 
     if (op_type->kind == AST_TYPE_FLOAT) {
-        if (off) aoStrCatPrintf(buf, "%s   %d(%%rax), %%xmm1\n\t",  ptr_mov, off);
-        else     aoStrCatPrintf(buf,"%s   (%%rax), %%xmm1\n\t", ptr_mov);
+        if (off) aoStrCatPrintf(buf, "movq   %d(%%rax), %%xmm1\n\t", off);
+        else     aoStrCatPrintf(buf,"movq   (%%rax), %%xmm1\n\t");
         aoStrCatPrintf(buf,"movsd   %%xmm1, %%xmm0\n\t");
     } else {
         reg = AsmGetIntReg(result,'c');
@@ -1965,7 +1965,7 @@ void AsmDataSection(Cctrl *cc, aoStr *buf) {
 
         label = ast->slabel->data;
         str = ast->sval->data;
-        escaped = aoStrNew();
+        escaped = aoStrAlloc(1<<10);
 
         ptr = str;
         while (*ptr) {
@@ -1981,8 +1981,10 @@ void AsmDataSection(Cctrl *cc, aoStr *buf) {
             ptr++;
         }
 
-        aoStrCatPrintf(buf,"%s:\n\t",label);
-        aoStrCatPrintf(buf, ".string \"%s\\0\"\n", escaped->data);
+        if (escaped->len) {
+            aoStrCatPrintf(buf,"%s:\n\t",label);
+            aoStrCatPrintf(buf, ".string \"%s\\0\"\n", escaped->data);
+        }
         aoStrRelease(escaped);
         it = it->next;
     }
@@ -2210,7 +2212,7 @@ void AsmInitaliser(Cctrl *cc, aoStr *buf) {
     char *fname = NULL;
     int locals = 0, stack_space;
 
-#ifdef IS_BSD
+#if IS_BSD
     fname = "_main";
 #else
     fname = "main";

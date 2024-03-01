@@ -12,7 +12,6 @@ Bool _TestStrings(U8 **strings, U8 *pattern, I32 expected_matches, I32 case_mode
       FzFPositionRelease(res);
     }
   }
-  "pattern: %s -> expected=%d got=%d ok=%d\n",pattern, expected_matches,matches, matches == expected_matches;
   return matches == expected_matches;
 }
 
@@ -43,17 +42,17 @@ Bool TestPrefixCaseInsensative(U8 **strings)
 
 Bool TextMatchExact(U8 **strings)
 {
-  return _TestStrings(strings,"hey.c",1,FZF_CASE_RESPECT,FALSE);
+  return _TestStrings(strings,"'hey.c",1,FZF_CASE_RESPECT,FALSE);
 }
 
 Bool TextMatchExactCaseInsensative(U8 **strings)
 {
-  return _TestStrings(strings,"hey.c",2,FZF_CASE_IGNORE,FALSE);
+  return _TestStrings(strings,"'hey.c",2,FZF_CASE_IGNORE,FALSE);
 }
 
 U0 Main()
 {
-  "Test - FzF fuzzy finding\n";
+  "Test - FzF fuzzy finding: ";
   I32 tests = 7, correct = 0;
   U8 *strings[STRINGS_LEN] = {
     "Hello.HC",

@@ -6,7 +6,6 @@ OUT    := .
 LIB_SRC?=./holyc-lib
 SYNTAX?=./syntax-highlighting
 PREFIX?=/usr/local
-BUILT_IN_LOCATION?=$(HOME)/.holyc-lib
 
 .PHONY: unit-test
 
@@ -44,8 +43,7 @@ install-syntax-nvim:
 
 install:
 	install -c -m 555 $(TARGET) $(PREFIX)/bin
-	mkdir -p $(BUILT_IN_LOCATION)
-	cp $(LIB_SRC)/tos.HH $(BUILT_IN_LOCATION)/tos.HH
+	cp $(LIB_SRC)/tos.HH $(PREFIX)/include/tos.HH
 	cd ./holyc-lib && hcc -lib tos ./all.HC
 
 prsasm-test:
