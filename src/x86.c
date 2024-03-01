@@ -949,6 +949,7 @@ void AsmBinOpFunctionAssign(Cctrl *cc, aoStr *buf, Ast *fnptr, Ast *fn) {
             break;
 
         case AST_ASM_FUNCDEF:
+        case AST_ASM_FUNC_BIND:
             aoStrCatPrintf(buf,
                     "leaq   %s(%%rip), %%rax\n\t"
                     "movq    %%rax, %d(%%rbp)\n\t",
@@ -1012,8 +1013,13 @@ void AsmBinaryOp(Cctrl *cc, aoStr *buf, Ast *ast) {
         AsmBinaryOpIntArithmetic(cc,buf,ast,ASM_INORDER_ARITHMETIC);
     } else if (ast->type->kind == AST_TYPE_FLOAT) {
         AsmBinaryOpFloatArithmetic(cc,buf,ast,ASM_INORDER_ARITHMETIC);
-    } else if (ast->type->kind == AST_TYPE_FUNC)  {
-        char *fname = AsmNormaliseFunctionName(ast->fname->data);
+    } else if (ast->type->kind == AST_TYPE_FUNC) {
+        char *fname;
+        if (ast->kind == AST_ASM_FUNC_BIND) {
+            fname = strndup(ast->asmfname->data,ast->asmfname->len);
+        } else {
+            fname = AsmNormaliseFunctionName(ast->fname->data);
+        }
         aoStrCatPrintf(buf,"leaq    %s(%%rip), %%rax\n\t",fname);
         free(fname);
     } else {
@@ -1194,6 +1200,7 @@ void AsmPrepFuncCallArgs(Cctrl *cc, aoStr *buf, Ast *funcall) {
             flags |= FUN_VARARG;
         }
     }
+
     /* Extern functions with variable argument lengths need to be 
      * interoperable with c */
 

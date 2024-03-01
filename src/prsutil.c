@@ -21,6 +21,22 @@ inline int ParseIsClassOrUnion(int kind) {
            kind == AST_TYPE_UNION;
 }
 
+inline int ParseIsFunction(Ast *ast) {
+    if (ast) {
+        switch (ast->kind) {
+            case AST_FUNC:
+            case AST_FUN_PROTO:
+            case AST_ASM_FUNC_BIND:
+            case AST_ASM_FUNCDEF:
+            case AST_EXTERN_FUNC:
+                return 1;
+            default:
+                return 0;
+        }
+    }
+    return 0;
+}
+
 inline int ParseIsFunctionCall(Ast *ast) {
     return ast && (ast->type->kind == AST_FUNCALL || 
            ast->type->kind == AST_FUNPTR_CALL || 

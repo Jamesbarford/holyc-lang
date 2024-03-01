@@ -275,7 +275,7 @@ public class ThreadPool {
 };
 
 public extern "c" I64 pthread_create(pthread_t **th, U0 *thread_attr = NULL,
-                U0 *(*function_ptr)(U0 *argv), U0 *argv = NULL);
+                U0 *(*function_ptr)(U0 *_argv), U0 *argv = NULL);
 public extern "c" I32 pthread_mutex_init(MutexLock *lk,
                   MutexLockattr *mutex_attr = NULL);
 public extern "c" I32 pthread_mutex_destroy(MutexLock *lk);
@@ -297,6 +297,9 @@ public ThreadPool *ThreadPoolNew(I64 worker_count);
 public U0 ThreadPoolStop(ThreadPool *pool);
 public U0 ThreadPoolRelease(ThreadPool *pool);
 
+public extern "c" I32 wait(I32 *statloc);
+public extern "c" I32 waitpid(I32 pid, I32 *statlock, I32 options);
+public extern "c" I32 fork();
 public _extern _EXIT U0 Exit(I64 exit_code = EXIT_FAIL);
 public _extern _WRITE I64 Write(I64 fd, U8 *buf, I64 len);
 public _extern _SYSTEM I64 System(U8 *command);
@@ -361,15 +364,15 @@ public U64 ModU64(U64 *k, U64 m);
 public extern "c" U0 *memchr(U0 *__s, I32 __c, U64 __n);
 public extern "c" I32 memcmp(U0 *__s1, U0 *__s2, U64 __n);
 public extern "c" U0 *memmove(U0 *__dst, U0 *__src, U64 __len);
-public _extern _MALLOC U0 *MAlloc(I64 size);
+public extern "c" U0 free(U0 *ptr);
+public extern "c" U0 *malloc(U64 size);
+public _extern _MALLOC U0 *MAlloc(U64 size);
 public _extern _FREE U0 Free(U0 *ptr);
 public _extern _REALLOC U0 *ReAlloc(U0 *ptr, U64 new_size);
 public _extern _CALLOC U0 *CAlloc(U64 new_size);
 public _extern _MSIZE U64 MSize(U0 *ptr);
-public _extern _MALLOC_ALIGN16 U0 *MAlloc16(I64 size);
-public _extern _FREE_ALIGNED U0 Free16(U0 *ptr);
-public _extern _MEMCPY U0 *MemCpy(U0 *dst, U0 *src, I64 len);
-public _extern _MEMSET U0 *MemSet(U0 *dst, I32 ch, I64 len);
+public _extern _MEMCPY U0 *MemCpy(U0 *dst, U0 *src, U64 len);
+public _extern _MEMSET U0 *MemSet(U0 *dst, I32 ch, U64 len);
 
 #define STR_LEN 256
 
@@ -461,42 +464,55 @@ public Bool Str2CDateStruct(U8 *strdate, U8 *format, CDateStruct *t);
 public Bool WildMatch(U8 *test_str, U8 *wild_str);
 public CDate StrToCDate(U8 *_str, U8 *fmt);
 
-#define F_DUPFD  0 /* duplicate file descriptor */
-#define F_GETFD  1 /* get file descriptor flags */
-#define F_SETFD  2 /* set file descriptor flags */
-#define F_GETFL  3 /* get file status flags */
-#define F_SETFL  4 /* set file status flags */
-#define F_GETOWN 5 /* get SIGIO/SIGURG proc/pgrp */
-#define F_SETOWN 6 /* set SIGIO/SIGURG proc/pgrp */
-#define F_GETLK  7 /* get record locking information */
-#define F_SETLK  8 /* set record locking information */
-#define F_SETLKW 9 /* F_SETLK; wait if blocked */
+#define F_DUPFD         0  /* Duplicate a file descriptor */
+#define F_GETFD         1  /* Retrieve file descriptor flags */
+#define F_SETFD         2  /* Assign flags to file descriptor */
+#define F_GETFL         3  /* Get file status flags */
+#define F_SETFL         4  /* Assign file status flags */
+#define F_GETOWN        5  /* Retrieve SIGIO/SIGURG process/group */
+#define F_SETOWN        6  /* Set SIGIO/SIGURG process/group */
+#define F_GETLK         7  /* Query record locking info */
+#define F_SETLK         8  /* Set record locking info without waiting */
+#define F_SETLKW        9  /* Set record locking info with waiting */
 
-#define F_FLUSH_DATA  40
-#define F_CHKCLEAN    41 /* Used for regression test */
-#define F_PREALLOCATE 42 /* Preallocate storage */
-#define F_SETSIZE     43 /* Truncate a file. Equivalent to calling truncate(2) */
-#define F_RDADVISE    44 /* Issue an advisory read async with no copy to user */
-#define F_RDAHEAD     45 /* turn read ahead off/on for this fd */
+#define F_FLUSH_DATA   40  /* Commit data to disk */
+#define F_CHKCLEAN     41  /* Verify file is not modified */
+#define F_PREALLOCATE  42  /* Allocate space for file in advance */
+#define F_SETSIZE      43  /* Adjust file size */
+#define F_RDADVISE     44  /* Suggest read behavior */
+#define F_RDAHEAD      45  /* Enable read ahead */
 
-#define FD_CLOEXEC 1 /* close-on-exec flag */
+#define FD_CLOEXEC      1  /* Close file descriptor on exec */
 
-/* record locking flags (F_GETLK, F_SETLK, F_SETLKW) */
-#define F_RDLCK 1 /* shared or read lock */
-#define F_UNLCK 2 /* unlock */
-#define F_WRLCK 3 /* exclusive or write lock */
+/* Record locking flags */
+#define F_RDLCK         1  /* Establish a read lock */
+#define F_UNLCK         2  /* Remove a lock */
+#define F_WRLCK         3  /* Establish a write lock */
 
-#define O_RDONLY  0x0000   /* open for reading only */
-#define O_WRONLY  0x0001   /* open for writing only */
-#define O_RDWR    0x0002   /* open for reading and writing */
-#define O_ACCMODE 0x0003   /* mask for above modes */
-#define O_CREAT   0x00000200 /* create if nonexistant */
-#define O_TRUNC   0x00000400 /* truncate to zero length */
-#define O_EXCL    0x00000800 /* error if already exists */
+#define O_RDONLY    0x0000    /* Open exclusively for reading */
+#define O_WRONLY    0x0001    /* Open exclusively for writing */
+#define O_RDWR      0x0002    /* Open for reading and writing */
+#define O_ACCMODE   0x0003    /* Mask to extract access modes */
+#define O_CREAT     0x00000200 /* Create file if it doesn't exist */
+#define O_TRUNC     0x00000400 /* Truncate existing file to zero length */
+#define O_EXCL      0x00000800 /* Error if file already exists */
 
-#define SEEK_SET 0 /* set file offset to offset */
-#define SEEK_CUR 1 /* set file offset to current plus offset */
-#define SEEK_END 2 /* set file offset to EOF plus offset */
+#define O_NONBLOCK  0x00000004 /* Non-blocking mode */
+#define O_APPEND    0x00000008 /* Append data to the end of the file */
+
+#define SEEK_SET    0 /* Set offset to specified value */
+#define SEEK_CUR    1 /* Set offset to current position plus value */
+#define SEEK_END    2 /* Set offset to size of file plus value */
+
+/*
+ * The iovec class represents a buffer in memory, with a base address and a length.
+ * It's typically used for scatter-gather I/O operations to manage multiple buffers.
+ */
+class iovec
+{
+  U0 *iov_base;  /* Pointer to data buffer */
+  U64 iov_len;   /* Length of the buffer */
+};
 
 public extern "c" I32 open(U8 *__name, I32 flags, ...);
 public extern "c" I32 creat(U8 *__name, U16 __flags);
@@ -511,17 +527,17 @@ public U8 *FileRead(U8 *path, I64 *_size = NULL);
 public Bool FileWrite(U8 *filename, U8 *buf, I64 size, I64 flags = O_CREAT | O_RDWR);
 public I32 Cd(U8 *path);
 
-#define DT_UNKNOWN 0
-#define DT_FIFO    1
-#define DT_CHR     2
-#define DT_DIR     4
-#define DT_BLK     6
-#define DT_REG     8
-#define DT_LNK     10
-#define DT_SOCK    12
-#define DT_WHT     14
+#define DT_UNKNOWN 0  /* Type not determined */
+#define DT_FIFO    1  /* FIFO/pipe */
+#define DT_CHR     2  /* Character device */
+#define DT_DIR     4  /* Directory */
+#define DT_BLK     6  /* Block device */
+#define DT_REG     8  /* Regular file */
+#define DT_LNK    10  /* Symbolic link */
+#define DT_SOCK   12  /* Socket */
+#define DT_WHT    14  /* Whiteout */
 
-class cDIR {};
+class cDIR;
 
 #ifdef IS_MACOS
 #define DIR_MAXPATHLEN (1024)
@@ -591,42 +607,44 @@ public extern "c" I32 mkdir(U8 *dirname, I32 mode = 438);
 public extern "c" I32 unlink(U8 *pathname);
 public extern "c" I32 rmdir(U8 *dirname);
 
-#define S_IFMT      0xF000 /* [XSI] type of file mask */
-#define S_IFIFO     0x1000     /* [XSI] named pipe (fifo) */
-#define S_IFCHR     0x2000     /* [XSI] character special */
-#define S_IFDIR     0x4000     /* [XSI] directory */
-#define S_IFBLK     0x6000     /* [XSI] block special */
-#define S_IFREG     0x8000     /* [XSI] regular */
-#define S_IFLNK     0xa000     /* [XSI] symbolic link */
-#define S_IFSOCK    0xc000     /* [XSI] socket */
+#define S_IFMT      0xF000  /* Bit mask for the file type bit fields */
+#define S_IFIFO     0x1000  /* FIFO or pipe */
+#define S_IFCHR     0x2000  /* Character device */
+#define S_IFDIR     0x4000  /* Directory */
+#define S_IFBLK     0x6000  /* Block device */
+#define S_IFREG     0x8000  /* Regular file */
+#define S_IFLNK     0xA000  /* Symbolic link */
+#define S_IFSOCK    0xC000  /* Socket */
 
-#define S_IRWXU 0x1c0     /* [XSI] RWX mask for owner */
-#define S_IRUSR 0x100     /* [XSI] R for owner */
-#define S_IWUSR 0x80      /* [XSI] W for owner */
-#define S_IXUSR 0x40      /* [XSI] X for owner */
-/* Read, write, execute/search by group */
-#define S_IRWXG 0x38      /* [XSI] RWX mask for group */
-#define S_IRGRP 0x20      /* [XSI] R for group */
-#define S_IWGRP 0x10      /* [XSI] W for group */
-#define S_IXGRP 0x8       /* [XSI] X for group */
-/* Read, write, execute/search by others */
-#define S_IRWXO 0x7       /* [XSI] RWX mask for other */
-#define S_IROTH 0x4       /* [XSI] R for other */
-#define S_IWOTH 0x2       /* [XSI] W for other */
-#define S_IXOTH 0x1       /* [XSI] X for other */
+#define S_IRWXU 0x1C0  /* Permission: user (owner) can read, write, execute */
+#define S_IRUSR 0x100  /* Permission: user (owner) can read */
+#define S_IWUSR 0x80   /* Permission: user (owner) can write */
+#define S_IXUSR 0x40   /* Permission: user (owner) can execute */
 
-#define S_ISUID 0x800     /* [XSI] set user id on execution */
-#define S_ISGID 0x400     /* [XSI] set group id on execution */
-#define S_ISVTX 0x200     /* [XSI] directory restricted delete */
-#define MKDIR_DEFAULT (S_ISUID|S_IRWXU|S_IRWXG|S_IROTH|S_IXOTH)
+/* Permissions: group can read, write, execute */
+#define S_IRWXG 0x38
+#define S_IRGRP 0x20   /* Permission: group can read */
+#define S_IWGRP 0x10   /* Permission: group can write */
+#define S_IXGRP 0x8    /* Permission: group can execute */
 
-#define RM_RECURSE  0x1
-#define RM_VERBOSE  0x2
-#define RM_FORCE    0x4
+/* Permissions: others can read, write, execute */
+#define S_IRWXO 0x7
+#define S_IROTH 0x4    /* Permission: others can read */
+#define S_IWOTH 0x2    /* Permission: others can write */
+#define S_IXOTH 0x1    /* Permission: others can execute */
+
+#define S_ISUID 0x800  /* Set user ID on execution */
+#define S_ISGID 0x400  /* Set group ID on execution */
+#define S_ISVTX 0x200  /* Save swapped text after use (sticky) */
+#define MKDIR_DEFAULT (S_ISUID|S_IRWXU|S_IRWXG|S_IROTH|S_IXOTH) /* Default mkdir permission */
+
+#define RM_RECURSE  0x1  /* Remove directories and their contents recursively */
+#define RM_VERBOSE  0x2  /* Verbosely list files processed */
+#define RM_FORCE    0x4  /* Force removal, ignore nonexistent files and arguments */
 
 public I32 RmDir(U8 *path, Bool flags=0);
 public I32 Rm(U8 *path, Bool flags=0)
-public I32 MkDir(U8 *path, I32 mode=MKDIR_DEFAULT, Bool recurse=FALSE);
+public Bool MkDir(U8 *path, I32 mode=MKDIR_DEFAULT, Bool recurse=FALSE);
 
 #define FZF_CASE_SMART   0
 #define FZF_CASE_IGNORE  1
@@ -699,13 +717,12 @@ class Json
 #define JSON_INVALID_ESCAPE_CHARACTER 16
 #define JSON_EOF 17
 
-public U8 *JsonToString(Json *json);
-public U0 JsonRelease(Json *J);
-public Json *JsonParseWithLenAndFlags(U8 *raw, I64 len,
-    I32 flags);
 /* Raw string, with option length of the string and 
  * flags */
 public Json *JsonParse(U8 *raw, I64 len=-1, I64 flags=0);
+public Bool JsonOk(Json *j);
+public U0 JsonRelease(Json *J);
+public U8 *JsonToString(Json *json);
 public U8 *JsonGetStrerror(Json *json);
 public U0 JsonPrintError(Json *J);
 public Bool JsonIsObject(Json *j);
@@ -877,3 +894,312 @@ public Bool SqlQuery(SqlCtx *ctx, U8 *sql, SqlParam *params=NULL,
 public I32 SqlIter(SqlRow *row);
 public I64 SqlIterPrepared(SqlRow *row);
 public U0 SqlRowRelease(SqlRow *row);
+
+/* Socket options level */
+#define SOL_SOCKET      0xffff          /* Socket-level options */
+
+/*
+ * Address families.
+ */
+#define AF_UNSPEC       0               /* Unspecified */
+#define AF_UNIX         1               /* Local communication (unix pipes) */
+#define AF_INET         2               /* Internet IPv4 */
+#define AF_INET6        30              /* Internet IPv6 */
+
+/* Socket types */
+#define SOCK_STREAM     1               /* Stream (connection-oriented) socket */
+#define SOCK_DGRAM      2               /* Datagram (connectionless) socket */
+#define SOCK_RAW        3               /* Raw protocol interface */
+#define SOCK_SEQPACKET  5               /* Sequenced packet stream */
+
+/*
+ * Per-socket option flags.
+ */
+#define SO_DEBUG        0x0001          /* Enable debugging information */
+#define SO_ACCEPTCONN   0x0002          /* Socket has had listen() applied */
+#define SO_REUSEADDR    0x0004          /* Allow reuse of local addresses */
+#define SO_KEEPALIVE    0x0008          /* Keep connections active */
+#define SO_DONTROUTE    0x0010          /* Route packets through local interfaces */
+#define SO_BROADCAST    0x0020          /* Allow broadcast messages */
+#define SO_LINGER       0x1080          /* Linger on close if data is present */
+#define SO_OOBINLINE    0x0100          /* Leave out-of-band data inline */
+#define SO_REUSEPORT    0x0200          /* Allow reuse of local ports */
+#define SO_TIMESTAMP    0x0400          /* Timestamp incoming datagrams */
+#define SO_TIMESTAMP_MONOTONIC  0x0800  /* Use monotonic timestamps for datagrams */
+
+/* Protocols */
+#define IPPROTO_IP              0               /* Placeholder for IP */
+#define IPPROTO_IPV6            41              /* IPv6 protocol */
+
+/* TCP options */
+#define TCP_NODELAY             0x01    /* Disable Nagle's algorithm */
+#define TCP_MAXSEG              0x02    /* Set maximum segment size */
+#define TCP_NOPUSH              0x04    /* Disable push on final write */
+#define TCP_NOOPT               0x08    /* Disable TCP options */
+#define TCP_KEEPALIVE           0x10    /* Set keepalive idle time */
+#define TCP_CONNECTIONTIMEOUT   0x20    /* Set connection timeout */
+#define PERSIST_TIMEOUT         0x40    /* Timeout for persist state */
+#define TCP_RXT_CONNDROPTIME    0x80    /* Connection drop time for retransmissions */
+#define TCP_RXT_FINDROP         0x100   /* Drop connection after retransmitting FIN */
+#define TCP_KEEPINTVL           0x101   /* Interval between keepalives */
+#define TCP_KEEPCNT             0x102   /* Number of keepalives before close */
+#define TCP_SENDMOREACKS        0x103   /* Acknowledge every other packet */
+#define TCP_ENABLE_ECN          0x104   /* Enable Explicit Congestion Notification */
+#define TCP_FASTOPEN            0x105   /* TCP Fast Open */
+#define TCP_CONNECTION_INFO     0x106   /* TCP connection state info */
+
+#define INET6_ADDRSTRLEN        46      /* Length of string form of IPv6 address */
+
+/* Address info flags */
+#define AI_PASSIVE     0x00000001 /* Suitable for bind() */
+#define AI_CANONNAME   0x00000002 /* Request canonical name */
+#define AI_NUMERICHOST 0x00000004 /* Numeric host address string */
+#define AI_NUMERICSERV 0x00001000 /* Numeric service address string */
+#define AI_UNUSABLE    0x10000000 /* Include unusable addresses */
+
+/*
+ * The hostent class represents an entry from the database of host names and addresses.
+ * It includes the official name of the host, aliases, the type of address, the length of the address,
+ * and a list of addresses for the host.
+ */
+public class hostent
+{
+  U8	*h_name;	/* Official name of the host */
+  U8	**h_aliases;	/* Null-terminated array of alternate names for the host */
+  I32 h_addrtype;	/* Type of address; typically AF_INET */
+  I32 h_length;		/* Length of each address in bytes */
+  U8	**h_addr_list;	/* Null-terminated array of addresses for the host */
+};
+
+/*
+ * The netent class provides details about a network including its name, aliases, address type,
+ * and the network number. The assumption is that a network number can fit in an unsigned long.
+ */
+public class netent
+{
+  U8  *n_name;      /* Official name of the network */
+  U8  **n_aliases;  /* Null-terminated array of alternate names for the network */
+  I32 n_addrtype;   /* Type of address for the network */
+  U32 n_net;        /* Network number */
+};
+
+/*
+ * The servent class encapsulates information about a service provided over the network,
+ * including its official name, aliases, port number, and the protocol used.
+ */
+public class servent
+{
+  U8 *s_name;	  /* Official name of the service */
+  U8 **s_aliases; /* Null-terminated array of alternate names for the service */
+  I32 s_port;     /* Port number associated with the service */
+  U8 *s_proto;    /* Name of the protocol to use with this service */
+};
+
+/*
+ * The protoent class contains information about a given protocol, such as its name,
+ * aliases, and the protocol number.
+ */
+public class protoent
+{
+  U8  *p_name;     /* Official name of the protocol */
+  U8  **p_aliases; /* Null-terminated array of alternate names for the protocol */
+  I32 p_proto;     /* Protocol number */
+};
+
+/*
+ * The sockaddr class is a generic descriptor for socket address information,
+ * including length, family, and actual address data.
+ */
+public class sockaddr
+{
+  U8 sa_len;       /* Length of the structure */
+  U8 sa_family;    /* Address family */
+  U8 sa_data[14];  /* Actual address information */
+};
+
+/*
+ * The in_addr class represents an IPv4 Internet address,
+ * stored as an unsigned long.
+ */
+public class in_addr
+{
+  U32 s_addr; /* IPv4 address */
+};
+
+/*
+ * The sockaddr_in class represents an IPv4 socket address,
+ * including length, family, port, address, and padding to match the size of sockaddr.
+ */
+public class sockaddr_in
+{
+  U8 sin_len;         /* Length of the structure */
+  U8 sin_family;      /* Address family, AF_INET */
+  U16 sin_port;       /* Port number */
+  in_addr sin_addr;   /* IPv4 address */
+  U8 sin_zero[8];     /* Padding to make structure the same size as sockaddr */
+};
+
+/*
+ * The in6_addr class is used to store an IPv6 address,
+ * with three different representations for convenience.
+ */
+public class in6_addr
+{
+  union
+  {
+    U8   __u6_addr8[16];  /* 16 bytes of IPv6 address */
+    U16  __u6_addr16[8];  /* 8 shorts of IPv6 address */
+    U32  __u6_addr32[4];  /* 4 ints of IPv6 address */
+  };                      /* Represents a 128-bit IPv6 address */
+};
+
+/*
+ * The sockaddr_in6 class represents an IPv6 socket address,
+ * including length, family, port, flow information, the IPv6 address,
+ * and the scope zone index for link-local addresses.
+ */
+public class sockaddr_in6
+{
+  U8  sin6_len;        /* Length of this struct */
+  U8  sin6_family;     /* Address family, AF_INET6 */
+  I64 sin6_port;       /* Transport layer port number */
+  U32 sin6_flowinfo;   /* IPv6 flow information */
+  in6_addr sin6_addr;  /* IPv6 address */
+  U32 sin6_scope_id;   /* Scope zone index */
+};
+
+/*
+ * The addrinfo class is used for domain name resolution,
+ * containing flags, family, socket type, protocol, address length,
+ * canonical name, address, and pointer to the next in list.
+ */
+class addrinfo;
+public class addrinfo
+{
+  I32 ai_flags;	     /* Input flags */
+  I32 ai_family;     /* Address family */
+  I32 ai_socktype;   /* Socket type */
+  I32 ai_protocol;   /* Protocol for the socket */
+  U32 ai_addrlen;    /* Length of the address */
+  U8  *ai_canonname; /* Canonical name for the host */
+  sockaddr *ai_addr; /* Binary address */
+  addrinfo *ai_next; /* Next structure in the linked list */
+};
+
+
+#define _SS_PAD1SIZE (6)
+#define _SS_PAD2SIZE (112)
+
+/*
+ * The sockaddr_storage class is designed to accommodate all supported address families,
+ * ensuring sufficient storage and proper alignment. It's used where a socket address
+ * structure's size and family are known, but the exact type is not.
+ */
+public class sockaddr_storage
+{
+  U8  ss_len;         /* Total length of the address */
+  U8  ss_family;      /* Address family (AF_*) */
+  U8  __ss_pad1[_SS_PAD1SIZE]; /* Padding to achieve alignment */
+  I64 __ss_align;     /* Force alignment of the structure */
+  U8  __ss_pad2[_SS_PAD2SIZE]; /* Additional padding to reach desired size */
+};
+
+/*
+ * The msghdr class is used with message-based socket operations (sendmsg, recvmsg).
+ * It includes an optional socket address, scatter/gather array, ancillary data,
+ * and flags for received messages.
+ */
+public class msghdr
+{
+  U8    *msg_name;      /* Optional address */
+  I64   msg_namelen;    /* Size of the address */
+  iovec *msg_iov;       /* Scatter/gather array of buffers */
+  I32   msg_iovlen;     /* Number of elements in msg_iov */
+  U0    *msg_control;   /* Ancillary data */
+  I64   msg_controllen; /* Length of ancillary data buffer */
+  I32   msg_flags;      /* Flags on received message */
+};
+
+/*
+ * The sockaddr_un class specifies a local socket address for Unix domain sockets.
+ * It includes the address length, family, and path.
+ */
+public class sockaddr_un
+{
+  U8 sun_len;        /* Length of the sockaddr including null */
+  U8 sun_family;     /* Address family: AF_UNIX */
+  U8 sun_path[104];  /* Path name */
+};
+
+public extern "c" I32 setsockopt(I32 __sockfd, I32 __level, I32 __option_name,
+    U0 *__option_value, I64 __option_len);
+public extern "c" I32 getsockopt(I32 socket, I32 level, I32 option_name,
+    U0 * option_value, I64 *option_len);
+public extern "c" I32 shutdown(I32 socket, I32 how);
+public extern "c" U32 inet_addr(U8 *cp);
+public extern "c" I32 inet_aton(U8 *cp, in_addr *pin);
+public extern "c" U32 inet_lnaof(in_addr in);
+public extern "c" in_addr inet_makeaddr(U32 net, U32 lna);
+public extern "c" U32 inet_netof(in_addr in);
+public extern "c" U32 inet_network(U8 *cp);
+public extern "c" U8 *inet_ntoa(in_addr in);
+public extern "c" U8 *inet_ntop(I32 af, U0 *src, U8 *dst, I64 size);
+public extern "c" I32 inet_pton(I32 af, U8 *src, U0 *dst);
+
+public extern "c" U0 endhostent();
+public extern "c" U0 endnetent();
+public extern "c" U0 endprotoent();
+public extern "c" U0 endservent();
+
+public extern "c" U0 freeaddrinfo(addrinfo *info);
+public extern "c" U8 *gai_strerror(I32 __err);
+public extern "c" I32 getaddrinfo(U8 *hostname, U8 *servname, addrinfo *hints, addrinfo **res);
+/* Depricated */
+hostent *gethostbyaddr(U0 *ptr, I64 len, I32 type);
+/* Depricated */
+hostent *gethostbyname(U8 * name);
+
+public extern "c" hostent *gethostent();
+public extern "c" I32 getnameinfo(sockaddr *sa, I64 salen, U8 *host,
+    I64 hostlen, U8 *serv, I64 servlen, I32 flags);
+public extern "c" netent *getnetbyaddr(U32 net, I32 type);
+public extern "c" netent *getnetbyname(U8 *name);
+public extern "c" netent *getnetent();
+public extern "c" protoent *getprotobyname(U8 *name);
+public extern "c" protoent *getprotobynumber(I32 proto);
+public extern "c" protoent *getprotoent();
+public extern "c" servent *getservbyname(U8 *name, U8 *proto);
+public extern "c" servent *getservbyport(I32 port, U8 *proto);
+public extern "c" servent *getservent();
+public extern "c" U0 sethostent(I32 stayopen);
+public extern "c" U0 setnetent(I32 stayopen);
+public extern "c" U0 setprotoent(I32 stayopen);
+public extern "c" U0 setservent(I32 stayopen);
+public extern "c" U8 *hstrerror(I32 err);
+
+public extern "c" I32 socket(I32 domain, I32 type, I32 protocol);
+public extern "c" I32 connect(I32 socket, sockaddr *address, I64 address_len);
+public extern "c" I32 accept(I32 socket, sockaddr *address, I64 *address_len);
+public extern "c" I32 bind(I32 socket, sockaddr *address, I64 address_len);
+public extern "c" I32 getpeername(I32 socket, sockaddr *address, I64 *address_len);
+public extern "c" I64 recvmsg(I32 socket, msghdr *message, I32 flags); 
+public extern "c" I64 recvfrom(I32 socket, U0 *buffer, U64 length, I32 flags, sockaddr *address, U64 *address_len);
+public extern "c" I64 recv(I32 socket, U0 *buffer, U64 length, I32 flags);
+public extern "c" I32 listen(I32 socket, I32 backlog);
+public extern "c" I32 getsockname(I32 socket, sockaddr *address, I64 *address_len);
+public extern "c" I64 send(I32 socket, U0 *buffer, U64 length, I32 flags);
+public extern "c" I64 sendmsg(I32 socket, msghdr *message, I32 flags);
+public extern "c" I64 sendto(I32 socket, U0 *buffer, U64 length, I32 flags, sockaddr *dest_addr, U64 dest_len);
+
+public Bool NetSetSocketNonBlocking(I32 sockfd);
+public Bool NetSetSockReuseAddr(I32 sockfd);
+public Bool NetSetSocketNoDelay(I32 sockfd);
+public Bool NetGetIpv4Address(sockaddr *sAddr, I32 ai_family, U8 *outbuf, I32 size);
+public I32 NetConnect(U8 *addr, I32 port, Bool non_blocking=FALSE);
+public Bool NetListen(I32 sockfd, addrinfo *sa, I32 backlog);
+public I32 NetCreateServer(I32 port, U8 *bindaddr, I32 backlog,
+    I32 addrfam=AF_UNSPEC, Bool non_blocking=FALSE);
+public Bool NetAccept(I32 socket, Bool non_blocking=FALSE);
+public Bool NetGetIpv4AddressFromAcceptedSocket(I32 sockfd, U8 *ipbuf, I32 outlen);
+public I32 NetCreateUnixServerSocket(U8 *name, I32 backlog);
+public I32 NetCreateUnixClientSocket(U8 *name);

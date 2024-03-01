@@ -711,6 +711,11 @@ start_routine:
         if (ptr1->kind != AST_TYPE_INT) {
             goto error;
         }
+        /* These are the only arithmetic operators for pointers,
+         * the rest are boolean */
+        if (op != '+' && op != '-') {
+            return ast_uint_type;
+        }
         return ptr2;
     }
     switch (ptr1->kind) {
@@ -1391,11 +1396,13 @@ void _AstToString(aoStr *str, Ast *ast, int depth) {
                 aoStrCatRepeat(str, "  ", depth+1);
 
                 if (!AstIsClassPointer(field_type)) {
-                    tmp = AstTypeToString(field_type);
+                    tmp = AstTypeToColorString(field_type);
                     aoStrCatPrintf(str, "%s ", tmp);
                     free(tmp);
                 } else {
-                    aoStrCatPrintf(str, "<class> ");
+                    tmp = AstTypeToColorString(field_type);
+                    aoStrCatPrintf(str, "<class> %s ",tmp);
+                    free(tmp);
                 }
 
                 /* Find the name of the variable that contains this reference */
@@ -1546,6 +1553,7 @@ char *AstKindToString(int kind) {
     case AST_CAST:       return "AST_CAST";
     case AST_JUMP:       return "AST_JUMP";
     case AST_CASE:       return "AST_CASE";
+    case AST_ASM_FUNC_BIND: return "AST_ASM_FUNC_BIND";
 
 
     case TK_AND_AND:         return "&&";

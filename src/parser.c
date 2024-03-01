@@ -499,7 +499,10 @@ Ast *ParseDecl(Cctrl *cc) {
         return NULL;
     }
     var = AstLVar(type,varname->start,varname->len);
-    DictSet(cc->localenv,var->lname->data,var);
+    if (!DictSet(cc->localenv,var->lname->data,var)) {
+        loggerPanic("line: %ld variable %s already declared\n",
+                cc->lineno,AstLValueToString(var));
+    }
     if (cc->tmp_locals) {
         ListAppend(cc->tmp_locals, var);
     }
@@ -988,7 +991,10 @@ Ast *ParseCompoundStatement(Cctrl *cc) {
                     }
                     type = ParseArrayDimensions(cc,next_type);
                     var = AstLVar(type,varname->start,varname->len);
-                    DictSet(cc->localenv,var->lname->data,var);
+                    if (!DictSet(cc->localenv,var->lname->data,var)) {
+                        loggerPanic("line: %ld variable %s already declared\n",
+                                cc->lineno,AstLValueToString(var));
+                    }
                 } else {
                     CctrlTokenGet(cc);
                     var = ParseFunctionPointer(cc,next_type);
@@ -1111,7 +1117,7 @@ Ast *ParseExternFunctionProto(Cctrl *cc, AstType *rettype, char *fname, int len)
     lexeme *tok;
     cc->localenv = DictNewWithParent(cc->localenv);
 
-    params = ParseParams(cc,')', &has_var_args);
+    params = ParseParams(cc,')', &has_var_args,1);
     tok = CctrlTokenGet(cc);
     if (!TokenPunctIs(tok, ';')) {
         loggerPanic("line %d: extern %.*s() cannot have a function body "
@@ -1129,7 +1135,7 @@ Ast *ParseFunctionOrDef(Cctrl *cc, AstType *rettype, char *fname, int len) {
     int has_var_args = 0;
     CctrlTokenExpect(cc,'(');
     cc->localenv = DictNewWithParent(cc->localenv);
-    List *params = ParseParams(cc,')',&has_var_args);
+    List *params = ParseParams(cc,')',&has_var_args,1);
     lexeme *tok = CctrlTokenGet(cc);
     if (TokenPunctIs(tok, '{')) {
         return ParseFunctionDef(cc,rettype,fname,len,params,has_var_args);
@@ -1179,7 +1185,7 @@ Ast *ParseAsmFunctionBinding(Cctrl *cc) {
     cc->localenv = DictNewWithParent(cc->localenv);
     CctrlTokenExpect(cc,'(');
 
-    params = ParseParams(cc,')',&has_var_args);
+    params = ParseParams(cc,')',&has_var_args,0);
 
     asm_func = AstAsmFunctionBind(
             AstMakeFunctionType(rettype, AstParamTypes(params)),

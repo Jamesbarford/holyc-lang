@@ -3,7 +3,6 @@
 #define FZF_CASE_SMART   0
 #define FZF_CASE_IGNORE  1
 #define FZF_CASE_RESPECT 2
-#define FZF_UNICODE_MAXASCII 0x7f
 
 #define FZF_SCORE_MATCH 16
 #define FZF_SCORE_GAP_START -3
@@ -81,15 +80,14 @@ class FzFTerm
 
 class FzFTermSet 
 {
-  FzFTerm *ptr;
-  List *terms;
+  List *entries;
   I64 size;
   I64 cap;
 };
 
 class FzFPattern
 {
-  FzFTermSet **ptr;
+  List *entries;
   I64 size;
   I64 cap;
   Bool only_inv;
@@ -681,41 +679,10 @@ U0 FzFFuzzyMatchV1(FzFResult *res, Bool case_sensitive, FzFString *text,
   return;
 }
 
-U0 append_set(FzFTermSet *set, FzFTerm *value)
-{
-  if (set->cap == 0) {
-    set->cap = 1;
-    set->ptr = CAlloc(sizeof(FzFTerm));
-  } else if (set->size + 1 > set->cap) {
-    set->cap *= 2;
-    set->ptr = ReAlloc(set->ptr, sizeof(FzFTerm) * set->cap);
-  }
-  FzFTerm *ptr = &(set->ptr[set->size]);
-  auto i = value->inv;
-  ptr->fn = value->fn;
-  ptr->inv = i;
-  ptr->ptr = value->ptr;
-  ptr->text = value->text;
-  ptr->case_sensitive = value->case_sensitive;
-  set->size++;
-}
-
-U0 append_pattern(FzFPattern *pattern, FzFTermSet *value)
-{
-  if (pattern->cap == 0) {
-    pattern->cap = 1;
-    pattern->ptr = MAlloc(sizeof(FzFTermSet *));
-  } else if (pattern->size + 1 >= pattern->cap) {
-    pattern->cap *= 2;
-    pattern->ptr = ReAlloc(pattern->ptr, sizeof(FzFTermSet *) * pattern->cap);
-  }
-  pattern->ptr[pattern->size] = value;
-  pattern->size++;
-}
-
 FzFPattern *FzFParsePattern(I32 case_mode, U8 *pattern, Bool fuzzy=TRUE)
 {
   FzFPattern *pat_obj = CAlloc(sizeof(FzFPattern));
+  pat_obj->entries = ListNew();
   FzFTerm term;
 
   I64 pat_len = StrLen(pattern);
@@ -735,6 +702,7 @@ FzFPattern *FzFParsePattern(I32 case_mode, U8 *pattern, Bool fuzzy=TRUE)
   U8 *ptr = strtok(pattern_copy, delim);
 
   FzFTermSet *set = CAlloc(sizeof(FzFTermSet));
+  set->entries = ListNew();
 
   Bool switch_set = FALSE;
   Bool after_bar = FALSE;
@@ -815,20 +783,24 @@ FzFPattern *FzFParsePattern(I32 case_mode, U8 *pattern, Bool fuzzy=TRUE)
 
     if (len > 0) {
       if (switch_set) {
-        append_pattern(pat_obj, set);
+        ListAppend(pat_obj->entries,set);
         set = MAlloc(sizeof(FzFTermSet));
+        set->entries = ListNew();
         set->cap = 0;
         set->size = 0;
       }
       FzFString *text_ptr = MAlloc(sizeof(FzFString));
       text_ptr->data = text;
       text_ptr->size = len;
-      term.fn = fn;
-      term.inv = inv;
-      term.ptr = og_str;
-      term.case_sensitive = case_sensitive;
-      term.text = text_ptr;
-      append_set(set,&term);
+      FzFTerm *t = MAlloc(sizeof(FzFTerm));
+      t->fn = fn;
+      t->inv = inv;
+      t->ptr = og_str;
+      t->case_sensitive = case_sensitive;
+      t->text = text_ptr;
+
+      ListAppend(set->entries,t);
+      set->size++;
       switch_set = TRUE;
     } else {
       if (og_str) {
@@ -839,27 +811,32 @@ FzFPattern *FzFParsePattern(I32 case_mode, U8 *pattern, Bool fuzzy=TRUE)
     ptr = strtok(NULL, delim);
   }
   if (set->size > 0) {
-    append_pattern(pat_obj, set);
+    ListAppend(pat_obj->entries,set);
+    pat_obj->size++;
   } else {
     if (set) {
-      if (set->ptr) {
-        Free(set->ptr);
+      if (set->entries) {
+        ListRelease(set->entries,&Free);
       }
-        Free(set);
+      Free(set);
     }
   }
   Bool only = TRUE;
-  for (I64 i = 0; i < pat_obj->size; i++) {
-    FzFTermSet *term_set = pat_obj->ptr[i];
+
+  for (auto it = pat_obj->entries->next; it != pat_obj->entries; it = it->next) {
+    auto term_set = it->value(FzFTermSet *);
     if (term_set->size > 1) {
       only = FALSE;
       break;
     }
-    if (term_set->ptr[0].inv == FALSE) {
+
+    Bool x = term_set->entries->next->value(FzFTerm *)->inv;
+    if (!x) {
       only = FALSE;
       break;
     }
   }
+
   pat_obj->only_inv = only;
   if (pattern_copy) {
     Free(pattern_copy);
@@ -867,45 +844,44 @@ FzFPattern *FzFParsePattern(I32 case_mode, U8 *pattern, Bool fuzzy=TRUE)
   return pat_obj;
 }
 
+static U0 FzFTermSetRelease(U0 *_set)
+{
+  FzFTermSet *set = _set;
+  if (set) {
+    ListRelease(set->entries,&Free);
+    Free(set);
+  }
+}
+
 U0 FzFPatternRelease(FzFPattern *pattern)
 {
-  if (pattern->ptr) {
-    for (I64 i = 0; i < pattern->size; i++) {
-      FzFTermSet *term_set = pattern->ptr[i];
-      for (I64 j = 0; j < term_set->size; j++) {
-        FzFTerm *term = &term_set->ptr[j];
-        Free(term->ptr);
-        Free(term->text);
-      }
-      Free(term_set->ptr);
-      Free(term_set);
-    }
-    Free(pattern->ptr);
-  }
   if (pattern) {
-    Free(pattern);
+    if (!ListEmpty(pattern->entries)) {
+      ListRelease(pattern->entries,&FzFTermSetRelease);
+      Free(pattern);
+    } else if (pattern) {
+      ListRelease(pattern->entries,&Free);
+      Free(pattern);
+    }
   }
 }
 
 I64 FzFGetScore(U8 *text, FzFPattern *pattern, FzFSlab *slab)
 {
-  if (pattern->ptr == NULL || text == NULL) {
-    return 1;
-  }
+  if (text == NULL || ListEmpty(pattern->entries)) return 1;
 
+  auto entries = pattern->entries;
   FzFString input;
   input.data = text;
   input.size = StrLen(text);
 
   if (pattern->only_inv) {
     I64 final = 0;
-    for (I64 i = 0; i < pattern->size; i++) {
-      FzFTermSet *term_set = pattern->ptr[i];
-      FzFTerm *term = &term_set->ptr[0];
+    for (auto it = entries->next; it != entries; it = it->next) {
+      FzFTermSet *term_set = it->value;
+      FzFTerm *term = term_set->entries->next->value;
       FzFResult res;
       term->fn(&res,term->case_sensitive,&input,term->text(FzFString *),NULL,slab);
-
-      final += res.score; 
     }
     if (final > 0) {
       return 0;
@@ -914,13 +890,15 @@ I64 FzFGetScore(U8 *text, FzFPattern *pattern, FzFSlab *slab)
   }
 
   I64 total_score = 0;
-  for (I64 i = 0; i < pattern->size; i++) {
-    FzFTermSet *term_set = pattern->ptr[i];
+  for (auto it = entries->next; it != entries; it = it->next) {
+    FzFTermSet *term_set = it->value(FzFTermSet *);
     I64 current_score = 0;
     Bool matched = FALSE;
-    for (I64 j = 0; j < term_set->size; j++) {
-      FzFTerm *term = &term_set->ptr[j];
-      FzFString *fzf_str = term->text;
+    auto term_entries = term_set->entries;
+    for (auto ii = term_entries->next; ii != term_entries; ii = ii->next) {
+      FzFTerm *term = ii->value(FzFTerm *);
+      auto fzf_str = term->text(FzFString *);
+
       FzFResult res;
       term->fn(&res,term->case_sensitive,&input,fzf_str,NULL,slab);
 
@@ -969,20 +947,20 @@ FzFPosition *FzFGetPositions(U8 *text, FzFPattern *pattern, FzFSlab *slab)
   FzFTerm *term;
   Bool matched;
 
-  if (pattern->ptr == NULL || text == NULL) {
-    return NULL;
-  }
+  if (text == NULL || ListEmpty(pattern->entries)) return NULL;
 
   input.data = text;
   input.size = StrLen(text);
   all_pos = FzFPosArray(0);
+  auto entries = pattern->entries;
 
-  for (I64 i = 0; i < pattern->size; i++) {
-    term_set = pattern->ptr[i];
+  for (auto it = entries->next; it != entries; it = it->next) {
+    term_set = it->value(FzFTermSet *);
     matched = FALSE;
 
-    for (I64 j = 0; j < term_set->size; j++) {
-      term = &term_set->ptr[j];
+    auto term_entries = term_set->entries;
+    for (auto ii = term_entries->next; ii != term_entries; ii = ii->next) {
+      term = ii->value(FzFTermSet *);
       fzf_str = term->text(FzFString *);
 
       if (term->inv) {
@@ -992,6 +970,7 @@ FzFPosition *FzFGetPositions(U8 *text, FzFPattern *pattern, FzFSlab *slab)
         }
         continue;
       }
+
       term->fn(&res,term->case_sensitive,&input,fzf_str,all_pos,slab);
       if (res.start >= 0) {
         matched = TRUE;

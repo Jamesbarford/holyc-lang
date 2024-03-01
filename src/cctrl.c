@@ -277,6 +277,10 @@ Ast *CctrlGetVar(Cctrl *cc, char *varname, int len) {
         return ast_var;
     }
 
+    if ((ast_var = DictGetLen(cc->asm_funcs, varname, len)) != NULL) {
+        return ast_var;
+    }
+
     /* Expand a macro definition */
     if ((tok = DictGetLen(cc->macro_defs, varname, len)) != NULL) {
         switch (tok->tk_type) {

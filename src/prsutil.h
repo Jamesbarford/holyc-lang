@@ -27,6 +27,7 @@ int EvalClassRef(Ast *ast, int offset);
 void AssertLValue(Ast *ast, long lineno);
 int ParseIsFloatOrInt(Ast *ast);
 int ParseIsClassOrUnion(int kind);
+int ParseIsFunction(Ast *ast);
 
 void AssertTokenIsTerminator(lexeme *tok, long terminator_flags);
 void AssertUniqueSwitchCaseLabels(List *case_list, Ast *case_);

@@ -57,6 +57,19 @@ public class StrMap
   StrMapNode **entries; /* All of the entries, XXX: could this be IntMapNode *entries? */
 };
 
+U64 RoundUpToNextPowerOf2(U64 v)
+{
+  v--;
+  v |= v >> 1;
+  v |= v >> 2;
+  v |= v >> 4;
+  v |= v >> 8;
+  v |= v >> 16;
+  v |= v >> 32;
+  v++;
+  return v;
+}
+
 MapIndex *MapIndexNew(I64 capacity=1000)
 {
   I64 offset = (sizeof(I64)*2)+sizeof(I64*);
@@ -93,7 +106,7 @@ U64 IntMapHashFunction(I64 key, U64 mask)
 IntMap *IntMapNew(U64 capacity)
 {
   IntMap *map = MAlloc(sizeof(IntMap));
-  map->capacity = capacity;
+  map->capacity = RoundUpToNextPowerOf2(capacity);
   map->mask = capacity-1;
   map->size = 0;
   map->indexes = MapIndexNew(capacity);
@@ -320,7 +333,7 @@ public Bool StrMapResize(StrMap *map, U64 size);
 StrMap *StrMapNew(U64 capacity)
 {
   StrMap *map = MAlloc(sizeof(StrMap));
-  map->capacity = capacity;
+  map->capacity = RoundUpToNextPowerOf2(capacity);
   map->mask = capacity-1;
   map->size = 0;
   map->indexes = MapIndexNew(capacity);
