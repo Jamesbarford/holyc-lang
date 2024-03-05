@@ -78,10 +78,10 @@ int CompileToAst(Cctrl *cc, char *entrypath, int lexer_flags) {
     tokens = ListNew();
     builtin_path = aoStrDupRaw("/usr/local/include/tos.HH",25); //aoStrNew();
 
-    lexerInit(&l,NULL);
-    l.flags |= lexer_flags;
+    lexerInit(&l,NULL,CCF_PRE_PROC);
     l.seen_files = seen_files;
     l.lineno = 1;
+    lexerSetBuiltinRoot(&l,"/usr/local/include/");
 
     /* library files */
     lexPushFile(&l,aoStrDupRaw(entrypath,strlen(entrypath)));
@@ -100,18 +100,11 @@ int CompileToAst(Cctrl *cc, char *entrypath, int lexer_flags) {
     return 1;
 }
 
-aoStr *CompileFile(Cctrl *cc, char *file_path) {
-    aoStr *asm_str;
-    CompileToAst(cc,file_path,CCF_PRE_PROC);
-    asm_str = CompileToAsm(cc);
-    return asm_str;
-}
-
 aoStr *CompileCode(Cctrl *cc, char *code, int lexer_flags) {
     aoStr *asm_str;
     List *tokens;
     lexer l;
-    lexerInit(&l,code);
+    lexerInit(&l,code,lexer_flags);
     tokens = lexToLexemes(cc->macro_defs,&l);
     CctrlInitTokenIter(cc,tokens);
     ParseToAst(cc);

@@ -239,6 +239,10 @@ extern AstType *ast_u8_type;
 extern AstType *ast_i8_type;
 extern AstType *ast_float_type;
 extern AstType *ast_void_type;
+extern AstType *ast_i16_type;
+extern AstType *ast_u16_type;
+extern AstType *ast_i32_type;
+extern AstType *ast_u32_type;
 extern Ast *placeholder_arg;
 
 Ast *AstNew(void);

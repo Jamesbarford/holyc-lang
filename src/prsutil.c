@@ -193,6 +193,7 @@ long EvalIntConstExpr(Ast *ast) {
             return ~ast->operand->i64;
         }
     }
+    case '!': return !EvalIntConstExpr(ast->operand);
     case TK_EQU_EQU: return EvalIntConstExpr(ast->left) == EvalIntConstExpr(ast->right);
     case TK_GREATER_EQU: return EvalIntConstExpr(ast->left) >= EvalIntConstExpr(ast->right);
     case TK_LESS_EQU: return EvalIntConstExpr(ast->left) <= EvalIntConstExpr(ast->right);

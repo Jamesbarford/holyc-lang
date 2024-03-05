@@ -68,7 +68,7 @@ class Json
     U8 *str;
     U8 *strnum;
     F64 f64;
-    I64 int;
+    I64 i64;
     Bool boolean;
   };
 };
@@ -276,7 +276,7 @@ static U0 JsonParseNumber(JsonParser *p)
   }
 
   if (num_len == 1) {
-    current->int = JsonPeek(p)-'0';
+    current->i64 = JsonPeek(p)-'0';
     current->type = JSON_INT;
     JsonAdvance(p);
     return;
@@ -291,7 +291,7 @@ static U0 JsonParseNumber(JsonParser *p)
     } else {
       res = strtoll(ptr,&endptr);
     }
-    current->int = res;
+    current->i64 = res;
     current->type = JSON_INT;
     JsonUnsafeAdvanceBy(p, num_len);
     return;
@@ -487,7 +487,7 @@ static U0 JsonToStringInternal(Json *J, JsonStringBuilder *js)
     if (J->key) js->buf = CatLenPrint(js->buf,&js->len,"\"%Q\": ",J->key);
     switch (J->type) {
       case JSON_INT:
-        js->buf = CatLenPrint(js->buf,&js->len,"%d",J->int);
+        js->buf = CatLenPrint(js->buf,&js->len,"%d",J->i64);
         break;
       case JSON_FLOAT:
         js->buf = CatLenPrint(js->buf,&js->len,"%f",J->f64);

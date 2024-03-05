@@ -54,7 +54,7 @@ class SqlParam
   I64 type;
   union 
   {
-    I64 int;
+    I64 i64;
     F64 f64;
     U8 *str;
     class 
@@ -77,7 +77,7 @@ class SqlColumn
   I64 len;
   I64 type;
   union {
-    I64 int;
+    I64 i64;
     U8 *str;
     U0 *blob;
     F64 f64;
@@ -222,7 +222,7 @@ I32 SqlExecPrepared(SqlPreparedStmt *pstmt, SqlRow *row, SqlParam *params)
     SqlParam *param = &params[i];
     switch (param->type) {
       case SQL_INT:
-        sqlite3_bind_int64(pstmt->stmt, i + 1, param->int);
+        sqlite3_bind_int64(pstmt->stmt, i + 1, param->i64);
         break;
       case SQL_FLOAT:
         sqlite3_bind_double(pstmt->stmt, i + 1, param->f64);
@@ -272,7 +272,7 @@ static I32 SqlExecQuery(SqlCtx *ctx, SqlRow *row, U8 *sql, SqlParam *params,
       case SQL_INT:
         /* The leftmost SQL parameter has an index of 1 ref:
          * https://www.sqlite.org/c3ref/bind_blob.html */
-        rc = sqlite3_bind_int64(stmt, i + 1, params[i].int);
+        rc = sqlite3_bind_int64(stmt, i + 1, params[i].i64);
         break;
       case SQL_FLOAT:
         rc = sqlite3_bind_double(stmt, i + 1, params[i].f64);
@@ -357,7 +357,7 @@ static Bool SqlIterGeneric(SqlRow *row, I32 free_row)
     row->col[i].type = sqlite3_column_type(row->stmt,i);
     switch (row->col[i].type) {
       case SQLITE_INTEGER:
-        row->col[i].int = sqlite3_column_int64(row->stmt,i);
+        row->col[i].i64 = sqlite3_column_int64(row->stmt,i);
         break;
       case SQLITE_FLOAT:
         row->col[i].f64 = sqlite3_column_double(row->stmt,i);
@@ -373,7 +373,7 @@ static Bool SqlIterGeneric(SqlRow *row, I32 free_row)
       default:
         /* XXX: You may want to handle this case differently */
         row->col[i].str = NULL;
-        row->col[i].int = 0;
+        row->col[i].i64 = 0;
         row->col[i].f64 = 0;
         break;
     }

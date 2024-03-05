@@ -61,7 +61,7 @@ Bool TestSelect(SqlCtx *ctx)
   I64 count = 0;
   if (ok) {
     while (SqlIter(&row)) {
-      auto id = row.col[0].int;
+      auto id = row.col[0].i64;
       auto name = row.col[1].str;
       count++;
       switch (count) {
