@@ -16,6 +16,9 @@
 #include "prsutil.h"
 #include "util.h"
 
+/* prototypes */
+int lexPreProcIf(Dict *macro_defs, lexer *l);
+
 typedef struct {
     char *name;
     int kind;
@@ -79,6 +82,7 @@ static LexerTypes lexer_types[] = {
     {"static", KW_STATIC},
 };
 
+
 #define isNum(ch) ((ch) >= '0' && (ch) <= '9')
 #define isHex(ch) \
     (isNum(ch) || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F'))
@@ -86,13 +90,7 @@ static LexerTypes lexer_types[] = {
 #define toUpper(ch) ((ch >= 'a' && ch <= 'z') ? (ch - 'a' + 'A') : ch)
 #define toHex(ch)   (toUpper(ch) - 'A' + 10)
 #define isNumTerminator(ch) (!isNum(ch) && !isHex(ch) && ch != '.' && ch != 'x' \
-        && ch != 'X')
-
-char *lexGetBuiltInRoot(void) {
-    aoStr *full_path = aoStrNew();
-    aoStrCatPrintf(full_path, "/usr/local/include");
-    return aoStrMove(full_path);
-}
+        && ch != 'X' && ch != '\\')
 
 lexeme *lexemeNew(char *start, int len) {
     lexeme *le = malloc(sizeof(lexeme));
@@ -144,7 +142,7 @@ lexeme *lexemeNewOp(char *start, int len, long op, int line) {
 
 static Cctrl *macro_proccessor = NULL;
 
-void lexerInit(lexer *l, char *source) {
+void lexerInit(lexer *l, char *source, int flags) {
     l->ptr = source;
     l->cur_ch = -1;
     l->lineno = 1;
@@ -153,12 +151,11 @@ void lexerInit(lexer *l, char *source) {
     l->cur_str = NULL;
     l->cur_strlen = 0;
     l->cur_file = NULL;
-    l->flags = 0;
     l->ishex = 0;
+    l->flags = flags;
     l->files = ListNew();
     l->all_source = ListNew();
     l->symbol_table = DictNew(&default_table_type);
-    l->builtin_root = lexGetBuiltInRoot();
     DictSetFreeKey(l->symbol_table, NULL);
     if (macro_proccessor == NULL) {
         macro_proccessor = CcMacroProcessor(NULL);
@@ -169,7 +166,10 @@ void lexerInit(lexer *l, char *source) {
         LexerTypes *bilt = &lexer_types[i]; 
         DictSet(l->symbol_table, bilt->name, bilt);
     }
+}
 
+void lexerSetBuiltinRoot(lexer *l, char *root) {
+    l->builtin_root = root;
 }
 
 /* Is the lexeme both of type TK_PUNCT and does 'ch' match */
@@ -300,12 +300,12 @@ char *lexemeToString(lexeme *tok) {
                 case KW_IF_DEF:      aoStrCatPrintf(str,"ifdef");   break;
                 case KW_ELIF_DEF:    aoStrCatPrintf(str,"elifdef");   break;
                 case KW_ENDIF:       aoStrCatPrintf(str,"endif");   break;
-                case KW_DEFINED:     aoStrCatPrintf(str,"defined"); break;
                 case KW_UNDEF:       aoStrCatPrintf(str,"undef");   break;
                 case KW_AUTO:        aoStrCatPrintf(str,"auto");    break;
                 case KW_DEFAULT:     aoStrCatPrintf(str,"default"); break;
                 case KW_DO:          aoStrCatPrintf(str,"do");      break;
                 case KW_STATIC:      aoStrCatPrintf(str,"static");  break;
+                case KW_DEFINED:     aoStrCatPrintf(str,"defined"); break;
                 default:
                     loggerPanic("line %d: Keyword %.*s: is not defined\n",
                             tok->line,tok->len,tok->start);
@@ -1029,6 +1029,10 @@ int lex(lexer *l, lexeme *le) {
             lexemeAssignOp(le,start,1,ch,l->lineno);
             return 1;
 
+        case '\\':
+            lexemeAssignOp(le,start,1,'\\',l->lineno);
+            return 1;
+
         case '#':
         case '~':
         case '(':
@@ -1092,10 +1096,12 @@ void lexInclude(lexer *l) {
 }
 
 lexeme *lexDefine(Dict *macro_defs, lexer *l) {
-    int tk_type;
+    int tk_type,iters;
     List *macro_tokens;
     lexeme next,*start,*end,*expanded,*macro;
     aoStr *ident;
+
+
     tk_type = -1;
     macro_tokens = ListNew();
     /* <ident> <value> */
@@ -1106,7 +1112,9 @@ lexeme *lexDefine(Dict *macro_defs, lexer *l) {
     ident = aoStrDupRaw(next.start, next.len);
     /* A define must be on one line a \n determines the end of a define */
     l->flags |= CCF_ACCEPT_NEWLINES;
+    iters = 0;
     do {
+        iters++;
         if (!lex(l,&next)) break;
 
         if (next.tk_type == TK_IDENT) {
@@ -1133,6 +1141,15 @@ lexeme *lexDefine(Dict *macro_defs, lexer *l) {
     } while (!TokenPunctIs(&next,'\n') && !TokenPunctIs(&next,'\0'));
     /* Turn off the flag */
     l->flags &= ~CCF_ACCEPT_NEWLINES;
+
+    start = macro_tokens->next->value;
+    end = macro_tokens->prev->value;
+
+    if (start==end && iters == 1) {
+        DictSet(macro_defs,ident->data,lexemeSentinal());
+        ListRelease(macro_tokens,NULL);
+        return NULL;
+    }
 
     if (tk_type == -1) {
         loggerPanic("line %d: Error while parsing #define %s; #define either be a numerical expression or a string\n",
@@ -1225,6 +1242,14 @@ void lexExpandAndCollect(lexer *l, Dict *macro_defs, List *tokens, int should_co
                         }
                         break;
                     }
+                    case KW_ELIF: {
+                        should_collect = lexPreProcIf(macro_defs,l);
+                        break;
+                    }
+                    case KW_IF: {
+                        should_collect = lexPreProcIf(macro_defs,l);
+                        break;
+                    }
                     case KW_IF_DEF: {
                         lex(l,&next);
                         should_collect = 0;
@@ -1272,6 +1297,96 @@ void lexExpandAndCollect(lexer *l, Dict *macro_defs, List *tokens, int should_co
     } while (1);
 done:
     return;
+}
+
+int lexPreProcIf(Dict *macro_defs, lexer *l) {
+    int tk_type,iters,should_collect;
+    List *macro_tokens;
+    lexeme next,*start,*end,*expanded,*macro;
+
+    tk_type = -1;
+    should_collect = 0;
+    macro_tokens = ListNew();
+
+    /* An if must be on one line a \n determines the end of a define */
+    l->flags |= CCF_ACCEPT_NEWLINES;
+    iters = 0;
+
+    if (!lex(l,&next)) {
+        loggerPanic("line %d: Run out of tokens\n", l->lineno);
+    }
+
+    while (!TokenPunctIs(&next,'\n') && !TokenPunctIs(&next,'\0')){ 
+        iters++;
+
+        if (TokenPunctIs(&next,'\\')) {
+            if (!lex(l,&next)) break;
+            if (!TokenPunctIs(&next,'\n')) {
+                loggerPanic("line %d: Invalid use of '\\' should be \\ \\n got %s\n",
+                        next.line, lexemeToString(&next));
+            }
+            if (!lex(l,&next)) break;
+        } 
+
+        if (next.tk_type == TK_IDENT) {
+            if ((macro = DictGetLen(macro_defs,next.start,next.len)) != NULL) {
+                ListAppend(macro_tokens,lexemeCopy(macro));
+                tk_type = macro->tk_type;
+            }
+            if (!lex(l,&next)) break;
+        }
+
+        if (tk_type == -1) {
+            switch (next.tk_type) {
+                case TK_F64:
+                case TK_I64:
+                case TK_CHAR_CONST:
+                    tk_type = next.tk_type;
+                    break;
+            }
+        }
+        if (!TokenPunctIs(&next,'\n') && !TokenPunctIs(&next,'\0')) {
+            ListAppend(macro_tokens,lexemeCopy(&next));
+        }
+        if (!lex(l,&next)) break;
+    }
+    /* Turn off the flag */
+    l->flags &= ~CCF_ACCEPT_NEWLINES;
+
+    start = macro_tokens->next->value;
+    end = macro_tokens->prev->value;
+
+    if (start == end && iters == 1) {
+        loggerPanic("line %d: a #if must evaluate some expression\n",next.line);
+        return 0;
+    }
+
+    start = macro_tokens->next->value;
+    end = macro_tokens->prev->value;
+
+    CctrlInitTokenIter(macro_proccessor,macro_tokens);
+    Ast *ast = ParseExpr(macro_proccessor,16);
+    expanded = lexemeNew(start->start,end->len-start->len);
+    expanded->tk_type = tk_type;
+
+    if (tk_type == TK_STR) {
+        should_collect = 1;
+    } else if (tk_type == TK_F64) {
+        expanded->f64 = (long double)EvalFloatExpr(ast);
+        if (expanded->f64 != 0) {
+            should_collect = 1;
+        }
+        expanded->line = start->line;
+    } else {
+        expanded->i64 = EvalIntConstExpr(ast);
+        if (expanded->i64 != 0) {
+            should_collect = 1;
+        }
+        expanded->line = start->line;
+    }
+    AstRelease(ast);
+    lexemeListRelease(macro_tokens);
+    return should_collect;
 }
 
 List *lexUntil(Dict *macro_defs, lexer *l, char to) {
@@ -1341,7 +1456,11 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
                     case KW_INCLUDE: lexInclude(l); break;
                     case KW_DEFINE: copy = lexDefine(macro_defs,l); break;
                     case KW_UNDEF: lexUndef(macro_defs, l); break;
-
+                    case KW_IF: {
+                        int should_collect = lexPreProcIf(macro_defs,l);
+                        lexExpandAndCollect(l,macro_defs,tokens,should_collect);
+                        break;
+                    }
                     case KW_IF_NDEF:
                     case KW_IF_DEF:
                         lex(l, &next);

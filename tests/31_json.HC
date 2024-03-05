@@ -20,7 +20,7 @@ U0 Main()
 
   auto obj = JsonSelect(j,".hello:i");
   if (obj) {
-    if (obj->int == 10) correct++;
+    if (obj->i64 == 10) correct++;
   }
 
   U8 *str = JsonToString(j);
@@ -44,16 +44,16 @@ U0 Main()
   }
 
   if ((obj = JsonSelect(j,".array[0]:i"))) {
-    if (obj->int == 1) correct++;
+    if (obj->i64 == 1) correct++;
   }
   if ((obj = JsonSelect(j,".array[1]:i"))) {
-    if (obj->int == 30030303) correct++;
+    if (obj->i64 == 30030303) correct++;
   }
   if ((obj = JsonSelect(j,".array[2]"))) {
-    if (obj->int == 430) correct++;
+    if (obj->i64 == 430) correct++;
   }
   if ((obj = JsonSelect(j,".array[3]:i"))) {
-    if (obj->int == -14) correct++;
+    if (obj->i64 == -14) correct++;
   }
 
   JsonRelease(j);

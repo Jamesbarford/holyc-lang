@@ -10,6 +10,7 @@
 #include "config.h"
 #include "compile.h"
 #include "cctrl.h"
+#include "lexer.h"
 #include "util.h"
 
 #define ASM_TMP_FILE "/tmp/holyc-asm.s"
@@ -221,14 +222,14 @@ void usage(void) {
             "HolyC Compiler 2024. UNSTABLE\n"
             "hcc [..OPTIONS] <..file>\n\n"
             "OPTIONS:\n"
-            "  -ast     print the ast and exit\n"
-            "  -tokens  print the tokens and exit\n"
-            "  -S       emit assembly only\n"
-            "  -obj     emit an objectfile\n"
-            "  -lib     emit a dynamic and static library\n"
-            "  -clibs   link c libraries like: -clibs=`-lSDL2 -lxml2 -lcurl...`\n"
-            "  -g       not implemented\n"
-            "  --help   print this message\n");
+            "  -ast     Print the ast and exit\n"
+            "  -tokens  Print the tokens and exit\n"
+            "  -S       Emit assembly only\n"
+            "  -obj     Emit an objectfile\n"
+            "  -lib     Emit a dynamic and static library\n"
+            "  -clibs   Link c libraries like: -clibs=`-lSDL2 -lxml2 -lcurl...`\n"
+            "  -g       Not implemented\n"
+            "  --help   Print this message\n");
     exit(1);
 }
 
@@ -291,7 +292,7 @@ int main(int argc, char **argv) {
         exit(EXIT_FAILURE);
     }
     hccOpts opts;
-
+    int lexer_flags = CCF_PRE_PROC;
     aoStr *asmbuf;
     Cctrl *cc;
     
@@ -302,7 +303,8 @@ int main(int argc, char **argv) {
     parseCliOptions(&opts,argc,argv);
     
     cc = CctrlNew();
-    CompileToAst(cc,opts.infile,CCF_PRE_PROC);
+    
+    CompileToAst(cc,opts.infile,lexer_flags);
 
     if (opts.print_tokens) {
         CompilePrintTokens(cc);

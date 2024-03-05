@@ -158,7 +158,8 @@ typedef struct lexer {
 lexeme *lexemeTokNew(char *start, int len, int line, long ch);
 lexeme *lexemeNew(char *start, int len);
 lexeme *lexemeSentinal(void);
-void lexerInit(lexer *l, char *source);
+void lexerSetBuiltinRoot(lexer *l, char *root);
+void lexerInit(lexer *l, char *source, int flag);
 void lexPushFile(lexer *l, aoStr *filename);
 int lex(lexer *l, lexeme *le);
 List *lexToLexemes(Dict *macro_defs, lexer *l);

@@ -5,6 +5,7 @@
 #include "aostr.h"
 #include "ast.h"
 #include "cctrl.h"
+#include "dict.h"
 #include "lexer.h"
 #include "list.h"
 #include "prsutil.h"
@@ -191,6 +192,21 @@ List *ParseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
                 if (TokenPunctIs(tok, terminator)) {
                     return params;
                 }
+                continue;
+            } else if (TokenPunctIs(pname,',') || TokenPunctIs(pname,')')) {
+                type = ParseArrayDimensions(cc,type);
+                if (type->kind == AST_TYPE_ARRAY) {
+                    type = AstMakePointerType(type->ptr);
+                }
+                var = AstLVar(type,"_unknown",7);
+                if (cc->tmp_locals) {
+                    ListAppend(cc->tmp_locals, var);
+                }
+                ListAppend(params, var);
+                if (TokenPunctIs(pname, terminator)) {
+                    return params;
+                }
+
                 continue;
             } else {
                 loggerPanic("line %d: Identifier expected, got: %s\n",
@@ -973,6 +989,20 @@ Ast *ParseUnaryExpr(Cctrl *cc) {
         switch (tok->i64) {
             case KW_SIZEOF: return ParseSizeof(cc);
             case KW_CAST:   return ParseCast(cc);
+            case KW_DEFINED: {
+                CctrlTokenExpect(cc,'(');
+                tok = CctrlTokenGet(cc);
+
+                if (tok->i64 != ')') {
+                    ast = AstI64Type(1);
+                } else {
+                    ast = AstI64Type(0);
+                }
+                if (tok->i64 != ')') {
+                    CctrlTokenExpect(cc,')');
+                }
+                return ast;
+            }
             default:
                 loggerPanic("line %d: Unexpected keyword: %.*s while parsing unary expression\n",
                         tok->line,tok->len,tok->start);

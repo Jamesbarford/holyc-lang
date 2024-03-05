@@ -16,9 +16,18 @@
 #define BAR 4
 #endif
 
+
+#if defined(__FOO__)
+#define _INTVAL (420)
+#elif defined(_SOME_STRING) && 32 && 1 && \
+  defined(_SOME_INT_MATHS)
+#define _INTVAL (42)
+#endif
+
+
 U0 Main()
 {
-  I64 correct = 0, tests = 5;
+  I64 correct = 0, tests = 6;
   "Test - Preprocessor: ";
 
   if (!StrCmp(_SOME_STRING,"Hello World")) correct++;
@@ -26,6 +35,8 @@ U0 Main()
   if (_SOME_FLOAT_MATHS == 18.64) correct++;
   if (FOO == 24) correct++;
   if (BAR == 32) correct++;
+  if (_INTVAL == 42) correct++;
   PrintResult(correct,tests);
   "====\n";
 }
+

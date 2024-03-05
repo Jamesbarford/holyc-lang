@@ -815,7 +815,7 @@ class Json
     Bool boolean;
     U8 *strnum;
     F64 f64;
-    I64 int;
+    I64 i64;
   };
 };
 #define JSON_OK 0
@@ -903,7 +903,7 @@ class SqlParam
   I64 type;
   union 
   {
-    I64 int;
+    I64 i64;
     F64 f64;
     U8 *str;
     class 
@@ -927,7 +927,7 @@ class SqlColumn
   I64 type;
   union
   {
-    I64 int;
+    I64 i64;
     U8 *str;
     U0 *blob;
     F64 f64;
