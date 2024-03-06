@@ -71,6 +71,9 @@ typedef struct Cctrl {
     List *initalisers;
     List *initaliser_locals;
 
+    /* A list of intermediate representations of the code */
+    List *ir_list;
+
     /* For parsing a switch */
     aoStr *tmp_default_case;
 

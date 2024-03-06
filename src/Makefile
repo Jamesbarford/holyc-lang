@@ -33,6 +33,7 @@ OBJS = $(OUT)/main.o \
 	   $(OUT)/aostr.o \
 	   $(OUT)/cctrl.o \
 	   $(OUT)/compile.o \
+	   $(OUT)/ir.o \
 	   $(OUT)/lexer.o
 
 $(TARGET): $(OBJS)
@@ -58,6 +59,7 @@ $(OUT)/main.o: main.c dict.h lexer.h list.h aostr.h
 $(OUT)/lexer.o: lexer.c lexer.h dict.h list.h aostr.h 
 $(OUT)/parser.o: parser.c parser.h prsutil.h prslib.h dict.h aostr.h 
 $(OUT)/ast.o: ast.c ast.h aostr.h 
+$(OUT)/ir.o: ir.c ir.h aostr.h list.h dict.h cctrl.h ast.h
 $(OUT)/aostr.o: aostr.c aostr.h 
 $(OUT)/prsasm.o: prsasm.c prsasm.h aostr.h lexer.h list.h dict.h cctrl.h ast.h
 $(OUT)/prsutil.o: prsutil.c prsutil.h aostr.h lexer.h list.h dict.h cctrl.h ast.h

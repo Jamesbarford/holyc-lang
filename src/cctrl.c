@@ -154,6 +154,7 @@ Cctrl *CctrlNew(void) {
     cc->ast_list = ListNew();
     cc->initalisers = ListNew();
     cc->initaliser_locals = ListNew();
+    cc->ir_list = ListNew();
     cc->tkit = malloc(sizeof(TokenIter));
     /* These are temoraries that the parser will allocate and 
      * NULL out between parses of classes and functions */

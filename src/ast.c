@@ -1562,16 +1562,18 @@ char *AstKindToString(int kind) {
 
     case TK_AND_AND:         return "&&";
     case TK_OR_OR:           return "||";
+    case TK_EQU_EQU:         return "==";
+    case TK_NOT_EQU:         return "!=";
+    case TK_LESS_EQU:        return "<=";
+    case TK_GREATER_EQU:     return ">=";
+
     case TK_SHL:             return "<<";
     case TK_SHR:             return ">>";
     case TK_PLUS_PLUS:       return "++";
     case TK_PRE_PLUS_PLUS:   return "<p>++";
     case TK_PRE_MINUS_MINUS: return "<p>--";
     case TK_MINUS_MINUS:     return "--";
-    case TK_EQU_EQU:         return "==";
-    case TK_NOT_EQU:         return "!=";
-    case TK_LESS_EQU:        return "<=";
-    case TK_GREATER_EQU:     return ">=";
+
     case TK_DIV_EQU:         return "/=";
     case TK_MUL_EQU:         return "*=";
     case TK_MOD_EQU:         return "%=";
@@ -1582,20 +1584,24 @@ char *AstKindToString(int kind) {
     case TK_AND_EQU:         return "&=";
     case TK_OR_EQU:          return "|=";
     case TK_XOR_EQU:         return "^=";
+
     case '+':
     case AST_OP_ADD:     return "+";
     case '-':            return "-";
     case '*':            return "*";
-    case '~':            return "~";
-    case '<':            return "<";
-    case '>':            return ">";
     case '/':            return "/";
+    case '%':            return "%";
+
+    case '~':            return "~";
+    case '!':            return "!";
+
+    case '^':            return "^";
     case '&':            return "&";
     case '|':            return "|";
+
+    case '<':            return "<";
+    case '>':            return ">";
     case '=':            return "=";
-    case '!':            return "!";
-    case '%':            return "%";
-    case '^':            return "^";
     default:
         loggerPanic("Cannot find kind: %d\n", kind);
     }

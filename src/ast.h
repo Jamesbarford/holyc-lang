@@ -126,18 +126,6 @@ typedef struct Ast {
             aoStr *glabel;
         };
 
-        /* Local reference */
-        struct {
-            Ast *lref;
-            int lrefoff;
-        };
-
-        /* Global reference */
-        struct {
-            Ast *gref;
-            int goff;
-        };
-
         /* Binary operator */
         struct {
             Ast *left;
