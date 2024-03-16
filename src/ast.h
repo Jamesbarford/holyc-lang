@@ -93,6 +93,10 @@ typedef struct Ast {
     long kind;
     AstType *type;
     int loff;
+    /* For ir to determine what register should be used for the variable 
+     * as we cannot use name. The same variable name can be used in
+     * different scopes. */
+    int reg;
     union {
         /* 8, 16, 32, 64 bit number */
         long long i64;

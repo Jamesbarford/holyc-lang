@@ -192,8 +192,8 @@ Cctrl *CctrlNew(void) {
     CctrlAddBuiltinMacros(cc);
 
     Ast *cmd_args = AstGlobalCmdArgs();
-    ListAppend(cc->ast_list,cmd_args->argc);
-    ListAppend(cc->ast_list,cmd_args->argv);
+    //ListAppend(cc->ast_list,cmd_args->argc);
+    //ListAppend(cc->ast_list,cmd_args->argv);
     DictSet(cc->global_env,"argc",cmd_args->argc->declvar);
     DictSet(cc->global_env,"argv",cmd_args->argv->declvar);
     return cc;
@@ -304,6 +304,14 @@ Ast *CctrlGetVar(Cctrl *cc, char *varname, int len) {
         }
     }
     return NULL;
+}
+
+long CctrlGetTmpRegister(Cctrl *cc, char *varname, int len) {
+    return (long)DictGetLen(cc->localenv,varname,len);
+}
+
+void CctrlSetTmpRegister(Cctrl *cc, char *varname, long register_num) {
+    DictSet(cc->localenv,varname,(void*)register_num);
 }
 
 AstType *CctrlGetKeyWord(Cctrl *cc, char *name, int len) {

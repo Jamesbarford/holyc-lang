@@ -7,6 +7,7 @@
 #include "cctrl.h"
 #include "compile.h"
 #include "dict.h"
+#include "ir.h"
 #include "x86.h"
 #include "lexer.h"
 #include "list.h"
@@ -92,6 +93,8 @@ int CompileToAst(Cctrl *cc, char *entrypath, int lexer_flags) {
     DictRelease(seen_files);
     CctrlInitTokenIter(cc,tokens);
     ParseToAst(cc);
+    irMain(cc);
+    irPrint(cc->ir_list);
     lexReleaseAllFiles(&l);
     aoStrRelease(builtin_path);
     // ListRelease(code_list,free);

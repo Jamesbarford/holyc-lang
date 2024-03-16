@@ -4,6 +4,7 @@
 #include "aostr.h"
 #include "ast.h"
 #include "dict.h"
+#include "ir.h"
 #include "lexer.h"
 
 typedef struct TokenIter {
@@ -88,6 +89,12 @@ typedef struct Cctrl {
     /* Temporary name of the function being parsed */
     aoStr *tmp_fname;
 
+    /* Temporary jump label */
+    aoStr *tmp_label;
+
+    /* Temporary jump label 2, can be used for anything */
+    aoStr *tmp_label_2;
+
     /* A list of tokens that have been through the lexer */
     TokenIter *tkit;
 
@@ -99,6 +106,10 @@ typedef struct Cctrl {
     /* Is the current type or function static,
      * with functions this has no real difference */
     int is_static;
+
+    /* Function that is being transformed to an intermediate 
+     * representation */
+    IrInstruction *ir_func;
 } Cctrl;
 
 /* Instantiate a new compiler control struct */
@@ -115,5 +126,10 @@ void CctrlTokenExpect(Cctrl *cc, long expected);
 Ast *CctrlGetVar(Cctrl *cc, char *varname, int len);
 int CctrlIsKeyword(Cctrl *cc, char *name, int len);
 AstType *CctrlGetKeyWord(Cctrl *cc, char *name, int len);
+
+/* Ir Routines */
+long CctrlGetTmpRegister(Cctrl *cc, char *varname, int len);
+void CctrlSetTmpRegister(Cctrl *cc, char *varname, long register_num);
+void irMain(Cctrl *cc);
 
 #endif // !CCTRL_H
