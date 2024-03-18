@@ -164,6 +164,8 @@ Cctrl *CctrlNew(void) {
     cc->tmp_params = NULL;
     cc->tmp_loop_begin = NULL;
     cc->tmp_loop_end = NULL;
+    /* temoraries for intermediate representation */
+    cc->tmp_ir_list = NULL;
 
     str_array = aoStrSplit(x86_registers,',',&len);
     for (int i = 0; i < len; ++i) {

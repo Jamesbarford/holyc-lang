@@ -75,6 +75,10 @@ typedef struct Cctrl {
     /* A list of intermediate representations of the code */
     List *ir_list;
 
+    /* Temporary ir list for storing a list of ir i.e for a function body
+     * or a function call */
+    List *tmp_ir_list;
+
     /* For parsing a switch */
     aoStr *tmp_default_case;
 
