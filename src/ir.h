@@ -44,17 +44,18 @@
 #define IR_JMP_NOT_ZERO 263 // jnz
 #define IR_JMP_ZERO     264 // jz
 
-#define IR_FUNCTION     300
-#define IR_FLOAT        301
-#define IR_INT          302
-#define IR_STRING       303
-#define IR_ARRAY        304
-#define IR_VOID         305
-#define IR_CHAR         306
-#define IR_POINTER      307 
-#define IR_CLASS        308
-#define IR_LOCAL        309
-#define IR_LABEL        310
+#define IR_FUNCTION      300
+#define IR_FLOAT         301
+#define IR_INT           302
+#define IR_STRING        303
+#define IR_ARRAY         304
+#define IR_VOID          305
+#define IR_CHAR          306
+#define IR_POINTER       307 
+#define IR_CLASS         308
+#define IR_LOCAL         309
+#define IR_LABEL         310
+#define IR_FUNCTION_CALL 311
 
 #define IR_FLOAT_TO_INT 350
 #define IR_INT_TO_FLOAT 351
@@ -110,6 +111,7 @@ typedef struct IrOperand {
 typedef struct IrInstruction {
     int op;
     unsigned long flags;
+
     union {
         /* function */
         struct {
@@ -121,9 +123,13 @@ typedef struct IrInstruction {
 
         /* function call */
         struct {
+            /* Add float_args and int_args to get the total number of 
+             * arguments. */
+            int float_arg_cnt;
+            int int_arg_cnt;
+            int vararg_start_idx;
+            List *funcall_args;
             aoStr *call_name;
-            List *args;
-            int has_var_args;
         };
 
         /* classic */

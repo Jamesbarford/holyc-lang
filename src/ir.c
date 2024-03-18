@@ -270,6 +270,13 @@ void irToString(aoStr *str, IrInstruction *inst) {
             aoStrCatPrintf(str,"%s:\n",inst->arg1->label->data);
             break;
 
+        case IR_FUNCTION_CALL:
+            ListForEach(inst->funcall_args) {
+                irToString(str,(IrInstruction *)it->value);
+            }
+            aoStrCatPrintf(str,"\tCALL\t%s\n",inst->call_name->data);
+            break;
+
         default: loggerPanic("Could not convert ir kind %d "
                          "to a string\n", inst->op);
     }
@@ -341,13 +348,23 @@ int irIsLogical(Ast *ast) {
 }
 
 int irLeftOrRightIsFloat(Ast *ast) {
-    return AstIsFloatType(ast->left->type) ||
-           AstIsFloatType(ast->right->type);
+    if (ast->left) {
+        if (AstIsFloatType(ast->left->type)) return 1;
+    }
+    if (ast->right) {
+        if (AstIsFloatType(ast->right->type)) return 1;
+    }
+    return 0;
 }
 
 int irLeftOrRightIsUnsigned(Ast *ast) {
-    return !ast->left->type->issigned ||
-           !ast->right->type->issigned;
+    if (ast->left) {
+        if (!ast->left->type->issigned) return 1;
+    }
+    if (ast->right) {
+        if (!ast->right->type->issigned) return 1;
+    }
+    return 0;
 }
 
 IrOperand *irOperandNew(int kind) {
@@ -414,7 +431,7 @@ void irLoadString(Cctrl *cc, Ast *ast) {
     op->sval = ast->sval;
     op->slabel = ast->slabel;
     inst->arg1 = op;
-    ListAppend(cc->ir_func->body,inst);
+    ListAppend(cc->tmp_ir_list,inst);
 }
 
 void irLoadLocal(Cctrl *cc, Ast *ast) {
@@ -432,7 +449,7 @@ void irLoadLocal(Cctrl *cc, Ast *ast) {
         op->flags |= IR_FLAGS_UNSIGNED;
     }
     inst->arg1 = op;
-    ListAppend(cc->ir_func->body,inst);
+    ListAppend(cc->tmp_ir_list,inst);
 }
 
 void irLoadGlobal(Cctrl *cc, Ast *ast) {
@@ -441,14 +458,14 @@ void irLoadGlobal(Cctrl *cc, Ast *ast) {
     op->gname = ast->gname;
     op->kind = irAstTypeKindToIr(ast->kind);
     inst->arg1 = op;
-    ListAppend(cc->ir_func->body,inst);
+    ListAppend(cc->tmp_ir_list,inst);
 }
 
 void irLoadIntermediate(Cctrl *cc, Ast *ast) {
     IrInstruction *inst = irInstNew(IR_LOAD);
     inst->arg1 = irIntermediateNew(ast);
     inst->arg1->reg = irGetRegister();
-    ListAppend(cc->ir_func->body,inst);
+    ListAppend(cc->tmp_ir_list,inst);
 }
 /* LOAD end ================================================================= */
 
@@ -463,7 +480,7 @@ void irSaveLocal(Cctrl *cc, Ast *ast) {
     op->reg = irGetRegister();
     op->size = ast->type->size;
     inst->arg1 = op;
-    ListAppend(cc->ir_func->body,inst);
+    ListAppend(cc->tmp_ir_list,inst);
 }
 
 /**
@@ -513,14 +530,14 @@ void irDecl(Cctrl *cc, Ast *ast) {
 void irFloatToInt(Cctrl *cc, Ast *ast) {
     if (ast->type->kind == AST_TYPE_FLOAT) {
         IrInstruction *inst = irInstNew(IR_FLOAT_TO_INT);
-        ListAppend(cc->ir_func->body,inst);
+        ListAppend(cc->tmp_ir_list,inst);
     }
 }
 
 void irIntToFloat(Cctrl *cc, Ast *ast) {
     if (ast->type->kind == AST_TYPE_INT) {
         IrInstruction *inst = irInstNew(IR_INT_TO_FLOAT);
-        ListAppend(cc->ir_func->body,inst);
+        ListAppend(cc->tmp_ir_list,inst);
     }
 }
 
@@ -592,7 +609,7 @@ void irArithmetic(Cctrl *cc, Ast *ast, int reverse) {
     inst->arg1->reg = irGetRegister();
     inst->arg2 = arg2;
     inst->arg3 = arg3;
-    ListAppend(cc->ir_func->body,inst);
+    ListAppend(cc->tmp_ir_list,inst);
 }
 
 void irCompare(Cctrl *cc, Ast *ast, int cmp) {
@@ -628,7 +645,7 @@ void irCompare(Cctrl *cc, Ast *ast, int cmp) {
     inst->arg1->reg = irGetRegister();
     inst->arg2 = arg2;
     inst->arg3 = arg3;
-    ListAppend(cc->ir_func->body,inst);
+    ListAppend(cc->tmp_ir_list,inst);
 }
 
 void irCompareAndJump(Cctrl *cc, Ast *ast, aoStr *label, int invert) {
@@ -660,11 +677,11 @@ void irCompareAndJump(Cctrl *cc, Ast *ast, aoStr *label, int invert) {
     inst->flags = flags;
     inst->arg1 = ops[0];
     inst->arg2 = ops[1];
-    ListAppend(cc->ir_func->body,inst);
+    ListAppend(cc->tmp_ir_list,inst);
 
     inst = irInstNew(jmp);
     inst->arg1 = irOpLabelNew(label);
-    ListAppend(cc->ir_func->body,inst);
+    ListAppend(cc->tmp_ir_list,inst);
 }
 
 int opIsCompoundAssign(Ast *ast) {
@@ -784,7 +801,7 @@ void irIf(Cctrl *cc, Ast *ast) {
         inst->arg1 = irOpLabelNew(cc->tmp_label);
         if (ast->then) irEval(cc,ast->then);
         if (ast->els)  irEval(cc,ast->els);
-        ListAppend(cc->ir_func->body,inst);
+        ListAppend(cc->tmp_ir_list,inst);
     }
     cc->tmp_label = tmp_label;
 }
@@ -814,7 +831,7 @@ void irCondLogical(Cctrl *cc, Ast *ast, int invert) {
             inst = irInstNew(IR_LABEL);
             inst->arg1 = irOpLabelNew(cc->tmp_label);
             inst->flags = flags;
-            ListAppend(cc->ir_func->body,inst);
+            ListAppend(cc->tmp_ir_list,inst);
         } else {
             irCompareAndJump(cc,cond,label,invert);
             cc->tmp_label = label;
@@ -864,7 +881,7 @@ void irLabel(Cctrl *cc, Ast *ast) {
     if (ast->sval) op->label = ast->sval;
     else           op->label = ast->slabel;
     inst->arg1 = op;
-    ListAppend(cc->ir_func->body,inst);
+    ListAppend(cc->tmp_ir_list,inst);
 }
 
 void irJump(Cctrl *cc, Ast *ast) {
@@ -872,7 +889,7 @@ void irJump(Cctrl *cc, Ast *ast) {
     IrOperand *op = irOperandNew(IR_LABEL);
     op->label = ast->slabel;
     inst->arg1 = op;
-    ListAppend(cc->ir_func->body,inst);
+    ListAppend(cc->tmp_ir_list,inst);
 }
 
 void irWhile(Cctrl *cc, Ast *ast) {
@@ -886,7 +903,7 @@ void irWhile(Cctrl *cc, Ast *ast) {
     i1 = irInstNew(IR_LABEL);
     op1 = irOpLabelNew(ast->while_begin);
     i1->arg1 = op1;
-    ListAppend(cc->ir_func->body,i1);
+    ListAppend(cc->tmp_ir_list,i1);
 
     /* Jump out of the loop if the condition is not met, by inverting the 
      * condition in the `while (<cond>)` */
@@ -910,13 +927,115 @@ void irWhile(Cctrl *cc, Ast *ast) {
 
     cc->tmp_label = tmp_label;
 
-    ListAppend(cc->ir_func->body,i2);
-    ListAppend(cc->ir_func->body,i3);
+    ListAppend(cc->tmp_ir_list,i2);
+    ListAppend(cc->tmp_ir_list,i3);
 }
 
+/**
+ * [<IrInstruction>, <IrInstruction>]
+ */
 void irFunctionCall(Cctrl *cc, Ast *funcall) {
-    /*XXX: @Unimplmented */
-    loggerPanic("Unimplmented\n");
+    int float_arg_cnt = 0, int_arg_cnt = 0, vararg_start_idx = -1;
+    unsigned long flags = 0;
+    List *funcall_args, *params, *funparam, *funarg, *cur_ir_list;
+    IrInstruction *inst;
+    Ast *fun, *arg, *tmparg;
+
+    cur_ir_list = cc->tmp_ir_list;
+
+    inst = irInstNew(IR_FUNCTION_CALL);
+    fun = DictGetLen(cc->global_env,funcall->fname->data,
+                                    funcall->fname->len);
+    funarg = NULL;
+    funcall_args = ListNew();
+    cc->tmp_ir_list = funcall_args;
+
+    if (fun) {
+        flags |= IR_FLAGS_FUN_EXISTS;
+        if (fun->kind == AST_EXTERN_FUNC) {
+            flags |= IR_FLAGS_FUN_EXTERN;
+        }
+        if (fun->type->has_var_args) {
+            flags |= IR_FLAGS_VAR_ARGS;
+        }
+    }
+
+    if (flags & (IR_FLAGS_FUN_EXISTS|IR_FLAGS_VAR_ARGS) && 
+            !(flags & IR_FLAGS_FUN_EXTERN)) {
+        ListForEach(fun->params) {
+            vararg_start_idx++;
+            arg = (Ast*)it->value;
+            if (arg->kind == AST_VAR_ARGS) {
+                break;
+            }
+        }
+        vararg_start_idx++;
+    }
+
+    if (flags & IR_FLAGS_FUN_EXISTS) {
+        if (!ListEmpty(fun->params)) {
+            params = fun->params;
+            funparam = params->next;
+        }
+    } else {
+        if (funcall->paramtypes && !ListEmpty(funcall->paramtypes)) {
+            params = fun->paramtypes;
+            funparam = params->next;
+        }
+    }
+
+    if (!ListEmpty(funcall->args)) {
+        funarg = funcall->args->next;
+    }
+
+    while (1) {
+        if (funarg != NULL) {
+            tmparg = (Ast*)funarg->value;
+            if (tmparg->kind == AST_PLACEHOLDER) {
+                tmparg = ((Ast *)funparam->value)->declinit;
+                if (tmparg == NULL) {
+                    loggerPanic("Default parameter not found for function "
+                            "call: %s()\n", funcall->fname->data);
+                }
+            }
+        } else if (funparam != NULL) {
+            tmparg = ((Ast *)funparam->value)->declinit;
+        } else {
+            break;
+        }
+
+        /**
+         * XXX: @Current
+         * How to keep track of the registers a that need to be passed to the 
+         * function call
+         */
+        // loggerDebug("REGISTER: %ld\n", register_num-1);
+        irEval(cc,tmparg);
+        irSaveLocal(cc,tmparg);
+
+        /* Handling the case for either more arguments than parameters or
+         * more parameters than arguments */
+        if (funarg != NULL && funarg->next != funcall->args) {
+            funarg = funarg->next;
+        } else {
+            funarg = NULL;
+        }
+
+        if (funparam != NULL && funparam->next != params) {
+            funparam = funparam->next;
+        } else {
+            funparam = NULL;
+        }
+    }
+
+    inst->funcall_args = funcall_args;
+    inst->flags = flags;
+    inst->float_arg_cnt = float_arg_cnt;
+    inst->int_arg_cnt = int_arg_cnt;
+    inst->vararg_start_idx = vararg_start_idx;
+    inst->call_name = funcall->fname;
+    cc->tmp_ir_list = cur_ir_list;
+    ListAppend(cc->tmp_ir_list,inst);
 }
 
 void irEval(Cctrl *cc, Ast *ast) {
@@ -958,6 +1077,7 @@ void irEvalFunc(Cctrl *cc, Ast *func) {
     inst->body = ListNew();
 
     cc->ir_func = inst;
+    cc->tmp_ir_list = inst->body;
 
     irResetRegister();
 
