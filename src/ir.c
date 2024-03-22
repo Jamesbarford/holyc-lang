@@ -14,8 +14,10 @@
 #include "util.h"
 
 
-#define irGetRegister() register_num++
+#define irGetRegister()   register_num++
 #define irResetRegister() register_num = 1
+#define irSaveRegister()   register_num_save = register_num
+#define irRestoreRegister() register_num = register_num_save
 
 void irEval(Cctrl *cc, Ast *ast);
 void irEvalIfCond(Cctrl *cc, Ast *ast, int invert);
@@ -28,6 +30,9 @@ int irJumpConditional(Cctrl *cc, Ast *ast);
 int irJumpConditionalInverted(Cctrl *cc, Ast *ast);
 
 static long register_num = 0;
+/* In case we need to save the current register number and perhaps want to 
+ * reset the register counter. */
+static long register_num_save = 0;
 static int ir_has_initialisers = 0;
 
 char *irNormaliseFunctionName(char *fname) {
@@ -87,6 +92,7 @@ char *irOpKindToString(IrOperand *op) {
         case IR_LOAD:        return "IR_LOAD";
         case IR_LOAD_GLOBAL: return "IR_LOAD_GLOBAL";
         case IR_SAVE:        return "IR_SAVE";
+        case IR_MOV:         return "IR_MOV";
         case IR_FUNCTION:    return "@func";
         case IR_FLOAT:       return "@f64";
         case IR_CHAR: {
@@ -193,7 +199,7 @@ char *irRegisterOrValueToString(IrOperand *op) {
 
 void irToString(aoStr *str, IrInstruction *inst) {
     IrOperand *arg1;
-    char *alu,*s_arg1,*s_arg2,*s_arg3;
+    char *alu,*s_arg1,*s_arg2,*s_arg3,*s_type;
     switch (inst->op) {
         case IR_LOAD: {
             arg1 = inst->arg1;
@@ -213,6 +219,27 @@ void irToString(aoStr *str, IrInstruction *inst) {
                 irOpKindToString(inst->arg1), inst->arg1->reg);
             break;
         }
+
+        case IR_MOV: {
+            s_type = irOpKindToString(inst->arg1);
+            if (inst->flags & IR_FLAGS_INTERMEDIATE) {
+                if (inst->arg1->kind == IR_INT) {
+                    aoStrCatPrintf(str,"\tMOV\t%sRx%d, %s%d\n",
+                            s_type,inst->arg1->reg,s_type,inst->arg1->i64);
+                } else {
+                    aoStrCatPrintf(str,"\tMOV\t%sRx%d, %s%f\n",
+                            s_type,inst->arg1->reg,s_type,inst->arg1->f64);
+                }
+            } else if (inst->flags & IR_FLAGS_TEXT_LABEL) {
+                aoStrCatPrintf(str,"\tMOV\t%sRx%d, %s\n",
+                        s_type,inst->arg1->reg,inst->arg1->slabel->data);
+            } else {
+                aoStrCatPrintf(str,"\tMOV\t%sRx%d, %sRx%d\n",
+                        s_type,inst->arg2->reg,s_type,inst->arg1->reg);
+            }
+            break;
+        }
+
         case IR_FUNCTION: {
             aoStrCatPrintf(str, "%s\n", inst->fname->data);
             ListForEach(inst->body) {
@@ -467,6 +494,14 @@ void irLoadIntermediate(Cctrl *cc, Ast *ast) {
     inst->arg1->reg = irGetRegister();
     ListAppend(cc->tmp_ir_list,inst);
 }
+
+
+void irMovIntermediate(Cctrl *cc, Ast *ast, int reg) {
+    IrInstruction *inst = irInstNew(IR_MOV);
+    inst->arg1 = irIntermediateNew(ast);
+    inst->arg1->reg = reg;
+    ListAppend(cc->tmp_ir_list,inst);
+}
 /* LOAD end ================================================================= */
 
 void irSaveLocal(Cctrl *cc, Ast *ast) {
@@ -480,6 +515,38 @@ void irSaveLocal(Cctrl *cc, Ast *ast) {
     op->reg = irGetRegister();
     op->size = ast->type->size;
     inst->arg1 = op;
+    ListAppend(cc->tmp_ir_list,inst);
+}
+
+IrOperand *irOpSetReg(Ast *ast, int reg) {
+    IrOperand *op1 = irOperandNew(-1);
+    int ir_kind = irAstTypeKindToIr(ast->type->kind);
+    op1->kind = ir_kind;
+    if (!ast->type->issigned) {
+        op1->flags |= IR_FLAGS_UNSIGNED;
+    }
+    op1->reg = reg;
+    op1->size = ast->type->size;
+    return op1;
+}
+
+void irMov(Cctrl *cc, Ast *ast, int fromreg, int to) {
+    IrInstruction *inst = irInstNew(IR_MOV);
+    inst->arg1 = irOpSetReg(ast,fromreg);
+    inst->arg2 = irOpSetReg(ast,to);
+    ListAppend(cc->tmp_ir_list,inst);
+}
+
+void irMovLabelToReg(Cctrl *cc, Ast *ast, int to) {
+    IrInstruction *inst = irInstNew(IR_MOV);
+    IrOperand *op = irOperandNew(IR_STRING);
+    /* Set the string */
+    op->sval = ast->sval;
+    op->slabel = ast->slabel;
+
+    inst->flags |= IR_FLAGS_TEXT_LABEL;
+    inst->arg1 = op;
+    inst->arg2 = irOpSetReg(ast,to);
     ListAppend(cc->tmp_ir_list,inst);
 }
 
@@ -931,11 +998,16 @@ void irWhile(Cctrl *cc, Ast *ast) {
     ListAppend(cc->tmp_ir_list,i3);
 }
 
+void irSetFuncRegister(Cctrl *cc) {
+
+}
+
 /**
  * [<IrInstruction>, <IrInstruction>]
  */
 void irFunctionCall(Cctrl *cc, Ast *funcall) {
-    int float_arg_cnt = 0, int_arg_cnt = 0, vararg_start_idx = -1;
+    int float_arg_cnt = 0, int_arg_cnt = 0, vararg_start_idx = -1, from_reg,
+        func_reg = 0;
     unsigned long flags = 0;
     List *funcall_args, *params, *funparam, *funarg, *cur_ir_list;
     IrInstruction *inst;
@@ -1009,9 +1081,22 @@ void irFunctionCall(Cctrl *cc, Ast *funcall) {
          * How to keep track of the registers a that need to be passed to the 
          * function call
          */
-        // loggerDebug("REGISTER: %ld\n", register_num-1);
-        irEval(cc,tmparg);
-        irSaveLocal(cc,tmparg);
+        switch (tmparg->kind) {
+            case AST_LITERAL: irMovIntermediate(cc,tmparg,func_reg++); break;
+            case AST_STRING:  irMovLabelToReg(cc,tmparg,func_reg++);   break;
+            case AST_LVAR:
+                from_reg = CctrlGetTmpRegister(cc,tmparg->lname->data,
+                        tmparg->lname->len);
+                irMov(cc,tmparg,from_reg,func_reg++);
+                break;
+            case AST_GVAR:
+                loggerPanic("GLOABLS not implemented");
+                break;
+            default:
+                irEval(cc,tmparg);
+                irMov(cc,tmparg,register_num-1,func_reg++);
+                break;
+        }
 
         /* Handling the case for either more arguments than parameters or
          * more parameters than arguments */
@@ -1038,29 +1123,49 @@ void irFunctionCall(Cctrl *cc, Ast *funcall) {
     ListAppend(cc->tmp_ir_list,inst);
 }
 
+void irReturn(Cctrl *cc, Ast *ast) {
+    IrInstruction *ret = irInstNew(IR_RETURN);
+    if (ast->retval == NULL) {
+        ListAppend(cc->tmp_ir_list,ret);
+    } else {
+        irEval(cc,ast);
+
+    }
+}
+
 void irEval(Cctrl *cc, Ast *ast) {
     switch (ast->kind) {
         case AST_LITERAL:       irLoadIntermediate(cc,ast); break;
         case AST_STRING:        irLoadString(cc,ast);       break;
         case AST_LVAR:          irLoadLocal(cc,ast);        break;
-        case AST_IF:            irIf(cc,ast);               break;
         case AST_GVAR:          irLoadGlobal(cc,ast);       break;
-        case AST_DEFAULT_PARAM: irEval(cc,ast->declvar);    break;
         case AST_DECL:          irDecl(cc,ast);             break;
-        case AST_COMPOUND_STMT: irCompound(cc,ast->stms);   break;
-        case AST_LABEL:         irLabel(cc,ast);            break;
-        case AST_WHILE:         irWhile(cc,ast);            break;
 
         case AST_FUNPTR_CALL:
         case AST_ASM_FUNCALL:
         case AST_FUNCALL:       irFunctionCall(cc,ast);     break;
 
+        case AST_IF:            irIf(cc,ast);               break;
+        case AST_DEFAULT_PARAM: irEval(cc,ast->declvar);    break;
+        case AST_COMPOUND_STMT: irCompound(cc,ast->stms);   break;
+        case AST_WHILE:         irWhile(cc,ast);            break;
+
+
         case AST_GOTO:
         case AST_BREAK:
         case AST_CONTINUE:      irJump(cc,ast);             break;
-//        case TK_AND_AND:        irLogicalAnd(cc,ast);       break;
-//        case TK_OR_OR:          irLogicalOr(cc,ast);        break;
-//      
+        case AST_LABEL:         irLabel(cc,ast);            break;
+
+        case AST_RETURN:        irReturn(cc,ast);           break;
+
+        /* XXX:
+         * This is for contional expressions like:
+         * I64 something = 24;
+         * Bool i = 3 && something; // 1;
+         * case TK_AND_AND:        irLogicalAnd(cc,ast);       break;
+         * case TK_OR_OR:          irLogicalOr(cc,ast);        break;
+         * */
+
         default:                irBinaryOp(cc,ast);         break;
     }
 }
@@ -1087,7 +1192,7 @@ void irEvalFunc(Cctrl *cc, Ast *func) {
     if (func->params) {
         ListForEach(func->params) { 
             Ast *ast = (Ast*)it->value;
-            CctrlSetTmpRegister(cc,ast->lname->data,register_num);
+            CctrlSetTmpRegister(cc,ast->lname->data,irGetRegister());
             inst->reg_count++;
         }
     }

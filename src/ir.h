@@ -5,6 +5,7 @@
 #include "dict.h"
 #include "list.h"
 
+#define IR_MOV         199
 #define IR_LOAD        200
 #define IR_LOAD_GLOBAL 201
 #define IR_SAVE        202
@@ -56,6 +57,7 @@
 #define IR_LOCAL         309
 #define IR_LABEL         310
 #define IR_FUNCTION_CALL 311
+#define IR_RETURN        312
 
 #define IR_FLOAT_TO_INT 350
 #define IR_INT_TO_FLOAT 351
@@ -67,6 +69,7 @@
 #define IR_FLAGS_VAR_ARGS     (1 << 4)
 #define IR_FLAGS_FUN_EXTERN   (1 << 5)
 #define IR_FLAGS_FUN_EXISTS   (1 << 6)
+#define IR_FLAGS_TEXT_LABEL   (1 << 7)
 
 
 typedef struct IrOperand {
