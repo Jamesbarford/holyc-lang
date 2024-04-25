@@ -117,8 +117,7 @@ static void CctrlAddBuiltinMacros(Cctrl *cc) {
     le->tk_type = TK_STR;
     DictSet(cc->macro_defs,"__TIMESTAMP__",le);
 
-
-    len = snprintf(version,bufsize,"v0.0.1-alpha");
+    len = snprintf(version,bufsize,"v0.0.2-alpha");
     version[len] = '\0';
     le = lexemeNew(version,len);
     le->tk_type = TK_STR;

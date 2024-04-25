@@ -1,3 +1,4 @@
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stddef.h>
@@ -94,39 +95,51 @@ int hccLibInit(hccLib *lib, hccOpts *opts, char *name) {
 void getASMFileName(hccOpts *opts, char *file_name) {
     int len = strlen(file_name);
     int i;
-    char *slashptr = NULL, *dotptr = NULL,
-         *asm_outfile, *obj_outfile; 
+    char *slashptr = NULL, *asm_outfile, *obj_outfile, *end; 
 
-    for (i = len -1; i >= 0; --i) {
-        if (file_name[i] == '.') {
-            dotptr = &file_name[i];
+    if ((file_name[0] != '.' && file_name[1] != '/') && 
+         file_name[0] != '/' && file_name[0] != '~') {
+        end = 0;
+        slashptr = 0;
+    } else {
+        end = &file_name[len-1];
+        for (i = len -1; i >= 0; --i) {
+            if (file_name[i] == '/') {
+                slashptr = &file_name[i];
+                slashptr += 1;
+                break;
+            }
         }
 
-        if (file_name[i] == '/') {
-            slashptr = &file_name[i];
-            slashptr += 1;
-            break;
+        if (tolower(*end) == 'c' && tolower(*(end-1)) == 'h' && 
+                *(end-2) == '.') {
+            end -= 2;
+        } else if (tolower(*end) == 'c' && tolower(*(end-1)) == 'h' && 
+                *(end-2) == '.') {
+            end -= 2;
+        } else {
+            loggerPanic("Unknown file extension, file must end with .HC or .HH case insensitive. Got: %s\n", file_name);
+        }
+
+        if (slashptr == NULL) {
+            loggerPanic("Failed to extract filename\n");
         }
     }
 
     fprintf(stderr,"%s\n",file_name);
-    if (slashptr == NULL || dotptr == NULL) {
-        loggerPanic("Failed to extract filename\n");
-    }
-
     asm_outfile = malloc(sizeof(char) * len+1);
     obj_outfile = malloc(sizeof(char) * len+1);
 
-    memcpy(asm_outfile, slashptr, dotptr-slashptr);
-    memcpy(obj_outfile, slashptr, dotptr-slashptr);
+    memcpy(asm_outfile, slashptr, end-slashptr);
+    memcpy(obj_outfile, slashptr, end-slashptr);
 
-    memcpy(asm_outfile+(dotptr-slashptr), ".s", 2);
-    memcpy(obj_outfile+(dotptr-slashptr), ".o", 2);
+    memcpy(asm_outfile+(end-slashptr), ".s", 2);
+    memcpy(obj_outfile+(end-slashptr), ".o", 2);
 
-    asm_outfile[dotptr-slashptr+2] = '\0';
+    asm_outfile[end-slashptr+2] = '\0';
     asm_outfile[len] = '\0';
 
-    obj_outfile[dotptr-slashptr+2] = '\0';
+    obj_outfile[end-slashptr+2] = '\0';
     obj_outfile[len] = '\0';
     opts->asm_outfile = asm_outfile;
     opts->obj_outfile = obj_outfile;
