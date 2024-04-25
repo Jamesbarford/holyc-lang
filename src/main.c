@@ -97,23 +97,27 @@ void getASMFileName(hccOpts *opts, char *file_name) {
     char *slashptr = NULL, *dotptr = NULL,
          *asm_outfile, *obj_outfile; 
 
-    for (i = len -1; i >= 0; --i) {
-        if (file_name[i] == '.') {
-            dotptr = &file_name[i];
-        }
+    if (file_name[0] != '.' || file_name[1] != '/') {
+        slashptr = 0;
+        dotptr = 0;
+    } else {
+        for (i = len -1; i >= 0; --i) {
+            if (file_name[i] == '.') {
+                dotptr = &file_name[i];
+            }
 
-        if (file_name[i] == '/') {
-            slashptr = &file_name[i];
-            slashptr += 1;
-            break;
+            if (file_name[i] == '/') {
+                slashptr = &file_name[i];
+                slashptr += 1;
+                break;
+            }
+        }
+        if (slashptr == NULL || dotptr == NULL) {
+            loggerPanic("Failed to extract filename\n");
         }
     }
 
     fprintf(stderr,"%s\n",file_name);
-    if (slashptr == NULL || dotptr == NULL) {
-        loggerPanic("Failed to extract filename\n");
-    }
-
     asm_outfile = malloc(sizeof(char) * len+1);
     obj_outfile = malloc(sizeof(char) * len+1);
 
