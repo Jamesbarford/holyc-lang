@@ -88,6 +88,7 @@ typedef struct AstType {
     List *params;
 } AstType;
 
+
 typedef struct Ast Ast;
 typedef struct Ast {
     long kind;
@@ -204,7 +205,8 @@ typedef struct Ast {
         /* Return statement */
         Ast *retval;
 
-        /* Compound statement */
+        /* @Typeo
+         * Compound statement */
         List *stms;
 
         /* Class */
@@ -232,6 +234,14 @@ typedef struct Ast {
         };
     };
 } Ast;
+
+typedef struct AstArray {
+    /* While int's it's absurd to think this would have 2^32 ast's in it's array 
+     * realistically it would max be something like 20? */
+    int count;
+    int capacity;
+    Ast **entries;
+} AstArray;
 
 extern AstType *ast_int_type;
 extern AstType *ast_uint_type;
@@ -329,6 +339,11 @@ int AstIsRangeOperator(long op);
 Ast *AstGlobalCmdArgs(void);
 
 aoStr *AstNormaliseFunctionName(char *fname);
+int AstIsAssignment(long op);
+
+AstArray *AstArrayNew(int capacity);
+void AstArrayPush(AstArray *ast_array, Ast *ast);
+void AstArrayRelease(AstArray *ast_array);
 
 /* For debugging */
 char *AstTypeToString(AstType *type);

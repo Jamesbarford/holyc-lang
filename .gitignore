@@ -18,3 +18,4 @@ unit_tests
 .cache
 compile_commands.json
 scratch
+*.dot

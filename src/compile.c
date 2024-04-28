@@ -5,6 +5,7 @@
 #include "aostr.h"
 #include "ast.h"
 #include "cctrl.h"
+#include "cfg.h"
 #include "compile.h"
 #include "dict.h"
 #include "x86.h"
@@ -92,6 +93,7 @@ int CompileToAst(Cctrl *cc, char *entrypath, int lexer_flags) {
     DictRelease(seen_files);
     CctrlInitTokenIter(cc,tokens);
     ParseToAst(cc);
+    cfgConstruct(cc);
     lexReleaseAllFiles(&l);
     aoStrRelease(builtin_path);
     // ListRelease(code_list,free);

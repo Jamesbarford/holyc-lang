@@ -5,6 +5,7 @@
 #include <stdlib.h>
 
 #define static_size(x) (sizeof((x)) / sizeof((x[0])))
+#define cast(type, value) (((type)(value)))
 
 #define ESC_GREEN  "\033[0;32m"
 #define ESC_BLACK  "\033[0;30m"

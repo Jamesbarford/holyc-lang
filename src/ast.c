@@ -668,6 +668,29 @@ List *AstParamTypes(List *params) {
     return ref;
 }
 
+int AstIsAssignment(long op) {
+    switch (op) {
+        case '=':
+        case TK_SHL_EQU:
+        case TK_SHR_EQU:
+        case TK_OR_EQU:
+        case TK_AND_EQU:
+        case TK_ADD_EQU:
+        case TK_SUB_EQU:
+        case TK_MUL_EQU:
+        case TK_DIV_EQU:
+        case TK_MOD_EQU:
+        /* These can be treated as short hand expressions for */
+        case TK_PLUS_PLUS:
+        case TK_PRE_PLUS_PLUS:
+        case TK_MINUS_MINUS:
+        case TK_PRE_MINUS_MINUS:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
 void AssertIsValidPointerOp(long op, long lineno) {
     switch (op) {
         case '-': case '+':
@@ -1873,5 +1896,34 @@ void AstRelease(Ast *ast) {
         case '*': case '-':
                 AstFreeBinaryOp(ast);
                 break;
+    }
+}
+
+AstArray *AstArrayNew(int capacity) {
+    AstArray *ast_array = cast(AstArray *,malloc(sizeof(AstArray)));
+    ast_array->capacity = capacity;
+    ast_array->count = 0;
+    ast_array->entries = cast(Ast **,malloc(sizeof(Ast *)*capacity));
+    return ast_array;
+}
+
+void AstArrayPush(AstArray *ast_array, Ast *ast) {
+    if (ast_array->count + 1 >= ast_array->capacity) {
+        int new_capacity = ast_array->capacity + 20;
+        Ast **new_entries = cast(Ast **,realloc(ast_array->entries,
+                    sizeof(Ast **)*new_capacity));
+        if (new_entries == NULL) {
+            loggerPanic("Failed to allocate memory for AstArray\n");
+        }
+        ast_array->entries = new_entries;
+        ast_array->capacity = new_capacity;
+    }
+    ast_array->entries[ast_array->count++] = ast;
+}
+
+void AstArrayRelease(AstArray *ast_array) {
+    if (ast_array) {
+        free(ast_array->entries);
+        free(ast_array);
     }
 }
