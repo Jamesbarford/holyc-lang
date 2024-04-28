@@ -55,7 +55,11 @@ static void cgfHandleIfBlock(CFGBuilder *builder, Ast *ast) {
 
     printf("cfg_ if\n");
     cfgBuilderSetBasicBlock(builder,bb);
-
+ 
+    /* @Confirm
+     * should the else block be part of this basic block and then the `bb->next` 
+     * pointer set to the next block as opposed to explicitly setting a 
+     * `bb->_else`? */
     if (ast->els) {
         printf("cfg_ else\n");
         else_body = cfgBuilderAllocBasicBlock(builder,CFG_CONTROL_BLOCK);
