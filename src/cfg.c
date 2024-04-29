@@ -12,7 +12,17 @@ static void cfgConstructCompoundStatement(CFGBuilder *builder, List *stmts);
 static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast);
 
 static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder, int type) {
-    BasicBlock *bb = (BasicBlock *)calloc(1,sizeof(BasicBlock));
+    if (builder->bb_pos + 1 >= builder->bb_cap) {
+        int new_cap = builder->bb_cap * 2;
+        BasicBlock *bb_pool = cast(BasicBlock *,
+                realloc(builder->bb_pool,new_cap));
+        if (bb_pool == NULL) {
+            loggerPanic("Failed to reallocate memory for basic block pool\n");
+        }
+        builder->bb_pool = bb_pool;
+        builder->bb_cap = new_cap;
+    }
+    BasicBlock *bb = &builder->bb_pool[builder->bb_pos++];
     bb->type = 0;
     bb->prev_cnt = 0;
     bb->block_no = 0;
@@ -21,9 +31,22 @@ static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder, int type) {
     return bb;
 }
 
+void cfgBuilderRelease(CFGBuilder *builder, int free_builder) {
+    if (builder) {
+        free(builder->bb_pool);
+        if (free_builder) {
+            free(builder);
+        }
+    }
+}
+
 static void cfgBuilderInit(CFGBuilder *builder, Cctrl *cc) {
+    BasicBlock *bb_pool = cast(BasicBlock *, malloc(sizeof(BasicBlock)*64));
     builder->cc = cc;
     builder->bb_count = 0;
+    builder->bb_cap = 64;
+    builder->bb_pool = bb_pool;
+    builder->bb_pos = 0;
 }
 
 static void cfgBuilderSetCFG(CFGBuilder *builder, CFG *cfg) {
@@ -41,41 +64,39 @@ static CFG *cfgNew(aoStr *fname, BasicBlock *head_block) {
     return cfg;
 }
 
+/* @Buggy */
 static void cgfHandleIfBlock(CFGBuilder *builder, Ast *ast) {
     BasicBlock *bb = builder->bb;
-    BasicBlock *then_body;
-    BasicBlock *else_body;
+    BasicBlock *new_block, *then_body, *else_body;
     AstArrayPush(bb->ast_array,ast->cond);
 
+    /* Start of a new basic block */
     then_body = cfgBuilderAllocBasicBlock(builder,CFG_CONTROL_BLOCK);
     cfgBuilderSetBasicBlock(builder,then_body);
-    bb->_if = then_body;
-    /* Start of a new basic block */
     cfgHandleAstNode(builder,ast->then);
-
-    printf("cfg_ if\n");
-    cfgBuilderSetBasicBlock(builder,bb);
+    bb->_if = then_body;
+    new_block = cfgBuilderAllocBasicBlock(builder,CFG_CONTROL_BLOCK);
+    then_body->next = new_block;
+    // cfgBuilderSetBasicBlock(builder,new_block);
  
+
     /* @Confirm
      * should the else block be part of this basic block and then the `bb->next` 
      * pointer set to the next block as opposed to explicitly setting a 
      * `bb->_else`? */
     if (ast->els) {
-        printf("cfg_ else\n");
         else_body = cfgBuilderAllocBasicBlock(builder,CFG_CONTROL_BLOCK);
-        bb->_else = else_body;
         cfgBuilderSetBasicBlock(builder,else_body);
-        /* Possible entry to an alternate basic block */
         cfgHandleAstNode(builder,ast->els);
-        cfgBuilderSetBasicBlock(builder,bb);
+        bb->_else = else_body;
+        bb->_else->next = new_block;
     }
+    cfgBuilderSetBasicBlock(builder,new_block);
 }
 
 static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
     int kind = ast->kind;
     BasicBlock *bb = builder->bb;
-    BasicBlock *then_body;
-    BasicBlock *else_body;
 
     /* We are only interested in the AST nodes that are the start of a new 
      * basic block or a top level `I64 x = 10;` type declaration or assignment 
@@ -89,17 +110,11 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
  
         case AST_LVAR: {
             AstArrayPush(bb->ast_array,ast);
-            char *lvar_string = AstToString(ast);
-            printf("cfg_ lvar: %s\n", lvar_string);
-            free(lvar_string);
             break;
         }
 
         case AST_DECL: {
             AstArrayPush(bb->ast_array,ast);
-            char *decl_string = AstToString(ast);
-            printf("cfg_ decl: %s\n", decl_string);
-            free(decl_string);
             break;
         }
 
@@ -116,11 +131,9 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
         case AST_ASM_FUNCALL:
         case AST_FUNCALL:
         case AST_FUNPTR_CALL: {
-            printf("cgf_function_call\n");
             AstArrayPush(bb->ast_array,ast);
             break;
         }
-
 
         case AST_CLASS_REF:
         case AST_DEREF:
@@ -157,13 +170,11 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
 
         default:
             if (AstIsAssignment(kind)) {
-                printf("cfg_assign: %s\n",lexemePunctToString(kind));
                 AstArrayPush(bb->ast_array,ast);
             } else {
             }
             break;
     }
-    printf("=======\n");
 }
 
 /* @Confirm:
@@ -174,6 +185,46 @@ static void cfgConstructCompoundStatement(CFGBuilder *builder, List *stmts) {
     if (ListEmpty(stmts)) return;
     ListForEach(stmts) cfgHandleAstNode(builder,cast(Ast *,it->value));
 } 
+
+static void bbPrint(BasicBlock *bb) {
+    for (BasicBlock *it = bb; bb; bb = bb->next) {
+        BasicBlock *next = bb->next ? bb->next : NULL;
+        printf("++++++++++++\n");
+        printf("block: %d -> \n", bb->block_no);
+        if (bb->_if) {
+            printf("    goto %d\n",bb->_if->block_no);
+        }
+        if (bb->_else) {
+            printf("    goto %d\n",bb->_else->block_no);
+        }
+
+        if (next) {
+            printf("    block: %d\n",next->block_no);
+        }
+
+        if (!bb->_if && !bb->_else && ! next) {
+            printf("    nil\n");
+        }
+
+        for (int i = 0; i < bb->ast_array->count; ++i) {
+            AstPrint(bb->ast_array->entries[i]);
+        }
+
+        if (bb->_if) {
+            bbPrint(bb->_if);
+        }
+        if (bb->_else) {
+            bbPrint(bb->_else);
+        }
+        printf("######\n");
+    }
+}
+
+static void cfgWalk(CFG *cfg) {
+    printf("Entry: %s\n", cfg->ref_fname->data);
+    BasicBlock *bb = cfg->head;
+    bbPrint(bb);
+}
 
 CFG *cfgConstruct(Cctrl *cc) {
     Ast *ast;
@@ -194,5 +245,6 @@ CFG *cfgConstruct(Cctrl *cc) {
             cfgConstructCompoundStatement(&builder,ast->body->stms);
         }
     }
+    cfgWalk(cfg);
     return cfg;
 }

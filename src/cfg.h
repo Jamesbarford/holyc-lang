@@ -29,6 +29,8 @@ typedef struct BasicBlock {
 typedef struct CFG {
     /* CFG Does not own the function name, the AST does */
     aoStr *ref_fname;
+    /* This head block is also a pointer to the begining of `bb_pool` in 
+     * the `CFGBuilder` so freeing this frees every `BasicBlock` */
     BasicBlock *head;
 } CFG;
 
@@ -37,6 +39,9 @@ typedef struct CFGBuilder {
     Cctrl *cc;
     CFG *cfg;
     BasicBlock *bb;
+    BasicBlock *bb_pool;
+    int bb_pos;
+    int bb_cap;
 } CFGBuilder;
 
 BasicBlock *bbNew(int type);
