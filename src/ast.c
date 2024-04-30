@@ -1655,9 +1655,14 @@ void AstUnaryArgToString(aoStr *str, char *op, Ast *ast) {
 }
 
 void AstBinaryArgToString(aoStr *str, char *op, Ast *ast) {
-    _AstLValueToString(str, ast->left);
-    aoStrCatPrintf(str, " %s ", op);
-    _AstLValueToString(str, ast->right);
+    if (!strncmp(op,"-",1) || !strncmp(op,"~",1)) {
+        aoStrCatPrintf(str, " %s", op);
+        _AstLValueToString(str, ast->left);
+    } else {
+        _AstLValueToString(str, ast->left);
+        aoStrCatPrintf(str, " %s ", op);
+        _AstLValueToString(str, ast->right);
+    }
 }
 
 /* This can only be used for lvalues */
@@ -1721,7 +1726,20 @@ static void _AstLValueToString(aoStr *str, Ast *ast) {
         case AST_FUNCALL:
         case AST_FUNPTR_CALL:
         case AST_ASM_FUNCALL: {
-            aoStrCatPrintf(str, "%s()",ast->fname->data);
+            List *node = ast->args->next;
+            aoStr *internal = aoStrAlloc(256);
+            while (node != ast->args) {
+                Ast *val = cast(Ast *, node->value);
+                _AstLValueToString(internal,val);
+                if (node->next != ast->args) {
+                    aoStrCatPrintf(internal,",");
+                }
+                node = node->next;
+            }
+            aoStr *escaped = aoStrEscapeString(internal);
+            aoStrCatPrintf(str, "%s(%s)",ast->fname->data,escaped->data);
+            aoStrRelease(internal);
+            aoStrRelease(escaped);
             break;
         }
 

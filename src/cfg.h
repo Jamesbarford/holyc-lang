@@ -12,6 +12,9 @@
 
 #define CFG_MAX_PREV    (32)
 
+#define CFG_FLAG_IN_CONDITIONAL (0x1)
+#define CFG_FLAG_IN_LOOP        (0x2)
+
 typedef struct BasicBlock {
     /* @Confirm:
      * Should we stick ssa on this struct? */
@@ -36,10 +39,14 @@ typedef struct CFG {
 
 typedef struct CFGBuilder {
     int bb_count;
+    unsigned long flags;
     Cctrl *cc;
     CFG *cfg;
     BasicBlock *bb;
     BasicBlock *bb_pool;
+    List *ast_list;
+    List *ast_iter;
+    int needs_convergence;
     int bb_pos;
     int bb_cap;
 } CFGBuilder;

@@ -1,14 +1,17 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <assert.h>
+#include <string.h>
 
+#include "aostr.h"
 #include "ast.h"
 #include "cctrl.h"
 #include "cfg.h"
+#include "dict.h"
 #include "lexer.h"
 #include "list.h"
 #include "util.h"
 
-static void cfgConstructCompoundStatement(CFGBuilder *builder, List *stmts);
 static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast);
 
 static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder, int type) {
@@ -28,6 +31,7 @@ static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder, int type) {
     bb->block_no = 0;
     bb->ast_array = AstArrayNew(16);
     bb->block_no = builder->bb_count++;
+    bb->_else = bb->_if = NULL;
     return bb;
 }
 
@@ -43,10 +47,11 @@ void cfgBuilderRelease(CFGBuilder *builder, int free_builder) {
 static void cfgBuilderInit(CFGBuilder *builder, Cctrl *cc) {
     BasicBlock *bb_pool = cast(BasicBlock *, malloc(sizeof(BasicBlock)*64));
     builder->cc = cc;
-    builder->bb_count = 0;
+    builder->bb_count = 1;
     builder->bb_cap = 64;
     builder->bb_pool = bb_pool;
     builder->bb_pos = 0;
+    builder->flags = 0;
 }
 
 static void cfgBuilderSetCFG(CFGBuilder *builder, CFG *cfg) {
@@ -66,37 +71,51 @@ static CFG *cfgNew(aoStr *fname, BasicBlock *head_block) {
 
 /* @Buggy */
 static void cgfHandleIfBlock(CFGBuilder *builder, Ast *ast) {
+    assert(ast != NULL);
     BasicBlock *bb = builder->bb;
     BasicBlock *new_block, *then_body, *else_body;
+    builder->flags |= CFG_FLAG_IN_CONDITIONAL;
     AstArrayPush(bb->ast_array,ast->cond);
 
-    /* Start of a new basic block */
-    then_body = cfgBuilderAllocBasicBlock(builder,CFG_CONTROL_BLOCK);
-    cfgBuilderSetBasicBlock(builder,then_body);
-    cfgHandleAstNode(builder,ast->then);
-    bb->_if = then_body;
-    new_block = cfgBuilderAllocBasicBlock(builder,CFG_CONTROL_BLOCK);
-    then_body->next = new_block;
-    // cfgBuilderSetBasicBlock(builder,new_block);
- 
 
     /* @Confirm
      * should the else block be part of this basic block and then the `bb->next` 
      * pointer set to the next block as opposed to explicitly setting a 
      * `bb->_else`? */
+
+    new_block = cfgBuilderAllocBasicBlock(builder,CFG_CONTROL_BLOCK);
+
+    then_body = cfgBuilderAllocBasicBlock(builder,CFG_CONTROL_BLOCK);
+
+    then_body->prev[0] = bb;
+    bb->_if = then_body;
+    bb->_if->next = new_block;
+
     if (ast->els) {
         else_body = cfgBuilderAllocBasicBlock(builder,CFG_CONTROL_BLOCK);
+        bb->_else = else_body;
+        else_body->prev[0] = bb;
+    }
+
+    /* Start of a new basic block */
+    cfgBuilderSetBasicBlock(builder,then_body);
+    cfgHandleAstNode(builder,ast->then);
+
+    if (ast->els) {
         cfgBuilderSetBasicBlock(builder,else_body);
         cfgHandleAstNode(builder,ast->els);
-        bb->_else = else_body;
-        bb->_else->next = new_block;
+        else_body->next = new_block;
     }
+
     cfgBuilderSetBasicBlock(builder,new_block);
+    builder->flags &= ~(CFG_FLAG_IN_CONDITIONAL);
 }
 
 static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
+    assert(ast != NULL);
     int kind = ast->kind;
     BasicBlock *bb = builder->bb;
+    List *stmts;
 
     /* We are only interested in the AST nodes that are the start of a new 
      * basic block or a top level `I64 x = 10;` type declaration or assignment 
@@ -148,8 +167,14 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
         case AST_CONTINUE:
             break;
 
+        /* We are in a jump */
         case AST_COMPOUND_STMT: {
-            cfgConstructCompoundStatement(builder,ast->stms);
+            stmts = ast->stms;
+            if (ListEmpty(stmts)) return;
+            ListForEach(stmts) {
+                Ast *ast = cast(Ast *,it->value);
+                cfgHandleAstNode(builder,ast);
+            }
             break;
         }
 
@@ -171,59 +196,150 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
         default:
             if (AstIsAssignment(kind)) {
                 AstArrayPush(bb->ast_array,ast);
-            } else {
             }
             break;
     }
 }
 
-/* @Confirm:
- * I think this should be creating the graph from the List of ast's? */
-static void cfgConstructCompoundStatement(CFGBuilder *builder, List *stmts) {
-    /* Better to have this split out even if it means this function is 
-     * comically short. */
+/* Split out to make it simpler to reason with */
+static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
     if (ListEmpty(stmts)) return;
-    ListForEach(stmts) cfgHandleAstNode(builder,cast(Ast *,it->value));
-} 
-
-static void bbPrint(BasicBlock *bb) {
-    for (BasicBlock *it = bb; bb; bb = bb->next) {
-        BasicBlock *next = bb->next ? bb->next : NULL;
-        printf("++++++++++++\n");
-        printf("block: %d -> \n", bb->block_no);
-        if (bb->_if) {
-            printf("    goto %d\n",bb->_if->block_no);
-        }
-        if (bb->_else) {
-            printf("    goto %d\n",bb->_else->block_no);
-        }
-
-        if (next) {
-            printf("    block: %d\n",next->block_no);
-        }
-
-        if (!bb->_if && !bb->_else && ! next) {
-            printf("    nil\n");
-        }
-
-        for (int i = 0; i < bb->ast_array->count; ++i) {
-            AstPrint(bb->ast_array->entries[i]);
-        }
-
-        if (bb->_if) {
-            bbPrint(bb->_if);
-        }
-        if (bb->_else) {
-            bbPrint(bb->_else);
-        }
-        printf("######\n");
+    builder->ast_list = stmts;
+    ListForEach(stmts) {
+        Ast *ast = cast(Ast *,it->value);
+        builder->ast_iter = it;
+        cfgHandleAstNode(builder,ast);
     }
 }
 
-static void cfgWalk(CFG *cfg) {
-    printf("Entry: %s\n", cfg->ref_fname->data);
+/**
+ * @Hack
+ * It should be possible to be able to construct this tree without having
+ * to subsequently fix it.
+ */
+static void cfgFix(BasicBlock *bb) {
+    for (; bb; bb = bb->next) {
+        BasicBlock *_if, *_else, *next;
+        next = bb->next ? bb->next : NULL;
+        _if = bb->_if;
+        _else = bb->_else;
+
+        if (_if && _else && next) {
+            if (_if && _if->next->next != next)     _if->next = next;
+            if (_else && _else->next->next != next) _else->next = next;
+            bb->next = NULL;
+        }
+
+        if (_if && _if->next->next == NULL && next)     _if->next = next;
+        if (_else && _else->next->next == NULL && next) _else->next = next;
+
+        if (_if)   cfgFix(bb->_if);
+        if (_else) cfgFix(bb->_else);
+    }
+}
+
+static void cfgCreateGraphVizShapes(aoStr *str, BasicBlock *bb) {
+    BasicBlock *_if, *_else, *next;
+    for (; bb; bb = bb->next) {
+        next = bb->next;
+        _if = bb->_if;
+        _else = bb->_else;
+
+        if (!bb->_if && !bb->_else && !next) return;
+
+        if (bb->ast_array->count) {
+            aoStr *internal = aoStrAlloc(256);
+            char *lvalue_str;
+            for (int i = 0; i < bb->ast_array->count; ++i) {
+                lvalue_str = AstLValueToString(bb->ast_array->entries[i]);
+                aoStrCatPrintf(internal, "%s\\n",lvalue_str);
+                free(lvalue_str);
+            }
+            aoStrCatPrintf(str,
+                    "    bb%d [shape=record,style=filled,fillcolor=lightgrey,label=\"bb%d\\n%s\"];\n",
+                    bb->block_no,
+                    bb->block_no,
+                    internal->data);
+            aoStrRelease(internal);
+        }
+
+        if (_if)   cfgCreateGraphVizShapes(str,_if);
+        if (_else) cfgCreateGraphVizShapes(str,_else);
+    }
+}
+
+static void cfgCreateGraphVizMappings(Dict *mappings, aoStr *str, BasicBlock *bb) {
+    char buffer[BUFSIZ];
+    char *key;
+    ssize_t len;
+    BasicBlock *_if, *_else, *next;
+
+    for (; bb; bb = bb->next) {
+        next = bb->next;
+        _if = bb->_if;
+        _else = bb->_else;
+
+        if (_if) {
+            len = snprintf(buffer,sizeof(buffer),"    bb%d -> bb%d",
+                    bb->block_no,
+                    _if->block_no);
+            buffer[len]='\0';
+            if (!DictGet(mappings,buffer)) {
+                key = strndup(buffer,len);
+                DictSet(mappings,key,bb);
+            }
+        }
+
+        if (_else) {
+            len = snprintf(buffer,sizeof(buffer),"    bb%d -> bb%d",
+                    bb->block_no,
+                    _else->block_no);
+            buffer[len]='\0';
+            if (!DictGet(mappings,buffer)) {
+                key = strndup(buffer,len);
+                DictSet(mappings,key,bb);
+            }
+        }
+
+        if (next) {
+            len = snprintf(buffer,sizeof(buffer),"    bb%d -> bb%d",
+                    bb->block_no,
+                    next->block_no);
+            buffer[len]='\0';
+            if (!DictGet(mappings,buffer)) {
+                key = strndup(buffer,len);
+                DictSet(mappings,key,bb);
+            }
+        }
+
+        if (_if)   cfgCreateGraphVizMappings(mappings,str,_if);
+        if (_else) cfgCreateGraphVizMappings(mappings,str,_else);
+        
+    }
+}
+
+static void cfgCreateGraphVizBody(aoStr *str, CFG *cfg) {
     BasicBlock *bb = cfg->head;
-    bbPrint(bb);
+    Dict *mappings = DictNew(&default_table_type);
+    cfgCreateGraphVizShapes(str,bb);
+    cfgCreateGraphVizMappings(mappings,str,bb);
+
+    for (ssize_t i = 0; i < (ssize_t)mappings->capacity; ++i) {
+        DictNode *dn = mappings->body[i];
+        while (dn) {
+            aoStrCatPrintf(str,"%s\n",dn->key);
+            dn = dn->next;
+        }
+    }
+    DictRelease(mappings);
+}
+
+aoStr *cfgCreateGraphViz(CFG *cfg) {
+    aoStr *str = aoStrAlloc(1024);
+    aoStrCatPrintf(str,"digraph \"%s\" {\n",cfg->ref_fname->data);
+    cfgCreateGraphVizBody(str,cfg);
+    aoStrCatPrintf(str,"}");
+    return str;
 }
 
 CFG *cfgConstruct(Cctrl *cc) {
@@ -242,9 +358,13 @@ CFG *cfgConstruct(Cctrl *cc) {
             bb->next = cfgBuilderAllocBasicBlock(&builder,CFG_CONTROL_BLOCK);
             cfgBuilderSetCFG(&builder,cfg);
             cfgBuilderSetBasicBlock(&builder,bb->next);
-            cfgConstructCompoundStatement(&builder,ast->body->stms);
+            cfgConstructFunction(&builder,ast->body->stms);
         }
     }
-    cfgWalk(cfg);
+    cfgFix(cfg->head);
+    aoStr *data = cfgCreateGraphViz(cfg);
+    /* @Continue */
+    printf("%s\n",data->data);
+    aoStrRelease(data);
     return cfg;
 }
