@@ -218,9 +218,9 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
  * to subsequently fix it.
  */
 static void cfgFix(BasicBlock *bb) {
+    BasicBlock *_if, *_else, *next;
     for (; bb; bb = bb->next) {
-        BasicBlock *_if, *_else, *next;
-        next = bb->next ? bb->next : NULL;
+        next = bb->next;
         _if = bb->_if;
         _else = bb->_else;
 
