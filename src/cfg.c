@@ -256,7 +256,7 @@ static void cfgCreateGraphVizShapes(aoStr *str, BasicBlock *bb) {
                 free(lvalue_str);
             }
             aoStrCatPrintf(str,
-                    "    bb%d [shape=record,style=filled,fillcolor=lightgrey,label=\"bb%d\\n%s\"];\n",
+                    "    bb%d [shape=record,style=filled,fillcolor=lightgrey,label=\"{\\<bb%d\\>:|%s}\"];\n",
                     bb->block_no,
                     bb->block_no,
                     internal->data);
