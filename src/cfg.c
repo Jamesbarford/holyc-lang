@@ -111,6 +111,34 @@ static void cgfHandleIfBlock(CFGBuilder *builder, Ast *ast) {
     builder->flags &= ~(CFG_FLAG_IN_CONDITIONAL);
 }
 
+static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
+    BasicBlock *bb, *bb_cond, *bb_body;
+    bb = builder->bb;
+    bb_cond = cfgBuilderAllocBasicBlock(builder,CFG_CONTROL_BLOCK);
+    bb_body = cfgBuilderAllocBasicBlock(builder,CFG_LOOP_BLOCK);
+
+    Ast *init = ast->forinit;
+    Ast *cond = ast->forcond;
+
+    Ast *body = ast->forbody;
+    Ast *step = ast->forstep;
+
+
+    if (init) AstArrayPush(bb->ast_array,init);
+
+    bb_body->next = bb_cond;
+    bb_cond->next = bb_body;
+
+    /* Body exists within a loop 
+     *
+     * Need a block for the loop:
+     * - condition
+     * - (body & step) go in the same block and then link to the condition
+     * body and the c
+     * */
+
+}
+
 static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
     assert(ast != NULL);
     int kind = ast->kind;
@@ -127,12 +155,16 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
         case AST_FUNC:
             break;
  
+        case TK_PRE_PLUS_PLUS:
+        case TK_PLUS_PLUS:   
+        case TK_PRE_MINUS_MINUS:
+        case TK_MINUS_MINUS:
+        case AST_ARRAY_INIT:
+        case AST_ASM_FUNCALL:
+        case AST_FUNCALL:
+        case AST_FUNPTR_CALL:
+        case AST_DECL:
         case AST_LVAR: {
-            AstArrayPush(bb->ast_array,ast);
-            break;
-        }
-
-        case AST_DECL: {
             AstArrayPush(bb->ast_array,ast);
             break;
         }
@@ -142,27 +174,20 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
             break;
         }
 
-        case TK_PRE_PLUS_PLUS:
-        case TK_PLUS_PLUS:   
-        case TK_PRE_MINUS_MINUS:
-        case TK_MINUS_MINUS:
-
-        case AST_ASM_FUNCALL:
-        case AST_FUNCALL:
-        case AST_FUNPTR_CALL: {
-            AstArrayPush(bb->ast_array,ast);
+        case AST_FOR: {
+            cfgHandleForLoop(builder,ast);
             break;
         }
+        case AST_GOTO:
+        case AST_DO_WHILE:
+        case AST_WHILE:
 
         case AST_CLASS_REF:
         case AST_DEREF:
-        case AST_GOTO:
-        case AST_ARRAY_INIT:
-        case AST_DO_WHILE:
-        case AST_WHILE:
-        case AST_FOR:
+
         case AST_JUMP:
         case AST_CASE:
+
         case AST_BREAK:
         case AST_CONTINUE:
             break;
