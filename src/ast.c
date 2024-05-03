@@ -1812,6 +1812,12 @@ static void _AstLValueToString(aoStr *str, Ast *ast) {
             _AstLValueToString(str,ast->operand);
             break;
 
+        case AST_RETURN:
+            aoStrCatPrintf(str, "return ");
+            _AstLValueToString(str,ast->retval);
+            aoStrPutChar(str, ';');
+            break;
+
         case TK_PRE_PLUS_PLUS:
         case TK_PLUS_PLUS:   
         case TK_PRE_MINUS_MINUS:

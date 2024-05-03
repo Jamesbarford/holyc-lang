@@ -1,7 +1,10 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
 #include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
 
 #include "aostr.h"
 #include "ast.h"
@@ -18,7 +21,7 @@ static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder, int type) {
     if (builder->bb_pos + 1 >= builder->bb_cap) {
         int new_cap = builder->bb_cap * 2;
         BasicBlock *bb_pool = cast(BasicBlock *,
-                realloc(builder->bb_pool,new_cap));
+                realloc(builder->bb_pool,new_cap * sizeof(BasicBlock)));
         if (bb_pool == NULL) {
             loggerPanic("Failed to reallocate memory for basic block pool\n");
         }
@@ -26,12 +29,13 @@ static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder, int type) {
         builder->bb_cap = new_cap;
     }
     BasicBlock *bb = &builder->bb_pool[builder->bb_pos++];
-    bb->type = 0;
+    bb->type = type;
     bb->prev_cnt = 0;
-    bb->block_no = 0;
-    bb->ast_array = AstArrayNew(16);
     bb->block_no = builder->bb_count++;
-    bb->_else = bb->_if = NULL;
+    /* @Leak
+     * This should probably be a memory pool as well */
+    bb->ast_array = AstArrayNew(16);
+    bb->next = bb->_else = bb->_if = NULL;
     return bb;
 }
 
@@ -69,74 +73,170 @@ static CFG *cfgNew(aoStr *fname, BasicBlock *head_block) {
     return cfg;
 }
 
-/* @Buggy */
 static void cgfHandleIfBlock(CFGBuilder *builder, Ast *ast) {
-    assert(ast != NULL);
+    /**
+     * c-code:
+     * +--------------------------+                                           
+     * | I64 x = 10;              |                                           
+     * | I64 y;                   |
+     * | y = x * 89 + 1;          |
+     * | if (x == 10) {           |                                           
+     * |    y = 42;               |                                           
+     * | } else if (x == 21) {    |                                            
+     * |    y = 99;               |                                           
+     * | } else {                 |                                           
+     * |    y = 69;               |                                           
+     * |    if (y == 69) {        |                                           
+     * |       printf("69\n");    |                                           
+     * |    }                     |                                           
+     * | }                        |                                           
+     * | printf("%ld\n",y);       |                                           
+     * | if (x == 12) {           |                                           
+     * |    printf("kowabunga\n");|
+     * | }                       | 
+     * | return 10;               |                                           
+     * +--------------------------+                                           
+     */
+
     BasicBlock *bb = builder->bb;
-    BasicBlock *new_block, *then_body, *else_body;
-    builder->flags |= CFG_FLAG_IN_CONDITIONAL;
+    bb->type = CFG_BRANCH_BLOCK;
     AstArrayPush(bb->ast_array,ast->cond);
 
+    BasicBlock *else_body = cfgBuilderAllocBasicBlock(builder,
+                                                      CFG_CONTROL_BLOCK);
+    BasicBlock *if_body = cfgBuilderAllocBasicBlock(builder,
+                                                    CFG_CONTROL_BLOCK);
+    BasicBlock *new_block;
 
-    /* @Confirm
-     * should the else block be part of this basic block and then the `bb->next` 
-     * pointer set to the next block as opposed to explicitly setting a 
-     * `bb->_else`? */
 
-    new_block = cfgBuilderAllocBasicBlock(builder,CFG_CONTROL_BLOCK);
+    if_body->prev   = bb;
+    else_body->prev = bb;
 
-    then_body = cfgBuilderAllocBasicBlock(builder,CFG_CONTROL_BLOCK);
-
-    then_body->prev[0] = bb;
-    bb->_if = then_body;
-    bb->_if->next = new_block;
-
-    if (ast->els) {
-        else_body = cfgBuilderAllocBasicBlock(builder,CFG_CONTROL_BLOCK);
-        bb->_else = else_body;
-        else_body->prev[0] = bb;
-    }
+    bb->_if = if_body;
+    bb->_else = else_body;
 
     /* Start of a new basic block */
-    cfgBuilderSetBasicBlock(builder,then_body);
+    cfgBuilderSetBasicBlock(builder,if_body);
     cfgHandleAstNode(builder,ast->then);
 
     if (ast->els) {
         cfgBuilderSetBasicBlock(builder,else_body);
         cfgHandleAstNode(builder,ast->els);
-        else_body->next = new_block;
+        /* This means the node has changed, and thus the next block needs 
+         * to be this branch */
+        if (builder->bb != else_body) {
+            /* Join */
+            bb->_if->next = builder->bb;
+        } else {
+            new_block = cfgBuilderAllocBasicBlock(builder,CFG_CONTROL_BLOCK);
+            bb->_else->next = new_block;
+            bb->_if->next = new_block;
+            cfgBuilderSetBasicBlock(builder,new_block);
+        }
+    } else {
+        bb->_if->next = else_body;
+        cfgBuilderSetBasicBlock(builder,else_body);
     }
-
-    cfgBuilderSetBasicBlock(builder,new_block);
-    builder->flags &= ~(CFG_FLAG_IN_CONDITIONAL);
 }
 
 static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
-    BasicBlock *bb, *bb_cond, *bb_body;
-    bb = builder->bb;
-    bb_cond = cfgBuilderAllocBasicBlock(builder,CFG_CONTROL_BLOCK);
-    bb_body = cfgBuilderAllocBasicBlock(builder,CFG_LOOP_BLOCK);
-
     Ast *init = ast->forinit;
     Ast *cond = ast->forcond;
-
     Ast *body = ast->forbody;
     Ast *step = ast->forstep;
 
+    BasicBlock *bb = builder->bb;
+    BasicBlock *bb_cond_else = cfgBuilderAllocBasicBlock(builder,
+                                                         CFG_CONTROL_BLOCK);
+    BasicBlock *bb_cond = cfgBuilderAllocBasicBlock(builder,CFG_BRANCH_BLOCK);
+    BasicBlock *bb_body = cfgBuilderAllocBasicBlock(builder,CFG_LOOP_BLOCK);
 
     if (init) AstArrayPush(bb->ast_array,init);
 
-    bb_body->next = bb_cond;
-    bb_cond->next = bb_body;
+    bb->next = bb_cond;
+    bb_cond->prev = bb;
+    /* Jump into loop body if condition is met */
+    bb_cond->_if = bb_body;
+    /* Else move past loop body */
+    bb_cond->_else = bb_cond_else;
+    /* Past the loop body, set for the fix function */
+    bb_cond->next = bb_cond_else;
+    /* And the previously met block was the condition */
+    bb_cond_else->prev = bb_cond;
 
+    /* Forms a loop, but the type is also set as a CFG_LOOP_BLOCK so it
+     * should be identifiable without (bb->next == bb->prev) */
+    bb_body->prev = bb_cond;
+    bb_body->next = bb_cond;
+
+    cfgBuilderSetBasicBlock(builder,bb_cond);
+    cfgHandleAstNode(builder,cond);
     /* Body exists within a loop 
      *
-     * Need a block for the loop:
-     * - condition
-     * - (body & step) go in the same block and then link to the condition
-     * body and the c
-     * */
+     * This c code:
+     * +--------------------------------+
+     * | I64 y = 420;                   |
+     * | for (I64 i = 0; i < 10; ++i) { |
+     * |    printf("%d\n",y);           |
+     * | }                              |
+     * | return 0;                      |
+     * +--------------------------------+
+     *
+     *
+     * Becomes this control flow graph:
+     * +--------------------+
+     * | BB1:               |
+     * +--------------------+
+     * | y = 420;           |
+     * | i = 0;             |<- forinit.
+     * +--------------------+
+     *           |          
+     *           V          
+     * +--------------------+
+     * | BB2:               |<- forcond is this whole block.
+     * +--------------------+
+     * | if i < 10          |         
+     * |    goto BB3;       |--------+
+     * | else               |        |
+     * |    goto BB4;       |--------+
+     * +--------------------+        |
+     *                               |
+     * +--------------------+        |
+     * | BB3:               |<-------+
+     * +--------------------+        |
+     * | printf("%d\n", y); |        |<- forbody forms the base of this block.
+     * | ++i                |  loop  |<- forstep is merged in with forbody.
+     * | goto BB2           |=======>+<- unconditional jump to the condition
+     * +--------------------+  BB2   |   block.
+     *                               |
+     *                               |
+     * +--------------------+        |
+     * | BB4:               |<-------+
+     * +--------------------+
+     * | return 0;          |
+     * +--------------------+
+     **/
 
+    cfgBuilderSetBasicBlock(builder,bb_body);
+    cfgHandleAstNode(builder,body);
+    cfgHandleAstNode(builder,step);
+    cfgBuilderSetBasicBlock(builder,bb_cond_else);
+}
+
+static void cfgHandleReturn(CFGBuilder *builder, Ast *ast) {
+    BasicBlock *bb = builder->bb;
+    BasicBlock *bb_return;
+
+    if (bb->ast_array->count == 0) {
+        bb_return = bb;
+    } else {
+        bb_return = cfgBuilderAllocBasicBlock(builder,CFG_RETURN_BLOCK);
+        bb->next = bb_return;
+        bb_return->prev = bb;
+    }
+    bb_return->next = NULL;
+    AstArrayPush(bb_return->ast_array,ast);
+    cfgBuilderSetBasicBlock(builder,bb_return);
 }
 
 static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
@@ -170,6 +270,7 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
         }
 
         case AST_IF: {
+            bb = builder->bb;
             cgfHandleIfBlock(builder,ast);
             break;
         }
@@ -178,6 +279,12 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
             cfgHandleForLoop(builder,ast);
             break;
         }
+
+        case AST_RETURN: {
+            cfgHandleReturn(builder,ast);
+            break;
+        }
+
         case AST_GOTO:
         case AST_DO_WHILE:
         case AST_WHILE:
@@ -198,6 +305,7 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
             if (ListEmpty(stmts)) return;
             ListForEach(stmts) {
                 Ast *ast = cast(Ast *,it->value);
+                bb = builder->bb;
                 cfgHandleAstNode(builder,ast);
             }
             break;
@@ -205,7 +313,6 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
 
         case AST_STRING:
         case AST_LITERAL:
-        case AST_RETURN:
         case AST_OP_ADD:
         case AST_ASM_STMT:
         case AST_ASM_FUNC_BIND:
@@ -219,7 +326,10 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
         case AST_PLACEHOLDER:
 
         default:
+            /* @Refactor */
             if (AstIsAssignment(kind)) {
+                AstArrayPush(bb->ast_array,ast);
+            } else {
                 AstArrayPush(bb->ast_array,ast);
             }
             break;
@@ -237,32 +347,6 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
     }
 }
 
-/**
- * @Hack
- * It should be possible to be able to construct this tree without having
- * to subsequently fix it.
- */
-static void cfgFix(BasicBlock *bb) {
-    BasicBlock *_if, *_else, *next;
-    for (; bb; bb = bb->next) {
-        next = bb->next;
-        _if = bb->_if;
-        _else = bb->_else;
-
-        if (_if && _else && next) {
-            if (_if && _if->next->next != next)     _if->next = next;
-            if (_else && _else->next->next != next) _else->next = next;
-            bb->next = NULL;
-        }
-
-        if (_if && _if->next->next == NULL && next)     _if->next = next;
-        if (_else && _else->next->next == NULL && next) _else->next = next;
-
-        if (_if)   cfgFix(bb->_if);
-        if (_else) cfgFix(bb->_else);
-    }
-}
-
 static void cfgCreateGraphVizShapes(aoStr *str, BasicBlock *bb) {
     BasicBlock *_if, *_else, *next;
     for (; bb; bb = bb->next) {
@@ -270,24 +354,40 @@ static void cfgCreateGraphVizShapes(aoStr *str, BasicBlock *bb) {
         _if = bb->_if;
         _else = bb->_else;
 
-        if (!bb->_if && !bb->_else && !next) return;
+        assert(!(next && _if && _else));
 
         if (bb->ast_array->count) {
             aoStr *internal = aoStrAlloc(256);
             char *lvalue_str;
             for (int i = 0; i < bb->ast_array->count; ++i) {
-                lvalue_str = AstLValueToString(bb->ast_array->entries[i]);
+                Ast *ast = bb->ast_array->entries[i];
+                lvalue_str = AstLValueToString(ast);
                 aoStrCatPrintf(internal, "%s\\n",lvalue_str);
                 free(lvalue_str);
             }
-            aoStrCatPrintf(str,
-                    "    bb%d [shape=record,style=filled,fillcolor=lightgrey,label=\"{\\<bb%d\\>:|%s}\"];\n",
-                    bb->block_no,
-                    bb->block_no,
-                    internal->data);
+
+            switch (bb->type) {
+                case CFG_BRANCH_BLOCK:
+                    aoStrCatPrintf(str,
+                            "    bb%d [shape=record,style=filled,fillcolor=lightgrey,label=\"{\\<bb%d\\> BRANCH:|%s}\"];\n",
+                            bb->block_no,
+                            bb->block_no,
+                            internal->data);
+                    break;
+                default:
+                    aoStrCatPrintf(str,
+                            "    bb%d [shape=record,style=filled,fillcolor=lightgrey,label=\"{\\<bb%d\\>:|%s}\"];\n",
+                            bb->block_no,
+                            bb->block_no,
+                            internal->data);
+                    break;
+            }
             aoStrRelease(internal);
         }
 
+        if (!bb->_if && !bb->_else && !next) {
+            return;
+        }
         if (_if)   cfgCreateGraphVizShapes(str,_if);
         if (_else) cfgCreateGraphVizShapes(str,_else);
     }
@@ -367,6 +467,18 @@ aoStr *cfgCreateGraphViz(CFG *cfg) {
     return str;
 }
 
+void cfgToFile(CFG *cfg, const char *filename) {
+    aoStr *cfg_string = cfgCreateGraphViz(cfg);
+    int fd = open(filename,O_CREAT|O_TRUNC|O_RDWR,0644);
+    if (fd == -1) {
+        loggerPanic("Failed to open file '%s': %s\n",
+                filename,strerror(errno));
+    }
+    write(fd,cfg_string->data,cfg_string->len);
+    close(fd);
+    aoStrRelease(cfg_string);
+}
+
 CFG *cfgConstruct(Cctrl *cc) {
     Ast *ast;
     CFG *cfg;
@@ -386,10 +498,6 @@ CFG *cfgConstruct(Cctrl *cc) {
             cfgConstructFunction(&builder,ast->body->stms);
         }
     }
-    cfgFix(cfg->head);
-    aoStr *data = cfgCreateGraphViz(cfg);
-    /* @Continue */
-    printf("%s\n",data->data);
-    aoStrRelease(data);
+    cfgToFile(cfg,"./ex.dot");
     return cfg;
 }

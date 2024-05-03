@@ -6,9 +6,12 @@
 #include "aostr.h"
 #include "cctrl.h"
 
-#define CFG_HEAD_BLOCK    (1<<0)
-#define CFG_CONTROL_BLOCK (1<<2)
-#define CFG_LOOP_BLOCK    (1<<3)
+#define CFG_END_BLOCK     (0)
+#define CFG_HEAD_BLOCK    (1)
+#define CFG_CONTROL_BLOCK (2)
+#define CFG_BRANCH_BLOCK  (3)
+#define CFG_LOOP_BLOCK    (4)
+#define CFG_RETURN_BLOCK  (5)
 
 #define CFG_MAX_PREV    (32)
 
@@ -24,7 +27,7 @@ typedef struct BasicBlock {
     struct BasicBlock *_if;
     struct BasicBlock *_else;
     struct BasicBlock *next;
-    struct BasicBlock *prev[CFG_MAX_PREV];
+    struct BasicBlock *prev;
     AstArray *ast_array;
 } BasicBlock;
 
@@ -46,7 +49,6 @@ typedef struct CFGBuilder {
     BasicBlock *bb_pool;
     List *ast_list;
     List *ast_iter;
-    int needs_convergence;
     int bb_pos;
     int bb_cap;
 } CFGBuilder;
