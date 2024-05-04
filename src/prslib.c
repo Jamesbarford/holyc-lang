@@ -226,7 +226,7 @@ List *ParseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
             if (store) {
                 if (!DictSet(cc->localenv,var->declvar->lname->data,var)) {
                     loggerPanic("line: %ld variable %s already declared\n",
-                            cc->lineno,AstLValueToString(var));
+                            cc->lineno,AstLValueToString(var,0));
                 }
             }
             tok = CctrlTokenGet(cc);
@@ -234,7 +234,7 @@ List *ParseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
             if (store) {
                 if (!DictSet(cc->localenv,var->lname->data,var)) {
                     loggerPanic("line: %ld variable %s already declared\n",
-                            cc->lineno,AstLValueToString(var));
+                            cc->lineno,AstLValueToString(var,0));
                 }
             }
        }
@@ -428,7 +428,7 @@ List *ParseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
 
                     expected = AstTypeToColorString(param->type);
                     got = AstTypeToColorString(ast->type);
-                    ast_str = AstLValueToString(ast);
+                    ast_str = AstLValueToString(ast,0);
                     loggerWarning("line %ld: %s incompatiable function argument %s got %s %s\n",
                             cc->lineno,fstring,expected,got,ast_str);
                     free(fstring);

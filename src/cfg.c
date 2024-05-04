@@ -18,6 +18,13 @@
 static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast);
 
 static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder, int type) {
+    /* @Bug, @HashTable
+     * This can and will create a new pointer sometimes and thus all references
+     * in the allocated instances will be invalid. Hence we need a bigger pool,
+     * or no `->next` or `->else` and work off an adjacency list. Essentially
+     * either one massive slab needs to be allocated up front or we work off
+     * numerical references in a hash table.
+     * */
     if (builder->bb_pos + 1 >= builder->bb_cap) {
         int new_cap = builder->bb_cap * 2;
         BasicBlock *bb_pool = cast(BasicBlock *,
@@ -159,18 +166,17 @@ static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
     bb_cond->_if = bb_body;
     /* Else move past loop body */
     bb_cond->_else = bb_cond_else;
-    /* Past the loop body, set for the fix function */
-    bb_cond->next = bb_cond_else;
     /* And the previously met block was the condition */
     bb_cond_else->prev = bb_cond;
+
+    cfgBuilderSetBasicBlock(builder,bb_cond);
+    cfgHandleAstNode(builder,cond);
 
     /* Forms a loop, but the type is also set as a CFG_LOOP_BLOCK so it
      * should be identifiable without (bb->next == bb->prev) */
     bb_body->prev = bb_cond;
-    bb_body->next = bb_cond;
+    bb_body->next = bb_cond_else;
 
-    cfgBuilderSetBasicBlock(builder,bb_cond);
-    cfgHandleAstNode(builder,cond);
     /* Body exists within a loop 
      *
      * This c code:
@@ -229,6 +235,7 @@ static void cfgHandleReturn(CFGBuilder *builder, Ast *ast) {
 
     if (bb->ast_array->count == 0) {
         bb_return = bb;
+        bb_return->type = CFG_RETURN_BLOCK;
     } else {
         bb_return = cfgBuilderAllocBasicBlock(builder,CFG_RETURN_BLOCK);
         bb->next = bb_return;
@@ -347,42 +354,86 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
     }
 }
 
+/**/
 static void cfgCreateGraphVizShapes(aoStr *str, BasicBlock *bb) {
     BasicBlock *_if, *_else, *next;
     for (; bb; bb = bb->next) {
+        int ast_count = bb->ast_array->count;
         next = bb->next;
         _if = bb->_if;
         _else = bb->_else;
 
-        assert(!(next && _if && _else));
-
-        if (bb->ast_array->count) {
+        if (ast_count) {
             aoStr *internal = aoStrAlloc(256);
             char *lvalue_str;
-            for (int i = 0; i < bb->ast_array->count; ++i) {
+            for (int i = 0; i < ast_count; ++i) {
                 Ast *ast = bb->ast_array->entries[i];
-                lvalue_str = AstLValueToString(ast);
-                aoStrCatPrintf(internal, "%s\\n",lvalue_str);
+                lvalue_str = AstLValueToString(ast,LEXEME_ENCODE_PUNCT);
+                if (i + 1 == ast_count) {
+                    if (bb->type == CFG_BRANCH_BLOCK) {
+                        if (ast_count > 1) {
+                            aoStrPutChar(internal,'|');
+                        }
+                        aoStrCatPrintf(internal,
+                                "if (%s)\\l\\"
+                                "  goto \\<%d bb\\>\\l\\"
+                                "else\\l\\\n"
+                                "  goto \\<%d bb\\>\\l\\",
+                                lvalue_str,
+                                _if->block_no,
+                                _else->block_no);
+
+                    } else if (bb->type == CFG_LOOP_BLOCK) {
+                        aoStrCatPrintf(internal,
+                                "%s\\l\\\n"
+                                "|goto \\<%d bb\\>\\l\\",
+                                lvalue_str,
+                                bb->prev->block_no);
+                    } else if (next) {
+                        aoStrCatPrintf(internal,
+                                "%s\\l\\\n"
+                                "|goto \\<%d bb\\>\\l\\",
+                                lvalue_str,
+                                next->block_no);
+                    } else {
+                        aoStrCatPrintf(internal,"%s\\l\\\n",lvalue_str);
+                    }
+                } else {
+                    aoStrCatPrintf(internal,"%s\\l\\\n",lvalue_str);
+                }
                 free(lvalue_str);
             }
 
             switch (bb->type) {
                 case CFG_BRANCH_BLOCK:
                     aoStrCatPrintf(str,
-                            "    bb%d [shape=record,style=filled,fillcolor=lightgrey,label=\"{\\<bb%d\\> BRANCH:|%s}\"];\n",
+                            "    bb%d [shape=record,style=filled,fillcolor=lightgrey,label=\"{\\<bb%d\\>:|\n%s\n}\"];\n",
+                            bb->block_no,
+                            bb->block_no,
+                            internal->data,
+                            _if->block_no);
+                    break;
+                case CFG_RETURN_BLOCK:
+                    aoStrCatPrintf(str,
+                            "    bb%d [shape=doublecircle,style=filled,fillcolor=white,label=\"\\<bb%d\\>\\n%s\"];\n",
                             bb->block_no,
                             bb->block_no,
                             internal->data);
                     break;
                 default:
                     aoStrCatPrintf(str,
-                            "    bb%d [shape=record,style=filled,fillcolor=lightgrey,label=\"{\\<bb%d\\>:|%s}\"];\n",
+                            "    bb%d [shape=record,style=filled,fillcolor=lightgrey,label=\"{\\<bb%d\\>:|\n%s\n}\"];\n",
                             bb->block_no,
                             bb->block_no,
                             internal->data);
                     break;
             }
             aoStrRelease(internal);
+        } else if (bb->type == CFG_HEAD_BLOCK) {
+            aoStrCatPrintf(str,
+                    "    bb%d [shape=circle,style=filled,fillcolor=white,label=\"Entry\"];\n",
+                    bb->block_no,
+                    bb->block_no);
         }
 
         if (!bb->_if && !bb->_else && !next) {
@@ -404,11 +455,25 @@ static void cfgCreateGraphVizMappings(Dict *mappings, aoStr *str, BasicBlock *bb
         _if = bb->_if;
         _else = bb->_else;
 
+        if (bb->type == CFG_LOOP_BLOCK) {
+            len = snprintf(buffer,sizeof(buffer),
+                    "    bb%d:s -> bb%d:n [style=\"dotted,bold\",color=blue,weight=10,constraint=false];",
+                    bb->block_no,
+                    bb->prev->block_no);
+            buffer[len] = '\0';
+            if (!DictGet(mappings,buffer)) {
+                key = strndup(buffer,len);
+                DictSet(mappings,key,bb);
+            }
+            continue;
+        }
+
         if (_if) {
-            len = snprintf(buffer,sizeof(buffer),"    bb%d -> bb%d",
+            len = snprintf(buffer,sizeof(buffer),
+                    "    bb%d:s -> bb%d:n [style=\"solid,bold\",color=forestgreen,weight=10,constraint=true];",
                     bb->block_no,
                     _if->block_no);
-            buffer[len]='\0';
+            buffer[len] = '\0';
             if (!DictGet(mappings,buffer)) {
                 key = strndup(buffer,len);
                 DictSet(mappings,key,bb);
@@ -416,10 +481,11 @@ static void cfgCreateGraphVizMappings(Dict *mappings, aoStr *str, BasicBlock *bb
         }
 
         if (_else) {
-            len = snprintf(buffer,sizeof(buffer),"    bb%d -> bb%d",
+            len = snprintf(buffer,sizeof(buffer),
+                    "    bb%d:s -> bb%d:n [style=\"solid,bold\",color=darkorange,weight=10,constraint=true];",
                     bb->block_no,
                     _else->block_no);
-            buffer[len]='\0';
+            buffer[len] = '\0';
             if (!DictGet(mappings,buffer)) {
                 key = strndup(buffer,len);
                 DictSet(mappings,key,bb);
@@ -427,10 +493,11 @@ static void cfgCreateGraphVizMappings(Dict *mappings, aoStr *str, BasicBlock *bb
         }
 
         if (next) {
-            len = snprintf(buffer,sizeof(buffer),"    bb%d -> bb%d",
+            len = snprintf(buffer,sizeof(buffer),
+                    "    bb%d:s -> bb%d:n [style=\"solid,bold\",color=black,weight=100,constraint=true];",
                     bb->block_no,
                     next->block_no);
-            buffer[len]='\0';
+            buffer[len] = '\0';
             if (!DictGet(mappings,buffer)) {
                 key = strndup(buffer,len);
                 DictSet(mappings,key,bb);
@@ -439,7 +506,6 @@ static void cfgCreateGraphVizMappings(Dict *mappings, aoStr *str, BasicBlock *bb
 
         if (_if)   cfgCreateGraphVizMappings(mappings,str,_if);
         if (_else) cfgCreateGraphVizMappings(mappings,str,_else);
-        
     }
 }
 
@@ -448,7 +514,6 @@ static void cfgCreateGraphVizBody(aoStr *str, CFG *cfg) {
     Dict *mappings = DictNew(&default_table_type);
     cfgCreateGraphVizShapes(str,bb);
     cfgCreateGraphVizMappings(mappings,str,bb);
-
     for (ssize_t i = 0; i < (ssize_t)mappings->capacity; ++i) {
         DictNode *dn = mappings->body[i];
         while (dn) {
@@ -498,6 +563,6 @@ CFG *cfgConstruct(Cctrl *cc) {
             cfgConstructFunction(&builder,ast->body->stms);
         }
     }
-    cfgToFile(cfg,"./ex.dot");
+    cfgToFile(cfg,"./loop.dot");
     return cfg;
 }

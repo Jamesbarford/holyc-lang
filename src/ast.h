@@ -352,7 +352,7 @@ char *AstKindToString(int kind);
 char *AstFunctionToString(Ast *func);
 char *AstFunctionNameToString(AstType *rettype, char *fname, int len);
 char *AstToString(Ast *ast);
-char *AstLValueToString(Ast *ast);
+char *AstLValueToString(Ast *ast, unsigned long lexme_flags);
 void AstPrint(Ast *ast);
 void AstTypePrint(AstType *type);
 void AstKindPrint(int kind);

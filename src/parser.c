@@ -501,7 +501,7 @@ Ast *ParseDecl(Cctrl *cc) {
     var = AstLVar(type,varname->start,varname->len);
     if (!DictSet(cc->localenv,var->lname->data,var)) {
         loggerPanic("line: %ld variable %s already declared\n",
-                cc->lineno,AstLValueToString(var));
+                cc->lineno,AstLValueToString(var,0));
     }
     if (cc->tmp_locals) {
         ListAppend(cc->tmp_locals, var);
@@ -694,7 +694,7 @@ Ast *ParseReturnStatement(Cctrl *cc) {
 
         expected = AstTypeToColorString(cc->tmp_rettype);
         got = AstTypeToColorString(check);
-        ast_str = AstLValueToString(retval);
+        ast_str = AstLValueToString(retval,0);
         loggerWarning("line %ld: %s expected return type %s got %s %s\n",
                 lineno,fstring,expected,got,ast_str);
         free(fstring);
@@ -993,7 +993,7 @@ Ast *ParseCompoundStatement(Cctrl *cc) {
                     var = AstLVar(type,varname->start,varname->len);
                     if (!DictSet(cc->localenv,var->lname->data,var)) {
                         loggerPanic("line: %ld variable %s already declared\n",
-                                cc->lineno,AstLValueToString(var));
+                                cc->lineno,AstLValueToString(var,0));
                     }
                 } else {
                     CctrlTokenGet(cc);

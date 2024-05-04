@@ -117,6 +117,9 @@
 #define CCF_ASM_BLOCK       (1<<4)
 #define CCF_BLOCK           (1<<5)
 
+#define LEXEME_RAW_PUNCT    (1<<0)
+#define LEXEME_ENCODE_PUNCT (1<<1)
+
 typedef struct lexeme {
     int tk_type;
     int len;
@@ -167,6 +170,8 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to);
 void lexemePrint(lexeme *le);
 char *lexemeTypeToString(int tk_type);
 char *lexemePunctToString(long op);
+char *lexemePunctToStringWithFlags(long op, unsigned long flags);
+char *lexemePunctToEncodedString(long op);
 char *lexemeToString(lexeme *tok);
 void lexemePrintList(List *tokens);
 void lexemeListRelease(List *tokens);

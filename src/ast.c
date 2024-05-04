@@ -1341,7 +1341,6 @@ void _AstToString(aoStr *str, Ast *ast, int depth) {
             break;
 
         case AST_DO_WHILE:
-
             aoStrCatPrintf(str, "do");
             aoStrCatRepeat(str, "  ", depth+1);
             _AstToString(str, ast->whilebody, depth+2);
@@ -1492,7 +1491,7 @@ void _AstToString(aoStr *str, Ast *ast, int depth) {
         case AST_CAST:
             aoStrCatPrintf(str, "<cast> %s %s -> %s\n",
                     AstTypeToString(ast->operand->type),
-                    AstLValueToString(ast->operand),
+                    AstLValueToString(ast->operand,0),
                     AstTypeToString(ast->type));
             break;
 
@@ -1647,26 +1646,26 @@ char *AstToString(Ast *ast) {
     return _AstToStringRec(ast,0);
 }
 
-static void _AstLValueToString(aoStr *str, Ast *ast);
+static void _AstLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags);
 
-void AstUnaryArgToString(aoStr *str, char *op, Ast *ast) {
-    aoStrCatPrintf(str, "%s", op);
-    _AstLValueToString(str, ast->operand);
+void AstUnaryArgToString(aoStr *str, char *op, Ast *ast,
+        unsigned long lexeme_flags)
+{
+    aoStrCatPrintf(str,"%s",op);
+    _AstLValueToString(str,ast->operand,lexeme_flags);
 }
 
-void AstBinaryArgToString(aoStr *str, char *op, Ast *ast) {
-    if (!strncmp(op,"-",1) || !strncmp(op,"~",1)) {
-        aoStrCatPrintf(str, " %s", op);
-        _AstLValueToString(str, ast->left);
-    } else {
-        _AstLValueToString(str, ast->left);
-        aoStrCatPrintf(str, " %s ", op);
-        _AstLValueToString(str, ast->right);
-    }
+void AstBinaryArgToString(aoStr *str, char *op, Ast *ast,
+        unsigned long lexeme_flags)
+{
+    _AstLValueToString(str,ast->left,lexeme_flags);
+    aoStrCatPrintf(str," %s ",op);
+    _AstLValueToString(str,ast->right,lexeme_flags);
 }
 
 /* This can only be used for lvalues */
-static void _AstLValueToString(aoStr *str, Ast *ast) {
+static void _AstLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags) {
+    char *str_op = NULL;
     if (ast == NULL) {
         aoStrCatLen(str, "(null)", 6);
         return;
@@ -1710,19 +1709,20 @@ static void _AstLValueToString(aoStr *str, Ast *ast) {
         
         case AST_DECL:
             if (ast->declvar->kind == AST_FUNPTR) {
-                aoStrCatPrintf(str,"%s", ast->declvar->fname->data);
+                aoStrCatPrintf(str,"%s = ",ast->declvar->fname->data);
             } else {
                 aoStrCatPrintf(str,"%s",ast->declvar->lname->data);
             }
             if (ast->declinit) {
-                _AstLValueToString(str,ast->declinit);
+                aoStrCatPrintf(str,lexemePunctToStringWithFlags('=',lexeme_flags));
+                _AstLValueToString(str,ast->declinit,lexeme_flags);
             }
             break;
 
         case AST_GVAR:
             aoStrCatPrintf(str, "%s", ast->gname->data);
             break;
-        
+
         case AST_FUNCALL:
         case AST_FUNPTR_CALL:
         case AST_ASM_FUNCALL: {
@@ -1730,7 +1730,7 @@ static void _AstLValueToString(aoStr *str, Ast *ast) {
             aoStr *internal = aoStrAlloc(256);
             while (node != ast->args) {
                 Ast *val = cast(Ast *, node->value);
-                _AstLValueToString(internal,val);
+                _AstLValueToString(internal,val,lexeme_flags);
                 if (node->next != ast->args) {
                     aoStrCatPrintf(internal,",");
                 }
@@ -1799,42 +1799,62 @@ static void _AstLValueToString(aoStr *str, Ast *ast) {
 
         case AST_ADDR:
             aoStrCatPrintf(str, "&");
-            _AstLValueToString(str,ast->operand);
+            _AstLValueToString(str,ast->operand,lexeme_flags);
             break;
 
         case AST_DEREF:
             aoStrCatPrintf(str, "*");
-            _AstLValueToString(str,ast->operand);
+            _AstLValueToString(str,ast->operand,lexeme_flags);
             break;
 
         case AST_CAST:
             aoStrCatPrintf(str, "cast ");
-            _AstLValueToString(str,ast->operand);
+            _AstLValueToString(str,ast->operand,lexeme_flags);
             break;
 
         case AST_RETURN:
             aoStrCatPrintf(str, "return ");
-            _AstLValueToString(str,ast->retval);
-            aoStrPutChar(str, ';');
+            _AstLValueToString(str,ast->retval, lexeme_flags);
+            //aoStrPutChar(str, ';');
+            aoStrCatPrintf(str,"%s",
+                    lexemePunctToStringWithFlags(';',lexeme_flags));
             break;
 
         case TK_PRE_PLUS_PLUS:
         case TK_PLUS_PLUS:   
         case TK_PRE_MINUS_MINUS:
         case TK_MINUS_MINUS:
-            AstUnaryArgToString(str, lexemePunctToString(ast->kind),ast);
+        case '~':
+        case '!': {
+            str_op = lexemePunctToStringWithFlags(ast->kind,lexeme_flags);
+            AstUnaryArgToString(str,str_op,ast,lexeme_flags);
             break;
+        }
+        case '-': {
+            str_op = lexemePunctToStringWithFlags(ast->kind,lexeme_flags);
+            if (ast->right == NULL) {
+                AstUnaryArgToString(str,str_op,ast,lexeme_flags);
+            } else {
+                AstBinaryArgToString(str,str_op,ast,lexeme_flags);
+            }
+            break;
+        }
 
         default: {
-            AstBinaryArgToString(str,lexemePunctToString(ast->kind),ast);
+            str_op = lexemePunctToStringWithFlags(ast->kind,lexeme_flags);
+            AstBinaryArgToString(str,str_op,ast,lexeme_flags);
+            if (ast->left == NULL) {
+                aoStrCatPrintf(str,"%s",
+                        lexemePunctToStringWithFlags(';',lexeme_flags));
+            }
             break;
         }
     }
 }
 
-char *AstLValueToString(Ast *ast) {
+char *AstLValueToString(Ast *ast, unsigned long lexeme_flags) {
     aoStr *str = aoStrNew();
-    _AstLValueToString(str,ast);
+    _AstLValueToString(str,ast,lexeme_flags);
     return aoStrMove(str);
 }
 

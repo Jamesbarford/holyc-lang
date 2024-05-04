@@ -197,32 +197,125 @@ char *lexemeTypeToString(int tk_type) {
     return "UNKNOWN";
 }
 
+/* This is for something that will play nicely with HTML or GraphViz*/
+char *lexemePunctToEncodedString(long op) {
+    static char buf[4];
+    switch(op) {
+    case '\\':               return "\\";
+    case '\n':               return "\\n";
+    case '\t':               return "\\t";
+    case '\r':               return "\\r";
+    case '\"':               return "&#34;";
+    case '\'':               return "&#39;";
+    case ' ':                return "&#32;";
+    case '>':                return "&#62;";
+    case '<':                return "&#60;";
+    case '&':                return "&#38;";
+    case '|':                return "&#124;";
+    case ';':                return "&#59;";
+    case '@':                return "&#64;";
+    case '=':                return "&#61;";
+    case '(':                return "&#40;";
+    case ')':                return "&#41;";
+    case '~':                return "&#126;";
+    case '^':                return "&#94;";
+    case '_':                return "&#65;";
+    case '!':                return "&#33;";
+    case '{':                return "&#123;";
+    case '}':                return "&#125;";
+    case '[':                return "&#91;";
+    case ']':                return "&#93;";
+    case '`':                return "&#96;";
+    case '*':                return "&#42;";
+    case '+':                return "&#43;";
+    case '-':                return "&#45;";
+    case '/':                return "&#47;";
+    case '%':                return "&#37;";
+    case '$':                return "&#36;";
+    case '#':                return "&#35;";
+    case ',':                return "&#44;";
+    case '.':                return "&#46;";
+    case '?':                return "&#63;";
+    case ':':                return "&#48;";
+
+    case TK_EQU_EQU:         return "&#61;&#61;";
+    case TK_NOT_EQU:         return "&#33;&#61;";
+    case TK_LESS_EQU:        return "&#60;&#61;";
+    case TK_GREATER_EQU:     return "&#62;&#61;";      
+    case TK_AND_AND:         return "&#38;&#38;";
+    case TK_OR_OR:           return "&#124;&#124;";
+    case TK_SHL:             return "&#60;&#60;";
+    case TK_SHL_EQU:         return "&#60;&#60;&#61;";
+    case TK_SHR:             return "&#62;&#62;";
+    case TK_SHR_EQU:         return "&#62;&#62;&#61;";
+    case TK_MUL_EQU:         return "&#42;&#61;";
+    case TK_DIV_EQU:         return "&#47;&#61;";
+    case TK_OR_EQU:          return "&#124;&#61;";
+    case TK_XOR_EQU:         return "&#94;&#61;";
+    case TK_AND_EQU:         return "&#38;&#61;";
+    case TK_SUB_EQU:         return "&#45;&#61;";
+    case TK_ADD_EQU:         return "&#43;&#61;";
+    case TK_MOD_EQU:         return "&#37;&#61;";
+    case TK_ELLIPSIS:        return "&#48;&#48;&#48;";
+    case TK_ARROW:           return "&#45;&gt;";
+    case TK_PRE_PLUS_PLUS:   return "&#43;&#43;";
+    case TK_PLUS_PLUS:       return "&#43;&#43;";
+    case TK_PRE_MINUS_MINUS: return "&#45;&#45;";
+    case TK_MINUS_MINUS:     return "&#45;&#45;";
+    default:{
+        int len = snprintf(buf,sizeof(buf),"%c",(char)op);
+        buf[len] = '\0';
+        return buf;
+    }
+    }
+}
+
 /* Convert all of this to a massive lookup table */
 char *lexemePunctToString(long op) {
-    aoStr *str = aoStrNew();
+    static char buf[4];
     switch (op) {
-    case TK_AND_AND:     aoStrCatPrintf(str,"&&"); break;
-    case TK_OR_OR:       aoStrCatPrintf(str,"||"); break;
-    case TK_EQU_EQU:     aoStrCatPrintf(str,"=="); break;
-    case TK_NOT_EQU:     aoStrCatPrintf(str,"!="); break;
-    case TK_LESS_EQU:    aoStrCatPrintf(str,"<="); break;
-    case TK_GREATER_EQU: aoStrCatPrintf(str,">="); break;
-    case TK_PLUS_PLUS:   aoStrCatPrintf(str,"++"); break;
-    case TK_MINUS_MINUS: aoStrCatPrintf(str,"--"); break;
-    case TK_SHL:         aoStrCatPrintf(str,"<<"); break;
-    case TK_SHR:         aoStrCatPrintf(str,">>"); break;
-    case TK_ARROW:       aoStrCatPrintf(str,"->"); break;
-    case TK_DBL_COLON:   aoStrCatPrintf(str,"::"); break;
-    case TK_ELLIPSIS:    aoStrCatPrintf(str,"..."); break;
-    default:
-        if (op == '\n') {
-            aoStrCatPrintf(str,"\\n");
-        } else {
-            aoStrCatPrintf(str,"%c", (char)op);
-        }
-        break;
+    case '\\':               return "\\";
+    case '\n':               return "\\n";
+    case '\t':               return "\\t";
+    case '\r':               return "\\r";
+    case '\"':               return "\\\"";
+    case '\'':               return "\\\'";
+    case TK_AND_AND:         return "&&";
+    case TK_OR_OR:           return "||";
+    case TK_EQU_EQU:         return "==";
+    case TK_NOT_EQU:         return "!=";
+    case TK_LESS_EQU:        return "<=";
+    case TK_GREATER_EQU:     return ">=";
+    case TK_PLUS_PLUS:       return "++";
+    case TK_MINUS_MINUS:     return "--";
+    case TK_SHL:             return "<<";
+    case TK_SHR:             return ">>";
+    case TK_ARROW:           return "->";
+    case TK_DBL_COLON:       return "::";
+    case TK_ELLIPSIS:        return "...";
+    case TK_SHL_EQU:         return "<<=";
+    case TK_SHR_EQU:         return ">>=";
+    case TK_MUL_EQU:         return "*=";
+    case TK_DIV_EQU:         return "/=";
+    case TK_OR_EQU:          return "|=";
+    case TK_XOR_EQU:         return "^=";
+    case TK_AND_EQU:         return "&=";
+    case TK_SUB_EQU:         return "-=";
+    case TK_ADD_EQU:         return "+=";
+    case TK_MOD_EQU:         return "%=";
+    case TK_PRE_PLUS_PLUS:   return "++";
+    case TK_PRE_MINUS_MINUS: return "--";
+    default: {
+        int len = snprintf(buf,sizeof(buf),"%c",(char)op);
+        buf[len] = '\0';
+        return buf;
     }
-    return aoStrMove(str);
+    }
+}
+
+char *lexemePunctToStringWithFlags(long op, unsigned long flags) {
+    if (flags & LEXEME_ENCODE_PUNCT) return lexemePunctToEncodedString(op);
+                                     return lexemePunctToString(op);
 }
 
 char *lexemeToString(lexeme *tok) {
@@ -242,7 +335,6 @@ char *lexemeToString(lexeme *tok) {
             aoStrCatPrintf(str,"TK_PUNCT\t");
             tmp = lexemePunctToString(tok->i64);
             aoStrCatPrintf(str,"%s",tmp);
-            free(tmp);
             return aoStrMove(str);
         }
         case TK_I64:
