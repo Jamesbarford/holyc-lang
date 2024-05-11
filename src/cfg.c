@@ -15,6 +15,17 @@
 #include "list.h"
 #include "util.h"
 
+typedef struct CfgGraphVizBuilder {
+    BasicBlock *bb;
+    aoStr *viz;
+    /* @Optimise, this could be a hash set for O(1), however for a small 
+     * enough seen count this is fairly in-expensive */
+    int *seen_blocks;
+    int seen_cnt;
+    int block_cnt;
+} CfgGraphVizBuilder; 
+
+
 static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast);
 
 static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder, int type) {
@@ -37,6 +48,7 @@ static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder, int type) {
     }
     BasicBlock *bb = &builder->bb_pool[builder->bb_pos++];
     bb->type = type;
+    bb->flags = 0;
     bb->prev_cnt = 0;
     bb->block_no = builder->bb_count++;
     /* @Leak
@@ -100,19 +112,20 @@ static void cgfHandleIfBlock(CFGBuilder *builder, Ast *ast) {
      * | printf("%ld\n",y);       |                                           
      * | if (x == 12) {           |                                           
      * |    printf("kowabunga\n");|
-     * | }                       | 
+     * | }                        | 
      * | return 10;               |                                           
      * +--------------------------+                                           
      */
 
     BasicBlock *bb = builder->bb;
-    bb->type = CFG_BRANCH_BLOCK;
+    bb->type = BB_BRANCH_BLOCK;
     AstArrayPush(bb->ast_array,ast->cond);
+    builder->flags |= CFG_BUILDER_FLAG_IN_CONDITIONAL;
 
     BasicBlock *else_body = cfgBuilderAllocBasicBlock(builder,
-                                                      CFG_CONTROL_BLOCK);
+                                                      BB_CONTROL_BLOCK);
     BasicBlock *if_body = cfgBuilderAllocBasicBlock(builder,
-                                                    CFG_CONTROL_BLOCK);
+                                                    BB_CONTROL_BLOCK);
     BasicBlock *new_block;
 
 
@@ -135,7 +148,7 @@ static void cgfHandleIfBlock(CFGBuilder *builder, Ast *ast) {
             /* Join */
             bb->_if->next = builder->bb;
         } else {
-            new_block = cfgBuilderAllocBasicBlock(builder,CFG_CONTROL_BLOCK);
+            new_block = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
             bb->_else->next = new_block;
             bb->_if->next = new_block;
             cfgBuilderSetBasicBlock(builder,new_block);
@@ -144,6 +157,7 @@ static void cgfHandleIfBlock(CFGBuilder *builder, Ast *ast) {
         bb->_if->next = else_body;
         cfgBuilderSetBasicBlock(builder,else_body);
     }
+    builder->flags |= ~(CFG_BUILDER_FLAG_IN_CONDITIONAL);
 }
 
 static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
@@ -152,14 +166,18 @@ static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
     Ast *body = ast->forbody;
     Ast *step = ast->forstep;
 
+    builder->flags |= CFG_BUILDER_FLAG_IN_LOOP;
+    BasicBlock *bb_prev_loop = builder->bb_cur_loop;
+
     BasicBlock *bb = builder->bb;
     BasicBlock *bb_cond_else = cfgBuilderAllocBasicBlock(builder,
-                                                         CFG_CONTROL_BLOCK);
-    BasicBlock *bb_cond = cfgBuilderAllocBasicBlock(builder,CFG_BRANCH_BLOCK);
-    BasicBlock *bb_body = cfgBuilderAllocBasicBlock(builder,CFG_LOOP_BLOCK);
+                                                         BB_CONTROL_BLOCK);
+    BasicBlock *bb_cond = cfgBuilderAllocBasicBlock(builder,BB_BRANCH_BLOCK);
+    BasicBlock *bb_body = cfgBuilderAllocBasicBlock(builder,BB_LOOP_BLOCK);
 
     if (init) AstArrayPush(bb->ast_array,init);
 
+    bb_cond->flags |= BB_FLAG_LOOP_HEAD;
     bb->next = bb_cond;
     bb_cond->prev = bb;
     /* Jump into loop body if condition is met */
@@ -169,13 +187,14 @@ static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
     /* And the previously met block was the condition */
     bb_cond_else->prev = bb_cond;
 
+    builder->bb_cur_loop = bb_body;
+
     cfgBuilderSetBasicBlock(builder,bb_cond);
     cfgHandleAstNode(builder,cond);
 
-    /* Forms a loop, but the type is also set as a CFG_LOOP_BLOCK so it
+    /* Forms a loop, but the type is also set as a BB_LOOP_BLOCK so it
      * should be identifiable without (bb->next == bb->prev) */
     bb_body->prev = bb_cond;
-    bb_body->next = bb_cond_else;
 
     /* Body exists within a loop 
      *
@@ -223,10 +242,28 @@ static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
      * +--------------------+
      **/
 
+    /* @Wrong 
+     * We realistically do not want to be merging these two together in the 
+     * same unit.
+     *
+     * Think step should be separate and that bb_body->next always should point
+     * to it?
+     * */
     cfgBuilderSetBasicBlock(builder,bb_body);
     cfgHandleAstNode(builder,body);
     cfgHandleAstNode(builder,step);
+
+    
+    /* This means we had branches or possibly inner loops in our loop */
+    if (builder->bb != bb_body && !builder->bb->next) {
+        builder->bb->type = BB_LOOP_BLOCK;
+        builder->bb->prev = bb_cond;
+    }
+    builder->bb->flags |= BB_FLAG_LOOP_END;
+
     cfgBuilderSetBasicBlock(builder,bb_cond_else);
+    builder->flags |= ~(CFG_BUILDER_FLAG_IN_LOOP);
+    builder->bb_cur_loop = bb_prev_loop;
 }
 
 static void cfgHandleReturn(CFGBuilder *builder, Ast *ast) {
@@ -235,9 +272,9 @@ static void cfgHandleReturn(CFGBuilder *builder, Ast *ast) {
 
     if (bb->ast_array->count == 0) {
         bb_return = bb;
-        bb_return->type = CFG_RETURN_BLOCK;
+        bb_return->type = BB_RETURN_BLOCK;
     } else {
-        bb_return = cfgBuilderAllocBasicBlock(builder,CFG_RETURN_BLOCK);
+        bb_return = cfgBuilderAllocBasicBlock(builder,BB_RETURN_BLOCK);
         bb->next = bb_return;
         bb_return->prev = bb;
     }
@@ -251,7 +288,6 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
     int kind = ast->kind;
     BasicBlock *bb = builder->bb;
     List *stmts;
-
     /* We are only interested in the AST nodes that are the start of a new 
      * basic block or a top level `I64 x = 10;` type declaration or assignment 
      * 
@@ -277,7 +313,6 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
         }
 
         case AST_IF: {
-            bb = builder->bb;
             cgfHandleIfBlock(builder,ast);
             break;
         }
@@ -301,8 +336,21 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
 
         case AST_JUMP:
         case AST_CASE:
+            break;
 
-        case AST_BREAK:
+        case AST_BREAK: {
+            /* This is essentially a goto */
+            assert(builder->flags & CFG_BUILDER_FLAG_IN_LOOP);
+            if (builder->flags & CFG_BUILDER_FLAG_IN_CONDITIONAL) {
+                loggerDebug("We in an if\n");
+                BasicBlock *break_block = cfgBuilderAllocBasicBlock(builder,
+                        BB_BREAK_BLOCK);
+                break_block->prev = builder->bb;
+                builder->bb = break_block;
+            }
+            break;
+        }
+
         case AST_CONTINUE:
             break;
 
@@ -354,14 +402,66 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
     }
 }
 
-/**/
-static void cfgCreateGraphVizShapes(aoStr *str, BasicBlock *bb) {
+static void cfgGraphVizBuilderClear(CfgGraphVizBuilder *builder) {
+    if (builder->seen_blocks) {
+        free(builder->seen_blocks);
+        builder->seen_blocks = NULL;
+        builder->block_cnt = 0;
+    }
+}
+
+static aoStr *cfgGraphVizBuilderDestroyAndReturnVizString(CfgGraphVizBuilder *builder) {
+    cfgGraphVizBuilderClear(builder);
+    return builder->viz;
+}
+
+static void cfgGraphVizBuilderInit(CfgGraphVizBuilder *builder, CFG *cfg) {
+    builder->seen_blocks = (int *)calloc(cfg->bb_count,sizeof(int));
+    builder->seen_cnt = 0;
+    builder->block_cnt = cfg->bb_count;
+    builder->viz = aoStrAlloc(1<<10);
+}
+
+static void cfgGraphVizBuilderSetSeen(CfgGraphVizBuilder *builder, int block_no)
+{
+    builder->seen_blocks[builder->seen_cnt++] = block_no;
+}
+
+static int cfgGraphVizBuilderHasSeen(CfgGraphVizBuilder *builder, int block_no)
+{
+    int block_cnt = builder->block_cnt;
+    int *seen = builder->seen_blocks;
+    for (int i = 0; i < block_cnt; ++i) {
+        if (seen[i] == block_no) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
+        BasicBlock *bb)
+{
     BasicBlock *_if, *_else, *next;
+    aoStr *str = builder->viz;
+
     for (; bb; bb = bb->next) {
         int ast_count = bb->ast_array->count;
         next = bb->next;
         _if = bb->_if;
         _else = bb->_else;
+
+        if (cfgGraphVizBuilderHasSeen(builder,bb->block_no)) return;
+        else cfgGraphVizBuilderSetSeen(builder,bb->block_no);
+
+        if (bb->flags & BB_FLAG_LOOP_HEAD) {
+            aoStrCat(str,"subgraph cluster1_1 {\nstyle=\"filled\"\n;"
+                    "color=\"darkgreen\";\n"
+                    "fillcolor=\"grey88\";\n"
+                    "label=\"loop 1\";\n"
+                    "labeljust=l;\n"
+                    "penwidt=2;\n");
+        }
 
         if (ast_count) {
             aoStr *internal = aoStrAlloc(256);
@@ -370,7 +470,7 @@ static void cfgCreateGraphVizShapes(aoStr *str, BasicBlock *bb) {
                 Ast *ast = bb->ast_array->entries[i];
                 lvalue_str = AstLValueToString(ast,LEXEME_ENCODE_PUNCT);
                 if (i + 1 == ast_count) {
-                    if (bb->type == CFG_BRANCH_BLOCK) {
+                    if (bb->type == BB_BRANCH_BLOCK) {
                         if (ast_count > 1) {
                             aoStrPutChar(internal,'|');
                         }
@@ -383,7 +483,7 @@ static void cfgCreateGraphVizShapes(aoStr *str, BasicBlock *bb) {
                                 _if->block_no,
                                 _else->block_no);
 
-                    } else if (bb->type == CFG_LOOP_BLOCK) {
+                    } else if (bb->type == BB_LOOP_BLOCK) {
                         aoStrCatPrintf(internal,
                                 "%s\\l\\\n"
                                 "|goto \\<%d bb\\>\\l\\",
@@ -405,46 +505,48 @@ static void cfgCreateGraphVizShapes(aoStr *str, BasicBlock *bb) {
             }
 
             switch (bb->type) {
-                case CFG_BRANCH_BLOCK:
+                case BB_BRANCH_BLOCK:
                     aoStrCatPrintf(str,
-                            "    bb%d [shape=record,style=filled,fillcolor=lightgrey,label=\"{\\<bb%d\\>:|\n%s\n}\"];\n",
+                            "    bb%d [shape=record,style=filled,fillcolor=lightgrey,label=\"{\\<bb %d\\>|\n%s\n}\"];\n",
                             bb->block_no,
                             bb->block_no,
                             internal->data,
                             _if->block_no);
                     break;
-                case CFG_RETURN_BLOCK:
+                case BB_RETURN_BLOCK:
                     aoStrCatPrintf(str,
-                            "    bb%d [shape=doublecircle,style=filled,fillcolor=white,label=\"\\<bb%d\\>\\n%s\"];\n",
+                            "    bb%d [shape=doublecircle,style=filled,fillcolor=white,label=\"\\<bb %d\\>\\n%s\"];\n",
                             bb->block_no,
                             bb->block_no,
                             internal->data);
                     break;
                 default:
                     aoStrCatPrintf(str,
-                            "    bb%d [shape=record,style=filled,fillcolor=lightgrey,label=\"{\\<bb%d\\>:|\n%s\n}\"];\n",
+                            "    bb%d [shape=record,style=filled,fillcolor=lightgrey,label=\"{\\<bb %d\\>|\n%s\n}\"];\n",
                             bb->block_no,
                             bb->block_no,
                             internal->data);
                     break;
             }
             aoStrRelease(internal);
-        } else if (bb->type == CFG_HEAD_BLOCK) {
+        } else if (bb->type == BB_HEAD_BLOCK) {
             aoStrCatPrintf(str,
                     "    bb%d [shape=circle,style=filled,fillcolor=white,label=\"Entry\"];\n",
                     bb->block_no,
                     bb->block_no);
         }
 
-        if (!bb->_if && !bb->_else && !next) {
-            return;
+        if (_if)   cfgCreateGraphVizShapes(builder,_if);
+        if (_else) cfgCreateGraphVizShapes(builder,_else);
+        if (bb->flags & BB_FLAG_LOOP_END) {
+            aoStrCat(str,"}\n");
         }
-        if (_if)   cfgCreateGraphVizShapes(str,_if);
-        if (_else) cfgCreateGraphVizShapes(str,_else);
     }
 }
 
-static void cfgCreateGraphVizMappings(Dict *mappings, aoStr *str, BasicBlock *bb) {
+static void cfgCreateGraphVizMappings(CfgGraphVizBuilder *builder,
+        Dict *mappings, BasicBlock *bb)
+{
     char buffer[BUFSIZ];
     char *key;
     ssize_t len;
@@ -455,7 +557,7 @@ static void cfgCreateGraphVizMappings(Dict *mappings, aoStr *str, BasicBlock *bb
         _if = bb->_if;
         _else = bb->_else;
 
-        if (bb->type == CFG_LOOP_BLOCK) {
+        if (bb->type == BB_LOOP_BLOCK) {
             len = snprintf(buffer,sizeof(buffer),
                     "    bb%d:s -> bb%d:n [style=\"dotted,bold\",color=blue,weight=10,constraint=false];",
                     bb->block_no,
@@ -504,20 +606,20 @@ static void cfgCreateGraphVizMappings(Dict *mappings, aoStr *str, BasicBlock *bb
             }
         }
 
-        if (_if)   cfgCreateGraphVizMappings(mappings,str,_if);
-        if (_else) cfgCreateGraphVizMappings(mappings,str,_else);
+        if (_if)   cfgCreateGraphVizMappings(builder,mappings,_if);
+        if (_else) cfgCreateGraphVizMappings(builder,mappings,_else);
     }
 }
 
-static void cfgCreateGraphVizBody(aoStr *str, CFG *cfg) {
+static void cfgCreateGraphVizBody(CfgGraphVizBuilder *builder, CFG *cfg) {
     BasicBlock *bb = cfg->head;
     Dict *mappings = DictNew(&default_table_type);
-    cfgCreateGraphVizShapes(str,bb);
-    cfgCreateGraphVizMappings(mappings,str,bb);
+    cfgCreateGraphVizShapes(builder,bb);
+    cfgCreateGraphVizMappings(builder,mappings,bb);
     for (ssize_t i = 0; i < (ssize_t)mappings->capacity; ++i) {
         DictNode *dn = mappings->body[i];
         while (dn) {
-            aoStrCatPrintf(str,"%s\n",dn->key);
+            aoStrCatPrintf(builder->viz,"%s\n",dn->key);
             dn = dn->next;
         }
     }
@@ -525,11 +627,13 @@ static void cfgCreateGraphVizBody(aoStr *str, CFG *cfg) {
 }
 
 aoStr *cfgCreateGraphViz(CFG *cfg) {
-    aoStr *str = aoStrAlloc(1024);
-    aoStrCatPrintf(str,"digraph \"%s\" {\n",cfg->ref_fname->data);
-    cfgCreateGraphVizBody(str,cfg);
-    aoStrCatPrintf(str,"}");
-    return str;
+    CfgGraphVizBuilder builder;
+    cfgGraphVizBuilderInit(&builder,cfg);
+
+    aoStrCatPrintf(builder.viz,"digraph \"%s\" {\n overlap=false;\n",cfg->ref_fname->data);
+    cfgCreateGraphVizBody(&builder,cfg);
+    aoStrCatPrintf(builder.viz,"}");
+    return cfgGraphVizBuilderDestroyAndReturnVizString(&builder);
 }
 
 void cfgToFile(CFG *cfg, const char *filename) {
@@ -555,12 +659,13 @@ CFG *cfgConstruct(Cctrl *cc) {
     ListForEach(cc->ast_list) {
         ast = (Ast *)it->value;
         if (ast->kind == AST_FUNC) {
-            bb = cfgBuilderAllocBasicBlock(&builder,CFG_HEAD_BLOCK);
+            bb = cfgBuilderAllocBasicBlock(&builder,BB_HEAD_BLOCK);
             cfg = cfgNew(ast->fname,bb);
-            bb->next = cfgBuilderAllocBasicBlock(&builder,CFG_CONTROL_BLOCK);
+            bb->next = cfgBuilderAllocBasicBlock(&builder,BB_CONTROL_BLOCK);
             cfgBuilderSetCFG(&builder,cfg);
             cfgBuilderSetBasicBlock(&builder,bb->next);
             cfgConstructFunction(&builder,ast->body->stms);
+            cfg->bb_count = builder.bb_count;
         }
     }
     cfgToFile(cfg,"./loop.dot");
