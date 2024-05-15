@@ -23,6 +23,7 @@ typedef struct CfgGraphVizBuilder {
     int *seen_blocks;
     int seen_cnt;
     int block_cnt;
+    int loop_cnt;
 } CfgGraphVizBuilder; 
 
 
@@ -173,7 +174,9 @@ static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
     BasicBlock *bb_cond_else = cfgBuilderAllocBasicBlock(builder,
                                                          BB_CONTROL_BLOCK);
     BasicBlock *bb_cond = cfgBuilderAllocBasicBlock(builder,BB_BRANCH_BLOCK);
-    BasicBlock *bb_body = cfgBuilderAllocBasicBlock(builder,BB_LOOP_BLOCK);
+    /* Body may or may not be a Loop, we correct it in the if condition with
+     * builder->bb != bb_body */
+    BasicBlock *bb_body = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
 
     if (init) AstArrayPush(bb->ast_array,init);
 
@@ -192,8 +195,8 @@ static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
     cfgBuilderSetBasicBlock(builder,bb_cond);
     cfgHandleAstNode(builder,cond);
 
-    /* Forms a loop, but the type is also set as a BB_LOOP_BLOCK so it
-     * should be identifiable without (bb->next == bb->prev) */
+    /* Forms a loop, though this should be picked up by the if condition
+     * below */
     bb_body->prev = bb_cond;
 
     /* Body exists within a loop 
@@ -242,7 +245,7 @@ static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
      * +--------------------+
      **/
 
-    /* @Wrong 
+    /* @Wrong? Is this actually wrong?
      * We realistically do not want to be merging these two together in the 
      * same unit.
      *
@@ -253,7 +256,6 @@ static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
     cfgHandleAstNode(builder,body);
     cfgHandleAstNode(builder,step);
 
-    
     /* This means we had branches or possibly inner loops in our loop */
     if (builder->bb != bb_body && !builder->bb->next) {
         builder->bb->type = BB_LOOP_BLOCK;
@@ -420,6 +422,7 @@ static void cfgGraphVizBuilderInit(CfgGraphVizBuilder *builder, CFG *cfg) {
     builder->seen_cnt = 0;
     builder->block_cnt = cfg->bb_count;
     builder->viz = aoStrAlloc(1<<10);
+    builder->loop_cnt = 0;
 }
 
 static void cfgGraphVizBuilderSetSeen(CfgGraphVizBuilder *builder, int block_no)
@@ -455,12 +458,13 @@ static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
         else cfgGraphVizBuilderSetSeen(builder,bb->block_no);
 
         if (bb->flags & BB_FLAG_LOOP_HEAD) {
-            aoStrCat(str,"subgraph cluster1_1 {\nstyle=\"filled\"\n;"
+            int cnt = ++builder->loop_cnt;
+            aoStrCatPrintf(str,"subgraph cluster1_%d {\nstyle=\"filled\"\n;"
                     "color=\"darkgreen\";\n"
                     "fillcolor=\"grey88\";\n"
-                    "label=\"loop 1\";\n"
+                    "label=\"loop %d\";\n"
                     "labeljust=l;\n"
-                    "penwidt=2;\n");
+                    "penwidth=2;\n",cnt,cnt);
         }
 
         if (ast_count) {
