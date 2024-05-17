@@ -5,6 +5,7 @@
 #include "aostr.h"
 #include "ast.h"
 #include "cctrl.h"
+#include "cfg-print.h"
 #include "cfg.h"
 #include "compile.h"
 #include "dict.h"
@@ -77,7 +78,7 @@ int CompileToAst(Cctrl *cc, char *entrypath, int lexer_flags) {
 
     seen_files = DictNew(&default_table_type);
     tokens = ListNew();
-    builtin_path = aoStrDupRaw("/usr/local/include/tos.HH",25); //aoStrNew();
+    builtin_path = aoStrDupRaw("/usr/local/include/tos.HH",25);
 
     lexerInit(&l,NULL,CCF_PRE_PROC);
     l.seen_files = seen_files;
@@ -93,7 +94,8 @@ int CompileToAst(Cctrl *cc, char *entrypath, int lexer_flags) {
     DictRelease(seen_files);
     CctrlInitTokenIter(cc,tokens);
     ParseToAst(cc);
-    cfgConstruct(cc);
+    CFG *cfg = cfgConstruct(cc);
+    cfgToFile(cfg,"./loop.dot");
     lexReleaseAllFiles(&l);
     aoStrRelease(builtin_path);
     // ListRelease(code_list,free);

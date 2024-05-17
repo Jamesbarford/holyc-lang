@@ -1714,8 +1714,10 @@ static void _AstLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
                 aoStrCatPrintf(str,"%s",ast->declvar->lname->data);
             }
             if (ast->declinit) {
-                aoStrCatPrintf(str,lexemePunctToStringWithFlags('=',lexeme_flags));
+                aoStrCatPrintf(str, " %s ",
+                        lexemePunctToStringWithFlags('=',lexeme_flags));
                 _AstLValueToString(str,ast->declinit,lexeme_flags);
+                aoStrPutChar(str, ';');
             }
             break;
 
