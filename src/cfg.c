@@ -79,7 +79,7 @@ static CFG *cfgNew(aoStr *fname, BasicBlock *head_block) {
     return cfg;
 }
 
-static void cgfHandleIfBlock(CFGBuilder *builder, Ast *ast) {
+static void cgfHandleBranchBlock(CFGBuilder *builder, Ast *ast) {
     /**
      * c-code:
      * +--------------------------+                                           
@@ -133,7 +133,9 @@ static void cgfHandleIfBlock(CFGBuilder *builder, Ast *ast) {
          * to be this branch */
         if (builder->bb != else_body) {
             /* Join */
-            bb->_if->next = builder->bb;
+            if (bb->_if->type != BB_BREAK_BLOCK) {
+                bb->_if->next = builder->bb;
+            }
         } else {
             new_block = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
             bb->_else->next = new_block;
@@ -141,9 +143,14 @@ static void cgfHandleIfBlock(CFGBuilder *builder, Ast *ast) {
             cfgBuilderSetBasicBlock(builder,new_block);
         }
     } else {
-        bb->_if->next = else_body;
-        cfgBuilderSetBasicBlock(builder,else_body);
+        if (if_body->type == BB_BREAK_BLOCK) {
+            cfgBuilderSetBasicBlock(builder,else_body);
+        } else {
+            bb->_if->next = else_body;
+            cfgBuilderSetBasicBlock(builder,else_body);
+        }
     }
+
     builder->flags |= ~(CFG_BUILDER_FLAG_IN_CONDITIONAL);
 }
 
@@ -167,6 +174,7 @@ static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
     if (init) AstArrayPush(bb->ast_array,init);
 
     bb_cond->flags |= BB_FLAG_LOOP_HEAD;
+
     bb->next = bb_cond;
     bb_cond->prev = bb;
     /* Jump into loop body if condition is met */
@@ -240,6 +248,7 @@ static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
      * */
     cfgBuilderSetBasicBlock(builder,bb_body);
     cfgHandleAstNode(builder,body);
+
     if (bb_body->type != BB_BREAK_BLOCK) {
         cfgHandleAstNode(builder,step);
     }
@@ -249,10 +258,19 @@ static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
         builder->bb->type = BB_LOOP_BLOCK;
         builder->bb->prev = bb_cond;
     }
+
     builder->bb->flags |= BB_FLAG_LOOP_END;
 
+    if (builder->bb->type == BB_BREAK_BLOCK && 
+        (builder->bb->flags & BB_FLAG_LOOP_END)) {
+        builder->bb->flags |= BB_FLAG_REDUNDANT_LOOP;
+    }
+
     cfgBuilderSetBasicBlock(builder,bb_cond_else);
-    builder->flags |= ~(CFG_BUILDER_FLAG_IN_LOOP);
+
+    if (!bb_prev_loop) {
+        builder->flags |= ~(CFG_BUILDER_FLAG_IN_LOOP);
+    }
     builder->bb_cur_loop = bb_prev_loop;
 }
 
@@ -303,7 +321,7 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
         }
 
         case AST_IF: {
-            cgfHandleIfBlock(builder,ast);
+            cgfHandleBranchBlock(builder,ast);
             break;
         }
 
@@ -332,9 +350,8 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
             /* This is a goto */
             /* Switch not implemented */
             assert(builder->flags & CFG_BUILDER_FLAG_IN_LOOP);
-            BasicBlock *bb = builder->bb;
-            bb->type = BB_BREAK_BLOCK;
-            bb->next = builder->bb_cur_loop->_else;
+            builder->bb->type = BB_BREAK_BLOCK;
+            builder->bb->next = builder->bb_cur_loop->_else;
             break;
         }
 

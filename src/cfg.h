@@ -23,6 +23,7 @@
 
 #define BB_FLAG_LOOP_HEAD      (0x1) // 0001
 #define BB_FLAG_LOOP_END       (0x2) // 0010
+#define BB_FLAG_REDUNDANT_LOOP (0x4) // 0100
 
 typedef struct BasicBlock {
     /* @Confirm:

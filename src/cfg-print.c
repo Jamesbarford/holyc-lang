@@ -16,7 +16,6 @@
 #include "util.h"
 
 typedef struct CfgGraphVizBuilder {
-    BasicBlock *bb;
     aoStr *viz;
     /* @Optimise, this could be a hash set for O(1), however for a small 
      * enough seen count this is fairly in-expensive */
@@ -25,7 +24,8 @@ typedef struct CfgGraphVizBuilder {
     int block_cnt;
     int loop_cnt;
     /* This is if a loop does not have a break clause immediately in it */
-    int should_end_loop;
+    BasicBlock *break_blocks[256];
+    int break_idx;
 } CfgGraphVizBuilder; 
 
 static void cfgGraphVizBuilderClear(CfgGraphVizBuilder *builder) {
@@ -47,6 +47,7 @@ static void cfgGraphVizBuilderInit(CfgGraphVizBuilder *builder, CFG *cfg) {
     builder->block_cnt = cfg->bb_count;
     builder->viz = aoStrAlloc(1<<10);
     builder->loop_cnt = 0;
+    builder->break_idx = 0;
 }
 
 static void cfgGraphVizBuilderSetSeen(CfgGraphVizBuilder *builder, int block_no)
@@ -97,7 +98,7 @@ static void cfgBranchPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
             "  goto \\<%d bb\\>\\l\\"
             "else\\l\\\n"
             "  goto \\<%d bb\\>\\l\\"
-            "\n}\"];\n",
+            "\n}\"];\n\n",
             internal->data,
             lvalue_str,
             bb->_if->block_no,
@@ -129,7 +130,7 @@ static void cfgLoopPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     aoStrCatPrintf(builder->viz,
             "%s\n"
             "|goto \\<%d bb\\>\\l\\"
-            "\n}\"];\n",
+            "\n}\"];\n\n",
             internal->data,
             bb->prev->block_no);
 
@@ -160,7 +161,7 @@ static void cfgBreakPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     aoStrCatPrintf(builder->viz,
             "%s\\l\\\n"
             "|goto \\<%d bb\\>\\l\\"
-            "\n}\"];\n",
+            "\n}\"];\n\n",
             internal->data,
             bb->next->block_no);
     aoStrRelease(internal);
@@ -189,14 +190,12 @@ static void cfgDefaultPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
             internal->data);
 
     if (bb->next) {
-        aoStrCatPrintf(builder->viz,
-                "|goto \\<%d bb\\>\\l\\"
-                "\n}\"];\n",
+        aoStrCatPrintf(builder->viz,"|goto \\<%d bb\\>\\l\\ \n}\"];\n\n",
                 bb->next->block_no);
     } else {
         loggerWarning("Block unexpectedly terminates: %dbb, type %d\n",
                 bb->block_no, bb->type);
-        aoStrCat(builder->viz,"\n}\"];\n");
+        aoStrCat(builder->viz,"\n}\"];\n\n");
     }
     aoStrRelease(internal);
 }
@@ -206,7 +205,6 @@ static void cfgHeadPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
             "    bb%d [shape=circle,style=filled,fillcolor=white,label=\"Entry\"];\n",
             bb->block_no,
             bb->block_no);
-
 }
 
 static void cfgReturnPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
@@ -226,7 +224,7 @@ static void cfgReturnPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     }
 
     aoStrCatPrintf(builder->viz,
-            "    bb%d [shape=doublecircle,style=filled,fillcolor=white,label=\"\\<bb %d\\>\\n%s\"];\n",
+            "    bb%d [shape=doublecircle,style=filled,fillcolor=white,label=\" \\<bb %d\\>\n %s \"];\n\n",
             bb->block_no,
             bb->block_no,
             internal->data);
@@ -245,9 +243,9 @@ static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
         if (cfgGraphVizBuilderHasSeen(builder,bb->block_no)) return;
         else cfgGraphVizBuilderSetSeen(builder,bb->block_no);
 
-        if (bb->flags & BB_FLAG_LOOP_HEAD) {
+        if (bb->flags & BB_FLAG_LOOP_HEAD && bb->_if->type != BB_BREAK_BLOCK) {
             int cnt = ++builder->loop_cnt;
-            aoStrCatPrintf(builder->viz,"subgraph cluster1_%d {\nstyle=\"filled\"\n;"
+            aoStrCatPrintf(builder->viz,"subgraph cluster1_%d {\nstyle=\"filled\";\n"
                     "color=\"darkgreen\";\n"
                     "fillcolor=\"grey88\";\n"
                     "label=\"loop %d\";\n"
@@ -264,13 +262,48 @@ static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
             default:              cfgDefaultPrintf(builder,bb); break;
         }
 
-        if (_if)   cfgCreateGraphVizShapes(builder,_if);
-        if (_else) cfgCreateGraphVizShapes(builder,_else);
+        if (_if && _else) {
+            /* Break blocks visually live in the outer scope of the loop,
+             * so we save them for later. */
+            if (_if->type == BB_BREAK_BLOCK && _else->type == BB_BREAK_BLOCK) {
+                builder->break_blocks[builder->break_idx++] = _if;
+                builder->break_blocks[builder->break_idx++] = _else;
+            } else if (_if->type == BB_BREAK_BLOCK) {
+                cfgCreateGraphVizShapes(builder,_else);
+                builder->break_blocks[builder->break_idx++] = _if;
+            } else if (_else->type == BB_BREAK_BLOCK) {
+                cfgCreateGraphVizShapes(builder,_if);
+                builder->break_blocks[builder->break_idx++] = _else;
+            } else {
+                cfgCreateGraphVizShapes(builder,_if);
+                cfgCreateGraphVizShapes(builder,_else);
+            }
+
+            /* This is for when the body of a loop breaks immediately, then 
+             * we will never hit the bb->flags & BB_FLAG_LOOP_END. 
+             * There feels like there should be a better way of doing this 
+             * though. */
+            if ((_if->flags & BB_FLAG_REDUNDANT_LOOP) ||
+                (_else->flags & BB_FLAG_REDUNDANT_LOOP)) {
+                while (builder->break_idx) {
+                    cfgCreateGraphVizShapes(builder,
+                            builder->break_blocks[--builder->break_idx]);
+                }
+            }
+
+        }
 
         if (bb->flags & BB_FLAG_LOOP_END) {
-            aoStrCat(builder->viz,"}\n");
+            while (builder->break_idx) {
+                cfgCreateGraphVizShapes(builder,
+                        builder->break_blocks[--builder->break_idx]);
+            }
+            if (!(bb->flags & BB_FLAG_REDUNDANT_LOOP)) {
+                aoStrCat(builder->viz,"}\n");
+            }
         }
     }
+
 }
 
 static void cfgCreateGraphVizMappings(CfgGraphVizBuilder *builder,
