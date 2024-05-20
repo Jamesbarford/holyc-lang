@@ -353,6 +353,74 @@ static void cfgHandleReturn(CFGBuilder *builder, Ast *ast) {
     cfgBuilderSetBasicBlock(builder,bb_return);
 }
 
+/* @CopyPaste
+ * This is a copy and paste of the above for loop code with the ast_step removed
+ * it can almost certainly be merged together
+ */
+static void cfgHandleDoWhileLoop(CFGBuilder *builder, Ast *ast) {
+    Ast *ast_cond = ast->whilecond;
+    Ast *ast_body = ast->whilebody;
+
+    AstPrint(ast_cond);
+    
+    BasicBlock *bb_prev_loop = builder->bb_cur_loop;
+    BasicBlock *bb = builder->bb;
+
+    BasicBlock *bb_cond_else = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
+    BasicBlock *bb_cond = cfgBuilderAllocBasicBlock(builder,BB_BRANCH_BLOCK);
+    BasicBlock *bb_body = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
+
+    bb_cond->flags |= BB_FLAG_LOOP_HEAD;
+
+    bb->next = bb_body;
+
+    bb_body->prev = bb;
+    bb_cond->prev = bb_body;
+
+    /* Jump into loop body if condition is met */
+    bb_cond->_if = bb_body;
+
+    /* Else move past loop body */
+    bb_cond->_else = bb_cond_else;
+
+    builder->flags |= CFG_BUILDER_FLAG_IN_LOOP;
+
+    /* And the previously met block was the condition */
+    bb_cond_else->prev = bb_cond;
+
+    builder->bb_cur_loop = bb_body;
+    cfgBuilderSetBasicBlock(builder,bb_body);
+    cfgHandleAstNode(builder,ast_body);
+
+    /* Forms a loop, though this should be picked up by the if condition
+     * below */
+    bb_cond->prev = bb_body;
+
+    cfgBuilderSetBasicBlock(builder,bb_cond);
+    cfgHandleAstNode(builder,ast_cond);
+
+    /* This means we had branches or possibly inner loops in our loop */
+    if (builder->bb != bb_body || !builder->bb->next) {
+        builder->bb->type = BB_LOOP_BLOCK;
+        builder->bb->prev = bb_cond;
+    }
+
+    builder->bb->flags |= BB_FLAG_LOOP_END;
+
+    if (builder->bb->type == BB_BREAK_BLOCK && 
+        (builder->bb->flags & BB_FLAG_LOOP_END)) {
+        builder->bb->flags |= BB_FLAG_REDUNDANT_LOOP;
+    }
+
+    cfgBuilderSetBasicBlock(builder,bb_cond_else);
+
+    if (!bb_prev_loop) {
+        builder->flags |= ~(CFG_BUILDER_FLAG_IN_LOOP);
+    }
+
+    builder->bb_cur_loop = bb_prev_loop;
+}
+
 static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
     assert(ast != NULL);
     int kind = ast->kind;
@@ -391,6 +459,12 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
             cfgHandleForLoop(builder,ast);
             break;
         }
+                      
+        case AST_DO_WHILE: {
+            loggerDebug("do while\n");
+            cfgHandleDoWhileLoop(builder,ast);
+            break;
+        }
 
         case AST_WHILE: {
             cfgHandleWhileLoop(builder,ast);
@@ -403,7 +477,6 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
         }
 
         case AST_GOTO:
-        case AST_DO_WHILE:
 
         case AST_CLASS_REF:
         case AST_DEREF:
