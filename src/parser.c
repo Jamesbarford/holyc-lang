@@ -640,7 +640,7 @@ Ast *ParseDoWhileStatement(Cctrl *cc) {
     cc->localenv = cc->localenv->parent;
     cc->tmp_loop_begin = prev_begin;
     cc->tmp_loop_end = prev_end;
-    return AstWhile(whilecond,whilebody,while_begin, while_end);
+    return AstDoWhile(whilecond,whilebody,while_begin, while_end);
 }
 
 Ast *ParseBreakStatement(Cctrl *cc) {

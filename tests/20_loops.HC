@@ -23,7 +23,6 @@ U0 TestForLoop()
   }
 
   PrintResult(passed,test_cases);
-  "=====\n";
 }
 
 U0 TestWhileLoop()
@@ -38,11 +37,24 @@ U0 TestWhileLoop()
     passed++;
   }
   PrintResult(passed,test_cases);
-  "=====\n";
+}
+
+U0 TestDoWhileLoop()
+{
+  "Testing do-while loop: ";
+  I64 i = 10;
+  do {
+    i = i + 1;
+
+  } while (i < 10);
+  PrintResult(i == 11, 1);
 }
 
 I32 Main()
 {
+  "Loop test suite\n";
   TestForLoop();
   TestWhileLoop();  
+  TestDoWhileLoop();
+  "=====\n";
 }

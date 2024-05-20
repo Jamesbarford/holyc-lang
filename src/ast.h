@@ -287,6 +287,8 @@ Ast *AstFor(Ast *init, Ast *cond, Ast *step, Ast *body, aoStr *for_begin,
 Ast *AstIf(Ast *cond, Ast *then, Ast *els);
 Ast *AstWhile(Ast *whilecond, Ast *whilebody, aoStr *while_begin,
         aoStr *while_end);
+Ast *AstDoWhile(Ast *whilecond, Ast *whilebody, aoStr *while_begin, 
+        aoStr *while_end);
 Ast *AstContinue(aoStr *continue_label);
 Ast *AstBreak(aoStr *break_label);
 Ast *AstCase(aoStr *case_label, long case_begin, long case_end);
