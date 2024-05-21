@@ -112,7 +112,7 @@ Bool TestCreate(SqlCtx *ctx)
   return TRUE;
 }
 
-U0 Main()
+I32 Main()
 {// These tests need to be run in a specific order.
   "Test - sqlite bindings & abstraction: \n";
   I64 tests = 4, correct = 0;
@@ -129,4 +129,5 @@ U0 Main()
   unlink(DB_NAME);
   PrintResult(correct,tests);
   "====\n";
+  return 0;
 }

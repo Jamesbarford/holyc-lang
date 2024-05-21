@@ -25,7 +25,7 @@
 #endif
 
 
-U0 Main()
+I32 Main()
 {
   I64 correct = 0, tests = 6;
   "Test - Preprocessor: ";
@@ -38,5 +38,6 @@ U0 Main()
   if (_INTVAL == 42) correct++;
   PrintResult(correct,tests);
   "====\n";
+  return 0;
 }
 

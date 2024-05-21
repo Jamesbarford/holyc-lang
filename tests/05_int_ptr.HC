@@ -1,6 +1,6 @@
 #include "testhelper.HC"
 
-U0 Main()
+I32 Main()
 {
   "Test - Taking the address of a local: ";
   I64 i = 420;
@@ -8,4 +8,5 @@ U0 Main()
   *x = 69;
 
   PrintResult(*x == 69, 1);
+  return 0;
 }

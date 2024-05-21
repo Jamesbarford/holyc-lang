@@ -49,7 +49,7 @@ I64 TestForContinue()
   return j == 1;
 }
 
-U0 Main()
+I32 Main()
 {
   "Test - 'break' and 'continue' inside while and for loops: ";
   I64 correct = 0, tests = 4;
@@ -59,4 +59,5 @@ U0 Main()
   correct += TestForContinue();
   PrintResult(correct,tests);
   "====\n";
+  return 0;
 }

@@ -50,7 +50,7 @@ prsasm-test:
 	gcc -O0 -g -DPRSASM_TEST ./prsasm.c ./cctrl.c ./dict.c ./ast.c ./aostr.c ./list.c ./lexer.c ./prsutil.c
 
 unit-test:
-	cd ../tests && ./tests.sh
+	cd ../tests && hcc ./run.HC && ./a.out
 
 $(OUT)/dict.o: dict.c dict.h aostr.h 
 $(OUT)/list.o: list.c list.h aostr.h 

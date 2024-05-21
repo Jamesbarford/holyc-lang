@@ -30,7 +30,7 @@ U0 TestListAdd(TestList *ll, I64 value)
   ll->size++;
 }
 
-U0 Main()
+I32 Main()
 {
   "Test - Linked list recusive definition class: ";
   I64 correct = 0, test_cases = 5;
@@ -68,4 +68,5 @@ U0 Main()
 
   PrintResult(correct,test_cases);
   "====\n";
+  return 0;
 }

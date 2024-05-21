@@ -50,7 +50,7 @@ Bool TextMatchExactCaseInsensative(U8 **strings)
   return _TestStrings(strings,"'hey.c",2,FZF_CASE_IGNORE,FALSE);
 }
 
-U0 Main()
+I32 Main()
 {
   "Test - FzF fuzzy finding: ";
   I32 tests = 7, correct = 0;
@@ -75,4 +75,6 @@ U0 Main()
   if (TextMatchExactCaseInsensative(strings)) correct++;
   
   PrintResult(correct,tests);
+  "====\n";
+  return 0;
 }

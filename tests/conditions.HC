@@ -40,8 +40,9 @@ U0 TestIfElse()
   PrintResult(passed,test_cases);
 }
 
-U0 Main()
+I32 Main()
 {
   TestIfElse();
   "=====\n";
+  return 0;
 }

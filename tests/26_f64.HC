@@ -117,7 +117,7 @@ Bool FloatOperators()
   return tests == correct;
 }
 
-U0 Main()
+I32 Main()
 {
   "Test - Floating point arithmetic:\n";
   I64 tests = 5, correct = 0;
@@ -128,4 +128,5 @@ U0 Main()
   if (FloatOperators()) correct++;
   PrintResult(correct,tests);
   "====\n";
+  return 0;
 }

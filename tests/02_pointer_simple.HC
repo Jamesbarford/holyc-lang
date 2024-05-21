@@ -14,7 +14,7 @@ U0 Assign(I64 *i)
   *i = 9;
 }
 
-U0 Main()
+I32 Main()
 {
   "Test Assigning pointer to a pointer from a class, no brackets: ";
   Example *e = MAlloc(sizeof(Example));
@@ -23,4 +23,5 @@ U0 Main()
   PrintResult(*p == 9, 1);
   Free(e);
   "====\n";
+  return 0;
 }

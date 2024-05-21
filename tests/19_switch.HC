@@ -56,7 +56,7 @@ Bool UnNamedCase()
   return num == 5;
 }
 
-U0 Main(I32 argc, U8 **argv)
+I32 Main(I32 argc, U8 **argv)
 {
   "Test - Switch statement: ";
   I64 correct = 0, tests = 5, count = 0;
@@ -100,4 +100,5 @@ U0 Main(I32 argc, U8 **argv)
   if (UnNamedCase()) correct++;
 
   PrintResult(correct,tests);
+  return 0;
 }

@@ -23,7 +23,7 @@ class SuperStudent
   I64 id;
 };
 
-U0 Main()
+I32 Main()
 {
   "Test - class definition: ";
   I64 correct = 0, tests = 6;
@@ -67,5 +67,5 @@ U0 Main()
   Free(c2);
   Free(s);
   "====\n";
-  return;
+  return 0;
 }

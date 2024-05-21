@@ -56,10 +56,11 @@ Bool FunctionCalls()
   return correct == tests;
 }
 
-U0 Main()
+I32 Main()
 {
   I64 correct = 0, tests = 2;
   if (VariableAutos()) correct++;
   if (FunctionCalls()) correct++;
   PrintResult(correct,tests);
+  return 0;
 }

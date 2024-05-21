@@ -89,7 +89,7 @@ Bool CastingArray()
          arr[2](I8) == 3;
 }
 
-U0 Main()
+I32 Main()
 {
   "Test - Type casting:\n";
   I64 correct = 0, tests = 9;
@@ -114,4 +114,5 @@ U0 Main()
 
   PrintResult(correct,tests);
   "=====\n";
+  return 0;
 }
