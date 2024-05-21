@@ -1341,10 +1341,11 @@ void _AstToString(aoStr *str, Ast *ast, int depth) {
             break;
 
         case AST_DO_WHILE:
-            aoStrCatPrintf(str, "do");
-            aoStrCatRepeat(str, "  ", depth+1);
+            aoStrCatRepeat(str, " ", depth);
+            aoStrCatPrintf(str, "<do_while>\n");
             _AstToString(str, ast->whilebody, depth+2);
 
+            aoStrCatRepeat(str, "  ", depth+1);
             aoStrCatPrintf(str, "<while_cond>\n"); 
             _AstToString(str, ast->whilecond, depth+2);
             AstStringEndStmt(str);
