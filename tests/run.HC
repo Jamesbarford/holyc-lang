@@ -86,12 +86,33 @@ Bool ShouldExclude(U8 *filename, I64 namelen)
   return FALSE;
 }
 
-I32 Main()
+U0 RunTest(U8 *filename)
 {
   U8 buffer[256];
+  auto len = snprintf(buffer,sizeof(buffer),"hcc %s",filename);
+  buffer[len] = '\0';
+  auto res = System(buffer);
+
+  if (res != 0) {
+    "\033[0;31mFailed to compile\033[0;0m: %s\n",filename;
+  } else {
+    if ((res = System("./a.out")) != 0) {
+      "\033[0;31mFAILED\033[0;0m to run: %s\n",filename;
+    }
+    Rm("./a.out");
+  }
+}
+
+I32 Main(I32 argc, U8 **argv)
+{
   auto dir = opendir(".");
   auto arr = StringArrayNew;
   Dirent *ent;
+
+  if (argc != 1) {
+    RunTest(argv[1]);
+    Exit(0);
+  }
 
   if (!dir) {
     "Failed to open directory\n";
@@ -111,19 +132,7 @@ I32 Main()
   QSortStrings(arr->entries,arr->len-1);
 
   for (auto i = 0; i < arr->len; ++i) {
-    auto name = arr->entries[i];
-    auto len = snprintf(buffer,sizeof(buffer),"hcc %s",name);
-    buffer[len] = '\0';
-    auto res = System(buffer);
-
-    if (res != 0) {
-      "\033[0;31mFailed to compile\033[0;0m: %s\n",name;
-    } else {
-      if ((res = System("./a.out")) != 0) {
-        "\033[0;31mFAILED\033[0;0m to run: %s\n",name;
-      }
-      Rm("./a.out");
-    }
+    RunTest(arr->entries[i]);
   }
 
   closedir(dir);
