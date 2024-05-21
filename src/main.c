@@ -30,6 +30,7 @@ typedef struct hccOpts {
     char *asm_outfile;
     char *obj_outfile;
     char *lib_name;
+    char *output_filename;
     char *clibs;
 } hccOpts;
 
@@ -214,11 +215,11 @@ void emitFile(aoStr *asmbuf, hccOpts *opts) {
     } else {
         writeAsmToTmp(asmbuf);
         if (opts->clibs) {
-            aoStrCatPrintf(cmd, "gcc -L/usr/local/lib %s -lpthread -ltos -lsqlite3 %s -lc -lm -o ./a.out", 
-                    ASM_TMP_FILE,opts->clibs);
+            aoStrCatPrintf(cmd, "gcc -L/usr/local/lib %s -lpthread -ltos -lsqlite3 %s -lc -lm -o %s", 
+                    ASM_TMP_FILE,opts->clibs,opts->output_filename);
         } else {
-            aoStrCatPrintf(cmd, "gcc -L/usr/local/lib %s -lpthread -ltos -lsqlite3 -lc -lm -o ./a.out", 
-                    ASM_TMP_FILE);
+            aoStrCatPrintf(cmd, "gcc -L/usr/local/lib %s -lpthread -ltos -lsqlite3 -lc -lm -o %s", 
+                    ASM_TMP_FILE, opts->output_filename);
         }
         system(cmd->data);
     }
@@ -241,6 +242,7 @@ void usage(void) {
             "  -obj     Emit an objectfile\n"
             "  -lib     Emit a dynamic and static library\n"
             "  -clibs   Link c libraries like: -clibs=`-lSDL2 -lxml2 -lcurl...`\n"
+            "  -o       Output filename: hcc <file>.HC -o <name>\n"
             "  -g       Not implemented\n"
             "  --help   Print this message\n");
     exit(1);
@@ -268,6 +270,9 @@ void parseCliOptions(hccOpts *opts, int argc, char **argv) {
             }
             opts->emit_dylib = 1;
             opts->lib_name = argv[i+1];
+            i++;
+        } else if (!strncmp(argv[i],"-o",2)) {
+            opts->output_filename = argv[i+1];
             i++;
         } else if (!strncmp(argv[i],"-obj",4)) {
             opts->emit_object = 1;
@@ -312,6 +317,7 @@ int main(int argc, char **argv) {
 
     memset(&opts,0,sizeof(opts));
     opts.clibs = "";
+    opts.output_filename = "a.out";
     /* now parse cli options */
     parseCliOptions(&opts,argc,argv);
     

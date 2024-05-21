@@ -78,7 +78,8 @@ U0 QSortStrings(U8 **arr, I64 high, I64 low=0)
 
 Bool ShouldExclude(U8 *filename, I64 namelen)
 {
-  U8 *exclude[] = {"run.HC", "testhelper.HC", "tests.sh", "Makefile", "a.out"};
+  U8 *exclude[] = {"run.HC", "testhelper.HC", "tests.sh", "Makefile", "a.out",
+    "test-runner"};
   auto len = sizeof(exclude)/sizeof(exclude[0]);
   for (auto i = 0; i < len; ++i) {
     if (!StrNCmp(exclude[i],filename,namelen)) return TRUE;
@@ -118,7 +119,6 @@ I32 Main(I32 argc, U8 **argv)
     "Failed to open directory\n";
     Exit;
   }
-
 
   while ((ent = readdir(dir)) != NULL) {
     if (ent->type & DT_REG) {
