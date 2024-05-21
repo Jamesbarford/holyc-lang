@@ -13,8 +13,8 @@
 #define BB_LOOP_BLOCK         (4)
 #define BB_RETURN_BLOCK       (5)
 #define BB_BREAK_BLOCK        (6)
-#define BB_UNCONDITIONAL_JUMP (7)
-#define BB_DO_WHILE_COND      (8)
+#define BB_DO_WHILE_COND      (7)
+#define BB_GOTO               (8)
 
 #define CFG_MAX_PREV    (32)
 
@@ -22,9 +22,10 @@
 #define CFG_BUILDER_FLAG_IN_CONDITIONAL (0x1)
 #define CFG_BUILDER_FLAG_IN_LOOP        (0x2)
 
-#define BB_FLAG_LOOP_HEAD      (0x1) // 0001
-#define BB_FLAG_LOOP_END       (0x2) // 0010
-#define BB_FLAG_REDUNDANT_LOOP (0x4) // 0100
+#define BB_FLAG_LOOP_HEAD          (0x1)
+#define BB_FLAG_LOOP_END           (0x2)
+#define BB_FLAG_REDUNDANT_LOOP     (0x4)
+#define BB_FLAG_UNCONDITIONAL_JUMP (0x8)
 
 typedef struct BasicBlock {
     /* @Confirm:
@@ -53,6 +54,8 @@ typedef struct CFG {
     BasicBlock *head;
     /* How many basic blocks are in the graph */
     int bb_count;
+    /* This a pointer to the memory pool which holds all of the basic blocks */
+    void *_memory;
 } CFG;
 
 typedef struct CFGBuilder {
@@ -67,6 +70,8 @@ typedef struct CFGBuilder {
     List *ast_iter;
     int bb_pos;
     int bb_cap;
+    List *unresoved_gotos;
+    Dict *resolved_labels;
 } CFGBuilder;
 
 BasicBlock *bbNew(int type);

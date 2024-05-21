@@ -79,7 +79,7 @@ void *ListPop(void *l) {
     return val;
 }
 
-void ListRelease(List *ll, void (*freeValue)(void *)) {
+void ListClear(List *ll, void (*freeValue)(void *)) {
     if (!ll) return;
     List *node = ll->next;
     List *next;
@@ -91,6 +91,12 @@ void ListRelease(List *ll, void (*freeValue)(void *)) {
         free(node);
         node = next;
     }
+    ll->next = ll->prev = ll;
+}
+
+void ListRelease(List *ll, void (*freeValue)(void *)) {
+    if (!ll) return;
+    ListClear(ll,freeValue);
     free(ll);
 }
 

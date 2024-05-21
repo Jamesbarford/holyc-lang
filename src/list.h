@@ -20,6 +20,7 @@ void ListInsertValueBefore(List *ll, void *value);
 void *ListDeque(void *l);
 void *ListPop(void *l);
 void ListRelease(List *ll, void (*freeValue)(void *));
+void ListClear(List *ll, void (*freeValue)(void *));
 int ListCount(List *ll);
 void ListMergeAppend(List *l1, List *l2);
 void ListMergePrepend(List *l1, List *l2);

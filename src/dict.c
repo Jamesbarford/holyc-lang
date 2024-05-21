@@ -80,10 +80,13 @@ static DictNode *DictNodeNew(void *key, void *value) {
     return n;
 }
 
-void DictRelease(Dict *d) {
-    if (d) {
+void DictClear(Dict *d) {
+    /* Clear the dictionary but don't release it, if size is 0 there is
+     * no need to do anything. We leave the capacity at whatever it was 
+     * previously. As clearing implies reuse it feels reasonable */
+    if (d && d->size) {
         DictNode *next = NULL;
-        for (size_t i = 0; i < d->size; ++i) {
+        for (size_t i = 0; i < d->capacity && d->size > 0; ++i) {
             DictNode *n = d->body[i];
             while (n) {
                 next = n->next;
@@ -94,6 +97,13 @@ void DictRelease(Dict *d) {
                 n = next;
             }
         }
+    }
+}
+
+void DictRelease(Dict *d) {
+    if (d) {
+        DictClear(d);
+        free(d->body);
         free(d);
     }
 }

@@ -1800,6 +1800,18 @@ static void _AstLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
             break;
         }
 
+        case AST_GOTO: {
+            aoStr *label = AstHackedGetLabel(ast);
+            aoStrCatPrintf(str,"goto %s",label->data);
+            break;
+        }
+
+        case AST_LABEL: {
+            aoStr *label = AstHackedGetLabel(ast);
+            aoStrCatPrintf(str,"%s:",label->data);
+            break;
+        }
+
         case AST_ADDR:
             aoStrCatPrintf(str, "&");
             _AstLValueToString(str,ast->operand,lexeme_flags);

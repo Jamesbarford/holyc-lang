@@ -279,6 +279,7 @@ static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
         _if = bb->_if;
         _else = bb->_else;
 
+        printf("spin\n");
         if (cfgGraphVizBuilderHasSeen(builder,bb->block_no)) return;
         else cfgGraphVizBuilderSetSeen(builder,bb->block_no);
 
@@ -304,6 +305,7 @@ static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
             case BB_BRANCH_BLOCK:  cfgBranchPrintf(builder,bb);  break;
             case BB_BREAK_BLOCK:   cfgBreakPrintf(builder,bb);   break;
             case BB_RETURN_BLOCK:  cfgReturnPrintf(builder,bb);  break;
+
             default:               cfgDefaultPrintf(builder,bb); break;
         }
 
@@ -315,7 +317,8 @@ static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
                 builder->break_blocks[builder->break_idx++] = _else;
             } else if (_if->type == BB_BREAK_BLOCK) {
                 cfgCreateGraphVizShapes(builder,_else);
-                builder->break_blocks[builder->break_idx++] = _if;
+                cfgCreateGraphVizShapes(builder,_if);
+                //builder->break_blocks[builder->break_idx++] = _if;
             } else if (_else->type == BB_BREAK_BLOCK) {
                 cfgCreateGraphVizShapes(builder,_if);
                 builder->break_blocks[builder->break_idx++] = _else;
@@ -337,6 +340,7 @@ static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
             }
         }
 
+
         if (bb->flags & BB_FLAG_LOOP_END) {
             while (builder->break_idx) {
                 cfgCreateGraphVizShapes(builder,
@@ -346,8 +350,13 @@ static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
                 aoStrCat(builder->viz,"}\n");
             }
         }
-    }
 
+        /* If we have a goto we do not want to print it's bb->next as 
+         * the code is non-linear and we will eventually get there. The 
+         * link will already be printed */
+        //if (bb->type == BB_GOTO && !(bb->flags & BB_FLAG_UNCONDITIONAL_JUMP)) break;
+        if (bb->prev) cfgCreateGraphVizShapes(builder,bb->prev);
+    }
 }
 
 static void cfgCreateGraphVizMappings(CfgGraphVizBuilder *builder,
@@ -439,6 +448,7 @@ static void cfgCreateGraphVizMappings(CfgGraphVizBuilder *builder,
                 DictSet(mappings,key,bb);
             }
         }
+
 
         if (_if)   cfgCreateGraphVizMappings(builder,mappings,_if);
         if (_else) cfgCreateGraphVizMappings(builder,mappings,_else);

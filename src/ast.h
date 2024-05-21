@@ -57,6 +57,11 @@
 #define AST_DO_WHILE       290
 #define AST_PLACEHOLDER    291
 
+/* @Cleanup
+ * Urgently get rid of this, we do not need `n` ways of setting a label on 
+ * an AST it is extremely confusing */
+#define AstHackedGetLabel(ast) ((ast)->slabel ? (ast)->slabel : (ast)->sval)
+
 typedef struct AstType AstType;
 /* Type of the variable or type of return type of a function */
 typedef struct AstType {

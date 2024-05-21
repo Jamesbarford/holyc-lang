@@ -9,6 +9,7 @@
 #include "ast.h"
 #include "cctrl.h"
 #include "cfg.h"
+#include "dict.h"
 #include "lexer.h"
 #include "list.h"
 #include "util.h"
@@ -24,8 +25,8 @@ const char *bbTypeToString(BasicBlock *bb) {
         case BB_LOOP_BLOCK:         return "BB_LOOP_BLOCK";
         case BB_RETURN_BLOCK:       return "BB_RETURN_BLOCK";
         case BB_BREAK_BLOCK:        return "BB_BREAK_BLOCK";
-        case BB_UNCONDITIONAL_JUMP: return "BB_UNCONDITIONAL_JUMP";
         case BB_DO_WHILE_COND:      return "BB_DO_WHILE_COND";
+        case BB_GOTO:               return "BB_GOTO";
         default:
             loggerPanic("Unknown type: %d\n", bb->type);
     }
@@ -78,6 +79,12 @@ static void cfgBuilderInit(CFGBuilder *builder, Cctrl *cc) {
     builder->bb_pool = bb_pool;
     builder->bb_pos = 0;
     builder->flags = 0;
+    builder->bb_cur_loop = NULL;
+
+    builder->unresoved_gotos = ListNew();
+
+    builder->resolved_labels = DictNew(&default_table_type);
+    DictSetFreeKey(builder->resolved_labels,NULL);
 }
 
 static void cfgBuilderSetCFG(CFGBuilder *builder, CFG *cfg) {
@@ -167,7 +174,7 @@ static void cgfHandleBranchBlock(CFGBuilder *builder, Ast *ast) {
         }
     }
 
-    builder->flags |= ~(CFG_BUILDER_FLAG_IN_CONDITIONAL);
+    builder->flags &= ~(CFG_BUILDER_FLAG_IN_CONDITIONAL);
 }
 
 static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
@@ -406,6 +413,37 @@ static void cfgHandleDoWhileLoop(CFGBuilder *builder, Ast *ast) {
     builder->bb_cur_loop = bb_prev_loop;
 }
 
+static void cfgHandleGoto(CFGBuilder *builder, Ast *ast) {
+    BasicBlock *dest;
+    aoStr *label = ast->slabel;
+
+    builder->bb->type = BB_GOTO;
+
+    /* Try straight out the gate to resolve the goto otherwise save it for 
+     * later*/
+    if ((dest = DictGetLen(builder->resolved_labels,label->data,
+            label->len)) != NULL)
+    {
+        dest->flags |= BB_FLAG_LOOP_HEAD;
+        builder->bb->prev = dest;
+        builder->bb->type = BB_LOOP_BLOCK;
+        builder->bb->flags |= BB_FLAG_LOOP_END;
+    } else {
+        ListAppend(builder->unresoved_gotos,builder->bb);
+    }
+
+    AstArrayPush(builder->bb->ast_array,ast);
+    
+    /* If this is an unconditional jump */
+    if (!(builder->flags & CFG_BUILDER_FLAG_IN_CONDITIONAL)) {
+        BasicBlock *bb_next = cfgBuilderAllocBasicBlock(builder,
+                BB_CONTROL_BLOCK);
+        builder->bb->flags |= BB_FLAG_UNCONDITIONAL_JUMP;
+        builder->bb->next = bb_next;
+        cfgBuilderSetBasicBlock(builder,bb_next);
+    }
+}
+
 static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
     assert(ast != NULL);
     int kind = ast->kind;
@@ -416,7 +454,15 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
      * 
      * A new basic block will start with an `if`, `for`, `while`, `goto` */
     switch (kind) {
-        case AST_LABEL:
+        case AST_LABEL: {
+            AstArrayPush(bb->ast_array,ast);
+            aoStr *label = AstHackedGetLabel(ast);
+            DictSet(builder->resolved_labels,label->data,builder->bb);
+            if (!(builder->flags & CFG_BUILDER_FLAG_IN_LOOP)) {
+                builder->bb->type = BB_BREAK_BLOCK;
+            }
+            break;
+        }
         case AST_ADDR:
         case AST_FUNC:
             break;
@@ -460,7 +506,10 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
             break;
         }
 
-        case AST_GOTO:
+        case AST_GOTO: {
+            cfgHandleGoto(builder,ast);
+            break;
+        }
 
         case AST_CLASS_REF:
         case AST_DEREF:
@@ -473,6 +522,7 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
             /* This is a goto */
             /* Switch not implemented */
             assert(builder->flags & CFG_BUILDER_FLAG_IN_LOOP);
+            loggerDebug("we broke: %d\n", builder->bb->block_no);
             builder->bb->type = BB_BREAK_BLOCK;
             builder->bb->next = builder->bb_cur_loop->_else;
             break;
@@ -529,8 +579,92 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
         builder->ast_iter = it;
         cfgHandleAstNode(builder,ast);
     }
+
+    /* Reconcile any non linear jumps */
+    ListForEach(builder->unresoved_gotos) {
+        BasicBlock *bb_goto = cast(BasicBlock *,it->value);
+        BasicBlock *bb_dest = NULL;
+        AstArray *ast_array = bb_goto->ast_array;
+        Ast *ast = NULL; 
+
+        for (int i = 0; i < ast_array->count; ++i) {
+            ast = ast_array->entries[i];
+            if (ast->kind == AST_GOTO) {
+                break;
+            }
+        }
+
+        assert(ast->kind == AST_GOTO);
+
+        bb_dest = DictGetLen(builder->resolved_labels,ast->slabel->data,
+                ast->slabel->len);
+        assert(bb_dest != NULL);
+
+        if (bb_goto->flags & BB_FLAG_UNCONDITIONAL_JUMP) {
+        /* If we are doing an unconditional jump into a loop, a switch or 
+         * a branch we need to re-order things as the flow changes. These 
+         * are somewhat contrived edge cases but _can_ happen. 
+         *
+         * If we are jumping into an if or a switch we can remove all of the 
+         * other branches as they will never be hit
+         * */
+            loggerDebug("unconditional jump to: %s\n",
+                    bbTypeToString(bb_dest));
+
+            /* This kind of changes it to a do while as the condition will 
+             * have to come last */
+            if (bb_dest->type == BB_LOOP_BLOCK) {
+                BasicBlock *head = bb_dest;
+                BasicBlock *tail = bb_dest;
+                
+                while (head->prev && !(head->flags & BB_FLAG_LOOP_HEAD)) {
+                    head = head->prev;
+                }
+                while (tail->next && !(tail->flags & BB_FLAG_LOOP_END)) {
+                    tail = tail->next;
+                }
+
+                if (bb_dest->next == NULL) {
+                    printf("next is NULL\n");
+                }
+
+                printf("loop head: bb%d %s\n", head->block_no, bbTypeToString(head));
+                printf("loop tail: bb%d %s\n", tail->block_no, bbTypeToString(tail));
+                
+                //if (bb_dest->prev && bb_dest->prev->flags & BB_FLAG_LOOP_HEAD) {
+
+                //    BasicBlock *tmp_prev = bb_dest->prev; 
+                //    loggerDebug("tmp_prev = %s\n", bbTypeToString(tmp_prev));
+                //    /* This block */
+                //    tmp_prev->flags &= ~BB_FLAG_LOOP_HEAD;
+
+                //    bb_dest->flags |= BB_FLAG_LOOP_HEAD;
+
+                //    bb_dest->prev->next = tmp_prev;
+                //    bb_dest->prev = bb_dest;
+                //    bb_dest->next = tmp_prev;
+                //
+                //   printf("yup\n");
+                //}
+            }
+
+        }
+
+        printf("%s => %d\n",ast->slabel->data,bb_dest->block_no);
+//        if (bb_dest->type == BB_BREAK_BLOCK) {
+//            bb_goto->type = BB_BREAK_BLOCK;
+//        }
+
+        bb_goto->next = bb_dest;
+    }
+
+    /* We still want these structures but don't want their contents for the 
+     * next functions. */
+    DictClear(builder->resolved_labels);
+    ListClear(builder->unresoved_gotos,NULL);
 }
 
+/* This will need to return a list of CFG's */
 CFG *cfgConstruct(Cctrl *cc) {
     Ast *ast;
     CFG *cfg;
@@ -548,8 +682,15 @@ CFG *cfgConstruct(Cctrl *cc) {
             cfgBuilderSetCFG(&builder,cfg);
             cfgBuilderSetBasicBlock(&builder,bb->next);
             cfgConstructFunction(&builder,ast->body->stms);
+
             cfg->bb_count = builder.bb_count;
+            cfg->_memory = builder.bb_pool;
         }
     }
+
+    DictRelease(builder.resolved_labels);
+    ListRelease(builder.unresoved_gotos,NULL);
+
+    loggerDebug("completed the construction\n");
     return cfg;
 }
