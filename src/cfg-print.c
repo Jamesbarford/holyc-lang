@@ -106,6 +106,45 @@ static void cfgBranchPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     aoStrRelease(internal);
 }
 
+static void cfgDoWhileCondPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
+    AstArray *ast_array = bb->ast_array;
+    char *lvalue_str;
+    int ast_count = ast_array->count;
+    aoStr *internal = aoStrAlloc(256);
+    Ast *cond = ast_array->entries[ast_count - 1];
+
+    for (int i = 0; i < ast_count-1; ++i) {
+        Ast *ast = ast_array->entries[i];
+        lvalue_str = AstLValueToString(ast,LEXEME_ENCODE_PUNCT);
+        aoStrCatPrintf(internal,"%s\\l\\\n",lvalue_str);
+        if (i + 1 != ast_count) {
+            aoStrPutChar(internal,'|');
+        }
+        free(lvalue_str);
+    }
+
+    assert(cond != NULL);
+    lvalue_str = AstLValueToString(cond,LEXEME_ENCODE_PUNCT);
+
+    aoStrCatPrintf(builder->viz,
+            "    bb%d [shape=record,style=filled,fillcolor=lightgrey,label=\"{\\<bb %d\\>|\n",
+            bb->block_no,
+            bb->block_no);
+
+    aoStrCatPrintf(builder->viz,
+            "%s\n"
+            "if (%s)\\l\\"
+            "  goto \\<%d bb\\>\\l\\"
+            "else\\l\\\n"
+            "  goto \\<%d bb\\>\\l\\"
+            "\n}\"];\n\n",
+            internal->data,
+            lvalue_str,
+            bb->prev->block_no,
+            bb->next->block_no);
+    aoStrRelease(internal);
+}
+
 static void cfgLoopPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     AstArray *ast_array = bb->ast_array;
     char *lvalue_str;
@@ -243,23 +282,29 @@ static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
         if (cfgGraphVizBuilderHasSeen(builder,bb->block_no)) return;
         else cfgGraphVizBuilderSetSeen(builder,bb->block_no);
 
-        if (bb->flags & BB_FLAG_LOOP_HEAD && bb->_if->type != BB_BREAK_BLOCK) {
-            int cnt = ++builder->loop_cnt;
-            aoStrCatPrintf(builder->viz,"subgraph cluster1_%d {\nstyle=\"filled\";\n"
-                    "color=\"darkgreen\";\n"
-                    "fillcolor=\"grey88\";\n"
-                    "label=\"loop %d\";\n"
-                    "labeljust=l;\n"
-                    "penwidth=2;\n",cnt,cnt);
+        /* @Cleanup
+         * We could do this thing in the cfg.c file and then remove the loop 
+         * head if there is an immeidate 'break'. This is not urgent */
+        if (bb->flags & BB_FLAG_LOOP_HEAD) {
+            if (!_if || (_if && _if->type != BB_BREAK_BLOCK)) {
+                int cnt = ++builder->loop_cnt;
+                aoStrCatPrintf(builder->viz,"subgraph cluster1_%d {\nstyle=\"filled\";\n"
+                        "color=\"darkgreen\";\n"
+                        "fillcolor=\"grey88\";\n"
+                        "label=\"loop %d\";\n"
+                        "labeljust=l;\n"
+                        "penwidth=2;\n",cnt,cnt);
+            }
         }
 
         switch (bb->type) {
-            case BB_HEAD_BLOCK:   cfgHeadPrintf(builder,bb);    break;
-            case BB_LOOP_BLOCK:   cfgLoopPrintf(builder,bb);    break;
-            case BB_BRANCH_BLOCK: cfgBranchPrintf(builder,bb);  break;
-            case BB_BREAK_BLOCK:  cfgBreakPrintf(builder,bb);   break;
-            case BB_RETURN_BLOCK: cfgReturnPrintf(builder,bb);  break;
-            default:              cfgDefaultPrintf(builder,bb); break;
+            case BB_HEAD_BLOCK:    cfgHeadPrintf(builder,bb);    break;
+            case BB_LOOP_BLOCK:    cfgLoopPrintf(builder,bb);    break;
+            case BB_DO_WHILE_COND: cfgDoWhileCondPrintf(builder,bb);  break;
+            case BB_BRANCH_BLOCK:  cfgBranchPrintf(builder,bb);  break;
+            case BB_BREAK_BLOCK:   cfgBreakPrintf(builder,bb);   break;
+            case BB_RETURN_BLOCK:  cfgReturnPrintf(builder,bb);  break;
+            default:               cfgDefaultPrintf(builder,bb); break;
         }
 
         if (_if && _else) {
@@ -290,7 +335,6 @@ static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
                             builder->break_blocks[--builder->break_idx]);
                 }
             }
-
         }
 
         if (bb->flags & BB_FLAG_LOOP_END) {
@@ -329,6 +373,34 @@ static void cfgCreateGraphVizMappings(CfgGraphVizBuilder *builder,
                 key = strndup(buffer,len);
                 DictSet(mappings,key,bb);
             }
+            continue;
+        }
+
+        if (bb->type == BB_DO_WHILE_COND) {
+
+            len = snprintf(buffer,sizeof(buffer),
+                    "    bb%d:s -> bb%d:n [style=\"dotted,bold\",color=blue,weight=10,constraint=false];",
+                    bb->block_no,
+                    bb->prev->block_no);
+            buffer[len] = '\0';
+
+            if (!DictGet(mappings,buffer)) {
+                key = strndup(buffer,len);
+                DictSet(mappings,key,bb);
+            }
+
+
+            len = snprintf(buffer,sizeof(buffer),
+                    "    bb%d:s -> bb%d:n [style=\"solid,bold\",color=darkorange,weight=10,constraint=true];",
+                    bb->block_no,
+                    bb->next->block_no);
+            buffer[len] = '\0';
+
+            if (!DictGet(mappings,buffer)) {
+                key = strndup(buffer,len);
+                DictSet(mappings,key,bb);
+            }
+
             continue;
         }
 

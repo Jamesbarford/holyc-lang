@@ -14,6 +14,7 @@
 #define BB_RETURN_BLOCK       (5)
 #define BB_BREAK_BLOCK        (6)
 #define BB_UNCONDITIONAL_JUMP (7)
+#define BB_DO_WHILE_COND      (8)
 
 #define CFG_MAX_PREV    (32)
 
@@ -70,7 +71,7 @@ typedef struct CFGBuilder {
 
 BasicBlock *bbNew(int type);
 BasicBlock *bbAddNext(BasicBlock *cur, int type, BasicBlock *next);
-
+const char *bbTypeToString(BasicBlock *bb);
 CFG *cfgConstruct(Cctrl *cc);
 
 #endif

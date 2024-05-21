@@ -15,6 +15,22 @@
 
 static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast);
 
+const char *bbTypeToString(BasicBlock *bb) {
+    switch (bb->type) {
+        case BB_END_BLOCK:          return "BB_END_BLOCK";
+        case BB_HEAD_BLOCK:         return "BB_HEAD_BLOCK";
+        case BB_CONTROL_BLOCK:      return "BB_CONTROL_BLOCK";
+        case BB_BRANCH_BLOCK:       return "BB_BRANCH_BLOCK";
+        case BB_LOOP_BLOCK:         return "BB_LOOP_BLOCK";
+        case BB_RETURN_BLOCK:       return "BB_RETURN_BLOCK";
+        case BB_BREAK_BLOCK:        return "BB_BREAK_BLOCK";
+        case BB_UNCONDITIONAL_JUMP: return "BB_UNCONDITIONAL_JUMP";
+        case BB_DO_WHILE_COND:      return "BB_DO_WHILE_COND";
+        default:
+            loggerPanic("Unknown type: %d\n", bb->type);
+    }
+}
+
 static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder, int type) {
     /* @Bug, @HashTable
      * This can and will create a new pointer sometimes and thus all references
@@ -41,7 +57,7 @@ static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder, int type) {
     /* @Leak
      * This should probably be a memory pool as well */
     bb->ast_array = AstArrayNew(16);
-    bb->next = bb->_else = bb->_if = NULL;
+    bb->next = bb->prev = bb->_else = bb->_if = NULL;
     return bb;
 }
 
@@ -269,7 +285,7 @@ static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
     cfgBuilderSetBasicBlock(builder,bb_cond_else);
 
     if (!bb_prev_loop) {
-        builder->flags |= ~(CFG_BUILDER_FLAG_IN_LOOP);
+        builder->flags &= ~(CFG_BUILDER_FLAG_IN_LOOP);
     }
 
     builder->bb_cur_loop = bb_prev_loop;
@@ -330,7 +346,7 @@ static void cfgHandleWhileLoop(CFGBuilder *builder, Ast *ast) {
     cfgBuilderSetBasicBlock(builder,bb_cond_else);
 
     if (!bb_prev_loop) {
-        builder->flags |= ~(CFG_BUILDER_FLAG_IN_LOOP);
+        builder->flags &= ~(CFG_BUILDER_FLAG_IN_LOOP);
     }
 
     builder->bb_cur_loop = bb_prev_loop;
@@ -361,63 +377,32 @@ static void cfgHandleDoWhileLoop(CFGBuilder *builder, Ast *ast) {
     Ast *ast_cond = ast->whilecond;
     Ast *ast_body = ast->whilebody;
 
-    AstPrint(ast_cond);
-    
     BasicBlock *bb_prev_loop = builder->bb_cur_loop;
     BasicBlock *bb = builder->bb;
 
     BasicBlock *bb_cond_else = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
-    BasicBlock *bb_cond = cfgBuilderAllocBasicBlock(builder,BB_BRANCH_BLOCK);
-    BasicBlock *bb_body = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
+    BasicBlock *bb_do_while = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
 
-    bb_cond->flags |= BB_FLAG_LOOP_HEAD;
+    bb->next = bb_do_while;
+    bb_do_while->flags |= (BB_FLAG_LOOP_HEAD);
 
-    bb->next = bb_body;
-
-    bb_body->prev = bb;
-    bb_cond->prev = bb_body;
-
-    /* Jump into loop body if condition is met */
-    bb_cond->_if = bb_body;
-
-    /* Else move past loop body */
-    bb_cond->_else = bb_cond_else;
-
+    builder->bb_cur_loop = bb_do_while;
     builder->flags |= CFG_BUILDER_FLAG_IN_LOOP;
 
-    /* And the previously met block was the condition */
-    bb_cond_else->prev = bb_cond;
-
-    builder->bb_cur_loop = bb_body;
-    cfgBuilderSetBasicBlock(builder,bb_body);
+    cfgBuilderSetBasicBlock(builder,bb_do_while);
     cfgHandleAstNode(builder,ast_body);
 
-    /* Forms a loop, though this should be picked up by the if condition
-     * below */
-    bb_cond->prev = bb_body;
-
-    cfgBuilderSetBasicBlock(builder,bb_cond);
-    cfgHandleAstNode(builder,ast_cond);
-
-    /* This means we had branches or possibly inner loops in our loop */
-    if (builder->bb != bb_body || !builder->bb->next) {
-        builder->bb->type = BB_LOOP_BLOCK;
-        builder->bb->prev = bb_cond;
-    }
-
+    builder->bb->type = BB_DO_WHILE_COND;
+    builder->bb->prev = bb_do_while;
+    builder->bb->next = bb_cond_else;
+    AstArrayPush(builder->bb->ast_array,ast_cond);
     builder->bb->flags |= BB_FLAG_LOOP_END;
 
-    if (builder->bb->type == BB_BREAK_BLOCK && 
-        (builder->bb->flags & BB_FLAG_LOOP_END)) {
-        builder->bb->flags |= BB_FLAG_REDUNDANT_LOOP;
+    if (!bb_prev_loop) {
+        builder->flags &= ~(CFG_BUILDER_FLAG_IN_LOOP);
     }
 
     cfgBuilderSetBasicBlock(builder,bb_cond_else);
-
-    if (!bb_prev_loop) {
-        builder->flags |= ~(CFG_BUILDER_FLAG_IN_LOOP);
-    }
-
     builder->bb_cur_loop = bb_prev_loop;
 }
 
@@ -461,7 +446,6 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
         }
                       
         case AST_DO_WHILE: {
-            loggerDebug("do while\n");
             cfgHandleDoWhileLoop(builder,ast);
             break;
         }
