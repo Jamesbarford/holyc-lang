@@ -12,21 +12,59 @@
 _An implementation of Terry A. Davis's HolyC_
 
 ```c
-"Hello, world!\n";
+U0 Main()
+{
+  "Hello world\n";
+}
+Main;
 ```
 
 Full documentation for the language can be found here: https://holyc-lang.com/
 
 ## Introduction
-This compiler is built from scratch in C. Currently it is non optimising,
-converting the AST to x86_64 assembly code which is fed into gcc to assemble.
+A holyc compiler is built from scratch in C. Currently it is non optimising,
+walking the AST and compiling it directly to x86_64 assembly code as text which 
+is fed into gcc to assemble. Floating point arithmetic is supported as are most
+of the major language features.
 
-## Compatability
-Currently the this will compile x86_64 assembly and works on linux and intel
-macs.
-This has been tested on an intel mac and linux ubuntu on amd. Most `x86_64`
-architectures should be supported. Creating an `IR` and compiling to `ARM`
-is high on the TODO list.
+## Example
+Below is a snippet of code showing some of the features supported by this holyc
+compiler. Namely inheritance, loops, `printf` by using a string and loops. All
+c-like control flows are supported by the compiler.
+
+```hc
+class SomethingWithAnAge
+{
+  I64 age;
+};
+
+class Person : SomethingWithAnAge
+{
+  U8 name[1<<5];
+};
+
+U0 ExampleFunction(U0)
+{
+  Person *p = MAlloc(sizeof(Person));
+
+  MemCpy(p->name,"Bob",3);
+  p->age = 0;
+
+  while (p->age < 42) {
+    p->age++;
+  }
+  "name: %s, age: %d\n",p->name,p->age;
+  Free(p);
+}
+
+ExampleFunction;
+```
+
+## Compatibility
+Currently this holyc compiler will compile to x86_64 assembly and has been 
+tested on linux and intel macs.
+Thus most `x86_64` architectures should be supported. Creating an `IR` with 
+some optimisations and compiling to `ARM` is high on the TODO list.
 
 ## Building
 Run `make`, then run `make install` (`sudo make install` on linux) this will 
@@ -38,17 +76,23 @@ etc... see ./src/holyc-lib/
   to write code.
 - `cast<type>` can be used for casting as well as post-fix type casting.
 - `break` and `continue` allowed in loops.
-- You can call any libc code with `extern "c" <type> <function_name>`
+- You can call any libc code by declaring the prototype with 
+  `extern "c" <type> <function_name>`. Then call the function as you usually
+  would. See [here](https://holyc-lang.com/learn-functions.html) for examples.
 
 ## Bugs
-This is a non exhuastive list of things that are buggy, if you find somethings
+This is a non exhaustive list of things that are buggy, if you find somethings
 please open an issue or open a pr.
-- using `%f` for string formatting floats not work
-- memory management for the compiler is virtually non-existant, presently all
+- Using `%f` for string formatting floats not work
+- Memory management for the compiler is virtually non-existent, presently all
   the tokens are made before compiling which is very slow.
-- line number in error messages is sometimes off and does not report the file
-- function pointers in a parameter list have to come at the end
+- Line number in error messages is sometimes off and does not report the file
+- Function pointers in a parameter list have to come at the end
 - Variable arguments are all passed on the stack
+- Casting between `I32` and `I64` is very buggy, the most obvious of which 
+  is calling a function which expects `I64` and calling it with an `I32` and
+  vice versa, this will often cause a segmentation fault. As such prefer using
+  `I64` for integer types.
 
 ## Inspirations & Resources:
 A lot of the assembly has been cobbled together by running `gcc -S -O0 <file>`
