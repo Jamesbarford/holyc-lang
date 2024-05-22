@@ -44,46 +44,37 @@ I64 TestRunner(I64 i1, I64 i2, I64 op, I64 expected)
   return answer == expected;
 }
 
-Bool MulTests()
+U0 MulTests()
 {
   I64 correct = 0;
   I64 total = 5;
-
+  "Multiplication * : ";
   correct += TestRunner(3, 4, MATHS_MUL, 12);
   correct += TestRunner(-2, 6, MATHS_MUL, -12);
   correct += TestRunner(-3, -4, MATHS_MUL, 12);
   correct += TestRunner(5, 0, MATHS_MUL, 0);
   correct += TestRunner(0, -5, MATHS_MUL, 0);
-
-  if (correct != total) {
-    "Multiplication * : ";
-    PrintResult(correct,total);
-  }
-  return correct == total;
+  PrintResult(correct, total);
 }
 
-Bool ModTests()
+U0 ModTests()
 {
   I64 correct = 0;
   I64 total = 5;
-
+  "Modulo %% : ";
   correct += TestRunner(15, 4, MATHS_MOD, 3);
   correct += TestRunner(20, 6, MATHS_MOD, 2);
   correct += TestRunner(-13, 5, MATHS_MOD, -3);
   correct += TestRunner(14, -3, MATHS_MOD, 2);
   correct += TestRunner(-15, -4, MATHS_MOD, -3);
-
-  if (correct != total) {
-    "Modulo %% : ";
-    PrintResult(correct,total);
-  }
-  return correct == total;
+  PrintResult(correct, total);
 }
 
-Bool SubTests()
+U0 SubTests()
 {
   I64 correct = 0;
   I64 total = 7;
+  "Subtraction - : ";
   correct += TestRunner(-12,16,MATHS_SUB,-28);
   correct += TestRunner(12,-16,MATHS_SUB,28);
   correct += TestRunner(0,16,MATHS_SUB,-16);
@@ -91,159 +82,113 @@ Bool SubTests()
   correct += TestRunner(-8,-8,MATHS_SUB,0);
   correct += TestRunner(-8,24,MATHS_SUB,-32);
   correct += TestRunner(16,24,MATHS_SUB,-8);
-
-  if (correct != total) {
-    "Subtraction - : ";
-    PrintResult(correct,total);
-  }
-  return correct == total;
+  PrintResult(correct, total);
 }
 
-Bool AddTests()
+U0 AddTests()
 {
   I64 correct = 0;
   I64 total = 5;
-
+  "Addition + : ";
   correct += TestRunner(10, 15, MATHS_ADD, 25);
   correct += TestRunner(-10, 20, MATHS_ADD, 10);
   correct += TestRunner(-5, -5, MATHS_ADD, -10);
   correct += TestRunner(0, 10, MATHS_ADD, 10);
   correct += TestRunner(20, 0, MATHS_ADD, 20);
-
-  if (correct != total) {
-    "Addition + : ";
-    PrintResult(correct,total);
-  }
-  return correct == total;
+  PrintResult(correct, total);
 }
 
-Bool DivTests()
+U0 DivTests()
 {
   I64 correct = 0;
   I64 total = 3;
-
+  "Division / : ";
   correct += TestRunner(20, 5, MATHS_DIV, 4);
   correct += TestRunner(-15, 3, MATHS_DIV, -5);
   correct += TestRunner(-24, -4, MATHS_DIV, 6);
-
-  if (correct != total) {
-    "Division / : ";
-    PrintResult(correct,total);
-  }
-  return correct == total;
+  PrintResult(correct,total);
 }
 
-Bool ShlTests()
+U0 ShlTests()
 {
   I64 correct = 0;
   I64 total = 3;
-
+  "MATHS_SHL << : ";
   correct += TestRunner(1, 2, MATHS_SHL, 4); // 1 << 2
   correct += TestRunner(3, 3, MATHS_SHL, 24); // 3 << 3
   correct += TestRunner(-2, 1, MATHS_SHL, -4); // -2 << 1
-
-  if (correct != total) {
-    "MATHS_SHL >> : ";
-    PrintResult(correct,total);
-  }
-  return correct == total;
+  PrintResult(correct, total);
 }
 
-Bool ShrTests()
+U0 ShrTests()
 {
   I64 correct = 0;
   I64 total = 3;
-
+  "MATHS_SHR >> : ";
   correct += TestRunner(4, 1, MATHS_SHR, 2); // 4 >> 1
   correct += TestRunner(16, 3, MATHS_SHR, 2); // 16 >> 3
   correct += TestRunner(-8, 2, MATHS_SHR, -2); // -8 >> 2
-
-  if (correct != total) {
-    "MATHS_SHR >> : ";
-    PrintResult(correct,total);
-  }
-  return correct == total;
+  PrintResult(correct, total);
 }
 
-Bool XorTests()
+U0 XorTests()
 {
   I64 correct = 0;
   I64 total = 3;
-
+  "Xor ^: ";
   correct += TestRunner(5, 3, MATHS_XMATHS_OR, 6);
   correct += TestRunner(6, 2, MATHS_XMATHS_OR, 4);
   correct += TestRunner(-1, 1, MATHS_XMATHS_OR, -2);
-
-  if (correct != total) {
-    "Xor ^: ";
-    PrintResult(correct,total);
-  }
-  return correct == total;
+  PrintResult(correct, total);
 }
 
-Bool OrTests()
+U0 OrTests()
 {
   I64 correct = 0;
   I64 total = 3;
-
+  "Or |: ";
   correct += TestRunner(5, 3, MATHS_OR, 7);
   correct += TestRunner(4, 2, MATHS_OR, 6);
   correct += TestRunner(-1, 1, MATHS_OR, -1);
-
-  if (correct != total) {
-    "Or |: ";
-    PrintResult(correct,total);
-  }
-  return correct == total;
+  PrintResult(correct, total);
 }
 
-Bool AndTests()
+U0 AndTests()
 {
   I64 correct = 0;
   I64 total = 3;
-
+  "And &: ";
   correct += TestRunner(5, 3, MATHS_AND, 1);
   correct += TestRunner(6, 4, MATHS_AND, 4);
   correct += TestRunner(-1, 1, MATHS_AND, 1);
-
-  if (correct != total) {
-    "And &: ";
-    PrintResult(correct,total);
-  }
-  return correct == total;
+  PrintResult(correct, total);
 }
 
-Bool NotTests()
+U0 NotTests()
 {
   I64 correct = 0;
   I64 total = 3;
-
+  "Not ~: ";
   correct += TestRunner(5, 0, MATHS_NOT, -6); // MATHS_NOT operation usually only takes one operand
   correct += TestRunner(-1, 0, MATHS_NOT, 0);
   correct += TestRunner(0, 0, MATHS_NOT, -1);
-
-  if (correct != total) {
-    "Not ~: ";
-    PrintResult(correct,total);
-  }
-  return correct == total;
+  PrintResult(correct, total);
 }
 
 I32 Main()
 {
- "Test - Integer Mathematics: ";
-  I64 tests = 11, correct = 0;
-  if (SubTests()) correct++;
-  if (MulTests()) correct++;
-  if (ModTests()) correct++;
-  if (AddTests()) correct++;
-  if (DivTests()) correct++;
-  if (ShlTests()) correct++;
-  if (ShrTests()) correct++;
-  if (XorTests()) correct++;
-  if (OrTests())  correct++;
-  if (AndTests()) correct++;
-  if (NotTests()) correct++;
-  PrintResult(correct,tests);
+ "Test Mathematics:\n";
+  SubTests();
+  MulTests();
+  ModTests();
+  AddTests();
+  DivTests();
+  ShlTests();
+  ShrTests();
+  XorTests();
+  OrTests();
+  AndTests();
+  NotTests();
+  "=====\n";
   return 0;
 }

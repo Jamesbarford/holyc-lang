@@ -58,7 +58,6 @@ Bool FunctionCalls()
 
 I32 Main()
 {
-  "Test - auto type inference: ";
   I64 correct = 0, tests = 2;
   if (VariableAutos()) correct++;
   if (FunctionCalls()) correct++;

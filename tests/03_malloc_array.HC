@@ -21,7 +21,7 @@ Bool ArrayJuggling()
 
 I32 Main()
 {
-  "Test - Juggling an array: ";
+  "Test - Juggling an array MAlloc(I64 * 10): ";
   I64 correct = 0, tests = 4;
   I64 *arr = MAlloc(sizeof(I64) * 10);
   I64 *ptr = &arr[2];
@@ -43,5 +43,6 @@ I32 Main()
   if (ArrayJuggling()) correct++;
 
   PrintResult(correct,tests);
+  "====\n";
   return 0;
 }

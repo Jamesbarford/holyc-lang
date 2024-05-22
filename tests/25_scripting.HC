@@ -1,4 +1,4 @@
-"Test - Scripting: ";
+"Test Scripting: ";
 #include "testhelper.HC"
 
 /* While this is possible, it is quite difficult to read */
@@ -50,4 +50,5 @@ I32 Main()
 Main;
 PrintResult(correct,tests);
 free(c);
+'===\n';
 Exit(0);

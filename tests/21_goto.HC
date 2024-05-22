@@ -28,9 +28,10 @@ passed:
 I32 Main()
 {
   I64 correct = 0, test_cases = 2;
-  "Test - goto: ";
+  "Testing GOTO: ";
   if (testGoto()) ++correct;
   if (testGoto2()) ++correct;
   PrintResult(correct,test_cases);
+  "=====\n";
   return 0;
 }

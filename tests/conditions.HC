@@ -1,7 +1,8 @@
 #include "testhelper.HC"
 
-Bool TestIfElse()
+U0 TestIfElse()
 {
+  "Testing if else\n";
   I64 test_cases = 4, passed = 0;
   I64 i = 0, j = 0;
   if (i == 0) {
@@ -11,22 +12,22 @@ Bool TestIfElse()
   i = 9;
   if (i == 0) {
     PrintResult(passed,test_cases);
-    return FALSE;
+    return;
   } else if (i == 9) {
     passed++;
   } else {
     PrintResult(passed,test_cases);
-    return FALSE;
+    return;
   }
 
   i = 10;
   j = 420;
   if (i == 0 && j == 69) {
     PrintResult(passed,test_cases);
-    return FALSE;
+    return;
   } else if (i == 10 && j == 439) {
     PrintResult(passed,test_cases);
-    return FALSE;
+    return;
   } else {
     passed++;
   }
@@ -36,15 +37,12 @@ Bool TestIfElse()
   if (i == 7 || j == 7) {
     passed++;
   }
-
-  return passed == test_cases;
+  PrintResult(passed,test_cases);
 }
 
 I32 Main()
 {
-  "Test - 'if', 'else' and 'else if': ";
-  I64 tests = 1, correct = 0;
-  if (TestIfElse()) correct++;
-  PrintResult(correct,tests);
+  TestIfElse();
+  "=====\n";
   return 0;
 }

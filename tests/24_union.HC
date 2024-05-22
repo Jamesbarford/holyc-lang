@@ -144,11 +144,12 @@ Bool TestComplexUnion()
 I32 Main()
 {
   I64 correct = 0, tests = 4;
-  "Test - Union and class inheritance: ";
+  "Test: Union and class inheritance: ";
   if (TestInheritanceOneLevel()) correct++;
   if (TestInheritanceTwoLevels()) correct++;
   if (TestSimpleUnion()) correct++;
   if (TestComplexUnion()) correct++;
   PrintResult(correct,tests);
+  "====\n";
   return 0;
 }

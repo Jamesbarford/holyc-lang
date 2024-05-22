@@ -114,7 +114,7 @@ Bool TestCreate(SqlCtx *ctx)
 
 I32 Main()
 {// These tests need to be run in a specific order.
-  "Test - sqlite bindings & abstraction: ";
+  "Test - sqlite bindings & abstraction: \n";
   I64 tests = 4, correct = 0;
   auto ctx = SqlCtxNew(DB_NAME);
 
@@ -128,5 +128,6 @@ I32 Main()
   /* Delete the database */
   unlink(DB_NAME);
   PrintResult(correct,tests);
+  "====\n";
   return 0;
 }

@@ -75,5 +75,6 @@ I32 Main()
   if (TextMatchExactCaseInsensative(strings)) correct++;
   
   PrintResult(correct,tests);
+  "====\n";
   return 0;
 }

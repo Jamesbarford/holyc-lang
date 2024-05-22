@@ -13,5 +13,6 @@ I32 Main()
   if (ch == 'f') ++correct;
 
   PrintResult(correct,tests);
+  "====\n";
   return 0;
 }

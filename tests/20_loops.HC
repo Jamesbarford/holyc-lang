@@ -1,6 +1,6 @@
 #include "testhelper.HC"
 
-Bool TestForLoop()
+U0 TestForLoop()
 {
   "Testing For Loop: ";
   I64 test_cases = 2, passed = 0;
@@ -22,10 +22,10 @@ Bool TestForLoop()
     passed++;
   }
 
-  return passed == test_cases;
+  PrintResult(passed,test_cases);
 }
 
-Bool TestWhileLoop()
+U0 TestWhileLoop()
 {
   "Testing while loop: ";
   I64 i = 0;
@@ -36,10 +36,10 @@ Bool TestWhileLoop()
   if (i == 9) {
     passed++;
   }
-  return passed == test_cases;
+  PrintResult(passed,test_cases);
 }
 
-Bool TestDoWhileLoop()
+U0 TestDoWhileLoop()
 {
   "Testing do-while loop: ";
   I64 i = 10;
@@ -47,17 +47,15 @@ Bool TestDoWhileLoop()
     i = i + 1;
 
   } while (i < 10);
-  return i == 11;
+  PrintResult(i == 11, 1);
 }
 
 I32 Main()
 {
-  "Test - while, for and do while: ";
-  I64 tests = 3;
-  I64 correct = 0;
-  if (TestForLoop()) correct++;
-  if (TestWhileLoop()) correct++;
-  if (TestDoWhileLoop()) correct++;
-  PrintResult(correct,tests);
+  "Loop test suite\n";
+  TestForLoop();
+  TestWhileLoop();  
+  TestDoWhileLoop();
+  "=====\n";
   return 0;
 }

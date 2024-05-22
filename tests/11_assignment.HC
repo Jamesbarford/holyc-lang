@@ -5,11 +5,12 @@ I64 Identity(I64 i)
   return i;
 }
 
-Bool Assign()
+U0 Assign()
 {
   I64 correct = 0, tests = 2;
-  I64 i = 10;
+  "= test: ";
 
+  I64 i = 10;
   if (i == 10) {
     correct++;
   }
@@ -18,18 +19,13 @@ Bool Assign()
   if (i == 69) {
     correct++;
   }
-
-  if (correct != tests) {
-    "= test: ";
-    PrintResult(correct,tests);
-  }
-
-  return correct == tests;
+  PrintResult(correct,tests);
 }
 
-Bool AddAssign()
+U0 AddAssign()
 {
   I64 correct = 0, tests = 2;
+  "+= test: ";
   I64 i = 10;
 
   i += 20;
@@ -41,17 +37,13 @@ Bool AddAssign()
   if (i == 99) {
     correct++;
   }
-  if (correct != tests) {
-    "+= test: ";
-    PrintResult(correct,tests);
-  }
-
-  return correct == tests;
+  PrintResult(correct,tests);
 }
 
-Bool SubAssign()
+U0 SubAssign()
 {
   I64 correct = 0, tests = 2;
+  "-= test: ";
   I64 i = 10;
 
   i -= 20;
@@ -63,17 +55,13 @@ Bool SubAssign()
   if (i == -20) {
     correct++;
   }
-
-  if (correct != tests) {
-    "-= test: ";
-    PrintResult(correct,tests);
-  }
-  return correct == tests;
+  PrintResult(correct,tests);
 }
 
-Bool MulAssign()
+U0 MulAssign()
 {
   I64 correct = 0, tests = 2;
+  "*= test: ";
   I64 i = 10;
 
   i *= 10;  
@@ -85,17 +73,13 @@ Bool MulAssign()
   if (i == 200) {
     correct++;
   }
-
-  if (correct != tests) {
-    "*= test: ";
-    PrintResult(correct,tests);
-  }
-  return correct == tests;
+  PrintResult(correct,tests);
 }
 
-Bool DivAssign()
+U0 DivAssign()
 {
   I64 correct = 0, tests = 2;
+  "/= test: ";
   I64 i = 100;
 
   i /= 10;
@@ -108,17 +92,13 @@ Bool DivAssign()
     correct++;
   }
 
-  if (correct != tests) {
-    "/= test: ";
-    PrintResult(correct,tests);
-  }
-
-  return correct == tests;
+  PrintResult(correct,tests);
 }
 
-Bool ModAssign()
+U0 ModAssign()
 {
   I64 correct = 0, tests = 2;
+  "%%= test: ";
   I64 i = 35;
 
   i %= 32;
@@ -130,17 +110,13 @@ Bool ModAssign()
   if (i == 1) {
     correct++;
   }
-
-  if (correct != tests) {
-    "%%= test: ";
-    PrintResult(correct,tests);
-  }
-  return correct == tests;
+  PrintResult(correct,tests);
 }
 
-Bool OrAssign()
+U0 OrAssign()
 {
   I64 correct = 0, tests = 2;
+  "|= test: ";
   I64 i = 1;
 
   i |= 8;
@@ -152,17 +128,13 @@ Bool OrAssign()
   if (i == 13) {
     correct++;
   }
-
-  if (correct != tests) {
-    "|= test: ";
-    PrintResult(correct,tests);
-  }
-  return correct == tests;
+  PrintResult(correct,tests);
 }
 
-Bool AndAssign()
+U0 AndAssign()
 {
   I64 correct = 0, tests = 2;
+  "&= test: ";
   I64 i = 11;
 
   i &= 1;
@@ -175,16 +147,13 @@ Bool AndAssign()
     correct++;
   }
   
-  if (correct != tests) {
-    "&= test: ";
-    PrintResult(correct,tests);
-  }
-  return correct == tests;
+  PrintResult(correct,tests);
 }
 
-Bool XorAssign()
+U0 XorAssign()
 { // Toggling bits
   I64 correct = 0, tests = 2;
+  "^= test: ";
   I64 i = 8;
 
   i ^= 1;
@@ -196,14 +165,10 @@ Bool XorAssign()
   if (i == 8) {
     correct++;
   }
-  if (correct != tests) {
-    "^= test: ";
-    PrintResult(correct,tests);
-  }
-  return correct == tests;
+  PrintResult(correct,tests);
 }
 
-Bool ShrAssign()
+U0 ShrAssign()
 {
   I64 correct = 0, tests = 2;
   ">>= test: ";
@@ -218,12 +183,13 @@ Bool ShrAssign()
   if (i == 256) {
     correct++;
   }
-  return correct == tests;
+  PrintResult(correct,tests);
 }
 
-Bool ShlAssign()
+U0 ShlAssign()
 {
   I64 correct = 0, tests = 2;
+  "<<= test: ";
   I64 i = 1;
 
   i <<= 10;
@@ -235,30 +201,23 @@ Bool ShlAssign()
   if (i == 2048) {
     correct++;
   }
-  if (correct != tests) {
-    "<<= test: ";
-    PrintResult(correct,tests);
-  }
-  return correct == tests;
+  PrintResult(correct,tests);
 }
 
 I32 Main()
 {
-  "Test - Assignments: ";
-  I64 tests = 11;
-  I64 correct = 0;
-  if (Assign()) correct++;
-  if (AddAssign()) correct++;
-  if (SubAssign()) correct++;
-  if (MulAssign()) correct++;
-  if (DivAssign()) correct++;
-  if (ModAssign()) correct++;
-  if (AndAssign()) correct++;
-  if (OrAssign()) correct++;
-  if (XorAssign()) correct++;
-  if (ShrAssign()) correct++;
-  if (ShlAssign()) correct++;
-
-  PrintResult(correct,tests);
+  "Assignment tests:\n";
+  Assign();
+  AddAssign();
+  SubAssign();
+  MulAssign();
+  DivAssign();
+  ModAssign();
+  AndAssign();
+  OrAssign();
+  XorAssign();
+  ShrAssign();
+  ShlAssign();
+  "=====\n";
   return 0;
 }

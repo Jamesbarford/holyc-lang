@@ -51,7 +51,7 @@ I64 CmpFileNames(U8 *str1, U8 *str2)
     }
     return n2 > n1;
   }
-  return StrCmp(str1,str2) > 1;
+  return 0;
 }
 
 U0 QSortStrings(U8 **arr, I64 high, I64 low=0)

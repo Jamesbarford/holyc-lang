@@ -105,10 +105,10 @@ Bool FloatOperators()
 {
   I64 tests = 9, correct = 0;
 
-  if (45.5*8  > 32.123)   correct++;
+  if (45.5*8  > 32.123) correct++;
   if (89.1231 == 89.1231) correct++;
   if (420.1   != 89.1231) correct++;
-  if (1.43234 < 89.1231)  correct++;
+  if (1.43234 < 89.1231) correct++;
   if (1.43234 <= 1.43234) correct++;
   if (1.43234 <= 1.43234) correct++;
   if (1.43234 == 1.43234) correct++;
@@ -119,7 +119,7 @@ Bool FloatOperators()
 
 I32 Main()
 {
-  "Test - Floating point arithmetic: ";
+  "Test - Floating point arithmetic:\n";
   I64 tests = 5, correct = 0;
   if (FloatAddition()) correct++;
   if (FloatSubraction()) correct++;
@@ -127,5 +127,6 @@ I32 Main()
   if (FloatMultiplication()) correct++;
   if (FloatOperators()) correct++;
   PrintResult(correct,tests);
+  "====\n";
   return 0;
 }

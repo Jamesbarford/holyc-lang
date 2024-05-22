@@ -67,5 +67,6 @@ I32 Main()
   }
 
   PrintResult(correct,test_cases);
+  "====\n";
   return 0;
 }
