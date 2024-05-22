@@ -101,7 +101,7 @@ when I get time.
 A lot of the assembly has been cobbled together by running `gcc -S -O0 <file>`
 or `clang -s O0 <file>`. Which has been effective in learning assembly, as 
 has playing with TempleOS. The following are a non-exhaustive list of compilers
-and resources that I have found particularly useful.
+and resources that I have found particularly useful for learning.
 - [TempleOS](https://templeos.org/)
 - [8cc](https://github.com/rui314/8cc)
 - [tcc](http://bellard.org/tcc/)
