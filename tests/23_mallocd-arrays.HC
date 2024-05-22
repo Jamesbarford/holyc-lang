@@ -51,10 +51,11 @@ U0 PointerArray()
   PrintResult(correct,tests);
 }
 
-U0 Main()
+I32 Main()
 {
   "Malloced Arrays:\n";
   IntArray();
   PointerArray();
   "=====\n";
+  return 0;
 }

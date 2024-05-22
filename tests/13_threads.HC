@@ -80,7 +80,7 @@ Bool ThreadPoolTest()
   return x == 10;
 }
 
-U0 Main()
+I32 Main()
 {
   I32 correct = 0, tests = 2;
   "Test - Simple Threading: \n";
@@ -88,4 +88,5 @@ U0 Main()
   if (ThreadPoolTest()) correct++;  
   PrintResult(correct, tests);
   "====\n";
+  return 0;
 }

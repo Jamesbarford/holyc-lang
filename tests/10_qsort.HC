@@ -20,7 +20,7 @@ public U0 quickSort(I64 *arr, I64 hi, I64 lo=0)
   }
 }
 
-U0 Main()
+I32 Main()
 {
   "Test - qsort, recursion and default function params: ";
   I64 correct = 0;
@@ -36,5 +36,6 @@ U0 Main()
   }
   PrintResult(correct == 10, 1);
   "====\n";
+  return 0;
 }
 Main;

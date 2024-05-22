@@ -141,7 +141,7 @@ Bool TestComplexUnion()
 }
 
 
-U0 Main()
+I32 Main()
 {
   I64 correct = 0, tests = 4;
   "Test: Union and class inheritance: ";
@@ -151,4 +151,5 @@ U0 Main()
   if (TestComplexUnion()) correct++;
   PrintResult(correct,tests);
   "====\n";
+  return 0;
 }

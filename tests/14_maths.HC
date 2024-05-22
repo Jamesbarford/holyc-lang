@@ -175,7 +175,7 @@ U0 NotTests()
   PrintResult(correct, total);
 }
 
-U0 Main()
+I32 Main()
 {
  "Test Mathematics:\n";
   SubTests();
@@ -190,4 +190,5 @@ U0 Main()
   AndTests();
   NotTests();
   "=====\n";
+  return 0;
 }

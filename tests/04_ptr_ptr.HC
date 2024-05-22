@@ -6,7 +6,7 @@ class Point
   I64 y;
 };
 
-U0 Main()
+I32 Main()
 {
   "Test - Pointer to a pointer from a class: ";
   Point *p = MAlloc(sizeof(Point *));
@@ -15,4 +15,5 @@ U0 Main()
   Point *x = *ptr;  // Dereference to get the pointer to p
   PrintResult(x->y == 420, 1); // x should be the original value we set
   "=====\n";
+  return 0;
 }

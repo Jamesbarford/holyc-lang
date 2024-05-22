@@ -86,7 +86,7 @@ I64 DoMaths(I64 (*mathfunc)(I64 a, I64 b), I64 x, I64 y)
   return mathfunc(x,y);
 }
 
-U0 Main()
+I32 Main()
 {
   "Test - Function pointers: ";
   I64 correct = 0, tests = 5;
@@ -100,4 +100,5 @@ U0 Main()
   
   PrintResult(correct, tests);
   "====\n";
+  return 0;
 }

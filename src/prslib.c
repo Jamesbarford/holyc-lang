@@ -146,6 +146,7 @@ List *ParseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
     lexeme *tok, *pname;
     AstType *type;
     Ast *var;
+    int arg_count = 0;
 
     tok = CctrlTokenGet(cc);
     if (TokenPunctIs(tok,terminator)) {
@@ -175,6 +176,14 @@ List *ParseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
 
         type = ParseDeclSpec(cc);
         pname = CctrlTokenGet(cc);
+
+        if (TokenPunctIs(pname, ')') && arg_count == 0) {
+            if (type->kind == AST_TYPE_VOID) {
+                return params;
+            }
+        }
+
+        arg_count++;
         if (pname->tk_type != TK_IDENT) {
             /* Function pointer */
             if (TokenPunctIs(pname, '(')) {
@@ -206,7 +215,6 @@ List *ParseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
                 if (TokenPunctIs(pname, terminator)) {
                     return params;
                 }
-
                 continue;
             } else {
                 loggerPanic("line %d: Identifier expected, got: %s\n",

@@ -19,3 +19,4 @@ unit_tests
 compile_commands.json
 scratch
 *.dot
+test-runner

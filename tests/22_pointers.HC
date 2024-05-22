@@ -24,9 +24,10 @@ U0 PointerAddressing()
   PrintResult(correct,tests);
 }
 
-U0 Main()
+I32 Main()
 {
   "Addressing: ";
   PointerAddressing();
   "====\n";
+  return 0;
 }

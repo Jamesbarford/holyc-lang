@@ -41,12 +41,14 @@ if (!strncmp("hello","hello",5)) correct++;
 if (strncmp("helo","hello",4) != 0) correct++;
 
 Assign;
-U0 Main()
+I32 Main()
 {
   if (x == 45) correct++;
   if (c->i == 89) correct++;
+  return 0;
 }
 Main;
 PrintResult(correct,tests);
 free(c);
 '===\n';
+Exit(0);

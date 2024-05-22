@@ -795,6 +795,8 @@ error:
 }
 
 AstType *AstTypeCheck(AstType *expected, Ast *ast) {
+    if (expected != NULL && ast == NULL) return NULL;
+
     AstType *original_actual = ast->type;
     AstType *actual;
     if (original_actual == NULL) {

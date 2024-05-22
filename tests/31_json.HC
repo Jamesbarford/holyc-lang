@@ -1,6 +1,6 @@
 #include "testhelper.HC"
 
-U0 Main()
+I32 Main()
 {
   "Test - JSON parsing: ";
   I32 tests = 10, correct = 0;
@@ -59,4 +59,5 @@ U0 Main()
   JsonRelease(j);
   PrintResult(correct,tests);
   "====\n";
+  return 0;
 }

@@ -97,7 +97,7 @@ Bool SingleDimensionArray()
          arr[3] == 4;
 }
 
-U0 Main()
+I32 Main()
 {
   "Test - Arrays & multi dimensional: ";
   I32 correct = 0, tests = 4;
@@ -109,4 +109,5 @@ U0 Main()
 
   PrintResult(correct,tests);
   "====\n";
+  return 0;
 }

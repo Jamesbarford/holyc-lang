@@ -1,6 +1,6 @@
 #include "testhelper.HC"
 
-U0 Main()
+I32 Main()
 {
   "Test - MemCpy, MemSet: ";
   I64 correct = 0, tests = 4;
@@ -26,4 +26,5 @@ U0 Main()
   Free(str2);
 
   PrintResult(correct,tests);
+  return 0;
 }

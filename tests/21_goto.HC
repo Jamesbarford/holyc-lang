@@ -25,7 +25,7 @@ passed:
   return TRUE;
 }
 
-U0 Main()
+I32 Main()
 {
   I64 correct = 0, test_cases = 2;
   "Testing GOTO: ";
@@ -33,4 +33,5 @@ U0 Main()
   if (testGoto2()) ++correct;
   PrintResult(correct,test_cases);
   "=====\n";
+  return 0;
 }

@@ -69,7 +69,7 @@ I64 Wrap(I64 i)
   return i;
 }
 
-U0 Main()
+I32 Main()
 {
   "Test - Variable arguments: ";
   I64 res, correct=0, tests = 15;
@@ -118,4 +118,5 @@ U0 Main()
 
   PrintResult(correct,tests);
   "=====\n";
+  return 0;
 }
