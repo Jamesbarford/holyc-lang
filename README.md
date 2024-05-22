@@ -61,15 +61,15 @@ ExampleFunction;
 ```
 
 ## Compatibility
-Currently this holyc compiler will compile to x86_64 assembly and has been 
-tested on linux and intel macs.
+Currently this holyc compiler will compile holyc source code to an x86_64 
+compatible binary which has been tested on amd linux and an intel mac.
 Thus most `x86_64` architectures should be supported. Creating an `IR` with 
 some optimisations and compiling to `ARM` is high on the TODO list.
 
 ## Building
 Run `make`, then run `make install` (`sudo make install` on linux) this will 
-install the compiler and holyc libraries for strings, hashtables, io, maths 
-etc... see ./src/holyc-lib/
+install the compiler and holyc libraries for strings, hashtables, I/O, maths,
+networking, JSON parsing etc... see ./src/holyc-lib/
  
 ## Differences
 - `auto` key word for type inference, an addition which makes it easier
