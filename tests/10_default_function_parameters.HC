@@ -15,6 +15,5 @@ I32 Main()
   "Test - Default function parameters: ";
   I64 i = Add(20);
   PrintResult(i == 96 && Add2(,43) == 53, 1);
-  "====\n";
   return 0;
 }

@@ -37,7 +37,6 @@ I32 Main()
   if (BAR == 32) correct++;
   if (_INTVAL == 42) correct++;
   PrintResult(correct,tests);
-  "====\n";
   return 0;
 }
 

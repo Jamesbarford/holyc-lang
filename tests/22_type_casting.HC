@@ -91,7 +91,7 @@ Bool CastingArray()
 
 I32 Main()
 {
-  "Test - Type casting:\n";
+  "Test - Type casting: ";
   I64 correct = 0, tests = 9;
   Ptr *p = MAlloc(sizeof(Ptr));
   p->x = 10;
@@ -113,6 +113,5 @@ I32 Main()
   Free(foo);
 
   PrintResult(correct,tests);
-  "=====\n";
   return 0;
 }

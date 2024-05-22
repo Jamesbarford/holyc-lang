@@ -127,7 +127,6 @@ void getASMFileName(hccOpts *opts, char *file_name) {
         }
     }
 
-    fprintf(stderr,"%s\n",file_name);
     asm_outfile = malloc(sizeof(char) * len+1);
     obj_outfile = malloc(sizeof(char) * len+1);
 

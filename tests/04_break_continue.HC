@@ -58,6 +58,5 @@ I32 Main()
   correct += TestForBreak();
   correct += TestForContinue();
   PrintResult(correct,tests);
-  "====\n";
   return 0;
 }

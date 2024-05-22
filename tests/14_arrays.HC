@@ -108,6 +108,5 @@ I32 Main()
   if (StringArray) correct++;
 
   PrintResult(correct,tests);
-  "====\n";
   return 0;
 }

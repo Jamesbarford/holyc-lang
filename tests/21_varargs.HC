@@ -117,6 +117,5 @@ I32 Main()
 
 
   PrintResult(correct,tests);
-  "=====\n";
   return 0;
 }

@@ -66,6 +66,5 @@ I32 Main()
   PrintResult(correct,tests);
   Free(c2);
   Free(s);
-  "====\n";
   return 0;
 }

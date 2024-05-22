@@ -24,7 +24,6 @@ I32 Main()
   }
 
   U8 *str = JsonToString(j);
-  "%s\n",str;
   Free(str);
 
   if ((obj = JsonSelect(j,".key:s"))) {
@@ -58,6 +57,5 @@ I32 Main()
 
   JsonRelease(j);
   PrintResult(correct,tests);
-  "====\n";
   return 0;
 }

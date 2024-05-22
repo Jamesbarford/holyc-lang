@@ -83,10 +83,9 @@ Bool ThreadPoolTest()
 I32 Main()
 {
   I32 correct = 0, tests = 2;
-  "Test - Simple Threading: \n";
+  "Test - Simple Threading: ";
   if (pthread_test()) correct++;
   if (ThreadPoolTest()) correct++;  
   PrintResult(correct, tests);
-  "====\n";
   return 0;
 }

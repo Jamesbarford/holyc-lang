@@ -6,7 +6,7 @@ class Point
   I64 y;
 };
 
-U0 IntArray()
+Bool IntArray()
 {
   I64 *arr = MAlloc(sizeof(I64) * 10);
   I64 j = 1, correct = 0, tests = 10;
@@ -33,10 +33,10 @@ U0 IntArray()
   if (arr[9] == 10) correct++;
 
   Free(arr);
-  PrintResult(correct,tests);
+  return correct == tests;
 }
 
-U0 PointerArray()
+Bool PointerArray()
 {
   I64 j = 1, correct = 0, tests = 2;
   Point *arr = MAlloc(sizeof(Point *) * 10);
@@ -48,14 +48,15 @@ U0 PointerArray()
   if (arr[8].y == 420) correct++;
 
   Free(arr);
-  PrintResult(correct,tests);
+  return correct == tests;
 }
 
 I32 Main()
 {
-  "Malloced Arrays:\n";
-  IntArray();
-  PointerArray();
-  "=====\n";
+  I64 tests = 2, correct = 0;
+  "Test - Malloced Arrays: ";
+  if (IntArray()) correct++;
+  if (PointerArray()) correct++;
+  PrintResult(correct,tests);
   return 0;
 }

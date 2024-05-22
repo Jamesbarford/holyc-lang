@@ -99,6 +99,5 @@ I32 Main()
   if (Test5()) correct++;
   
   PrintResult(correct, tests);
-  "====\n";
   return 0;
 }
