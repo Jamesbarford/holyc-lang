@@ -10,10 +10,11 @@ I64 Add2(I64 a=10, I64 b=43)
   return a + b;
 }
 
-U0 Main()
+I32 Main()
 {
   "Test - Default function parameters: ";
   I64 i = Add(20);
   PrintResult(i == 96 && Add2(,43) == 53, 1);
   "====\n";
+  return 0;
 }

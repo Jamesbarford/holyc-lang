@@ -204,7 +204,7 @@ U0 ShlAssign()
   PrintResult(correct,tests);
 }
 
-U0 Main()
+I32 Main()
 {
   "Assignment tests:\n";
   Assign();
@@ -219,4 +219,5 @@ U0 Main()
   ShrAssign();
   ShlAssign();
   "=====\n";
+  return 0;
 }

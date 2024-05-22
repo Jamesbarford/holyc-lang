@@ -1,6 +1,6 @@
 #include "testhelper.HC"
 
-U0 Main()
+I32 Main()
 {
   "Test - comma separated declarators & types: ";
   I64 correct = 0, tests = 3;
@@ -14,4 +14,5 @@ U0 Main()
 
   PrintResult(correct,tests);
   "====\n";
+  return 0;
 }

@@ -57,4 +57,5 @@ I32 Main()
   TestWhileLoop();  
   TestDoWhileLoop();
   "=====\n";
+  return 0;
 }

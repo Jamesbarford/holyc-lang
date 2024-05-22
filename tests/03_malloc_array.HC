@@ -19,7 +19,7 @@ Bool ArrayJuggling()
   return arr[0][1] == 69 && arr[0][0] == 3;
 }
 
-U0 Main()
+I32 Main()
 {
   "Test - Juggling an array MAlloc(I64 * 10): ";
   I64 correct = 0, tests = 4;
@@ -44,4 +44,5 @@ U0 Main()
 
   PrintResult(correct,tests);
   "====\n";
+  return 0;
 }
