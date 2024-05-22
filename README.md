@@ -11,7 +11,7 @@
 
 _An implementation of Terry A. Davis's HolyC_
 
-```c
+```hc
 U0 Main()
 {
   "Hello world\n";
@@ -22,7 +22,7 @@ Main;
 Full documentation for the language can be found here: https://holyc-lang.com/
 
 ## Introduction
-A holyc compiler is built from scratch in C. Currently it is non optimising,
+A holyc compiler built from scratch in C. Currently it is non optimising,
 walking the AST and compiling it directly to x86_64 assembly code as text which 
 is fed into gcc to assemble. Floating point arithmetic is supported as are most
 of the major language features.
@@ -81,8 +81,9 @@ etc... see ./src/holyc-lib/
   would. See [here](https://holyc-lang.com/learn-functions.html) for examples.
 
 ## Bugs
-This is a non exhaustive list of things that are buggy, if you find somethings
-please open an issue or open a pr.
+This is a non exhaustive list of things that are buggy, if you find something's
+please open an issue or open a pull request. I do, however, intend to fix them 
+when I get time.
 - Using `%f` for string formatting floats not work
 - Memory management for the compiler is virtually non-existent, presently all
   the tokens are made before compiling which is very slow.
@@ -93,6 +94,8 @@ please open an issue or open a pr.
   is calling a function which expects `I64` and calling it with an `I32` and
   vice versa, this will often cause a segmentation fault. As such prefer using
   `I64` for integer types.
+- The preprocessor for `#define` can presently _only_ accept numerical 
+  expressions and strings. It is not like a c compilers preprocessor.
 
 ## Inspirations & Resources:
 A lot of the assembly has been cobbled together by running `gcc -S -O0 <file>`
