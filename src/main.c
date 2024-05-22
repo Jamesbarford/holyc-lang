@@ -127,6 +127,7 @@ void getASMFileName(hccOpts *opts, char *file_name) {
         }
     }
 
+    fprintf(stderr,"%s\n",file_name);
     asm_outfile = malloc(sizeof(char) * len+1);
     obj_outfile = malloc(sizeof(char) * len+1);
 
@@ -241,7 +242,7 @@ void usage(void) {
             "  -obj     Emit an objectfile\n"
             "  -lib     Emit a dynamic and static library\n"
             "  -clibs   Link c libraries like: -clibs=`-lSDL2 -lxml2 -lcurl...`\n"
-            "  -o       Output filename: hcc <file>.HC -o <name>\n"
+            "  -o       Output filename: hcc -o <name> ./<file>.HC\n"
             "  -g       Not implemented\n"
             "  --help   Print this message\n");
     exit(1);
