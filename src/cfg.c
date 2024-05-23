@@ -127,6 +127,7 @@ static void cgfHandleBranchBlock(CFGBuilder *builder, Ast *ast) {
      * +--------------------------+                                           
      */
 
+    int in_conditional = builder->flags & CFG_BUILDER_FLAG_IN_CONDITIONAL;
     BasicBlock *bb = builder->bb;
     bb->type = BB_BRANCH_BLOCK;
     AstArrayPush(bb->ast_array,ast->cond);
@@ -142,7 +143,7 @@ static void cgfHandleBranchBlock(CFGBuilder *builder, Ast *ast) {
     if_body->prev   = bb;
     else_body->prev = bb;
 
-    bb->_if = if_body;
+    bb->_if   = if_body;
     bb->_else = else_body;
 
     /* Start of a new basic block */
@@ -152,29 +153,37 @@ static void cgfHandleBranchBlock(CFGBuilder *builder, Ast *ast) {
     if (ast->els) {
         cfgBuilderSetBasicBlock(builder,else_body);
         cfgHandleAstNode(builder,ast->els);
+
         /* This means the node has changed, and thus the next block needs 
          * to be this branch */
         if (builder->bb != else_body) {
-            /* Join */
+            builder->bb->prev = bb;
+            /* Join */ 
             if (bb->_if->type != BB_BREAK_BLOCK) {
                 bb->_if->next = builder->bb;
+                bb->_else->next = builder->bb;
             }
         } else {
             new_block = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
             bb->_else->next = new_block;
             bb->_if->next = new_block;
+            new_block->prev = bb->_if;
+
             cfgBuilderSetBasicBlock(builder,new_block);
         }
     } else {
-        if (if_body->type == BB_BREAK_BLOCK) {
-            cfgBuilderSetBasicBlock(builder,else_body);
-        } else {
-            bb->_if->next = else_body;
-            cfgBuilderSetBasicBlock(builder,else_body);
+        if (builder->bb != if_body) {
+            builder->bb->prev = bb;
         }
+        //if (if_body->type != BB_BREAK_BLOCK) {
+        //    bb->_if->next = else_body;
+        //}
+        cfgBuilderSetBasicBlock(builder,else_body);
     }
 
-    builder->flags &= ~(CFG_BUILDER_FLAG_IN_CONDITIONAL);
+    if (!in_conditional) {
+        builder->flags &= ~(CFG_BUILDER_FLAG_IN_CONDITIONAL);
+    }
 }
 
 static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
@@ -449,6 +458,7 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
     int kind = ast->kind;
     BasicBlock *bb = builder->bb;
     List *stmts;
+
     /* We are only interested in the AST nodes that are the start of a new 
      * basic block or a top level `I64 x = 10;` type declaration or assignment 
      * 
@@ -458,6 +468,7 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
             AstArrayPush(bb->ast_array,ast);
             aoStr *label = AstHackedGetLabel(ast);
             DictSet(builder->resolved_labels,label->data,builder->bb);
+            builder->bb->flags |= BB_FLAG_LABEL;
             if (!(builder->flags & CFG_BUILDER_FLAG_IN_LOOP)) {
                 builder->bb->type = BB_BREAK_BLOCK;
             }
@@ -570,6 +581,99 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
     }
 }
 
+static void bbFix(BasicBlock *bb);
+static void bbRelinkBranch(BasicBlock *branch);
+static void bbFixBranchBlock(BasicBlock *bb);
+
+static void bbRelinkBranch(BasicBlock *branch) {
+    AstArray *next_array = branch->next ? branch->next->ast_array : NULL;
+
+    if (branch->type == BB_BRANCH_BLOCK) {
+        if (next_array) {
+            AstArray *els_array = branch->_else->ast_array;
+            if (next_array->count != 0 && els_array->count == 0) {
+                /* mark as destroyed */
+                AstArrayRelease(els_array);
+                branch->_else->block_no = BB_GARBAGE;
+                branch->_else = branch->next;
+                branch->next = NULL;
+            } else {
+                AstArrayRelease(next_array);
+                branch->next->block_no = BB_GARBAGE;
+                branch->next = NULL;
+            }
+        }
+    } else if (branch->type == BB_CONTROL_BLOCK) {
+        /* Then we need to reverse up the graph again like we're doing in 
+         * bbFix() ... */
+        if (next_array && next_array->count == 0) {
+            loggerDebug("bb:%d\n", branch->block_no);
+        } else if (!next_array) {
+            loggerDebug("bb:%d\n", branch->block_no);
+        }
+    }
+}
+
+static void bbFixBranchBlock(BasicBlock *bb) {
+    BasicBlock *then = bb->_if, *els = bb->_else;
+
+    if (els->type == BB_CONTROL_BLOCK) {
+        bbRelinkBranch(els);
+        bbFix(els);
+    }
+
+    if (then->type == BB_CONTROL_BLOCK) {
+        bbFix(then);
+    }
+
+    if (els->type == BB_BRANCH_BLOCK) {
+        bbRelinkBranch(els);
+        bbFix(els);
+    }
+
+    if (then->type == BB_BRANCH_BLOCK) {
+        bbFix(then);
+    }
+}
+
+static void bbFix(BasicBlock *bb) {
+    for (; bb && bb->type != BB_END_BLOCK; bb = bb->next) {
+        /* Search up the tree to fix the node */
+        if (!bb->next && bb->type == BB_CONTROL_BLOCK) {
+            BasicBlock *prev = bb->prev;
+            /* Iterate back up the tree to find the join */
+            while (prev) {
+                if (prev->type == BB_BRANCH_BLOCK) {
+                    BasicBlock *prev_else = prev->_else;
+                    BasicBlock *prev_if = prev->_if;
+
+                    if (prev_if->type == BB_CONTROL_BLOCK) {
+                        bb->next = prev_if->next;
+                    } else if (prev_else->type == BB_CONTROL_BLOCK) {
+                        bb->next = prev_else->next;
+                    }
+                    if (prev_if->type == BB_RETURN_BLOCK) bb->next = prev_if;
+                    if (prev_else->type == BB_RETURN_BLOCK) bb->next = prev_else;
+                } else if (prev->type == BB_HEAD_BLOCK) {
+                    break;
+                } else if (prev->type == BB_CONTROL_BLOCK) {
+                    /* We've found a random control block which indicates 
+                     * that our current block is genuinely the end of the road*/
+                    if (prev->next != bb) {
+                        bb->type = BB_END_BLOCK;
+                        bb->next = NULL;
+                        break;
+                    }
+                }
+                prev = prev->prev;
+            }
+
+        } else if (bb->type == BB_BRANCH_BLOCK) {
+            bbFixBranchBlock(bb);
+        }
+    }
+}
+
 /* Split out to make it simpler to reason with */
 static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
     if (ListEmpty(stmts)) return;
@@ -579,6 +683,10 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
         builder->ast_iter = it;
         cfgHandleAstNode(builder,ast);
     }
+
+    BasicBlock *bb = &builder->bb_pool[0];
+    bbFix(bb);
+
 
     /* Reconcile any non linear jumps */
     ListForEach(builder->unresoved_gotos) {
@@ -617,6 +725,10 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
                 BasicBlock *head = bb_dest;
                 BasicBlock *tail = bb_dest;
                 
+                // bb_dest->flags |= BB_FLAG_LOOP_HEAD;
+
+                /* This is not a fair assumption as there could be potentially
+                 * many `previous blocks` */
                 while (head->prev && !(head->flags & BB_FLAG_LOOP_HEAD)) {
                     head = head->prev;
                 }
@@ -679,6 +791,7 @@ CFG *cfgConstruct(Cctrl *cc) {
             bb = cfgBuilderAllocBasicBlock(&builder,BB_HEAD_BLOCK);
             cfg = cfgNew(ast->fname,bb);
             bb->next = cfgBuilderAllocBasicBlock(&builder,BB_CONTROL_BLOCK);
+            bb->next->prev = bb;
             cfgBuilderSetCFG(&builder,cfg);
             cfgBuilderSetBasicBlock(&builder,bb->next);
             cfgConstructFunction(&builder,ast->body->stms);

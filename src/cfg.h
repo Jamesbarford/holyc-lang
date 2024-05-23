@@ -6,15 +6,16 @@
 #include "aostr.h"
 #include "cctrl.h"
 
-#define BB_END_BLOCK          (0)
-#define BB_HEAD_BLOCK         (1)
-#define BB_CONTROL_BLOCK      (2)
-#define BB_BRANCH_BLOCK       (3)
-#define BB_LOOP_BLOCK         (4)
-#define BB_RETURN_BLOCK       (5)
-#define BB_BREAK_BLOCK        (6)
-#define BB_DO_WHILE_COND      (7)
-#define BB_GOTO               (8)
+#define BB_GARBAGE        (-1)
+#define BB_END_BLOCK      (0)
+#define BB_HEAD_BLOCK     (1)
+#define BB_CONTROL_BLOCK  (2)
+#define BB_BRANCH_BLOCK   (3)
+#define BB_LOOP_BLOCK     (4)
+#define BB_RETURN_BLOCK   (5)
+#define BB_BREAK_BLOCK    (6)
+#define BB_DO_WHILE_COND  (7)
+#define BB_GOTO           (8)
 
 #define CFG_MAX_PREV    (32)
 
@@ -26,6 +27,7 @@
 #define BB_FLAG_LOOP_END           (0x2)
 #define BB_FLAG_REDUNDANT_LOOP     (0x4)
 #define BB_FLAG_UNCONDITIONAL_JUMP (0x8)
+#define BB_FLAG_LABEL              (0x10)
 
 typedef struct BasicBlock {
     /* @Confirm:
