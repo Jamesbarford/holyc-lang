@@ -257,12 +257,12 @@ char *lexemePunctToEncodedString(long op) {
     case TK_ADD_EQU:         return "&#43;&#61;";
     case TK_MOD_EQU:         return "&#37;&#61;";
     case TK_ELLIPSIS:        return "&#48;&#48;&#48;";
-    case TK_ARROW:           return "&#45;&gt;";
+    case TK_ARROW:           return "&#45;&#62;";
     case TK_PRE_PLUS_PLUS:   return "&#43;&#43;";
     case TK_PLUS_PLUS:       return "&#43;&#43;";
     case TK_PRE_MINUS_MINUS: return "&#45;&#45;";
     case TK_MINUS_MINUS:     return "&#45;&#45;";
-    default:{
+    default: {
         int len = snprintf(buf,sizeof(buf),"%c",(char)op);
         buf[len] = '\0';
         return buf;
@@ -315,7 +315,7 @@ char *lexemePunctToString(long op) {
 
 char *lexemePunctToStringWithFlags(long op, unsigned long flags) {
     if (flags & LEXEME_ENCODE_PUNCT) return lexemePunctToEncodedString(op);
-                                     return lexemePunctToString(op);
+    else                             return lexemePunctToString(op);
 }
 
 char *lexemeToString(lexeme *tok) {
