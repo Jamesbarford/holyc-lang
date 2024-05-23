@@ -175,9 +175,9 @@ static void cgfHandleBranchBlock(CFGBuilder *builder, Ast *ast) {
         if (builder->bb != if_body) {
             builder->bb->prev = bb;
         }
-        //if (if_body->type != BB_BREAK_BLOCK) {
-        //    bb->_if->next = else_body;
-        //}
+        if (if_body->type != BB_BREAK_BLOCK) {
+            bb->_if->next = else_body;
+        }
         cfgBuilderSetBasicBlock(builder,else_body);
     }
 
@@ -589,17 +589,16 @@ static void bbRelinkBranch(BasicBlock *branch) {
     AstArray *next_array = branch->next ? branch->next->ast_array : NULL;
 
     if (branch->type == BB_BRANCH_BLOCK) {
+
         if (next_array) {
             AstArray *els_array = branch->_else->ast_array;
             if (next_array->count != 0 && els_array->count == 0) {
                 /* mark as destroyed */
-                AstArrayRelease(els_array);
-                branch->_else->block_no = BB_GARBAGE;
+                branch->_else->type = BB_GARBAGE;
                 branch->_else = branch->next;
                 branch->next = NULL;
             } else {
-                AstArrayRelease(next_array);
-                branch->next->block_no = BB_GARBAGE;
+                branch->next->type = BB_GARBAGE;
                 branch->next = NULL;
             }
         }
@@ -632,6 +631,7 @@ static void bbFixBranchBlock(BasicBlock *bb) {
     }
 
     if (then->type == BB_BRANCH_BLOCK) {
+        bbRelinkBranch(then);
         bbFix(then);
     }
 }
@@ -686,6 +686,14 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
 
     BasicBlock *bb = &builder->bb_pool[0];
     bbFix(bb);
+
+    /* We don't need the memory... do we want to free this now or later? */
+    for (int i = 0; i < builder->bb_count; ++i) {
+        BasicBlock *_bb = &builder->bb_pool[i];
+        if (_bb->type == BB_GARBAGE) {
+            AstArrayRelease(_bb->ast_array);
+        }
+    }
 
 
     /* Reconcile any non linear jumps */
