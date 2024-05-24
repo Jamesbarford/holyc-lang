@@ -40,10 +40,13 @@ typedef struct BasicBlock {
     int block_no;
     /* @Unused ? */
     int prev_cnt;
+    int visited;
     struct BasicBlock *_if;
     struct BasicBlock *_else;
     struct BasicBlock *next;
     struct BasicBlock *prev;
+    struct BasicBlock *prev_blocks[32];
+ //    IntSet *prev_block_ids;
     AstArray *ast_array;
 } BasicBlock;
 
@@ -79,6 +82,7 @@ typedef struct CFGBuilder {
 BasicBlock *bbNew(int type);
 BasicBlock *bbAddNext(BasicBlock *cur, int type, BasicBlock *next);
 const char *bbTypeToString(BasicBlock *bb);
+const int bbPrevHas(BasicBlock *bb, int block_no);
 CFG *cfgConstruct(Cctrl *cc);
 
 #endif

@@ -58,6 +58,7 @@ static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder, int type) {
     /* @Leak
      * This should probably be a memory pool as well */
     bb->ast_array = AstArrayNew(16);
+    bb->visited = 0;
     bb->next = bb->prev = bb->_else = bb->_if = NULL;
     return bb;
 }
@@ -101,6 +102,22 @@ static CFG *cfgNew(aoStr *fname, BasicBlock *head_block) {
     cfg->ref_fname = fname;
     return cfg;
 }
+
+const int bbPrevHas(BasicBlock *bb, int block_no) {
+    int prev_cnt = bb->prev_cnt;
+    for (int i = 0; i < prev_cnt; ++i) {
+        if (bb->prev_blocks[i]->block_no == block_no) return 1;
+    }
+    return 0;
+}
+
+/* @Optimise */
+static void bbAddPrev(BasicBlock *bb, BasicBlock *prev) {
+    if (!bbPrevHas(bb,prev->block_no)) {
+        bb->prev_blocks[bb->prev_cnt++] = prev;
+    }
+}
+
 
 static void cgfHandleBranchBlock(CFGBuilder *builder, Ast *ast) {
     /**
@@ -168,7 +185,6 @@ static void cgfHandleBranchBlock(CFGBuilder *builder, Ast *ast) {
             bb->_else->next = new_block;
             bb->_if->next = new_block;
             new_block->prev = bb->_if;
-
             cfgBuilderSetBasicBlock(builder,new_block);
         }
     } else {
@@ -317,6 +333,7 @@ static void cfgHandleWhileLoop(CFGBuilder *builder, Ast *ast) {
     
     BasicBlock *bb_prev_loop = builder->bb_cur_loop;
     BasicBlock *bb = builder->bb;
+
     BasicBlock *bb_cond_else = cfgBuilderAllocBasicBlock(builder,
                                                          BB_CONTROL_BLOCK);
     BasicBlock *bb_cond = cfgBuilderAllocBasicBlock(builder,BB_BRANCH_BLOCK);
@@ -329,6 +346,7 @@ static void cfgHandleWhileLoop(CFGBuilder *builder, Ast *ast) {
     bb_cond->_if = bb_body;
     /* Else move past loop body */
     bb_cond->_else = bb_cond_else;
+    bb_cond_else->flags |= BB_FLAG_LOOP_END;
     /* And the previously met block was the condition */
     bb_cond_else->prev = bb_cond;
 
@@ -352,7 +370,7 @@ static void cfgHandleWhileLoop(CFGBuilder *builder, Ast *ast) {
         builder->bb->prev = bb_cond;
     }
 
-    builder->bb->flags |= BB_FLAG_LOOP_END;
+    //builder->bb->flags |= BB_FLAG_LOOP_END;
 
     if (builder->bb->type == BB_BREAK_BLOCK && 
         (builder->bb->flags & BB_FLAG_LOOP_END)) {
@@ -533,7 +551,6 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
             /* This is a goto */
             /* Switch not implemented */
             assert(builder->flags & CFG_BUILDER_FLAG_IN_LOOP);
-            loggerDebug("we broke: %d\n", builder->bb->block_no);
             builder->bb->type = BB_BREAK_BLOCK;
             builder->bb->next = builder->bb_cur_loop->_else;
             break;
@@ -582,57 +599,157 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
 }
 
 static void bbFix(BasicBlock *bb);
-static void bbRelinkBranch(BasicBlock *branch);
+static void bbRelinkBranch(BasicBlock *branch, BasicBlock *block);
 static void bbFixBranchBlock(BasicBlock *bb);
 
-static void bbRelinkBranch(BasicBlock *branch) {
-    AstArray *next_array = branch->next ? branch->next->ast_array : NULL;
+static void bbFixLeafNode(BasicBlock *bb) {
+    BasicBlock *prev = bb->prev;
+    assert(prev != NULL);
 
-    if (branch->type == BB_BRANCH_BLOCK) {
+    AstArray *next_array = bb->next ? bb->next->ast_array : NULL;
 
+    if (next_array && next_array->count == 0) {
+        bb->next->type = BB_GARBAGE;
+        bb->next = bb->next->next;
+        bbAddPrev(bb->next,bb);
+    } 
+
+    /* Iterate back up the tree to find the join */
+    while (prev) {
+        if (prev->type == BB_BRANCH_BLOCK) {
+            BasicBlock *prev_else = prev->_else;
+
+            if (prev_else->type == BB_CONTROL_BLOCK) {
+                bb->prev = prev_else->prev;
+                bb->next = prev_else->next;
+            }
+
+            if (prev_else->type == BB_RETURN_BLOCK ||
+                prev_else->type == BB_LOOP_BLOCK)
+            {
+                bb->prev = prev_else->prev;
+                bb->next = prev_else;
+                bbAddPrev(prev_else,bb);
+                break;
+            }
+
+        } else if (prev->type == BB_HEAD_BLOCK) {
+            break;
+        } else if (prev->type == BB_CONTROL_BLOCK) {
+            /* We've found a random control block which indicates 
+             * that our current block is genuinely the end of the road*/
+            if (prev->next != bb) {
+                bb->type = BB_END_BLOCK;
+                bb->next = NULL;
+                break;
+            }
+        } else if (prev->type == BB_LOOP_BLOCK) {
+            loggerDebug("we hit a loop\n");
+        }
+
+        prev = prev->prev;
+    }
+}
+
+/* We _know_ that the*/
+static void bbRelinkBranch(BasicBlock *branch, BasicBlock *bb) {
+    if (bb->type == BB_GARBAGE) return;
+
+    AstArray *current_array = bb->ast_array;
+    AstArray *next_array = bb->next ? bb->next->ast_array : NULL;
+    bbAddPrev(bb,branch);
+
+    if (bb->type == BB_BRANCH_BLOCK) {
         if (next_array) {
-            AstArray *els_array = branch->_else->ast_array;
+            AstArray *els_array = bb->_else->ast_array;
             if (next_array->count != 0 && els_array->count == 0) {
                 /* mark as destroyed */
-                branch->_else->type = BB_GARBAGE;
-                branch->_else = branch->next;
-                branch->next = NULL;
+                bb->_else->type = BB_GARBAGE;
+                bb->_else = bb->next;
+                bbAddPrev(bb->next,bb);
+                bb->next = NULL;
             } else {
-                branch->next->type = BB_GARBAGE;
-                branch->next = NULL;
+                bb->next->type = BB_GARBAGE;
+                if (bb->_else->next) {
+                    bb->_else = bb->_else->next;
+                    bbAddPrev(bb->_else,bb);
+                }
+            }
+        } else {
+            bb->next = NULL;
+            bbAddPrev(bb,branch);
+        }
+    } else if (bb->type == BB_CONTROL_BLOCK) {
+        if (next_array && next_array->count == 0) {
+            bb->next->type = BB_GARBAGE;
+            bbFixLeafNode(bb);
+        } else if (current_array && current_array->count == 0) {
+            if (next_array) {
+                bb->type = BB_GARBAGE;
+                if (branch->_if == bb) {
+                    branch->_if = bb->next;
+                    bbAddPrev(branch->_if,branch);
+                } else {
+                    branch->_else = bb->next;
+                    bbAddPrev(branch->_else,branch);
+                }
+            } else {
+                /* No idea ... */
+                loggerPanic("bb%d has an unexpected connection\n",
+                        bb->block_no);
             }
         }
-    } else if (branch->type == BB_CONTROL_BLOCK) {
-        /* Then we need to reverse up the graph again like we're doing in 
-         * bbFix() ... */
-        if (next_array && next_array->count == 0) {
-            loggerDebug("bb:%d\n", branch->block_no);
-        } else if (!next_array) {
-            loggerDebug("bb:%d\n", branch->block_no);
-        }
+        /* For some reason we keep getting branches with a next pointer */
+        branch->next = NULL;
+    } else if (bb->type == BB_LOOP_BLOCK) {
+        //printf("bb%d, prev_cnt = %d: ", block->block_no,block->prev_cnt);
+        //for (int i = 0; i < block->prev_cnt; ++i) {
+        //    printf("%dbb ", block->prev_blocks[i]->block_no);
+        //}
+        //printf("\n");
+        // ?
+        // loggerDebug("branchtype => %d is a loop block\n", block->block_no);
+    } else if (bb->type == BB_GARBAGE) {
+        loggerWarning("we hit the trash\n");
     }
 }
 
 static void bbFixBranchBlock(BasicBlock *bb) {
     BasicBlock *then = bb->_if, *els = bb->_else;
 
-    if (els->type == BB_CONTROL_BLOCK) {
-        bbRelinkBranch(els);
-        bbFix(els);
-    }
+    bbRelinkBranch(bb,els);
+    bbFix(els);
 
-    if (then->type == BB_CONTROL_BLOCK) {
-        bbFix(then);
-    }
+    bbRelinkBranch(bb,then);
+    bbFix(then);
+}
 
-    if (els->type == BB_BRANCH_BLOCK) {
-        bbRelinkBranch(els);
-        bbFix(els);
-    }
+static void bbFixLoopBlock(BasicBlock *bb) {
+    if (bb->ast_array->count == 0) {
+        if (bb->prev_cnt == 1) {
+            BasicBlock *prev = bb->prev_blocks[0];
+            if (prev->type == BB_BRANCH_BLOCK) {
+                if (prev->_else == bb) {
+                    prev->_else = NULL;
+                    prev->next = prev->_if;
 
-    if (then->type == BB_BRANCH_BLOCK) {
-        bbRelinkBranch(then);
-        bbFix(then);
+                } else {
+                    prev->_if = NULL;
+                    prev->next = prev->_else;
+                }
+
+                prev->type = BB_DO_WHILE_COND;
+                prev->prev = bb->prev;
+
+                bb->prev_blocks[0] = bb->prev;
+
+                printf("bb%d, prev_cnt = %d: ", prev->block_no,prev->prev_cnt);
+                for (int i = 0; i < prev->prev_cnt; ++i) {
+                    printf("%dbb ", prev->prev_blocks[i]->block_no);
+                }
+                bb->type = BB_GARBAGE;
+            }
+        }
     }
 }
 
@@ -640,36 +757,17 @@ static void bbFix(BasicBlock *bb) {
     for (; bb && bb->type != BB_END_BLOCK; bb = bb->next) {
         /* Search up the tree to fix the node */
         if (!bb->next && bb->type == BB_CONTROL_BLOCK) {
-            BasicBlock *prev = bb->prev;
             /* Iterate back up the tree to find the join */
-            while (prev) {
-                if (prev->type == BB_BRANCH_BLOCK) {
-                    BasicBlock *prev_else = prev->_else;
-                    BasicBlock *prev_if = prev->_if;
-
-                    if (prev_if->type == BB_CONTROL_BLOCK) {
-                        bb->next = prev_if->next;
-                    } else if (prev_else->type == BB_CONTROL_BLOCK) {
-                        bb->next = prev_else->next;
-                    }
-                    if (prev_if->type == BB_RETURN_BLOCK) bb->next = prev_if;
-                    if (prev_else->type == BB_RETURN_BLOCK) bb->next = prev_else;
-                } else if (prev->type == BB_HEAD_BLOCK) {
-                    break;
-                } else if (prev->type == BB_CONTROL_BLOCK) {
-                    /* We've found a random control block which indicates 
-                     * that our current block is genuinely the end of the road*/
-                    if (prev->next != bb) {
-                        bb->type = BB_END_BLOCK;
-                        bb->next = NULL;
-                        break;
-                    }
-                }
-                prev = prev->prev;
-            }
-
+            bbFixLeafNode(bb);
         } else if (bb->type == BB_BRANCH_BLOCK) {
             bbFixBranchBlock(bb);
+        } else if (bb->type == BB_LOOP_BLOCK) {
+            bbFixLoopBlock(bb);
+        }
+
+        if (bb->type != BB_GARBAGE && bb->next && 
+                bb->next->ast_array->count > 0) {
+            bbAddPrev(bb->next,bb);
         }
     }
 }
@@ -694,7 +792,6 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
             AstArrayRelease(_bb->ast_array);
         }
     }
-
 
     /* Reconcile any non linear jumps */
     ListForEach(builder->unresoved_gotos) {

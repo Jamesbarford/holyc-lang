@@ -193,12 +193,13 @@ static void cfgBreakPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     }
 
     aoStrCatPrintf(builder->viz,
-            "    bb%d [shape=record,style=filled,fillcolor=lightgrey,label=\"{\\<bb %d\\>|\n",
+            "    bb%d [shape=record,style=filled,fillcolor=lightgrey,label=\"{\\<bb %d\\>\n",
             bb->block_no,
             bb->block_no);
 
     aoStrCatPrintf(builder->viz,
             "%s\\l\\\n"
+            "|break\\l\\\n"
             "|goto \\<%d bb\\>\\l\\"
             "\n}\"];\n\n",
             internal->data,
@@ -279,8 +280,22 @@ static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
         _if = bb->_if;
         _else = bb->_else;
 
+        bb->visited++;
+
+        if (bb->flags & BB_FLAG_LOOP_END) {
+            if (bb->visited > 1 && bb->visited == bb->prev_cnt) {
+                aoStrCat(builder->viz, "}\n");
+            }
+        }
+
         if (cfgGraphVizBuilderHasSeen(builder,bb->block_no)) return;
         else cfgGraphVizBuilderSetSeen(builder,bb->block_no);
+
+        printf("bb%d, prev_cnt = %d: ", bb->block_no,bb->prev_cnt);
+        for (int i = 0; i < bb->prev_cnt; ++i) {
+            printf("%dbb ", bb->prev_blocks[i]->block_no);
+        }
+        printf("\n");
 
         /* @Cleanup
          * We could do this thing in the cfg.c file and then remove the loop 
@@ -297,6 +312,12 @@ static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
             }
         }
 
+        if (bb->flags & BB_FLAG_LOOP_END && bb->type != BB_LOOP_BLOCK) {
+            if (bb->visited == 1 && bb->visited == bb->prev_cnt) {
+                aoStrCat(builder->viz, "}\n");
+            }
+        }
+
         switch (bb->type) {
             case BB_HEAD_BLOCK:    cfgHeadPrintf(builder,bb);    break;
             case BB_LOOP_BLOCK:    cfgLoopPrintf(builder,bb);    break;
@@ -309,7 +330,6 @@ static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
             default:               cfgDefaultPrintf(builder,bb); break;
         }
 
-        if (bb->type == BB_END_BLOCK) break;
 
         if (_if && _else) {
             /* Break blocks visually live in the outer scope of the loop,
@@ -318,10 +338,13 @@ static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
                 builder->break_blocks[builder->break_idx++] = _if;
                 builder->break_blocks[builder->break_idx++] = _else;
             } else if (_if->type == BB_BREAK_BLOCK) {
+                //cfgCreateGraphVizShapes(builder,_else);
                 cfgCreateGraphVizShapes(builder,_else);
+               // cfgCreateGraphVizShapes(builder,_if);
                 builder->break_blocks[builder->break_idx++] = _if;
             } else if (_else->type == BB_BREAK_BLOCK) {
                 cfgCreateGraphVizShapes(builder,_if);
+                //cfgCreateGraphVizShapes(builder,_else);
                 builder->break_blocks[builder->break_idx++] = _else;
             } else {
                 cfgCreateGraphVizShapes(builder,_if);
@@ -340,15 +363,18 @@ static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
                 }
             }
         }
-
+        if (bb->type == BB_END_BLOCK) break;
 
         if (bb->flags & BB_FLAG_LOOP_END) {
             while (builder->break_idx) {
                 cfgCreateGraphVizShapes(builder,
                         builder->break_blocks[--builder->break_idx]);
             }
-            if (!(bb->flags & BB_FLAG_REDUNDANT_LOOP)) {
-                aoStrCat(builder->viz,"}\n");
+        }
+
+        if (bb->flags & BB_FLAG_LOOP_END && bb->type == BB_LOOP_BLOCK) {
+            if (bb->visited == 1 && bb->visited == bb->prev_cnt) {
+                aoStrCat(builder->viz, "}\n");
             }
         }
 
@@ -356,8 +382,6 @@ static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
          * the code is non-linear and we will eventually get there. The 
          * link will already be printed */
         if (bb->type == BB_GOTO && !(bb->flags & BB_FLAG_UNCONDITIONAL_JUMP)) break;
-        if (bb->prev) cfgCreateGraphVizShapes(builder,bb->prev);
-        if (bb->type == BB_BRANCH_BLOCK) break;
     }
 }
 

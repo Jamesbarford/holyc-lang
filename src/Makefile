@@ -23,6 +23,7 @@ format:
 
 OBJS = $(OUT)/main.o \
 	   $(OUT)/dict.o \
+	   $(OUT)/int-set.o \
 	   $(OUT)/parser.o \
 	   $(OUT)/list.o \
 	   $(OUT)/ast.o \
@@ -55,6 +56,7 @@ unit-test:
 	cd ../tests && hcc -o test-runner ./run.HC && ./test-runner
 
 $(OUT)/dict.o: dict.c dict.h aostr.h 
+$(OUT)/int-set.o: int-set.c int-set.h util.h
 $(OUT)/list.o: list.c list.h aostr.h 
 $(OUT)/main.o: main.c dict.h lexer.h list.h aostr.h 
 $(OUT)/lexer.o: lexer.c lexer.h dict.h list.h aostr.h 
