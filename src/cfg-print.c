@@ -15,6 +15,25 @@
 #include "lexer.h"
 #include "util.h"
 
+
+static char *depth_to_loop_color[] = {
+    [1] = "grey88",
+    [2] = "grey78",
+    [3] = "grey68",
+    [4] = "grey58",
+    [5] = "grey48",
+    [6] = "grey38",
+    [7] = "grey28",
+    [8] = "grey28",
+    [9] = "grey18",
+};
+
+static const char *cfgPrintGetLoopColor(int depth) {
+    static int len = sizeof(depth_to_loop_color)/sizeof(depth_to_loop_color[0]);
+    if (depth >= len) return "grey88";
+    return depth_to_loop_color[depth];
+}
+
 typedef struct CfgGraphVizBuilder {
     aoStr *viz;
     /* @Optimise, this could be a hash set for O(1), however for a small 
@@ -70,6 +89,7 @@ static int cfgGraphVizBuilderHasSeen(CfgGraphVizBuilder *builder, int block_no)
 static void cfgBranchPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     AstArray *ast_array = bb->ast_array;
     char *lvalue_str;
+    char *fillcolor;
     int ast_count = ast_array->count;
     aoStr *internal = aoStrAlloc(256);
     Ast *cond = ast_array->entries[ast_count - 1];
@@ -87,9 +107,16 @@ static void cfgBranchPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     assert(cond != NULL);
     lvalue_str = AstLValueToString(cond,LEXEME_ENCODE_PUNCT);
 
+    if (bb->flags & BB_FLAG_LOOP_HEAD) {
+        fillcolor = "lightpink";
+    } else {
+        fillcolor = "coral";
+    }
+
     aoStrCatPrintf(builder->viz,
-            "    bb%d [shape=record,style=filled,fillcolor=lightgrey,label=\"{\\<bb %d\\>|\n",
+            "    bb%d [shape=record,style=filled,fillcolor=%s,label=\"{\\<bb %d\\>|\n",
             bb->block_no,
+            fillcolor,
             bb->block_no);
 
     aoStrCatPrintf(builder->viz,
@@ -109,6 +136,7 @@ static void cfgBranchPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
 static void cfgDoWhileCondPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     AstArray *ast_array = bb->ast_array;
     char *lvalue_str;
+    char *fillcolor = "lightpink";
     int ast_count = ast_array->count;
     aoStr *internal = aoStrAlloc(256);
     Ast *cond = ast_array->entries[ast_count - 1];
@@ -123,12 +151,18 @@ static void cfgDoWhileCondPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
         free(lvalue_str);
     }
 
-    assert(cond != NULL);
+
+
+    if (bb->prev->flags & BB_FLAG_LOOP_HEAD) {
+        fillcolor = "lightskyblue";
+    }
+
     lvalue_str = AstLValueToString(cond,LEXEME_ENCODE_PUNCT);
 
     aoStrCatPrintf(builder->viz,
-            "    bb%d [shape=record,style=filled,fillcolor=lightgrey,label=\"{\\<bb %d\\>|\n",
+            "    bb%d [shape=record,style=filled,fillcolor=%s,label=\"{\\<bb %d\\>|\n",
             bb->block_no,
+            fillcolor,
             bb->block_no);
 
     aoStrCatPrintf(builder->viz,
@@ -162,7 +196,7 @@ static void cfgLoopPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     }
 
     aoStrCatPrintf(builder->viz,
-            "    bb%d [shape=record,style=filled,fillcolor=lightgrey,label=\"{\\<bb %d\\>|\n",
+            "    bb%d [shape=record,style=filled,fillcolor=lightgreen,label=\"{\\<bb %d\\>|\n",
             bb->block_no,
             bb->block_no);
 
@@ -193,7 +227,7 @@ static void cfgBreakPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     }
 
     aoStrCatPrintf(builder->viz,
-            "    bb%d [shape=record,style=filled,fillcolor=lightgrey,label=\"{\\<bb %d\\>\n",
+            "    bb%d [shape=record,style=filled,fillcolor=violet,label=\"{\\<bb %d\\>\n",
             bb->block_no,
             bb->block_no);
 
@@ -264,7 +298,7 @@ static void cfgReturnPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     }
 
     aoStrCatPrintf(builder->viz,
-            "    bb%d [shape=doublecircle,style=filled,fillcolor=white,label=\" \\<bb %d\\>\n %s \"];\n\n",
+            "    bb%d [shape=doublecircle,style=filled,fontcolor=white,fillcolor=black,label=\" \\<bb %d\\>\n %s \"];\n\n",
             bb->block_no,
             bb->block_no,
             internal->data);
@@ -303,12 +337,13 @@ static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
         if (bb->flags & BB_FLAG_LOOP_HEAD) {
             if (!_if || (_if && _if->type != BB_BREAK_BLOCK)) {
                 int cnt = ++builder->loop_cnt;
+                const char *loop_color = cfgPrintGetLoopColor(cnt);
                 aoStrCatPrintf(builder->viz,"subgraph cluster1_%d {\nstyle=\"filled\";\n"
                         "color=\"darkgreen\";\n"
-                        "fillcolor=\"grey88\";\n"
+                        "fillcolor=\"%s\";\n"
                         "label=\"loop %d\";\n"
                         "labeljust=l;\n"
-                        "penwidth=2;\n",cnt,cnt);
+                        "penwidth=2;\n",cnt,loop_color,cnt);
             }
         }
 
