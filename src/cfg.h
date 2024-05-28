@@ -28,6 +28,8 @@
 #define BB_FLAG_REDUNDANT_LOOP     (0x4)
 #define BB_FLAG_UNCONDITIONAL_JUMP (0x8)
 #define BB_FLAG_LABEL              (0x10)
+#define BB_FLAG_ELSE_BRANCH        (0x20)
+#define BB_FLAG_IF_BRANCH          (0x40)
 
 typedef struct BasicBlock {
     /* @Confirm:

@@ -327,8 +327,14 @@ static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
         _else = bb->_else;
 
 
+       // if (bb->type == BB_LOOP_BLOCK) {
+       //     if (bb->prev->type == BB_DO_WHILE_COND) {
+       //         aoStrCatPrintf(builder->viz,"}// end: bb%d\n",bb->block_no);
+       //     }
+       // }
+
         bb->visited++;
-        if (bb->flags & BB_FLAG_LOOP_END) {
+        if (bb->type == BB_LOOP_BLOCK && bb->prev->type == BB_DO_WHILE_COND) {
             if (bb->visited > 1 && bb->visited == bb->prev_cnt) {
                 aoStrCatPrintf(builder->viz, "}//1: terminating bb%d\n",bb->block_no);
             }
@@ -336,6 +342,13 @@ static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
 
         if (cfgGraphVizBuilderHasSeen(builder,bb->block_no)) return;
         else cfgGraphVizBuilderSetSeen(builder,bb->block_no);
+
+//        for (int i = 0; i < bb->prev_cnt; ++i) {
+//            if (bb->prev_blocks[i]->flags & BB_FLAG_LOOP_HEAD) {
+//                loggerDebug("bb%d Prev bb%d was a loop\n",
+//                        bb->block_no, bb->prev_blocks[i]->block_no);
+//            }
+//        }
 
         printf("bb%2d prev_cnt = %d: ", bb->block_no,bb->prev_cnt);
         for (int i = 0; i < bb->prev_cnt; ++i) {
@@ -363,12 +376,37 @@ static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
         int is_loop_block = bb->type == BB_LOOP_BLOCK && 
                             bb->type == BB_DO_WHILE_COND;
 
-//        if (bb->flags & BB_FLAG_LOOP_END && !is_loop_block) {
-//            if (bb->visited == 1 && bb->visited == bb->prev_cnt) {
-//                aoStrCatPrintf(builder->viz, "}//2: terminating loop: bb%d\n",
-//                        bb->block_no);
-//            }
-//        }
+        int is_do_while_end = bb->flags & BB_FLAG_LOOP_END && 
+                              bb->type == BB_DO_WHILE_COND;
+
+        int is_loop_end = 0;
+
+        if (is_do_while_end) {
+            loggerDebug("YUP: bb%d\n", bb->block_no);
+        }
+
+        if (bb->flags & BB_FLAG_ELSE_BRANCH) {
+            for (int i = 0; i < bb->prev_cnt; ++i) {
+                BasicBlock *it = bb->prev_blocks[i];
+                if (it->flags & BB_FLAG_LOOP_HEAD) {
+                    is_loop_end = 1;
+                    break;
+                }
+            }
+        }
+
+
+        if (is_loop_end) {
+            aoStrCatPrintf(builder->viz,"}// end: bb%d\n",bb->block_no);
+        }
+
+
+   //     if (bb->flags & BB_FLAG_LOOP_END && !is_loop_block) {
+   //         if (bb->visited >= 1 && bb->visited == bb->prev_cnt) {
+   //             aoStrCatPrintf(builder->viz, "}//2: terminating loop: bb%d\n",
+   //                     bb->block_no);
+   //         }
+   //     }
 
         switch (bb->type) {
             case BB_HEAD_BLOCK:    cfgHeadPrintf(builder,bb);    break;
@@ -419,11 +457,15 @@ static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
             }
         }
 
-        if (bb->flags & BB_FLAG_LOOP_END && !is_loop_block) {
-            if (bb->visited >= 1 && bb->prev_cnt == 1) {
-                aoStrCatPrintf(builder->viz, "}//3: terminating bb%d\n",bb->block_no);
-            }
-        }
+
+
+
+
+//        if (bb->flags & BB_FLAG_LOOP_END) {// && !is_loop_block) {
+//            if (bb->visited >= 1 && bb->prev_cnt == 1) {
+//                aoStrCatPrintf(builder->viz, "}//3: terminating bb%d\n",bb->block_no);
+//            }
+//        }
 
         /* If we have a goto we do not want to print it's bb->next as 
          * the code is non-linear and we will eventually get there. The 

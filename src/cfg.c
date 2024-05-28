@@ -454,7 +454,7 @@ static void cfgHandleGoto(CFGBuilder *builder, Ast *ast) {
     {
         dest->flags |= BB_FLAG_LOOP_HEAD;
         builder->bb->prev = dest;
-        builder->bb->type = BB_LOOP_BLOCK;
+        //builder->bb->type = BB_LOOP_BLOCK;
         builder->bb->flags |= BB_FLAG_LOOP_END;
     } else {
         ListAppend(builder->unresoved_gotos,builder->bb);
@@ -488,9 +488,10 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
             aoStr *label = AstHackedGetLabel(ast);
             DictSet(builder->resolved_labels,label->data,builder->bb);
             builder->bb->flags |= BB_FLAG_LABEL;
-            if ((builder->flags & CFG_BUILDER_FLAG_IN_LOOP)) {
-                builder->bb->type = BB_BREAK_BLOCK;
-            }
+            /* I guess if it is in a loop and the label is out of a loop ?*/
+            //if ((builder->flags & CFG_BUILDER_FLAG_IN_LOOP)) {
+            //    builder->bb->type = BB_BREAK_BLOCK;
+            //}
             break;
         }
         case AST_ADDR:
@@ -749,9 +750,11 @@ static void bbFixBranchBlock(BasicBlock *bb) {
 
     bbRelinkBranch(bb,els);
     bbFix(els);
+    els->flags |= BB_FLAG_ELSE_BRANCH;
 
     bbRelinkBranch(bb,then);
     bbFix(then);
+    then->flags |= BB_FLAG_IF_BRANCH;
 }
 
 static void bbFixLoopBlock(BasicBlock *bb) {
@@ -762,7 +765,6 @@ static void bbFixLoopBlock(BasicBlock *bb) {
                 if (prev->_else == bb) {
                     prev->_else = NULL;
                     prev->next = prev->_if;
-
                 } else {
                     prev->_if = NULL;
                     prev->next = prev->_else;
@@ -777,6 +779,7 @@ static void bbFixLoopBlock(BasicBlock *bb) {
                 for (int i = 0; i < prev->prev_cnt; ++i) {
                     printf("%dbb ", prev->prev_blocks[i]->block_no);
                 }
+                printf("\n");
                 bb->type = BB_GARBAGE;
             }
         }
@@ -793,7 +796,8 @@ static void bbFix(BasicBlock *bb) {
             bbFixBranchBlock(bb);
         } else if (bb->type == BB_LOOP_BLOCK) {
             bbFixLoopBlock(bb);
-        } else if (bb->type == BB_DO_WHILE_COND) {
+        } else if (bb->type == BB_BREAK_BLOCK) {
+            /* Trace back up to the loop head and find the else branch */
 
         }
 
@@ -867,6 +871,7 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
             /* This kind of changes it to a do while as the condition will 
              * have to come last */
             if (bb_dest->type == BB_LOOP_BLOCK) {
+                //asts_to_move[ast_move_cnt+1] = dest_ast_array->entries[dest_ast_array->count-1];
                 /* And now we need to paste them in the correct place */
                 BasicBlock *loop_head = bb_dest->prev;
                 BasicBlock *loop_back = cfgBuilderAllocBasicBlock(builder,
@@ -879,12 +884,17 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
                     AstArrayPush(dest_ast_array,loop_ast_array->entries[i]);
                 }
 
+                void *tmp  = dest_ast_array->entries[bb_dest->ast_array->count-1];
+                dest_ast_array->entries[bb_dest->ast_array->count-1] = dest_ast_array->entries[bb_dest->ast_array->count-2];
+                dest_ast_array->entries[bb_dest->ast_array->count-2] = tmp;
+                asts_to_move[ast_move_cnt++] = dest_ast_array->entries[bb_dest->ast_array->count-1];
+
                 /* Add asts from the loop_head */
                 for (int i = 0; i < ast_move_cnt; ++i) {
                     AstArrayPush(loop_back->ast_array,asts_to_move[i]);
                 }
 
-                bb_dest->ast_array->count -= ast_move_cnt;
+                bb_dest->ast_array->count -= (ast_move_cnt);
 
                 bb_dest->type = BB_BRANCH_BLOCK;
                 bb_dest->flags |= BB_FLAG_LOOP_HEAD;
@@ -897,6 +907,7 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
                 loop_back->flags |= BB_FLAG_LOOP_END;
                 bbAddPrev(loop_back,bb_dest);
                 bbAddPrev(bb_dest, bb_goto);
+                ast_move_cnt--;
             }
 
             /* Remove asts that no longer exist in the block */
