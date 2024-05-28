@@ -18,6 +18,7 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast);
 
 const char *bbTypeToString(BasicBlock *bb) {
     switch (bb->type) {
+        case BB_GARBAGE:            return "BB_GARBAGE";
         case BB_END_BLOCK:          return "BB_END_BLOCK";
         case BB_HEAD_BLOCK:         return "BB_HEAD_BLOCK";
         case BB_CONTROL_BLOCK:      return "BB_CONTROL_BLOCK";
@@ -487,7 +488,7 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
             aoStr *label = AstHackedGetLabel(ast);
             DictSet(builder->resolved_labels,label->data,builder->bb);
             builder->bb->flags |= BB_FLAG_LABEL;
-            if (!(builder->flags & CFG_BUILDER_FLAG_IN_LOOP)) {
+            if ((builder->flags & CFG_BUILDER_FLAG_IN_LOOP)) {
                 builder->bb->type = BB_BREAK_BLOCK;
             }
             break;
@@ -653,6 +654,7 @@ static void bbFixLeafNode(BasicBlock *bb) {
 
 /* We _know_ that the*/
 static void bbRelinkBranch(BasicBlock *branch, BasicBlock *bb) {
+    if (!bb) return;
     if (bb->type == BB_GARBAGE) return;
 
     AstArray *current_array = bb->ast_array;
@@ -668,6 +670,15 @@ static void bbRelinkBranch(BasicBlock *branch, BasicBlock *bb) {
                 bb->_else = bb->next;
                 bbAddPrev(bb->next,bb);
                 bb->next = NULL;
+            } else if (next_array->count != 0 && els_array->count != 0) {
+                /* This seems to happen if the bb->next is a control block 
+                 * where bb is of type branch and its in a loop */
+                if (bb->_else->next == bb->_if->next) {
+                    if (bb->_else->next->ast_array->count == 0) {
+                        bb->_else->next = bb->next;
+                        bb->_if->next = bb->next;
+                    }
+                }
             } else {
                 bb->next->type = BB_GARBAGE;
                 if (bb->_else->next) {
@@ -689,14 +700,33 @@ static void bbRelinkBranch(BasicBlock *branch, BasicBlock *bb) {
                 if (branch->_if == bb) {
                     branch->_if = bb->next;
                     bbAddPrev(branch->_if,branch);
-                } else {
+                } else if (branch->_else == bb) {
                     branch->_else = bb->next;
                     bbAddPrev(branch->_else,branch);
                 }
             } else {
+
+                if (branch->_if->next->ast_array->count == 0) {
+                    branch->_if->next = branch->next;
+                    //loggerDebug("if bb%d\n",branch->_if->block_no);
+                }
+                //if (branch->_else->next->ast_array->count == 0) {
+                //    branch->_else->next = branch->next;
+                //    //loggerDebug("if bb%d\n",branch->_else->block_no);
+                //}
+                //loggerDebug("bb%d\n", bb->block_no);
                 /* No idea ... */
-                loggerPanic("bb%d has an unexpected connection\n",
-                        bb->block_no);
+            //loggerDebug("%dbb %s\n",bb->prev->block_no, 
+            //        bbTypeToString(bb->prev));
+
+            //for (int i = 0; i < bb->prev->ast_array->count; ++i) {
+            //    AstPrint(bb->prev->ast_array->entries[i]);
+            //}
+                for (int i = 0; i < branch->ast_array->count; ++i) {
+                    AstPrint(branch->ast_array->entries[i]);
+                }
+                //loggerPanic("bb%d has an unexpected connection type = %s\n",
+                //        bb->block_no, bbTypeToString(bb));
             }
         }
         /* For some reason we keep getting branches with a next pointer */
@@ -763,6 +793,8 @@ static void bbFix(BasicBlock *bb) {
             bbFixBranchBlock(bb);
         } else if (bb->type == BB_LOOP_BLOCK) {
             bbFixLoopBlock(bb);
+        } else if (bb->type == BB_DO_WHILE_COND) {
+
         }
 
         if (bb->type != BB_GARBAGE && bb->next && 
@@ -782,17 +814,6 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
         cfgHandleAstNode(builder,ast);
     }
 
-    BasicBlock *bb = &builder->bb_pool[0];
-    bbFix(bb);
-
-    /* We don't need the memory... do we want to free this now or later? */
-    for (int i = 0; i < builder->bb_count; ++i) {
-        BasicBlock *_bb = &builder->bb_pool[i];
-        if (_bb->type == BB_GARBAGE) {
-            AstArrayRelease(_bb->ast_array);
-        }
-    }
-
     /* Reconcile any non linear jumps */
     ListForEach(builder->unresoved_gotos) {
         BasicBlock *bb_goto = cast(BasicBlock *,it->value);
@@ -807,6 +828,8 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
             }
         }
 
+        aoStr *goto_label = AstHackedGetLabel(ast);
+
         assert(ast->kind == AST_GOTO);
 
         bb_dest = DictGetLen(builder->resolved_labels,ast->slabel->data,
@@ -814,65 +837,93 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
         assert(bb_dest != NULL);
 
         if (bb_goto->flags & BB_FLAG_UNCONDITIONAL_JUMP) {
-        /* If we are doing an unconditional jump into a loop, a switch or 
-         * a branch we need to re-order things as the flow changes. These 
-         * are somewhat contrived edge cases but _can_ happen. 
-         *
-         * If we are jumping into an if or a switch we can remove all of the 
-         * other branches as they will never be hit
-         * */
-            loggerDebug("unconditional jump to: %s\n",
+            loggerWarning("bb%d unconditional jump to bb%d type %s\n",
+                    bb_goto->block_no,
+                    bb_dest->block_no,
                     bbTypeToString(bb_dest));
+            /* If we are doing an unconditional jump into a loop, a switch or 
+             * a branch we need to re-order things as the flow changes. These 
+             * are somewhat contrived edge cases but _can_ happen. 
+             *
+             * If we are jumping into an if or a switch we can remove all of the 
+             * other branches as they will never be hit
+             * */
+            AstArray *dest_ast_array = bb_dest->ast_array;
+            Ast *asts_to_move[100];
+            int ast_move_cnt = 0;
+
+            /* We need to get the statements that happened before the 
+             * label */
+            for (int i = 0; i < dest_ast_array->count; ++i) {
+                Ast *needle = dest_ast_array->entries[i];
+                if (needle->kind == AST_LABEL && aoStrCmp(goto_label,
+                            AstHackedGetLabel(needle))) {
+                    break;
+                } else {
+                    asts_to_move[ast_move_cnt++] = needle;
+                }
+            }
 
             /* This kind of changes it to a do while as the condition will 
              * have to come last */
             if (bb_dest->type == BB_LOOP_BLOCK) {
-                BasicBlock *head = bb_dest;
-                BasicBlock *tail = bb_dest;
-                
-                // bb_dest->flags |= BB_FLAG_LOOP_HEAD;
+                /* And now we need to paste them in the correct place */
+                BasicBlock *loop_head = bb_dest->prev;
+                BasicBlock *loop_back = cfgBuilderAllocBasicBlock(builder,
+                        BB_LOOP_BLOCK);
+                AstArray *loop_ast_array = loop_head->ast_array;
 
-                /* This is not a fair assumption as there could be potentially
-                 * many `previous blocks` */
-                while (head->prev && !(head->flags & BB_FLAG_LOOP_HEAD)) {
-                    head = head->prev;
-                }
-                while (tail->next && !(tail->flags & BB_FLAG_LOOP_END)) {
-                    tail = tail->next;
+                loop_head->type = BB_GARBAGE;
+
+                for (int i = 0; i < loop_head->ast_array->count; ++i) {
+                    AstArrayPush(dest_ast_array,loop_ast_array->entries[i]);
                 }
 
-                if (bb_dest->next == NULL) {
-                    printf("next is NULL\n");
+                /* Add asts from the loop_head */
+                for (int i = 0; i < ast_move_cnt; ++i) {
+                    AstArrayPush(loop_back->ast_array,asts_to_move[i]);
                 }
 
-                printf("loop head: bb%d %s\n", head->block_no, bbTypeToString(head));
-                printf("loop tail: bb%d %s\n", tail->block_no, bbTypeToString(tail));
-                
-                //if (bb_dest->prev && bb_dest->prev->flags & BB_FLAG_LOOP_HEAD) {
+                bb_dest->ast_array->count -= ast_move_cnt;
 
-                //    BasicBlock *tmp_prev = bb_dest->prev; 
-                //    loggerDebug("tmp_prev = %s\n", bbTypeToString(tmp_prev));
-                //    /* This block */
-                //    tmp_prev->flags &= ~BB_FLAG_LOOP_HEAD;
+                bb_dest->type = BB_BRANCH_BLOCK;
+                bb_dest->flags |= BB_FLAG_LOOP_HEAD;
+                bb_dest->flags &= ~BB_FLAG_LOOP_END;
 
-                //    bb_dest->flags |= BB_FLAG_LOOP_HEAD;
+                bb_dest->_if = loop_back;
+                bb_dest->_else = loop_head->_else;
 
-                //    bb_dest->prev->next = tmp_prev;
-                //    bb_dest->prev = bb_dest;
-                //    bb_dest->next = tmp_prev;
-                //
-                //   printf("yup\n");
-                //}
+                loop_back->prev = bb_dest;
+                loop_back->flags |= BB_FLAG_LOOP_END;
+                bbAddPrev(loop_back,bb_dest);
+                bbAddPrev(bb_dest, bb_goto);
             }
+
+            /* Remove asts that no longer exist in the block */
+            for (int i = 0; i < dest_ast_array->count; ++i) {
+                dest_ast_array->entries[i] = dest_ast_array->entries[ast_move_cnt+i];
+            }
+        } else {
+            loggerWarning("bb%d unhandled conditional jump to bb%d type %s\n",
+                    bb_goto->block_no,
+                    bb_dest->block_no,
+                    bbTypeToString(bb_dest));
 
         }
 
-        printf("%s => %d\n",ast->slabel->data,bb_dest->block_no);
-//        if (bb_dest->type == BB_BREAK_BLOCK) {
-//            bb_goto->type = BB_BREAK_BLOCK;
-//        }
-
         bb_goto->next = bb_dest;
+    }
+
+    BasicBlock *bb = &builder->bb_pool[0];
+    bbFix(bb);
+
+
+    /* We don't need the memory... do we want to free this now or later? */
+    for (int i = 0; i < builder->bb_count; ++i) {
+        BasicBlock *_bb = &builder->bb_pool[i];
+        if (_bb->type == BB_GARBAGE) {
+            AstArrayRelease(_bb->ast_array);
+        }
     }
 
     /* We still want these structures but don't want their contents for the 

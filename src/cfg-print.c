@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <unistd.h>
 #include <fcntl.h>
 
@@ -27,6 +28,63 @@ static char *depth_to_loop_color[] = {
     [8] = "grey28",
     [9] = "grey18",
 };
+
+char *staticmprintf(const char *fmt, ...) {
+    va_list ap, copy;
+    int allocated = 256;
+    int len = 0;
+    static char buffer[1024];
+    va_start(ap,fmt);
+
+    while (1) {
+        va_copy(copy,ap);
+        len = vsnprintf(buffer,allocated,fmt,copy);
+        va_end(copy);
+        if (len < 0) {
+            return NULL;
+        }
+        if (len >= allocated) {
+            return NULL;
+        }
+        break;
+    }
+    buffer[len] = '\0';
+    va_end(ap);
+    return buffer;
+}
+
+/* Allocating printf */
+char *mprintf(const char *fmt, ...) {
+    va_list ap, copy;
+    int allocated = 256;
+    int len = 0;
+    char *buffer = cast(char *,malloc(sizeof(char)*allocated));
+
+    va_start(ap,fmt);
+
+    while (1) {
+        va_copy(copy,ap);
+        len = vsnprintf(buffer,allocated,fmt,copy);
+        va_end(copy);
+
+        if (len < 0) {
+            free(buffer);
+            return NULL;
+        }
+
+        if (len >= allocated) {
+            free(buffer);
+            allocated = len + 2;
+            buffer = cast(char *,malloc(sizeof(char)*allocated));
+            if (buffer == NULL) return NULL;
+            continue;
+        }
+        break;
+    }
+    buffer[len] = '\0';
+    va_end(ap);
+    return buffer;
+}
 
 static const char *cfgPrintGetLoopColor(int depth) {
     static int len = sizeof(depth_to_loop_color)/sizeof(depth_to_loop_color[0]);
@@ -86,26 +144,30 @@ static int cfgGraphVizBuilderHasSeen(CfgGraphVizBuilder *builder, int block_no)
     return 0;
 }
 
-static void cfgBranchPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
-    AstArray *ast_array = bb->ast_array;
+static aoStr *bbAstArrayToString(AstArray *ast_array, int ast_count) {
+    aoStr *ast_str = aoStrAlloc(256);
     char *lvalue_str;
-    char *fillcolor;
-    int ast_count = ast_array->count;
-    aoStr *internal = aoStrAlloc(256);
-    Ast *cond = ast_array->entries[ast_count - 1];
-
-    for (int i = 0; i < ast_count-1; ++i) {
+    for (int i = 0; i < ast_count; ++i) {
         Ast *ast = ast_array->entries[i];
         lvalue_str = AstLValueToString(ast,LEXEME_ENCODE_PUNCT);
-        aoStrCatPrintf(internal,"%s\\l\\\n",lvalue_str);
+        aoStrCatPrintf(ast_str,"%s\\l\\\n",lvalue_str);
         if (i + 1 != ast_count) {
-            aoStrPutChar(internal,'|');
+            aoStrPutChar(ast_str,'|');
         }
         free(lvalue_str);
     }
+    return ast_str;
+}
+
+static void cfgBranchPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
+    AstArray *ast_array = bb->ast_array;
+    char *fillcolor;
+    int ast_count = ast_array->count;
+    aoStr *internal = bbAstArrayToString(bb->ast_array,ast_count-1);
+    Ast *cond = ast_array->entries[ast_count - 1];
 
     assert(cond != NULL);
-    lvalue_str = AstLValueToString(cond,LEXEME_ENCODE_PUNCT);
+    char *lvalue_str = AstLValueToString(cond,LEXEME_ENCODE_PUNCT);
 
     if (bb->flags & BB_FLAG_LOOP_HEAD) {
         fillcolor = "lightpink";
@@ -122,42 +184,30 @@ static void cfgBranchPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     aoStrCatPrintf(builder->viz,
             "%s\n"
             "if (%s)\\l\\"
-            "  goto \\<%d bb\\>\\l\\"
-            "else\\l\\\n"
-            "  goto \\<%d bb\\>\\l\\"
+            //"  goto \\<%d bb\\>\\l\\"
+            //"else\\l\\\n"
+            //"  goto \\<%d bb\\>\\l\\"
             "\n}\"];\n\n",
             internal->data,
-            lvalue_str,
-            bb->_if->block_no,
-            bb->_else->block_no);
+            lvalue_str
+         //   bb->_if->block_no,
+          //  bb->_else->block_no
+            );
     aoStrRelease(internal);
 }
 
 static void cfgDoWhileCondPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     AstArray *ast_array = bb->ast_array;
-    char *lvalue_str;
     char *fillcolor = "lightpink";
     int ast_count = ast_array->count;
-    aoStr *internal = aoStrAlloc(256);
+    aoStr *internal = bbAstArrayToString(ast_array,ast_count-1);
     Ast *cond = ast_array->entries[ast_count - 1];
-
-    for (int i = 0; i < ast_count-1; ++i) {
-        Ast *ast = ast_array->entries[i];
-        lvalue_str = AstLValueToString(ast,LEXEME_ENCODE_PUNCT);
-        aoStrCatPrintf(internal,"%s\\l\\\n",lvalue_str);
-        if (i + 1 != ast_count) {
-            aoStrPutChar(internal,'|');
-        }
-        free(lvalue_str);
-    }
-
-
 
     if (bb->prev->flags & BB_FLAG_LOOP_HEAD) {
         fillcolor = "lightskyblue";
     }
 
-    lvalue_str = AstLValueToString(cond,LEXEME_ENCODE_PUNCT);
+    char *lvalue_str = AstLValueToString(cond,LEXEME_ENCODE_PUNCT);
 
     aoStrCatPrintf(builder->viz,
             "    bb%d [shape=record,style=filled,fillcolor=%s,label=\"{\\<bb %d\\>|\n",
@@ -168,32 +218,22 @@ static void cfgDoWhileCondPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     aoStrCatPrintf(builder->viz,
             "%s\n"
             "if (%s)\\l\\"
-            "  goto \\<%d bb\\>\\l\\"
-            "else\\l\\\n"
-            "  goto \\<%d bb\\>\\l\\"
+            // "  goto \\<%d bb\\>\\l\\"
+          //  "else\\l\\\n"
+        //     "  goto \\<%d bb\\>\\l\\"
             "\n}\"];\n\n",
             internal->data,
-            lvalue_str,
-            bb->prev->block_no,
-            bb->next->block_no);
+            lvalue_str
+            // bb->prev->block_no,
+            // bb->next->block_no
+            );
     aoStrRelease(internal);
 }
 
 static void cfgLoopPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     AstArray *ast_array = bb->ast_array;
-    char *lvalue_str;
     int ast_count = ast_array->count;
-    aoStr *internal = aoStrAlloc(256);
-
-    for (int i = 0; i < ast_count; ++i) {
-        Ast *ast = ast_array->entries[i];
-        lvalue_str = AstLValueToString(ast,LEXEME_ENCODE_PUNCT);
-        aoStrCatPrintf(internal,"%s\\l\\\n",lvalue_str);
-        if (ast_count > 1 && i + 1 != ast_count) {
-            aoStrPutChar(internal,'|');
-        }
-        free(lvalue_str);
-    }
+    aoStr *internal = bbAstArrayToString(ast_array,ast_count);
 
     aoStrCatPrintf(builder->viz,
             "    bb%d [shape=record,style=filled,fillcolor=lightgreen,label=\"{\\<bb %d\\>|\n",
@@ -202,29 +242,19 @@ static void cfgLoopPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
 
     aoStrCatPrintf(builder->viz,
             "%s\n"
-            "|goto \\<%d bb\\>\\l\\"
+ //           "|goto \\<%d bb\\>\\l\\"
             "\n}\"];\n\n",
-            internal->data,
-            bb->prev->block_no);
+            internal->data
+        //     bb->prev->block_no
+            );
 
     aoStrRelease(internal);
 }
 
 static void cfgBreakPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     AstArray *ast_array = bb->ast_array;
-    char *lvalue_str;
     int ast_count = ast_array->count;
-    aoStr *internal = aoStrAlloc(256);
-
-    for (int i = 0; i < ast_count; ++i) {
-        Ast *ast = ast_array->entries[i];
-        lvalue_str = AstLValueToString(ast,LEXEME_ENCODE_PUNCT);
-        aoStrCatPrintf(internal,"%s\\l\\\n",lvalue_str);
-        if (ast_count > 1 && i + 1 != ast_count) {
-            aoStrPutChar(internal,'|');
-        }
-        free(lvalue_str);
-    }
+    aoStr *internal = bbAstArrayToString(ast_array,ast_count);
 
     aoStrCatPrintf(builder->viz,
             "    bb%d [shape=record,style=filled,fillcolor=violet,label=\"{\\<bb %d\\>\n",
@@ -234,28 +264,18 @@ static void cfgBreakPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     aoStrCatPrintf(builder->viz,
             "%s\\l\\\n"
             "|break\\l\\\n"
-            "|goto \\<%d bb\\>\\l\\"
+            //"|goto \\<%d bb\\>\\l\\"
             "\n}\"];\n\n",
-            internal->data,
-            bb->next->block_no);
+            internal->data
+            // bb->next->block_no
+            );
     aoStrRelease(internal);
 }
 
 static void cfgDefaultPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     AstArray *ast_array = bb->ast_array;
-    char *lvalue_str;
     int ast_count = ast_array->count;
-    aoStr *internal = aoStrAlloc(256);
-
-    for (int i = 0; i < ast_count; ++i) {
-        Ast *ast = ast_array->entries[i];
-        lvalue_str = AstLValueToString(ast,LEXEME_ENCODE_PUNCT);
-        aoStrCatPrintf(internal,"%s\\l\\\n",lvalue_str);
-        if (ast_count > 1 && i + 1 != ast_count) {
-            aoStrPutChar(internal,'|');
-        }
-        free(lvalue_str);
-    }
+    aoStr *internal = bbAstArrayToString(ast_array,ast_count); 
 
     aoStrCatPrintf(builder->viz,
             "    bb%d [shape=record,style=filled,fillcolor=lightgrey,label=\"{\\<bb %d\\>|\n%s",
@@ -264,8 +284,11 @@ static void cfgDefaultPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
             internal->data);
 
     if (bb->next) {
-        aoStrCatPrintf(builder->viz,"|goto \\<%d bb\\>\\l\\ \n}\"];\n\n",
-                bb->next->block_no);
+        aoStrCatPrintf(builder->viz,
+                 "|goto \\<%d bb\\>"
+                 " \n}\"];\n\n",
+                 bb->next->block_no
+                );
     } else {
         loggerWarning("Block unexpectedly terminates: %dbb, type %d\n",
                 bb->block_no, bb->type);
@@ -283,19 +306,8 @@ static void cfgHeadPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
 
 static void cfgReturnPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     AstArray *ast_array = bb->ast_array;
-    char *lvalue_str;
     int ast_count = ast_array->count;
-    aoStr *internal = aoStrAlloc(256);
-
-    for (int i = 0; i < ast_count; ++i) {
-        Ast *ast = ast_array->entries[i];
-        lvalue_str = AstLValueToString(ast,LEXEME_ENCODE_PUNCT);
-        aoStrCatPrintf(internal,"%s\\l\\\n",lvalue_str);
-        if (ast_count > 1 && i + 1 != ast_count) {
-            aoStrPutChar(internal,'|');
-        }
-        free(lvalue_str);
-    }
+    aoStr *internal = bbAstArrayToString(ast_array,ast_count);
 
     aoStrCatPrintf(builder->viz,
             "    bb%d [shape=doublecircle,style=filled,fontcolor=white,fillcolor=black,label=\" \\<bb %d\\>\n %s \"];\n\n",
@@ -314,20 +326,21 @@ static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
         _if = bb->_if;
         _else = bb->_else;
 
-        bb->visited++;
 
+        bb->visited++;
         if (bb->flags & BB_FLAG_LOOP_END) {
             if (bb->visited > 1 && bb->visited == bb->prev_cnt) {
-                aoStrCat(builder->viz, "}\n");
+                aoStrCatPrintf(builder->viz, "}//1: terminating bb%d\n",bb->block_no);
             }
         }
 
         if (cfgGraphVizBuilderHasSeen(builder,bb->block_no)) return;
         else cfgGraphVizBuilderSetSeen(builder,bb->block_no);
 
-        printf("bb%d, prev_cnt = %d: ", bb->block_no,bb->prev_cnt);
+        printf("bb%2d prev_cnt = %d: ", bb->block_no,bb->prev_cnt);
         for (int i = 0; i < bb->prev_cnt; ++i) {
-            printf("%dbb ", bb->prev_blocks[i]->block_no);
+            printf("%dbb", bb->prev_blocks[i]->block_no);
+            if (i + 1 != bb->prev_cnt) printf(", ");
         }
         printf("\n");
 
@@ -347,21 +360,24 @@ static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
             }
         }
 
-        if (bb->flags & BB_FLAG_LOOP_END && bb->type != BB_LOOP_BLOCK) {
-            if (bb->visited == 1 && bb->visited == bb->prev_cnt) {
-                aoStrCat(builder->viz, "}\n");
-            }
-        }
+        int is_loop_block = bb->type == BB_LOOP_BLOCK && 
+                            bb->type == BB_DO_WHILE_COND;
+
+//        if (bb->flags & BB_FLAG_LOOP_END && !is_loop_block) {
+//            if (bb->visited == 1 && bb->visited == bb->prev_cnt) {
+//                aoStrCatPrintf(builder->viz, "}//2: terminating loop: bb%d\n",
+//                        bb->block_no);
+//            }
+//        }
 
         switch (bb->type) {
             case BB_HEAD_BLOCK:    cfgHeadPrintf(builder,bb);    break;
             case BB_LOOP_BLOCK:    cfgLoopPrintf(builder,bb);    break;
             case BB_DO_WHILE_COND: cfgDoWhileCondPrintf(builder,bb);  break;
-            case BB_BRANCH_BLOCK:  cfgBranchPrintf(builder,bb);  break;
-            case BB_BREAK_BLOCK:   cfgBreakPrintf(builder,bb);   break;
+            case BB_BRANCH_BLOCK:  cfgBranchPrintf(builder,bb);       break;
+            case BB_BREAK_BLOCK:   cfgBreakPrintf(builder,bb);        break;
             case BB_END_BLOCK:
             case BB_RETURN_BLOCK:  cfgReturnPrintf(builder,bb);  break;
-
             default:               cfgDefaultPrintf(builder,bb); break;
         }
 
@@ -373,13 +389,10 @@ static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
                 builder->break_blocks[builder->break_idx++] = _if;
                 builder->break_blocks[builder->break_idx++] = _else;
             } else if (_if->type == BB_BREAK_BLOCK) {
-                //cfgCreateGraphVizShapes(builder,_else);
                 cfgCreateGraphVizShapes(builder,_else);
-               // cfgCreateGraphVizShapes(builder,_if);
                 builder->break_blocks[builder->break_idx++] = _if;
             } else if (_else->type == BB_BREAK_BLOCK) {
                 cfgCreateGraphVizShapes(builder,_if);
-                //cfgCreateGraphVizShapes(builder,_else);
                 builder->break_blocks[builder->break_idx++] = _else;
             } else {
                 cfgCreateGraphVizShapes(builder,_if);
@@ -398,7 +411,6 @@ static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
                 }
             }
         }
-        if (bb->type == BB_END_BLOCK) break;
 
         if (bb->flags & BB_FLAG_LOOP_END) {
             while (builder->break_idx) {
@@ -407,16 +419,21 @@ static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
             }
         }
 
-        if (bb->flags & BB_FLAG_LOOP_END && bb->type == BB_LOOP_BLOCK) {
-            if (bb->visited == 1 && bb->visited == bb->prev_cnt) {
-                aoStrCat(builder->viz, "}\n");
+        if (bb->flags & BB_FLAG_LOOP_END && !is_loop_block) {
+            if (bb->visited >= 1 && bb->prev_cnt == 1) {
+                aoStrCatPrintf(builder->viz, "}//3: terminating bb%d\n",bb->block_no);
             }
         }
 
         /* If we have a goto we do not want to print it's bb->next as 
          * the code is non-linear and we will eventually get there. The 
          * link will already be printed */
-        if (bb->type == BB_GOTO && !(bb->flags & BB_FLAG_UNCONDITIONAL_JUMP)) break;
+        //if (bb->type == BB_GOTO && !(bb->flags & BB_FLAG_UNCONDITIONAL_JUMP)) break;
+        if (bb->type == BB_GOTO && is_loop_block) {
+            bb->next->visited++;
+            break;
+        }
+        if (bb->type == BB_END_BLOCK) break;
     }
 }
 
@@ -461,7 +478,7 @@ static void cfgCreateGraphVizMappings(CfgGraphVizBuilder *builder,
 
 
             len = snprintf(buffer,sizeof(buffer),
-                    "    bb%d:s -> bb%d:n [style=\"solid,bold\",color=darkorange,weight=10,constraint=true];",
+                    "    bb%d:s -> bb%d:n [style=\"solid,bold\",color=firebrick1,weight=10,constraint=true];",
                     bb->block_no,
                     bb->next->block_no);
             buffer[len] = '\0';
@@ -488,7 +505,7 @@ static void cfgCreateGraphVizMappings(CfgGraphVizBuilder *builder,
 
         if (_else) {
             len = snprintf(buffer,sizeof(buffer),
-                    "    bb%d:s -> bb%d:n [style=\"solid,bold\",color=darkorange,weight=10,constraint=true];",
+                    "    bb%d:s -> bb%d:n [style=\"solid,bold\",color=firebrick1,weight=10,constraint=true];",
                     bb->block_no,
                     _else->block_no);
             buffer[len] = '\0';
@@ -536,9 +553,18 @@ aoStr *cfgCreateGraphViz(CFG *cfg) {
     CfgGraphVizBuilder builder;
     cfgGraphVizBuilderInit(&builder,cfg);
 
-    aoStrCatPrintf(builder.viz,"digraph \"%s\" {\n overlap=false;\n",cfg->ref_fname->data);
+    aoStrCatPrintf(builder.viz,
+            "digraph \"%s\" {\n "
+            "overlap=false;\n"
+            "subgraph \"cluster_%s\" {\n"
+            "    style=\"dashed\";\n"
+            "    color=\"black\";\n"
+            "    label=\"%s()\";\n",
+            cfg->ref_fname->data,
+            cfg->ref_fname->data,
+            cfg->ref_fname->data);
     cfgCreateGraphVizBody(&builder,cfg);
-    aoStrCatPrintf(builder.viz,"}");
+    aoStrCatPrintf(builder.viz,"}//ending function\n} // ending graph\n");
     return cfgGraphVizBuilderDestroyAndReturnVizString(&builder);
 }
 
