@@ -262,3 +262,36 @@ error:
     aoStrArrayRelease(outArr, arrsize);
     return NULL;
 }
+
+/* Allocating printf */
+char *mprintf(const char *fmt, ...) {
+    va_list ap, copy;
+    int allocated = 256;
+    int len = 0;
+    char *buffer = (char *)malloc(sizeof(char)*allocated);
+
+    va_start(ap,fmt);
+
+    while (1) {
+        va_copy(copy,ap);
+        len = vsnprintf(buffer,allocated,fmt,copy);
+        va_end(copy);
+
+        if (len < 0) {
+            free(buffer);
+            return NULL;
+        }
+
+        if (len >= allocated) {
+            free(buffer);
+            allocated = len + 2;
+            buffer = (char *)malloc(sizeof(char)*allocated);
+            if (buffer == NULL) return NULL;
+            continue;
+        }
+        break;
+    }
+    buffer[len] = '\0';
+    va_end(ap);
+    return buffer;
+}

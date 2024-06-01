@@ -5,6 +5,7 @@
 #include "ast.h"
 #include "aostr.h"
 #include "cctrl.h"
+#include "map.h"
 
 #define BB_GARBAGE        (-1)
 #define BB_END_BLOCK      (0)
@@ -61,7 +62,10 @@ typedef struct CFG {
     BasicBlock *head;
     /* How many basic blocks are in the graph */
     int bb_count;
-    /* This a pointer to the memory pool which holds all of the basic blocks */
+    /* A more compact representation of the graph */
+    IntMap *graph;
+    /* This a pointer to the memory pool which holds all of the basic blocks,
+     * why am I not using head?*/
     void *_memory;
 } CFG;
 
@@ -83,8 +87,10 @@ typedef struct CFGBuilder {
 
 BasicBlock *bbNew(int type);
 BasicBlock *bbAddNext(BasicBlock *cur, int type, BasicBlock *next);
-const char *bbTypeToString(BasicBlock *bb);
+const char *bbTypeToString(int type);
+const char *bbFlagsToString(unsigned int flags);
 const int bbPrevHas(BasicBlock *bb, int block_no);
+BasicBlock *cfgGet(CFG *cfg, int block_no);
 CFG *cfgConstruct(Cctrl *cc);
 
 #endif

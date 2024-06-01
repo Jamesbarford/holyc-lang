@@ -18,6 +18,8 @@
 #define ESC_WHITE  "\033[0;37m"
 #define ESC_RESET  "\033[0m"
 
+#define min(x,y) (((x) < (y) ? (x) : (y)))
+
 #ifndef DEBUG
 #define loggerDebug(...)
 
@@ -57,5 +59,6 @@
     } while (0)
 
 #endif
+
 
 #endif // !UTIL_H

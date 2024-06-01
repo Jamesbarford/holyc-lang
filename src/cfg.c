@@ -1,9 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <assert.h>
 #include <string.h>
-#include <unistd.h>
-#include <fcntl.h>
+#include <assert.h>
 
 #include "aostr.h"
 #include "ast.h"
@@ -12,12 +10,13 @@
 #include "dict.h"
 #include "lexer.h"
 #include "list.h"
+#include "map.h"
 #include "util.h"
 
 static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast);
 
-const char *bbTypeToString(BasicBlock *bb) {
-    switch (bb->type) {
+const char *bbTypeToString(int type) {
+    switch (type) {
         case BB_GARBAGE:            return "BB_GARBAGE";
         case BB_END_BLOCK:          return "BB_END_BLOCK";
         case BB_HEAD_BLOCK:         return "BB_HEAD_BLOCK";
@@ -29,8 +28,56 @@ const char *bbTypeToString(BasicBlock *bb) {
         case BB_DO_WHILE_COND:      return "BB_DO_WHILE_COND";
         case BB_GOTO:               return "BB_GOTO";
         default:
-            loggerPanic("Unknown type: %d\n", bb->type);
+            loggerPanic("Unknown type: %d\n", type);
     }
+}
+
+/* probably a better way of doing this */
+const char *bbFlagsToString(unsigned int flags) {
+    if (!flags) return mprintf("(NO_FLAGS)");
+    aoStr *str = aoStrNew();
+    int has_flag = 0;
+
+    aoStrPutChar(str,'(');
+
+    if (flags & BB_FLAG_IF_BRANCH) {
+        if (has_flag) aoStrCat(str,"|BB_FLAG_IF_BRANCH"); 
+        else          aoStrCat(str,"BB_FLAG_IF_BRANCH");
+        has_flag = 1;
+    }
+    if (flags & BB_FLAG_LOOP_HEAD) {
+        if (has_flag) aoStrCat(str,"|BB_FLAG_LOOP_HEAD");
+        aoStrCat(str,"BB_FLAG_LOOP_HEAD");
+        has_flag = 1;
+    }
+    if (flags & BB_FLAG_ELSE_BRANCH) {
+        if (has_flag) aoStrCat(str,"|BB_FLAG_ELSE_BRANCH"); 
+        else          aoStrCat(str,"BB_FLAG_ELSE_BRANCH");
+        has_flag = 1;
+    }
+    if (flags & BB_FLAG_LOOP_END) {
+        if (has_flag) aoStrCat(str,"|BB_FLAG_LOOP_END"); 
+        else          aoStrCat(str,"BB_FLAG_LOOP_END");
+        has_flag = 1;
+    }
+    if (flags & BB_FLAG_REDUNDANT_LOOP) {
+        if (has_flag) aoStrCat(str,"|BB_FLAG_LOOP_REDUNDANT_LOOP"); 
+        else          aoStrCat(str,"BB_FLAG_LOOP_REDUNDANT_LOOP");
+        has_flag = 1;
+    }
+    if (flags & BB_FLAG_UNCONDITIONAL_JUMP) {
+        if (has_flag) aoStrCat(str,"|BB_FLAG_LOOP_UNCONDITIONAL_JUMP"); 
+        else          aoStrCat(str,"BB_FLAG_LOOP_UNCONDITIONAL_JUMP");
+        has_flag = 1;
+    }
+    if (flags & BB_FLAG_LABEL) {
+        if (has_flag) aoStrCat(str,"|BG_FLAG_LOOP_LABEL"); 
+        else          aoStrCat(str,"BB_FLAG_LOOP_LABEL");
+        has_flag = 1;
+    }
+
+    aoStrPutChar(str,')');
+    return aoStrMove(str); 
 }
 
 static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder, int type) {
@@ -75,6 +122,10 @@ void cfgBuilderRelease(CFGBuilder *builder, int free_builder) {
 
 static void cfgBuilderInit(CFGBuilder *builder, Cctrl *cc) {
     BasicBlock *bb_pool = cast(BasicBlock *, malloc(sizeof(BasicBlock)*64));
+    for (int i = 0; i < 64; ++i) {
+        BasicBlock *bb = &bb_pool[i];
+        bb->type = -1;
+    }
     builder->cc = cc;
     builder->bb_count = 1;
     builder->bb_cap = 64;
@@ -84,7 +135,6 @@ static void cfgBuilderInit(CFGBuilder *builder, Cctrl *cc) {
     builder->bb_cur_loop = NULL;
 
     builder->unresoved_gotos = ListNew();
-
     builder->resolved_labels = DictNew(&default_table_type);
     DictSetFreeKey(builder->resolved_labels,NULL);
 }
@@ -102,6 +152,11 @@ static CFG *cfgNew(aoStr *fname, BasicBlock *head_block) {
     cfg->head = head_block;
     cfg->ref_fname = fname;
     return cfg;
+}
+
+BasicBlock *cfgGet(CFG *cfg, int block_no) {
+    BasicBlock *bb_array = (BasicBlock*)cfg->_memory;
+    return &(bb_array[block_no]);
 }
 
 const int bbPrevHas(BasicBlock *bb, int block_no) {
@@ -310,9 +365,14 @@ static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
 
     builder->bb->flags |= BB_FLAG_LOOP_END;
 
+    /* This is a loop which immediately hit a break; */
     if (builder->bb->type == BB_BREAK_BLOCK && 
-        (builder->bb->flags & BB_FLAG_LOOP_END)) {
+        (builder->bb->flags & BB_FLAG_LOOP_END))
+    {
         builder->bb->flags |= BB_FLAG_REDUNDANT_LOOP;
+        builder->bb->flags &= ~(BB_FLAG_LOOP_END);
+        bb_cond->flags &= ~BB_FLAG_LOOP_HEAD;
+        bb_cond->flags |= BB_FLAG_REDUNDANT_LOOP;
     }
 
     cfgBuilderSetBasicBlock(builder,bb_cond_else);
@@ -371,11 +431,14 @@ static void cfgHandleWhileLoop(CFGBuilder *builder, Ast *ast) {
         builder->bb->prev = bb_cond;
     }
 
-    //builder->bb->flags |= BB_FLAG_LOOP_END;
-
+    /* This is a loop which immediately hit a break; */
     if (builder->bb->type == BB_BREAK_BLOCK && 
-        (builder->bb->flags & BB_FLAG_LOOP_END)) {
+        (builder->bb->flags & BB_FLAG_LOOP_END))
+    {
         builder->bb->flags |= BB_FLAG_REDUNDANT_LOOP;
+        builder->bb->flags &= ~(BB_FLAG_LOOP_END);
+        bb_cond->flags &= ~BB_FLAG_LOOP_HEAD;
+        bb_cond->flags |= BB_FLAG_REDUNDANT_LOOP;
     }
 
     cfgBuilderSetBasicBlock(builder,bb_cond_else);
@@ -419,7 +482,7 @@ static void cfgHandleDoWhileLoop(CFGBuilder *builder, Ast *ast) {
     BasicBlock *bb_do_while = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
 
     bb->next = bb_do_while;
-    bb_do_while->flags |= (BB_FLAG_LOOP_HEAD);
+    bb_do_while->flags |= BB_FLAG_LOOP_HEAD;
 
     builder->bb_cur_loop = bb_do_while;
     builder->flags |= CFG_BUILDER_FLAG_IN_LOOP;
@@ -610,6 +673,12 @@ static void bbFixLeafNode(BasicBlock *bb) {
 
     AstArray *next_array = bb->next ? bb->next->ast_array : NULL;
 
+    if (!bb->ast_array || bb->ast_array->count == 0) {
+        loggerPanic("yupt\n");
+        bb->type = BB_GARBAGE;
+        return;
+    }
+
     if (next_array && next_array->count == 0) {
         bb->next->type = BB_GARBAGE;
         bb->next = bb->next->next;
@@ -641,7 +710,7 @@ static void bbFixLeafNode(BasicBlock *bb) {
             /* We've found a random control block which indicates 
              * that our current block is genuinely the end of the road*/
             if (prev->next != bb) {
-                bb->type = BB_END_BLOCK;
+                bb->type = BB_END_BLOCK;// BB_GARBAGE; BB_END_BLOCK;
                 bb->next = NULL;
                 break;
             }
@@ -681,11 +750,9 @@ static void bbRelinkBranch(BasicBlock *branch, BasicBlock *bb) {
                     }
                 }
             } else {
+                /* The next node is garbage as it does not point to any thing 
+                 * of interest, `if` and `else` have been added correctly */
                 bb->next->type = BB_GARBAGE;
-                if (bb->_else->next) {
-                    bb->_else = bb->_else->next;
-                    bbAddPrev(bb->_else,bb);
-                }
             }
         } else {
             bb->next = NULL;
@@ -706,7 +773,6 @@ static void bbRelinkBranch(BasicBlock *branch, BasicBlock *bb) {
                     bbAddPrev(branch->_else,branch);
                 }
             } else {
-
                 if (branch->_if->next->ast_array->count == 0) {
                     branch->_if->next = branch->next;
                     //loggerDebug("if bb%d\n",branch->_if->block_no);
@@ -718,7 +784,7 @@ static void bbRelinkBranch(BasicBlock *branch, BasicBlock *bb) {
                 //loggerDebug("bb%d\n", bb->block_no);
                 /* No idea ... */
             //loggerDebug("%dbb %s\n",bb->prev->block_no, 
-            //        bbTypeToString(bb->prev));
+            //        bbTypeToString(bb->prev->type));
 
             //for (int i = 0; i < bb->prev->ast_array->count; ++i) {
             //    AstPrint(bb->prev->ast_array->entries[i]);
@@ -727,19 +793,13 @@ static void bbRelinkBranch(BasicBlock *branch, BasicBlock *bb) {
                     AstPrint(branch->ast_array->entries[i]);
                 }
                 //loggerPanic("bb%d has an unexpected connection type = %s\n",
-                //        bb->block_no, bbTypeToString(bb));
+                //        bb->block_no, bbTypeToString(bb->type));
             }
         }
         /* For some reason we keep getting branches with a next pointer */
         branch->next = NULL;
     } else if (bb->type == BB_LOOP_BLOCK) {
-        //printf("bb%d, prev_cnt = %d: ", block->block_no,block->prev_cnt);
-        //for (int i = 0; i < block->prev_cnt; ++i) {
-        //    printf("%dbb ", block->prev_blocks[i]->block_no);
-        //}
-        //printf("\n");
-        // ?
-        // loggerDebug("branchtype => %d is a loop block\n", block->block_no);
+
     } else if (bb->type == BB_GARBAGE) {
         loggerWarning("we hit the trash\n");
     }
@@ -787,8 +847,15 @@ static void bbFixLoopBlock(BasicBlock *bb) {
 }
 
 static void bbFix(BasicBlock *bb) {
-    for (; bb && bb->type != BB_END_BLOCK; bb = bb->next) {
+    for (; bb; bb = bb->next) {
         /* Search up the tree to fix the node */
+        if (bb->type == BB_CONTROL_BLOCK) {
+            if (!bb->ast_array || bb->ast_array->count == 0) {
+                loggerPanic("typ\n");
+                bb->type = BB_GARBAGE;
+            }
+        }
+
         if (!bb->next && bb->type == BB_CONTROL_BLOCK) {
             /* Iterate back up the tree to find the join */
             bbFixLeafNode(bb);
@@ -844,7 +911,7 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
             loggerWarning("bb%d unconditional jump to bb%d type %s\n",
                     bb_goto->block_no,
                     bb_dest->block_no,
-                    bbTypeToString(bb_dest));
+                    bbTypeToString(bb_dest->type));
             /* If we are doing an unconditional jump into a loop, a switch or 
              * a branch we need to re-order things as the flow changes. These 
              * are somewhat contrived edge cases but _can_ happen. 
@@ -918,10 +985,10 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
             loggerWarning("bb%d unhandled conditional jump to bb%d type %s\n",
                     bb_goto->block_no,
                     bb_dest->block_no,
-                    bbTypeToString(bb_dest));
+                    bbTypeToString(bb_dest->type));
 
         }
-
+        bb_dest->prev = bb_goto;
         bb_goto->next = bb_dest;
     }
 
@@ -941,6 +1008,162 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
      * next functions. */
     DictClear(builder->resolved_labels);
     ListClear(builder->unresoved_gotos,NULL);
+}
+
+void cfgSCCUtil(BasicBlock *bb, int *disc, int *low, List *st, 
+        int *stack_member)
+{
+    static int time = 0;
+
+    disc[bb->block_no] = low[bb->block_no] = ++time;
+    ListAppend(st,bb);
+    stack_member[bb->block_no] = 1;
+    BasicBlock *adjacent[4] = {bb->next, bb->prev, bb->_if, bb->_else};
+    if (bb->type != BB_LOOP_BLOCK || bb->type != BB_DO_WHILE_COND) {
+        adjacent[1] = NULL;
+    }
+
+    for (int i = 0; i < 4; ++i) {
+        BasicBlock *v = adjacent[i];
+        if (!v) continue;
+
+        if (disc[v->block_no] == -1) {
+            cfgSCCUtil(v,disc,low,st,stack_member);
+            low[bb->block_no] = min(low[bb->block_no],low[v->block_no]);
+        } else if (stack_member[v->block_no] == 1) {
+            low[bb->block_no] = min(low[bb->block_no],disc[v->block_no]);
+        } 
+    }
+
+    if (low[bb->block_no] == disc[bb->block_no]) {
+        BasicBlock *it;
+        while (ListHead(st) != bb) {
+            it = ListPop(st);
+            if (!it) break;
+            printf("%d ", it->block_no);
+            stack_member[it->block_no] = 0;
+        }
+        it = ListPop(st);
+        if (it) {
+            printf("%d ", it->block_no);
+            stack_member[it->block_no] = 0;
+        }
+    }
+}
+
+void cfgGetStronglyConnectedComponents(CFG *cfg) {
+    int *disc = cast(int *,malloc(sizeof(int) * cfg->bb_count));
+    int *low = cast(int *,malloc(sizeof(int) * cfg->bb_count));
+    int *stack_member = cast(int *,malloc(sizeof(int) * cfg->bb_count));
+    List *st = ListNew();
+
+    for (int i = 0; i < cfg->bb_count; ++i) {
+        disc[i] = low[i] = -1;
+        stack_member[i] = 0;
+    }
+
+    BasicBlock *bb_array = cast(BasicBlock *, cfg->_memory);
+
+    for (int i = 0; i < cfg->bb_count; ++i) {
+        BasicBlock *bb = &(bb_array[i]);
+        if (disc[i] == -1 && bb->type != BB_GARBAGE) {
+            cfgSCCUtil(bb,disc,low,st,stack_member);
+        }
+    }
+}
+
+/* Print the Adjacency list graph representation */
+void cfgAdjacencyListPrint(IntMap *map) {
+    MapIndex *map_index = map->indexes;
+    long *index_entries = map_index->entries;
+
+    for (int i = 0; i < map->size; ++i) {
+        long idx = index_entries[i];
+        IntVec *vec = cast(IntVec *, map->entries[idx]->value);
+        printf("bb%ld\n",idx);
+
+        for (int i = 0; i < vec->size; ++i) {
+            long hash = vec->entries[i];
+            long block_no = hash & 0x7FF;
+            long type = hash >> 11 & 0x1F;
+            long flags = hash >> 16;
+            printf("    bb%2ld type = %-*s flags = %-*s\n",block_no,
+                18,
+                bbTypeToString(type),
+                40,
+                bbFlagsToString(flags));
+        }
+        printf("====\n");
+    }
+}
+
+/** 
+ * Information of a basic block packed into one `long`
+ *
+ * flags 16                type 5   blockno 11bits
+ * +---------------------+--------+---------------+
+ * | 0000_0000_0000_0000 | 0_0000 | 000_0000_0000 |
+ * +---------------------+--------+---------------+
+ */
+long cfgHashBasicBlock(BasicBlock *bb) {
+    long hash = 0;
+    hash |= bb->flags << 16;
+    hash |= bb->type << 11;
+    hash |= bb->block_no;
+    return hash;
+}
+
+/* This is for creating a very compact control flow graph that feels more like 
+ * a classical datascructure than the basic block node graph. It's significantly 
+ * faster to traverse and also easier to reason with */
+IntMap *cfgBuildAdjacencyList(CFG *cfg) {
+    IntMap *map = intMapNew(32);
+    BasicBlock *bb_array = ((BasicBlock *)cfg->_memory);
+    long hash = 0;
+
+    for (int i = 0; i < cfg->bb_count; ++i) {
+        BasicBlock *bb = &(bb_array[i]);
+        if (bb->type == BB_GARBAGE) continue;
+        IntVec *vec = intVecNew();
+
+        /* The order of _if _else and prev/next is of PARAMOUNT importance */
+        switch (bb->type) {
+            case BB_RETURN_BLOCK: break;
+            case BB_END_BLOCK:    break;
+
+            case BB_BREAK_BLOCK:
+            case BB_CONTROL_BLOCK:
+            case BB_GOTO:
+            case BB_HEAD_BLOCK:
+                hash = cfgHashBasicBlock(bb->next);
+                intVecPush(vec,hash);
+                break;
+
+            case BB_BRANCH_BLOCK:
+                hash = cfgHashBasicBlock(bb->_if);
+                intVecPush(vec,hash);
+                hash = cfgHashBasicBlock(bb->_else);
+                intVecPush(vec,hash);
+                break;
+
+            case BB_LOOP_BLOCK:
+                hash = cfgHashBasicBlock(bb->prev);
+                intVecPush(vec,hash);
+                break;
+
+            case BB_DO_WHILE_COND:
+                hash = cfgHashBasicBlock(bb->prev);
+                intVecPush(vec,hash);
+                hash = cfgHashBasicBlock(bb->next);
+                intVecPush(vec,hash);
+                break;
+
+            default:
+                loggerPanic("Unhandled type: %s\n", bbTypeToString(bb->type));
+        }
+        intMapSet(map,bb->block_no,vec);
+    }
+    return map;
 }
 
 /* This will need to return a list of CFG's */
@@ -965,9 +1188,12 @@ CFG *cfgConstruct(Cctrl *cc) {
 
             cfg->bb_count = builder.bb_count;
             cfg->_memory = builder.bb_pool;
+            cfg->graph = cfgBuildAdjacencyList(cfg);
         }
     }
 
+    cfgAdjacencyListPrint(cfg->graph);
+ //   cfgGetStronglyConnectedComponents(cfg);
     DictRelease(builder.resolved_labels);
     ListRelease(builder.unresoved_gotos,NULL);
 

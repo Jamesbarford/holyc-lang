@@ -66,6 +66,10 @@ void ListInsertValueBefore(List *ll, void *value) {
     ListInsertBefore(ll,prev);
 }
 
+void *ListHead(List *ll) {
+    return ll->prev->value;
+}
+
 void *ListPop(void *l) {
     List *ll = (List *)l;
     if (ll->next == ll) {

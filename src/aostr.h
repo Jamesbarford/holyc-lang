@@ -40,5 +40,6 @@ aoStr *aoStrEscapeString(aoStr *buf);
 
 void aoStrArrayRelease(aoStr **arr, int count);
 aoStr **aoStrSplit(char *to_split, char delimiter, int *count);
+char *mprintf(const char *fmt, ...);
 
 #endif

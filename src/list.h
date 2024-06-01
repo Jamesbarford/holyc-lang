@@ -18,6 +18,7 @@ void ListPrepend(List *head, void *value);
 void ListInsertBefore(List *ll, List *new_node);
 void ListInsertValueBefore(List *ll, void *value);
 void *ListDeque(void *l);
+void *ListHead(List *ll);
 void *ListPop(void *l);
 void ListRelease(List *ll, void (*freeValue)(void *));
 void ListClear(List *ll, void (*freeValue)(void *));
