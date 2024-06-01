@@ -13,7 +13,7 @@
 #include "parser.h"
 #include "util.h"
 
-void CompilePrintTokens(Cctrl *cc) {
+void compilePrintTokens(Cctrl *cc) {
     if (!cc->tkit->tokens || 
             cc->tkit->tokens == cc->tkit->tokens->next) {
         loggerWarning("No tokens to print\n");
@@ -22,7 +22,7 @@ void CompilePrintTokens(Cctrl *cc) {
     lexemePrintList(cc->tkit->tokens);
 }
 
-void CompilePrintAst(Cctrl *cc) {
+void compilePrintAst(Cctrl *cc) {
     List *it;
     Ast *ast;
     //DictNode *dn;
@@ -58,7 +58,7 @@ void CompilePrintAst(Cctrl *cc) {
     }
 }
 
-aoStr *CompileToAsm(Cctrl *cc) {
+aoStr *compileToAsm(Cctrl *cc) {
     if (cc->ast_list == NULL) {
         loggerWarning("Create AST before compiling AST\n");
         return NULL;
@@ -68,7 +68,7 @@ aoStr *CompileToAsm(Cctrl *cc) {
     return asmbuf;
 }
 
-int CompileToAst(Cctrl *cc, char *entrypath, int lexer_flags) {
+List *compileToTokens(Cctrl *cc, char *entrypath, int lexer_flags) {
     List *tokens;
     lexer l;
     aoStr *builtin_path;
@@ -89,6 +89,33 @@ int CompileToAst(Cctrl *cc, char *entrypath, int lexer_flags) {
     lexPushFile(&l,builtin_path);
 
     tokens = lexToLexemes(cc->macro_defs,&l);
+    lexemePrintList(tokens);
+    DictRelease(seen_files);
+    return tokens;
+}
+
+int compileToAst(Cctrl *cc, char *entrypath, int lexer_flags) {
+    List *tokens;
+    lexer l;
+    aoStr *builtin_path;
+    Dict *seen_files;
+
+    seen_files = DictNew(&default_table_type);
+    tokens = ListNew();
+    builtin_path = aoStrDupRaw("/usr/local/include/tos.HH",25); //aoStrNew();
+
+    lexerInit(&l,NULL,CCF_PRE_PROC);
+    l.seen_files = seen_files;
+    l.lineno = 1;
+    lexerSetBuiltinRoot(&l,"/usr/local/include/");
+
+    /* library files */
+    lexPushFile(&l,aoStrDupRaw(entrypath,strlen(entrypath)));
+    /* the structure is a stack so this will get popped first */
+    lexPushFile(&l,builtin_path);
+
+    tokens = lexToLexemes(cc->macro_defs,&l);
+
     DictRelease(seen_files);
     CctrlInitTokenIter(cc,tokens);
     ParseToAst(cc);
@@ -100,7 +127,7 @@ int CompileToAst(Cctrl *cc, char *entrypath, int lexer_flags) {
     return 1;
 }
 
-aoStr *CompileCode(Cctrl *cc, char *code, int lexer_flags) {
+aoStr *compileCode(Cctrl *cc, char *code, int lexer_flags) {
     aoStr *asm_str;
     List *tokens;
     lexer l;
@@ -108,7 +135,7 @@ aoStr *CompileCode(Cctrl *cc, char *code, int lexer_flags) {
     tokens = lexToLexemes(cc->macro_defs,&l);
     CctrlInitTokenIter(cc,tokens);
     ParseToAst(cc);
-    asm_str = CompileToAsm(cc);
+    asm_str = compileToAsm(cc);
     lexemeListRelease(tokens);
     free(l.files);
     return asm_str;
