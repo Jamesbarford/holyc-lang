@@ -321,22 +321,22 @@ int main(int argc, char **argv) {
     parseCliOptions(&opts,argc,argv);
     
     cc = CctrlNew();
-    
-    CompileToAst(cc,opts.infile,lexer_flags);
 
     if (opts.print_tokens) {
-        CompilePrintTokens(cc);
-    }
-
-    if (opts.print_ast) {
-        CompilePrintAst(cc);
+        List *tokens = compileToTokens(cc,opts.infile,lexer_flags);
+        lexemePrintList(tokens);
+        lexemeListRelease(tokens);
+    } else if (opts.print_ast) {
+        compileToAst(cc,opts.infile,lexer_flags);
+        compilePrintAst(cc);
     }
 
     if (opts.print_tokens || opts.print_ast) {
         return 0;
     }
 
-    asmbuf = CompileToAsm(cc);
+    compileToAst(cc,opts.infile,lexer_flags);
+    asmbuf = compileToAsm(cc);
 
 
     emitFile(asmbuf, &opts);

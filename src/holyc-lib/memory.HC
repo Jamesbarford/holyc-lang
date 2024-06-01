@@ -46,11 +46,9 @@ _REALLOC::
     MOV     RDI, -16[RBP]
     CALL    _MALLOC
     MOV     -24[RBP], RAX
-    MOV     RDI, -8[RBP]
-    CALL    _MSIZE
-    MOV     RDX, RAX
     MOV     RSI, -8[RBP]
     MOV     RDI, -24[RBP]
+    MOV     RDX, -16[RBP]
     CALL    _MEMCPY
     MOV     RDI, -8[RBP]
     CALL    _FREE

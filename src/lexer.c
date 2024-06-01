@@ -194,6 +194,7 @@ char *lexemeTypeToString(int tk_type) {
     case TK_CHAR_CONST: return "TK_CHAR_CONST";
     case TK_STR:   return "TK_STR";
     }
+    loggerDebug("%d\n",tk_type);
     return "UNKNOWN";
 }
 
@@ -326,31 +327,31 @@ char *lexemeToString(lexeme *tok) {
     char *tmp;
     switch (tok->tk_type) {
         case TK_IDENT:
-            aoStrCatPrintf(str,"TK_IDENT\t%.*s",tok->len,tok->start);
+            aoStrCatPrintf(str,"TK_IDENT      %.*s",tok->len,tok->start);
             return aoStrMove(str);
         case TK_CHAR_CONST:
-            aoStrCatPrintf(str,"TK_CHAR_CONST\t%x",tok->i64);
+            aoStrCatPrintf(str,"TK_CHAR_CONST %x",tok->i64);
             return aoStrMove(str);
         case TK_PUNCT: {
-            aoStrCatPrintf(str,"TK_PUNCT\t");
             tmp = lexemePunctToString(tok->i64);
-            aoStrCatPrintf(str,"%s",tmp);
+            aoStrCatPrintf(str,"TK_PUNCT      %s", tmp);
+            free(tmp);
             return aoStrMove(str);
         }
         case TK_I64:
-            aoStrCatPrintf(str,"TK_I64\t%lld",tok->i64);
+            aoStrCatPrintf(str,"TK_I64        %lld",tok->i64);
             return aoStrMove(str);
         case TK_F64:
-            aoStrCatPrintf(str,"TK_F64\t%g",tok->f64);
+            aoStrCatPrintf(str,"TK_F64        %g",tok->f64);
             return aoStrMove(str);
         case TK_STR:
-            aoStrCatPrintf(str,"TK_STR\t\"%.*s\"",tok->len,tok->start);
+            aoStrCatPrintf(str,"TK_STR        \"%.*s\"",tok->len,tok->start);
             return aoStrMove(str);
         case TK_EOF:
             aoStrCatPrintf(str,"TK_EOF");
             return aoStrMove(str);
         case TK_KEYWORD: {
-            aoStrCatPrintf(str,"TK_KEYWORD\t");
+            aoStrCatPrintf(str,"TK_KEYWORD    ");
             switch (tok->i64) {
                 case KW_CLASS:       aoStrCatPrintf(str,"class");   break;
                 case KW_UNION:       aoStrCatPrintf(str,"union");   break;

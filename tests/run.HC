@@ -1,8 +1,8 @@
 class StringArray
 {
-  U8 **entries;
   I64 len;
   I64 cap;
+  U8 **entries;
 };
 
 StringArray *StringArrayNew()
@@ -26,15 +26,18 @@ U0 StringArrayRelease(StringArray *arr)
 U0 StringArrayPush(StringArray *arr, U8 *str)
 {
   if (arr->len + 1 >= arr->cap) {
-    auto new_cap = arr->cap * 2;
-    arr->entries = ReAlloc(arr->entries,new_cap);
-    if (arr->entries == NULL) {
+    auto new_cap = arr->cap * 2 * sizeof(U8 *);
+    auto e = arr->entries;
+    auto new_entries = ReAlloc(e,new_cap);
+    if (new_entries == NULL) {
       "Failed to reallocate array\n";
       Exit;
     }
     arr->cap = new_cap;
+    arr->entries = new_entries;
   }
-  arr->entries[arr->len++] = str;
+  arr->entries[arr->len] = str;
+  arr->len++;
 }
 
 I64 CmpFileNames(U8 *str1, U8 *str2)
@@ -122,10 +125,15 @@ I32 Main(I32 argc, U8 **argv)
 
   while ((ent = readdir(dir)) != NULL) {
     if (ent->type & DT_REG) {
-      if (ShouldExclude(ent->name,StrLen(ent->name))) {
+      auto len = StrLen(ent->name);
+      auto res = FzF(ent->name,"HC$");
+
+      if (ShouldExclude(ent->name,len) || res == NULL) {
         continue;
       }
-      StringArrayPush(arr,StrNew(ent->name));
+      FzFPositionRelease(res);
+      auto str = StrNew(ent->name);
+      StringArrayPush(arr,str);
     }
   }
 
