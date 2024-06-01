@@ -270,9 +270,10 @@ U8 *StrNew(U8 *buf)
   U8 *res;
   I64 size;
   if (buf) {
-    size=StrLen(buf)+1;
-    res=MAlloc(size);
+    size = StrLen(buf)+1;
+    res = MAlloc(size);
     MemCpy(res,buf,size);
+    res[size-1] = '\0';
   } else {
     res=MAlloc(1);
     *res=0;

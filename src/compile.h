@@ -4,11 +4,13 @@
 #include "aostr.h"
 #include "cctrl.h"
 
-int CompileToToAst(Cctrl *cc, char *file_path, int lexer_flags);
-aoStr *CompileToAsm(Cctrl *cc);
-void CompileAssembleToFile(aoStr *asmbuf, char *filename);
-void CompilePrintTokens(Cctrl *cc);
-void CompilePrintAst(Cctrl *cc);
-int CompileToAst(Cctrl *cc, char *entrypath, int lexer_flags);
+int compileToToAst(Cctrl *cc, char *file_path, int lexer_flags);
+aoStr *compileToAsm(Cctrl *cc);
+void compileAssembleToFile(aoStr *asmbuf, char *filename);
+void compilePrintTokens(Cctrl *cc);
+void compilePrintAst(Cctrl *cc);
+
+int compileToAst(Cctrl *cc, char *entrypath, int lexer_flags);
+List *compileToTokens(Cctrl *cc, char *entrypath, int lexer_flags);
 
 #endif // !COMPILE_H
