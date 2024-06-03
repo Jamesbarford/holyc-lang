@@ -13,7 +13,6 @@
 #include "cfg-print.h"
 #include "cfg.h"
 #include "dict.h"
-#include "heap.h"
 #include "lexer.h"
 #include "util.h"
 
@@ -450,10 +449,10 @@ static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
     }
 }
 
-static void bbFindAllLoopNodes(BasicBlock *loop_head, BasicBlock *bb, IntVec *nodes) {
+static void bbFindAllLoopNodes(BasicBlock *loop_head, BasicBlock *bb, IntMap *nodes) {
     if (bb->flags & BB_FLAG_LOOP_END) {
         if (bb->prev == loop_head) {
-            intVecPush(nodes,bb->block_no);
+            loggerWarning("bb%d ended by bb%d\n", loop_head->block_no, bb->block_no);
             return;
         }
     }
@@ -461,17 +460,17 @@ static void bbFindAllLoopNodes(BasicBlock *loop_head, BasicBlock *bb, IntVec *no
     switch (bb->type) {
         case BB_LOOP_BLOCK:
             if (bb == loop_head) {
-                intVecPush(nodes,bb->block_no);
+                intMapSet(nodes,bb->block_no,NULL);
             }
             break;
 
         case BB_DO_WHILE_COND:
-            intVecPush(nodes,bb->block_no);
+            intMapSet(nodes,bb->block_no,NULL);
             bbFindAllLoopNodes(loop_head,bb->next,nodes);
             break;
 
         case BB_BRANCH_BLOCK:
-            intVecPush(nodes,bb->block_no);
+            intMapSet(nodes,bb->block_no,NULL);
             bbFindAllLoopNodes(loop_head,bb->_if,nodes);
             bbFindAllLoopNodes(loop_head,bb->_else,nodes);
             break;
@@ -480,18 +479,18 @@ static void bbFindAllLoopNodes(BasicBlock *loop_head, BasicBlock *bb, IntVec *no
             break;
  
         case BB_GOTO:
-            intVecPush(nodes,bb->block_no);
+            intMapSet(nodes,bb->block_no,NULL);
             bbFindAllLoopNodes(loop_head,bb->next,nodes);
             break;
 
         case BB_CONTROL_BLOCK:
-            intVecPush(nodes,bb->block_no);
+            intMapSet(nodes,bb->block_no,NULL);
             bbFindAllLoopNodes(loop_head,bb->next,nodes);
             break;
         
         case BB_BREAK_BLOCK: 
-            intVecPush(nodes,bb->block_no);
-            // bbFindAllLoopNodes(loop_head,bb->next,nodes);
+            intMapSet(nodes,bb->block_no,NULL);
+            bbFindAllLoopNodes(loop_head,bb->next,nodes);
             // cfgBreakPrintf(builder,bb);
             // cfgCreatePictureUtil(builder,map,bb->next,seen);
             break;
@@ -508,16 +507,6 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
     if (intMapHas(seen,bb->block_no)) return;
     else intMapSet(seen,bb->block_no,NULL);
 
-    if (bb->flags & BB_FLAG_LOOP_END) {
-        BasicBlock *bb_loop_head = ListDeque(builder->loop_queue);
-        if (bb_loop_head) {
-
-            loggerDebug("bb%d ended by bb%d\n",bb_loop_head->block_no,bb->block_no);
-        }
-        if (bb->prev == bb_loop_head) {
-        }
-    }
-
     switch (bb->type) {
         /* I want to visit the if block first then the else */
         case BB_LOOP_BLOCK:
@@ -525,19 +514,37 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
             break;
 
         case BB_DO_WHILE_COND:
+            if (bb->flags & BB_FLAG_LOOP_HEAD) {
+                IntMap *nodes = intMapNew(16);
+                intMapSet(nodes,bb->block_no,NULL);
+                bbFindAllLoopNodes(bb,bb,nodes);
+                long *indexes = nodes->indexes->entries;
+
+                ListAppend(builder->loop_queue,bb);
+                loggerWarning("All nodes for loop  bb%d\n", bb->block_no);
+                for (int i = 0; i < nodes->size; ++i) {
+                    int idx = (int)indexes[i];
+                    int block_no = (int)map->entries[idx]->key;
+                    loggerDebug("  %d\n", block_no);
+                }
+            }
             cfgDoWhileCondPrintf(builder,bb);
             cfgCreatePictureUtil(builder,map,bb->next,seen);
             break;
 
         case BB_BRANCH_BLOCK:
             if (bb->flags & BB_FLAG_LOOP_HEAD) {
-                IntVec *nodes = intVecNew();
+                IntMap *nodes = intMapNew(16);
+                intMapSet(nodes,bb->block_no,NULL);
                 bbFindAllLoopNodes(bb,bb,nodes);
+                long *indexes = nodes->indexes->entries;
+
                 ListAppend(builder->loop_queue,bb);
                 loggerWarning("All nodes for loop  bb%d\n", bb->block_no);
                 for (int i = 0; i < nodes->size; ++i) {
-                    int block_no = nodes->entries[i];
-                    loggerDebug("  %d\n", block_no);
+                    int idx = (int)indexes[i];
+                    int block_no = (int)map->entries[idx]->key;
+                    loggerDebug("  idx=%d block_no=%d\n",idx, block_no);
                 }
             }
             cfgBranchPrintf(builder,bb);

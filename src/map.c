@@ -500,37 +500,65 @@ int strMapKeyIter(StrMap *map, long *_idx, char **_key) {
     return 0;
 }
 
+#define vectorNew(ret_type, entry_type)                               \
+    do {                                                              \
+        ret_type *vec = (ret_type *)malloc(sizeof(ret_type));         \
+        vec->size = 0;                                                \
+        vec->capacity = 32;                                           \
+        vec->entries = (entry_type *)malloc(sizeof(entry_type) * 32); \
+        return vec;                                                   \
+    } while (0)
+
+#define vectorResize(vec, type)                           \
+    do {                                                  \
+        int new_capacity = vec->capacity * 2;             \
+        type *new_entries = (type *)realloc(vec->entries, \
+                    sizeof(type)*new_capacity);           \
+        vec->entries = new_entries;                       \
+        vec->capacity = new_capacity;                     \
+    } while (0)
+
+#define vectorPush(vec, type, value)                      \
+    do {                                                  \
+        if (vec->size + 1 >= vec->capacity) {             \
+            vectorResize(vec,type);                       \
+        }                                                 \
+        vec->entries[vec->size++] = value;                \
+    } while (0)
+
+#define vectorBoundsCheck(vec_size, idx)                                   \
+    do {                                                                   \
+        if (idx < 0 || idx >= vec_size) {                                  \
+            loggerPanic("idx '%d' is out of range for vector of size %d\n",\
+                    idx,vec->size);                                        \
+        }                                                                  \
+    } while (0)
+
+#define vectorRelease(vec)                                                 \
+    do {                                                                   \
+        if (vec) {                                                         \
+            free(vec->entries);                                            \
+            free(vec);                                                     \
+        }                                                                  \
+    } while (0)
+    
+
 /* I feel combining all of these data structures into one file will lead 
  * to a more happy prosperous codebase */
 IntVec *intVecNew(void) {
-    IntVec *vec = (IntVec *)malloc(sizeof(IntVec));
-    vec->size = 0;
-    vec->capacity = 32;
-    vec->entries = (long *)malloc(sizeof(long)*32);
-    return vec;
+    vectorNew(IntVec,long);
 }
 
 void intVecPush(IntVec *vec, long value) {
-    if (vec->size + 1 >= vec->capacity) {
-        int new_capacity = vec->capacity * 2;
-        long *new_entries = (long *)realloc(vec->entries,
-                    sizeof(long)*new_capacity);
-        vec->entries = new_entries;
-        vec->capacity = new_capacity;
-    }
-    vec->entries[vec->size++] = value;
+    vectorPush(vec,long,value);
 }
 
 int intVecGet(IntVec *vec, int idx) {
 #ifdef DEBUG
-    if (idx < 0 || idx >= vec->size) {
-        loggerPanic("idx '%d' is out of range for vector of size %d\n",
-                idx,vec->size);
-    }
-    return vec->entries[idx];
-#else /* No checking */
-    return vec->entries[idx];
+    vectorBoundsCheck(vec->size,idx);
 #endif
+    /* No checking */
+    return vec->entries[idx];
 }
 
 void intVecClear(IntVec *vec) {
@@ -542,4 +570,24 @@ void intVecRelease(IntVec *vec) {
         free(vec->entries);
         free(vec);
     }
+}
+
+PtrVec *ptrVecNew(void) {
+    vectorNew(PtrVec,void*);
+}
+
+void ptrVecPush(PtrVec *vec, void *value) {
+    vectorPush(vec,void*,value);
+}
+
+void *ptrVecGet(PtrVec *vec, int idx) {
+#ifdef DEBUG
+    vectorBoundsCheck(vec->size,idx);
+#endif
+    /* No checking */
+    return vec->entries[idx];
+}
+
+void ptrVecRelease(PtrVec *vec) {
+    vectorRelease(vec);
 }

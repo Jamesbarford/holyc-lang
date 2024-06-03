@@ -69,6 +69,18 @@ void intVecPush(IntVec *vec, long value);
 void intVecClear(IntVec *vec);
 void intVecRelease(IntVec *vec);
 
+/* This could be used to replace the `List` */
+typedef struct PtrVec {
+    int size;
+    int capacity;
+    void **entries;
+} PtrVec;
+
+PtrVec *ptrVecNew(void);
+void ptrVecPush(PtrVec *vec, void *value);
+void *ptrVecGet(PtrVec *vec, int idx);
+void ptrVecRelease(PtrVec *vec);
+
 int intMapSet(IntMap *map, long key, void *value);
 void *intMapGet(IntMap *map, long key);
 int intMapHas(IntMap *map, long key);
