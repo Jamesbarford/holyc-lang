@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <strings.h>
+#include <assert.h>
 
 #include "map.h"
 #include "util.h"
@@ -11,25 +12,6 @@
 #define HT_DELETED LONG_MAX
 #define HT_PROBE_1 1
 #define HT_PROBE_3 3
-
-static MapIndex *mapIndexNew(long capacity) {
-    long offset = (sizeof(long) * 2) + sizeof(long *);
-    void *memory = malloc(offset + (sizeof(MapIndex)) * (capacity * sizeof(long)));
-    MapIndex *idx = memory;
-    idx->len = 0;
-    idx->capacity = capacity;
-    idx->entries = memory + offset;
-    return idx;
-}
-
-static MapIndex *mapIndexReAlloc(MapIndex *idx) { // Reallocate the whole structure
-    long new_capacity = idx->capacity * 4;
-    MapIndex *new = mapIndexNew(new_capacity);
-    memcpy(new->entries, idx->entries, idx->capacity * sizeof(long));
-    new->capacity = new_capacity;
-    new->len = idx->len;
-    return new;
-}
 
 static unsigned long intMapHashFunction(long key, unsigned long mask) {
     return key & mask;
@@ -40,10 +22,10 @@ IntMap *intMapNew(unsigned long capacity) {
     map->capacity = capacity;
     map->mask = capacity - 1;
     map->size = 0;
-    map->indexes = mapIndexNew(capacity);
-    map->threashold = (unsigned long)(HT_LOAD * map->capacity);
+    map->threashold = (unsigned long)(HT_LOAD * capacity);
     map->_free_value = NULL;
-    map->entries = calloc(map->capacity, sizeof(IntMapNode *));
+    map->entries = (IntMapNode **)calloc(capacity, sizeof(IntMapNode *));
+    map->indexes = malloc(capacity*sizeof(long));
     return map;
 }
 
@@ -64,15 +46,14 @@ static unsigned long intMapGetNextIdx(IntMap *map, long key, int *_is_free) {
     unsigned long idx = key & mask;
     unsigned long probe = 1;
     IntMapNode *cur;
-    *_is_free = 0;
 
     while ((cur = map->entries[idx]) != NULL) {
         if (cur->key == key || cur->key == HT_DELETED) {
             *_is_free = 0;
             return idx;
         }
-        idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-        probe++;
+       idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
+       probe++;
     }
     *_is_free = 1;
     return idx;
@@ -97,23 +78,26 @@ void intMapRelease(IntMap *map) { // free the entire hashtable
 
 int intMapResize(IntMap *map) {
     // Resize the hashtable, will return false if OMM
-    unsigned long new_capacity, old_capacity, new_mask;
+    unsigned long new_capacity, new_mask;
     IntMapNode **new_entries, **old_entries;
-    MapIndex *new_indexes;
+    long *new_indexes, *old_indexes;
     int is_free;
 
     old_entries = map->entries;
-    old_capacity = map->capacity;
+    old_indexes = map->indexes;
+
     new_capacity = map->capacity << 1;
     new_mask = new_capacity - 1;
 
+    new_indexes = calloc(new_capacity, sizeof(long));
     /* OOM */
-    if ((new_indexes = mapIndexNew(map->indexes->capacity)) == NULL) {
+    if (new_indexes == NULL) {
         return 0;
     }
 
+    new_entries = (IntMapNode **)calloc(new_capacity, sizeof(IntMapNode *));
     /* OOM */
-    if ((new_entries = calloc(new_capacity , sizeof(IntMapNode *))) == NULL) {
+    if (new_entries == NULL) {
         free(new_indexes);
         return 0;
     }
@@ -121,25 +105,31 @@ int intMapResize(IntMap *map) {
     map->mask = new_mask;
     map->entries = new_entries;
     map->capacity = new_capacity;
+    long new_size = 0;
 
-    for (long i = 0; i < old_capacity; ++i) {
-        IntMapNode *old = old_entries[i];
-        if (old) {
-            long key = old->key;
-            if (key != HT_DELETED) {
-                unsigned long idx = intMapGetNextIdx(map, key, &is_free);
-                new_entries[idx] = old;
-                new_indexes->entries[new_indexes->len++] = idx;
-            } else {
-                free(old);
-            }
+    /* Keeps insertion order, and does not have to go over the capacity of 
+     * the hashtable which 'dict.c' has to do on a resize thus this should in
+     * theory be faster, but there are more array lookups however they should 
+     * have good spatial locality */
+    for (long i = 0; i < map->size; ++i) {
+        long idx = old_indexes[i];
+        IntMapNode *old = old_entries[idx];
+        if (old->key != HT_DELETED) {
+            long new_idx = intMapGetNextIdx(map,old->key,&is_free);
+            new_indexes[new_size] = new_idx;
+            new_entries[new_idx] = old;
+            /* keep track of the new size of this hashtable */
+            new_size++;
+        } else {
+            free(old);
         }
     }
 
     free(old_entries);
-    free(map->indexes);
+    free(old_indexes);
+    map->size = new_size;
     map->indexes = new_indexes;
-    map->threashold = (unsigned long)(map->capacity * HT_LOAD);
+    map->threashold = (unsigned long)(new_capacity * HT_LOAD);
     return 1;
 }
 
@@ -156,11 +146,8 @@ int intMapSet(IntMap *map, long key, void *value) {
     unsigned long idx = intMapGetNextIdx(map, key, &is_free);
     if (is_free) {
         IntMapNode *n = intMapNodeNew(key, value);
+        map->indexes[map->size] = idx;
         map->entries[idx] = n;
-        if (map->indexes->len + 1 >= map->indexes->capacity) {
-            map->indexes = mapIndexReAlloc(map->indexes);
-        }
-        map->indexes->entries[map->indexes->len++] = idx;
         map->size++;
         return 1;
     } else {
@@ -181,7 +168,7 @@ int intMapDelete(IntMap *map, long key) {
     while ((cur = entries[idx])) {
         if (cur->key == key) {
             cur->key = HT_DELETED;
-            map->indexes->entries[idx] = HT_DELETED;
+            map->indexes[idx] = HT_DELETED;
             map->size--;
             return 1;
         }
@@ -230,9 +217,8 @@ int intMapHas(IntMap *map, long key) {
 
 int intMapIter(IntMap *map, long *_idx, IntMapNode **_node) {
     long idx = *_idx;
-    MapIndex *indexes = map->indexes;
-    while (idx < indexes->len) {
-        unsigned long index = indexes->entries[idx];
+    while (idx < map->size) {
+        unsigned long index = map->indexes[idx];
         if (index != HT_DELETED) {
             *_idx = idx + 1;
             *_node = map->entries[index];
@@ -274,7 +260,7 @@ StrMap *strMapNew(unsigned long capacity) {
     map->capacity = capacity;
     map->mask = capacity - 1;
     map->size = 0;
-    map->indexes = mapIndexNew(capacity);
+    map->indexes = malloc(capacity*sizeof(long));
     map->threashold = (unsigned long)(HT_LOAD * map->capacity);
     map->_free_value = NULL;
     map->_free_key = NULL;
@@ -343,23 +329,26 @@ void strMapRelease(StrMap *map) { // free the entire hashtable
 
 // Resize the hashtable, will return false if OMM
 int strMapResize(StrMap *map) {
-    unsigned long new_capacity, old_capacity, new_mask;
-    StrMapNode **new_entries, **old_entries;
-    MapIndex *new_indexes;
+    unsigned long new_capacity, new_mask;
+    long *new_indexes, *old_indexes;
+    StrMapNode **old_entries, **new_entries;
     int is_free;
 
     old_entries = map->entries;
-    old_capacity = map->capacity;
+    old_indexes = map->indexes;
+
     new_capacity = map->capacity << 1;
     new_mask = new_capacity - 1;
 
+    new_indexes = calloc(new_capacity, sizeof(long));
     /* OOM */
-    if ((new_indexes = mapIndexNew(map->indexes->capacity)) == NULL) {
+    if (new_indexes == NULL) {
         return 0;
     }
 
+    new_entries = (StrMapNode **)calloc(new_capacity, sizeof(StrMapNode *));
     /* OOM */
-    if ((new_entries = calloc(new_capacity, sizeof(StrMapNode *))) == NULL) {
+    if (new_entries == NULL) {
         free(new_indexes);
         return 0;
     }
@@ -367,26 +356,31 @@ int strMapResize(StrMap *map) {
     map->mask = new_mask;
     map->entries = new_entries;
     map->capacity = new_capacity;
+    long new_size = 0;
 
-    for (long i = 0; i < old_capacity; ++i) {
-        StrMapNode *old = old_entries[i];
-        if (old) {
-            char *key = old->key;
-            if (key != NULL) {
-                unsigned long idx = strMapGetNextIdx(map, key, old->key_len,
-                                                     &is_free);
-                new_entries[idx] = old;
-                new_indexes->entries[new_indexes->len++] = idx;
-            } else {
-                free(old);
-            }
+    /* Keeps insertion order, and does not have to go over the capacity of 
+     * the hashtable which 'dict.c' has to do on a resize thus this should in
+     * theory be faster, but there are more array lookups however they should 
+     * have good spatial locality */
+    for (long i = 0; i < map->size; ++i) {
+        long idx = old_indexes[i];
+        StrMapNode *old = old_entries[idx];
+        if (old->key != NULL) {
+            long new_idx = strMapGetNextIdx(map,old->key,old->key_len,&is_free);
+            new_indexes[new_size] = new_idx;
+            new_entries[new_idx] = old;
+            /* keep track of the new size of this hashtable */
+            new_size++;
+        } else {
+            free(old);
         }
     }
 
     free(old_entries);
-    free(map->indexes);
+    free(old_indexes);
+    map->size = new_size;
     map->indexes = new_indexes;
-    map->threashold = (unsigned long)(map->capacity * HT_LOAD);
+    map->threashold = (unsigned long)(new_capacity * HT_LOAD);
     return 1;
 }
 
@@ -406,10 +400,7 @@ int strMapSet(StrMap *map, char *key, void *value) {
     if (is_free) {
         StrMapNode *n = strMapNodeNew(key, key_len, value);
         map->entries[idx] = n;
-        if (map->indexes->len + 1 >= map->indexes->capacity) {
-            map->indexes = mapIndexReAlloc(map->indexes);
-        }
-        map->indexes->entries[map->indexes->len++] = idx;
+        map->indexes[map->size] = idx;
         map->size++;
         return 1;
     } else {
@@ -435,7 +426,7 @@ int strMapDelete(StrMap *map, char *key) {
             if (map->_free_key)   map->_free_key(cur->key);
             if (map->_free_value) map->_free_value(cur->value);
             cur->value = cur->key = NULL;
-            map->indexes->entries[idx] = HT_DELETED;
+            map->indexes[idx] = HT_DELETED;
             map->size--;
             return 1;
         }
@@ -469,9 +460,9 @@ void *strMapGet(StrMap *map, char *key) {
 
 int strMapIter(StrMap *map, long *_idx, StrMapNode **_node) {
     long idx = *_idx;
-    MapIndex *indexes = map->indexes;
-    while (idx < indexes->len) {
-        long index = indexes->entries[idx];
+    long *indexes = map->indexes;
+    while (idx < map->size) {
+        long index = indexes[idx];
         if (index != HT_DELETED) {
             *_idx = idx + 1;
             *_node = map->entries[index];

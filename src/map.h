@@ -6,12 +6,6 @@
 #define HT_PROBE_1 1
 #define HT_PROBE_3 3
 
-typedef struct MapIndex {
-    long capacity;
-    long len;
-    long *entries;
-} MapIndex;
-
 typedef struct IntMapNode {
     long key;
     void *value;
@@ -29,12 +23,12 @@ typedef struct IntMap {
     unsigned long
             mask; /* Used for hashing, as the capacity is always a power of 2
                    * we can use fast modulo of `<int> & capacity-1`. */
-    MapIndex *indexes; /* Where all of the values are in the entries array, in
-                        * insertion order. Means we can iterate over the
-                        * HashTable quickly at the cost of memory */
     unsigned long threashold; /* rebuild threashold */
     void (*_free_value)(
             void *value); /* User defined callback for freeing values */
+    long *indexes; /* Where all of the values are in the entries array, in
+                    * insertion order. Means we can iterate over the
+                    * HashTable quickly at the cost of memory */
     IntMapNode **entries; /* All of the entries, XXX: could this be IntMapNode
                            *entries? */
 } IntMap;
@@ -45,13 +39,13 @@ typedef struct StrMap {
     unsigned long
             mask; /* Used for hashing, as the capacity is always a power of 2
                    * we can use fast modulo of `<int> & capacity-1`. */
-    MapIndex *indexes; /* Where all of the values are in the entries array, in
-                        * insertion order. Means we can iterate over the
-                        * HashTable quickly at the cost of memory */
     unsigned long threashold; /* rebuild threashold */
     void (*_free_value)(
             void *_value); /* User defined callback for freeing values */
     void (*_free_key)(void *_key); /* User defined callback for freeing keys */
+    long *indexes; /* Where all of the values are in the entries array, in
+                    * insertion order. Means we can iterate over the
+                    * HashTable quickly at the cost of memory */
     StrMapNode **entries; /* All of the entries, XXX: could this be IntMapNode
                            *entries? */
 } StrMap;
