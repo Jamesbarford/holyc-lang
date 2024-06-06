@@ -46,7 +46,6 @@ char *bbPreviousBlockNumbersToString(BasicBlock *bb) {
     return aoStrMove(str);
 }
 
-
 typedef struct CfgGraphVizBuilder {
     aoStr *viz;
     /* @Optimise, this could be a hash set for O(1), however for a small 
@@ -55,11 +54,16 @@ typedef struct CfgGraphVizBuilder {
     int seen_cnt;
     int block_cnt;
     int loop_cnt;
+
     /* This is if a loop does not have a break clause immediately in it */
-    BasicBlock *break_blocks[256];
-    List *loop_queue;
     int break_idx;
-} CfgGraphVizBuilder; 
+    BasicBlock *break_blocks[256];
+
+    int loop_idx;
+    BasicBlock *loop_stack[32];
+
+    List *loop_queue;
+} CfgGraphVizBuilder;
 
 static void cfgGraphVizBuilderClear(CfgGraphVizBuilder *builder) {
     if (builder->seen_blocks) {
@@ -81,6 +85,7 @@ static void cfgGraphVizBuilderInit(CfgGraphVizBuilder *builder, CFG *cfg) {
     builder->viz = aoStrAlloc(1<<10);
     builder->loop_cnt = 0;
     builder->break_idx = 0;
+    builder->loop_idx = 0;
     builder->loop_queue = ListNew();
 }
 
@@ -313,6 +318,19 @@ static int bbIsLoopEnd(BasicBlock *bb) {
     return 0;
 }
 
+static void bbPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
+    switch (bb->type) {
+        case BB_HEAD_BLOCK:    cfgHeadPrintf(builder,bb);    break;
+        case BB_LOOP_BLOCK:    cfgLoopPrintf(builder,bb);    break;
+        case BB_DO_WHILE_COND: cfgDoWhileCondPrintf(builder,bb);  break;
+        case BB_BRANCH_BLOCK:  cfgBranchPrintf(builder,bb);       break;
+        case BB_BREAK_BLOCK:   cfgBreakPrintf(builder,bb);        break;
+        case BB_END_BLOCK:
+        case BB_RETURN_BLOCK:  cfgReturnPrintf(builder,bb);  break;
+        default:               cfgDefaultPrintf(builder,bb); break;
+    }
+}
+
 static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
         BasicBlock *bb)
 {
@@ -449,127 +467,186 @@ static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
     }
 }
 
-static void bbFindAllLoopNodes(BasicBlock *loop_head, BasicBlock *bb, IntMap *nodes) {
+static void bbFindAllLoopNodes(BasicBlock *loop_head, BasicBlock *bb, IntMap *nodes, int loop_cnt) {
     if (bb->flags & BB_FLAG_LOOP_END) {
         if (bb->prev == loop_head) {
-            loggerWarning("bb%d ended by bb%d\n", loop_head->block_no, bb->block_no);
+            intMapSet(nodes,bb->block_no,NULL);
+            loop_cnt--;
             return;
         }
+        if (loop_cnt > 1) {
+            intMapSet(nodes,bb->block_no,NULL);
+        }
+    } else if (bb->type != BB_END_BLOCK && bb->type != BB_RETURN_BLOCK 
+            && bb->type != BB_HEAD_BLOCK) {
+        intMapSet(nodes,bb->block_no,NULL);
+    }
+
+    if (bb->flags & BB_FLAG_LOOP_HEAD) {
+        loggerWarning("incr loophead \n");
+        loop_cnt++;
+    }
+
+    if (bb->type == BB_BREAK_BLOCK) {
+        loggerWarning("%s %s loop_cnt=%d\n", bbTypeToString(bb->type),
+                bbFlagsToString(bb->flags),loop_cnt);
     }
 
     switch (bb->type) {
+        case BB_RETURN_BLOCK:
+        case BB_END_BLOCK:
+        case BB_HEAD_BLOCK:
         case BB_LOOP_BLOCK:
-            if (bb == loop_head) {
-                intMapSet(nodes,bb->block_no,NULL);
-            }
             break;
 
-        case BB_DO_WHILE_COND:
-            intMapSet(nodes,bb->block_no,NULL);
-            bbFindAllLoopNodes(loop_head,bb->next,nodes);
+        case BB_DO_WHILE_COND: /* Come back to */
+            bbFindAllLoopNodes(loop_head,bb->next,nodes,loop_cnt);
             break;
 
         case BB_BRANCH_BLOCK:
-            intMapSet(nodes,bb->block_no,NULL);
-            bbFindAllLoopNodes(loop_head,bb->_if,nodes);
-            bbFindAllLoopNodes(loop_head,bb->_else,nodes);
+            assert(bb->_if != NULL);
+            assert(bb->_else != NULL);
+            bbFindAllLoopNodes(loop_head,bb->_if,nodes,loop_cnt);
+            bbFindAllLoopNodes(loop_head,bb->_else,nodes,loop_cnt);
             break;
 
-        case BB_HEAD_BLOCK:
+        case BB_BREAK_BLOCK: 
+            if (loop_cnt > 1) {
+                bbFindAllLoopNodes(loop_head,bb->next,nodes,loop_cnt);
+            }
             break;
  
         case BB_GOTO:
-            intMapSet(nodes,bb->block_no,NULL);
-            bbFindAllLoopNodes(loop_head,bb->next,nodes);
-            break;
-
         case BB_CONTROL_BLOCK:
-            intMapSet(nodes,bb->block_no,NULL);
-            bbFindAllLoopNodes(loop_head,bb->next,nodes);
-            break;
-        
-        case BB_BREAK_BLOCK: 
-            intMapSet(nodes,bb->block_no,NULL);
-            bbFindAllLoopNodes(loop_head,bb->next,nodes);
-            // cfgBreakPrintf(builder,bb);
-            // cfgCreatePictureUtil(builder,map,bb->next,seen);
-            break;
-
-        case BB_END_BLOCK:
-        case BB_RETURN_BLOCK:
+            bbFindAllLoopNodes(loop_head,bb->next,nodes,loop_cnt);
             break;
     }
+
+    if (bb->flags & BB_FLAG_LOOP_HEAD) {
+        loop_cnt--;
+    }
+}
+
+int cfgGraphVizGetLoopBreakCount(CfgGraphVizBuilder *builder, BasicBlock *bb) {
+    BasicBlock *head = builder->loop_stack[builder->loop_idx-1];
+    if (builder->break_idx == 0) return 0;
+    if (builder->break_blocks[builder->break_idx-1] == head) return 0;
+
+    int i = 0;
+    for (int j = builder->break_idx-1; j >= 0; --j) {
+        BasicBlock *block = builder->break_blocks[j];
+        if (block->type != BB_BREAK_BLOCK) {
+            if (block == head) {
+                return i;
+            }
+            return 0;
+        }
+        i++;
+    }
+    return 0;
 }
 
 static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
         IntMap *map, BasicBlock *bb, IntMap *seen)
 {
+    bb->visited++;
+
+    if (bb->flags & BB_FLAG_LOOP_END) {
+        int break_cnt =  cfgGraphVizGetLoopBreakCount(builder,bb); 
+
+        /* @Confirm
+         * Do we still need this? It implies something is incorrect */
+        if (bb->visited > bb->prev_cnt) {
+            return;
+        }
+
+        if ((bb->visited == bb->prev_cnt) || ((bb->visited + break_cnt) >= bb->prev_cnt)) {
+            BasicBlock *head = builder->loop_stack[--builder->loop_idx];
+//            loggerDebug("head = bb%d end: bb%d breaks: %d prev_cnt = %d\n",
+//                    head->block_no,
+//                    bb->block_no,
+//                    builder->break_idx,
+//                    bb->prev_cnt);
+
+            aoStrCat(builder->viz,"}\n");
+
+            /* break blocks go outside of the current loops 'scope' */
+            while (builder->break_idx) {
+                int idx = builder->break_idx-1;
+                BasicBlock *break_block = builder->break_blocks[idx];
+                builder->break_idx--;
+                if (break_block == head) {
+                    break;
+                }
+                bbPrintf(builder,break_block);
+            }
+        }
+    }
+
     if (intMapHas(seen,bb->block_no)) return;
     else intMapSet(seen,bb->block_no,NULL);
+
+    bbPrintInfo(bb);
+
+    if (bb->flags & BB_FLAG_LOOP_HEAD) {
+        cfgLoopHeadPrintf(builder,bb);
+    }
 
     switch (bb->type) {
         /* I want to visit the if block first then the else */
         case BB_LOOP_BLOCK:
             cfgLoopPrintf(builder,bb);
+            cfgCreatePictureUtil(builder,map,bb->prev,seen);
             break;
 
         case BB_DO_WHILE_COND:
             if (bb->flags & BB_FLAG_LOOP_HEAD) {
-                IntMap *nodes = intMapNew(16);
-                intMapSet(nodes,bb->block_no,NULL);
-                bbFindAllLoopNodes(bb,bb,nodes);
-                long *indexes = nodes->indexes->entries;
-
-                ListAppend(builder->loop_queue,bb);
-                loggerWarning("All nodes for loop  bb%d\n", bb->block_no);
-                for (int i = 0; i < nodes->size; ++i) {
-                    int idx = (int)indexes[i];
-                    int block_no = (int)map->entries[idx]->key;
-                    loggerDebug("  %d\n", block_no);
-                }
+               builder->loop_stack[builder->loop_idx++] = bb;
+               /* Push the head onto the stack so that we can bookend the 
+                * break clauses and scope them to the current loop */
+               builder->break_blocks[builder->break_idx++] = bb;
             }
             cfgDoWhileCondPrintf(builder,bb);
-            cfgCreatePictureUtil(builder,map,bb->next,seen);
+            // builder->break_blocks[builder->break_idx++] = bb->next;
+            if (bb->flags & BB_FLAG_LOOP_HEAD) {
+                cfgCreatePictureUtil(builder,map,bb->next,seen);
+            }
+            cfgCreatePictureUtil(builder,map,bb->prev,seen);
+            //   builder->break_blocks[builder->break_idx++] = bb->prev;
             break;
 
         case BB_BRANCH_BLOCK:
             if (bb->flags & BB_FLAG_LOOP_HEAD) {
-                IntMap *nodes = intMapNew(16);
-                intMapSet(nodes,bb->block_no,NULL);
-                bbFindAllLoopNodes(bb,bb,nodes);
-                long *indexes = nodes->indexes->entries;
-
-                ListAppend(builder->loop_queue,bb);
-                loggerWarning("All nodes for loop  bb%d\n", bb->block_no);
-                for (int i = 0; i < nodes->size; ++i) {
-                    int idx = (int)indexes[i];
-                    int block_no = (int)map->entries[idx]->key;
-                    loggerDebug("  idx=%d block_no=%d\n",idx, block_no);
-                }
+                builder->loop_stack[builder->loop_idx++] = bb;
+                /* Push the head onto the stack so that we can bookend the 
+                 * break clauses and scope them to the current loop */
+                builder->break_blocks[builder->break_idx++] = bb;
             }
+
             cfgBranchPrintf(builder,bb);
             cfgCreatePictureUtil(builder,map,bb->_if,seen);
             cfgCreatePictureUtil(builder,map,bb->_else,seen);
-            break;
-
-        case BB_HEAD_BLOCK:
-            cfgHeadPrintf(builder,bb);
-            cfgCreatePictureUtil(builder,map,bb->next,seen);
-            break;
- 
-        case BB_GOTO:
-            cfgDefaultPrintf(builder,bb);
-            cfgCreatePictureUtil(builder,map,bb->next,seen);
+            if (bb->flags & BB_FLAG_LOOP_HEAD) {
+                if (bb->prev && bb->prev->type == BB_DO_WHILE_COND) {
+                    cfgCreatePictureUtil(builder,map,bb->prev->next,seen);
+                }
+            }
             break;
 
         case BB_CONTROL_BLOCK:
-            cfgDefaultPrintf(builder,bb);
+        case BB_HEAD_BLOCK:
+        case BB_GOTO:
+            bbPrintf(builder,bb);
             cfgCreatePictureUtil(builder,map,bb->next,seen);
+            if (bb->flags & BB_FLAG_LOOP_HEAD) {
+                if (bb->prev && bb->prev->type == BB_DO_WHILE_COND) {
+                    cfgCreatePictureUtil(builder,map,bb->prev->next,seen);
+                }
+            }
             break;
-        
-        case BB_BREAK_BLOCK: 
-            cfgBreakPrintf(builder,bb);
-            cfgCreatePictureUtil(builder,map,bb->next,seen);
+
+        case BB_BREAK_BLOCK:
+            builder->break_blocks[builder->break_idx++] = bb;
             break;
 
         case BB_END_BLOCK:
@@ -585,42 +662,13 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
 static void cfgCreatePicture(CfgGraphVizBuilder *builder, CFG *cfg) {
     IntMap *map = cfg->graph;
     IntMap *seen = intMapNew(32);
-    long *index_entries = map->indexes->entries;
+    long *index_entries = map->indexes;
     cfgCreatePictureUtil(builder,map,cfg->head,seen);
-    //for (int i = 0; i < map->size; ++i) {
-    //    long idx = index_entries[i];
-    //    BasicBlock *bb = &(cfg->head[idx-1]);
-
-    //    switch (bb->type) {
-    //        case BB_LOOP_BLOCK:
-    //            break;
-
-    //        case BB_DO_WHILE_COND:
-    //            break;
-
-    //        case BB_BRANCH_BLOCK:
-    //            break;
-
-    //        case BB_HEAD_BLOCK:
-    //            loggerDebug("hit head block\n");
-    //        case BB_GOTO:
-    //        case BB_CONTROL_BLOCK:
-    //        case BB_BREAK_BLOCK: 
-    //            break;
-
-    //            /* These don't goto anything */
-    //        case BB_END_BLOCK:
-    //        case BB_RETURN_BLOCK: 
-    //            break;
-    //        default:
-    //            loggerWarning("how?\n");
-    //    }
-    //}
 }
 
 static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
     IntMap *map = cfg->graph;
-    long *index_entries = map->indexes->entries;
+    long *index_entries = map->indexes;
 
     for (int i = 0; i < map->size; ++i) {
         long idx = index_entries[i];
@@ -657,17 +705,17 @@ static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
                 break;
 
             case BB_HEAD_BLOCK:
-                loggerDebug("hit head block\n");
             case BB_GOTO:
             case BB_CONTROL_BLOCK:
-            case BB_BREAK_BLOCK: 
+            case BB_BREAK_BLOCK: {
                 aoStrCatPrintf(builder->viz,
                         "    bb%d:s -> bb%d:n [style=\"solid,bold\",color=black,weight=100,constraint=true];\n",
                         cur->block_no,
                         cur->next->block_no);
                 break;
+            }
 
-                /* These don't goto anything */
+            /* These don't goto anything */
             case BB_END_BLOCK:
             case BB_RETURN_BLOCK: 
                 break;
