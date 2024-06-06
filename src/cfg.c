@@ -35,6 +35,7 @@ const char *bbTypeToString(int type) {
 /* probably a better way of doing this */
 const char *bbFlagsToString(unsigned int flags) {
     if (!flags) return mprintf("(NO_FLAGS)");
+    char *tmp;
     aoStr *str = aoStrNew();
     int has_flag = 0;
 
@@ -363,7 +364,7 @@ static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
         builder->bb->prev = bb_cond;
     }
 
-    builder->bb->flags |= BB_FLAG_LOOP_END;
+    //builder->bb->flags |= BB_FLAG_LOOP_END;
 
     /* This is a loop which immediately hit a break; */
     if (builder->bb->type == BB_BREAK_BLOCK && 
@@ -375,6 +376,7 @@ static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
         bb_cond->flags |= BB_FLAG_REDUNDANT_LOOP;
     }
 
+    bb_cond_else->flags |= BB_FLAG_LOOP_END;
     cfgBuilderSetBasicBlock(builder,bb_cond_else);
 
     if (!bb_prev_loop) {
@@ -441,6 +443,7 @@ static void cfgHandleWhileLoop(CFGBuilder *builder, Ast *ast) {
         bb_cond->flags |= BB_FLAG_REDUNDANT_LOOP;
     }
 
+    bb_cond_else->flags |= BB_FLAG_LOOP_END;
     cfgBuilderSetBasicBlock(builder,bb_cond_else);
 
     if (!bb_prev_loop) {
@@ -482,7 +485,11 @@ static void cfgHandleDoWhileLoop(CFGBuilder *builder, Ast *ast) {
     BasicBlock *bb_do_while = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
 
     bb->next = bb_do_while;
-    bb_do_while->flags |= BB_FLAG_LOOP_HEAD;
+    loggerDebug("DO WHILE: bb%d\n",bb_do_while->block_no);
+
+    //builder->bb->flags |= BB_FLAG_LOOP_HEAD;
+    //bb_cond_else->flags |= BB_FLAG_LOOP_END;
+    //bb_do_while->flags |= BB_FLAG_LOOP_END;
 
     builder->bb_cur_loop = bb_do_while;
     builder->flags |= CFG_BUILDER_FLAG_IN_LOOP;
@@ -492,9 +499,10 @@ static void cfgHandleDoWhileLoop(CFGBuilder *builder, Ast *ast) {
 
     builder->bb->type = BB_DO_WHILE_COND;
     builder->bb->prev = bb_do_while;
+    builder->bb->prev->flags |= BB_FLAG_LOOP_HEAD;
+
     builder->bb->next = bb_cond_else;
     AstArrayPush(builder->bb->ast_array,ast_cond);
-    builder->bb->flags |= BB_FLAG_LOOP_END;
 
     if (!bb_prev_loop) {
         builder->flags &= ~(CFG_BUILDER_FLAG_IN_LOOP);
@@ -821,27 +829,55 @@ static void bbFixLoopBlock(BasicBlock *bb) {
     if (bb->ast_array->count == 0) {
         if (bb->prev_cnt == 1) {
             BasicBlock *prev = bb->prev_blocks[0];
+
             if (prev->type == BB_BRANCH_BLOCK) {
                 if (prev->_else == bb) {
-                    prev->_else = NULL;
+                    // prev->_else = bb->prev->_else;
+                   // prev->_else->flags |= BB_FLAG_LOOP_END;
+                   // loggerDebug("yeeeeeeeee cur bb%d, else: bb%d \n",
+                   //         prev->block_no, prev->_else->block_no);
+                    prev->_else = NULL; // prev->_if;
                     prev->next = prev->_if;
+                //     bbAddPrev(prev->_else,prev);
+               //      return;
                 } else {
                     prev->_if = NULL;
                     prev->next = prev->_else;
                 }
 
-                prev->type = BB_DO_WHILE_COND;
-                prev->prev = bb->prev;
+                BasicBlock *do_while = prev;
+                //loggerPanic("bb%d bb%d, type %s\n",bb->block_no,
+                //        prev->block_no,
+                //        bbTypeToString(bb->type));
 
-                bb->prev_blocks[0] = bb->prev;
+                do_while->type = BB_DO_WHILE_COND;
+                do_while->prev = bb->prev;
+    
+                printf("prev->prev = bb%d, prev = bb%d \n",
+                        prev->prev->block_no,prev->block_no);
 
-                printf("bb%d, prev_cnt = %d: ", prev->block_no,prev->prev_cnt);
-                for (int i = 0; i < prev->prev_cnt; ++i) {
-                    printf("%dbb ", prev->prev_blocks[i]->block_no);
-                }
-                printf("\n");
+                do_while->prev->flags |= (BB_FLAG_LOOP_HEAD);
+                loggerDebug("do_while->block_no = %d, do_while->next->block_no = %d\n",
+                        do_while->block_no, do_while->next->block_no);
+                loggerDebug("do_while->flags = %s do_while->next->flags = %s do_while->prev->flags = %s\n",
+                        bbFlagsToString(do_while->flags),bbFlagsToString(do_while->next->flags),
+                        bbFlagsToString(do_while->prev->flags));
+                // do_while->next->flags |= BB_FLAG_LOOP_END;
+
+                do_while->prev->prev = bb;
+                bbAddPrev(prev,prev->prev);
+                //prev->prev_cnt = 0;
+
+                //bb->prev_blocks[0] = bb->prev;
                 bb->type = BB_GARBAGE;
             }
+
+        }
+    } else {
+        if (bb->prev->type == BB_DO_WHILE_COND) {
+            loggerWarning("were %d \n", bb->block_no);
+            bb->prev->flags &= ~BB_FLAG_LOOP_END;
+            bb->flags |= BB_FLAG_LOOP_END;
         }
     }
 }
@@ -850,22 +886,33 @@ static void bbFix(BasicBlock *bb) {
     for (; bb; bb = bb->next) {
         /* Search up the tree to fix the node */
         if (bb->type == BB_CONTROL_BLOCK) {
-            if (!bb->ast_array || bb->ast_array->count == 0) {
-                loggerPanic("typ\n");
+            if (!bb->next) {
+                bbFixLeafNode(bb);
+            } else if (bb == bb->next) {
+                bb->type = BB_GARBAGE;
+            } else if (!bb->ast_array || bb->ast_array->count == 0) {
                 bb->type = BB_GARBAGE;
             }
         }
 
-        if (!bb->next && bb->type == BB_CONTROL_BLOCK) {
+        //if (!bb->next || && bb->type == BB_CONTROL_BLOCK) {
             /* Iterate back up the tree to find the join */
-            bbFixLeafNode(bb);
-        } else if (bb->type == BB_BRANCH_BLOCK) {
+        if (bb->type == BB_BRANCH_BLOCK) {
             bbFixBranchBlock(bb);
         } else if (bb->type == BB_LOOP_BLOCK) {
             bbFixLoopBlock(bb);
+            // bbAddPrev(bb,bb->prev);
         } else if (bb->type == BB_BREAK_BLOCK) {
             /* Trace back up to the loop head and find the else branch */
-
+        } else if (bb->type == BB_DO_WHILE_COND) {
+            bbAddPrev(bb->prev,bb);
+            /* This is true in a traditional DO_WHILE, I think we need a 
+             * new block type as sometimes the do while can be the loop head 
+             * and a the previous be another loop */
+            if (!(bb->flags & BB_FLAG_LOOP_HEAD)) {
+                bb->next->flags |= BB_FLAG_LOOP_END;
+            }
+            bb->prev->prev = bb;
         }
 
         if (bb->type != BB_GARBAGE && bb->next && 
@@ -1074,8 +1121,7 @@ void cfgGetStronglyConnectedComponents(CFG *cfg) {
 
 /* Print the Adjacency list graph representation */
 void cfgAdjacencyListPrint(IntMap *map) {
-    MapIndex *map_index = map->indexes;
-    long *index_entries = map_index->entries;
+    long *index_entries = map->indexes;
 
     for (int i = 0; i < map->size; ++i) {
         long idx = index_entries[i];
@@ -1115,31 +1161,45 @@ long cfgHashBasicBlock(BasicBlock *bb) {
 
 /* This is for creating a very compact control flow graph that feels more like 
  * a classical datascructure than the basic block node graph. It's significantly 
- * faster to traverse and also easier to reason with */
+ * faster to traverse and also easier to reason with.
+ *
+ * This also fixes orphaned nodes, so is acting like a final check before 
+ * handing off to the next step.
+ * */
 IntMap *cfgBuildAdjacencyList(CFG *cfg) {
     IntMap *map = intMapNew(32);
     BasicBlock *bb_array = ((BasicBlock *)cfg->_memory);
     long hash = 0;
+    IntVec *vec;
 
     for (int i = 0; i < cfg->bb_count; ++i) {
         BasicBlock *bb = &(bb_array[i]);
         if (bb->type == BB_GARBAGE) continue;
-        IntVec *vec = intVecNew();
 
         /* The order of _if _else and prev/next is of PARAMOUNT importance */
         switch (bb->type) {
-            case BB_RETURN_BLOCK: break;
-            case BB_END_BLOCK:    break;
-
             case BB_BREAK_BLOCK:
+            case BB_RETURN_BLOCK:
+            case BB_END_BLOCK: {
+                vec = intVecNew();
+                break;
+            }
+
             case BB_CONTROL_BLOCK:
-            case BB_GOTO:
+                /* This is a check for an orphaned node */
+                if (bb->ast_array->count == 0 && bb->next == NULL) {
+                    bb->type = BB_GARBAGE;
+                    continue;
+                }
             case BB_HEAD_BLOCK:
-                hash = cfgHashBasicBlock(bb->next);
+            case BB_GOTO:
+                vec = intVecNew();
+                hash = cfgHashBasicBlock(bb);
                 intVecPush(vec,hash);
                 break;
 
             case BB_BRANCH_BLOCK:
+                vec = intVecNew();
                 hash = cfgHashBasicBlock(bb->_if);
                 intVecPush(vec,hash);
                 hash = cfgHashBasicBlock(bb->_else);
@@ -1147,11 +1207,13 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
                 break;
 
             case BB_LOOP_BLOCK:
+                vec = intVecNew();
                 hash = cfgHashBasicBlock(bb->prev);
                 intVecPush(vec,hash);
                 break;
 
             case BB_DO_WHILE_COND:
+                vec = intVecNew();
                 hash = cfgHashBasicBlock(bb->prev);
                 intVecPush(vec,hash);
                 hash = cfgHashBasicBlock(bb->next);
