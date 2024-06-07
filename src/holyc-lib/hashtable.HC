@@ -47,7 +47,7 @@ public class StrMap
   U64 threashold; /* rebuild threashold */
   U0 (*_free_value)(U0 *_value); /* User defined callback for freeing values */
   U0 (*_free_key)(U0 *_key); /* User defined callback for freeing keys */
-  StrMapNode **entries; /* All of the entries, XXX: could this be IntMapNode *entries? */
+  StrMapNode **entries; /* All of the entries, XXX: could this be StrMapNode *entries? */
 };
 
 U64 RoundUpToNextPowerOf2(U64 v)
@@ -64,6 +64,7 @@ U64 RoundUpToNextPowerOf2(U64 v)
 }
 
 public Bool IntMapSet(IntMap *map, I64 key, U0 *value);
+public Bool IntMapHas(IntMap *map, I64 key);
 public IntMap *IntMapNew(U64 capacity=1<<8);
 public U0 IntMapSetFreeValue(IntMap *map, U0 (*_free_value)(U0 *value));
 public U0 IntMapRelease(IntMap *map);
@@ -146,6 +147,7 @@ public Bool IntMapResize(IntMap *map, U64 size)
 
   old_entries = map->entries;
   old_mask = map->mask;
+  old_indexes = map->indexes;
 
   new_capacity = map->capacity << 1;
   new_mask = new_capacity - 1;
@@ -163,6 +165,7 @@ public Bool IntMapResize(IntMap *map, U64 size)
 
   map->mask = new_mask;
   map->entries = new_entries;
+  map->indexes = new_indexes;
   map->capacity = new_capacity;
   new_size = 0;
 
@@ -172,7 +175,7 @@ public Bool IntMapResize(IntMap *map, U64 size)
     if (old->key != HT_DELETED) {
       auto new_idx = IntMapGetNextIdx(map,old->key,&is_free);
       new_indexes[new_size] = new_idx;
-      new_indexes[new_idx] = old;
+      new_entries[new_idx] = old;
       new_size++;
     } else {
       Free(old);
@@ -181,8 +184,7 @@ public Bool IntMapResize(IntMap *map, U64 size)
 
   Free(old_entries);
   Free(old_indexes);
-  map->indexes = new_indexes;
-  map->threashold = (map->capacity * HT_LOAD)(U64);
+  map->threashold = (new_capacity * HT_LOAD)(U64);
   map->size = new_size;
   return TRUE;
 }
@@ -272,7 +274,6 @@ public U0 *IntMapGet(IntMap *map, I64 key)
 public Bool IntMapIter(IntMap *map, I64 *_idx, IntMapNode **_node)
 {
   I64 idx = *_idx;
-  auto indexes = map->indexes;
   while (idx < map->size) {
     I64 index = map->indexes[idx];
     if (index != HT_DELETED) {
@@ -396,6 +397,7 @@ public Bool StrMapResize(StrMap *map, U64 size)
   old_entries = map->entries;
   old_mask = map->mask;
   old_capacity = map->capacity;
+  old_indexes = map->indexes;
   new_capacity = map->capacity << 1;
   new_mask = new_capacity - 1;
 
@@ -413,6 +415,7 @@ public Bool StrMapResize(StrMap *map, U64 size)
   map->mask = new_mask;
   map->entries = new_entries;
   map->capacity = new_capacity;
+  map->indexes = new_indexes;
   I64 new_size = 0;
   I64 old_size = map->size;
 
@@ -420,7 +423,7 @@ public Bool StrMapResize(StrMap *map, U64 size)
     I64 idx = old_indexes[i];
     auto old = old_entries[idx];
     if (old->key != NULL) {
-      I64 new_idx = StrMapGetNextIdx(map,old->key,old->key_len,*is_free);
+      I64 new_idx = StrMapGetNextIdx(map,old->key,old->key_len,&is_free);
       new_indexes[new_size] = new_idx;
       new_entries[new_idx] = old;
       new_size++;
@@ -430,8 +433,8 @@ public Bool StrMapResize(StrMap *map, U64 size)
   }
 
   Free(old_entries);
-  Free(map->indexes);
-  map->indexes = new_indexes;
+  Free(old_indexes);
+  map->size = new_size;
   map->threashold = (map->capacity * HT_LOAD)(U64);
   return TRUE;
 }
@@ -482,6 +485,7 @@ public Bool StrMapDelete(StrMap *map, U8 *key)
       if (free_key)   free_key(cur->key);
       if (free_value) free_value(cur->value);
       cur->value = cur->key = NULL;
+      cur->key_len = 0;
       map->indexes[idx] = HT_DELETED;
       map->size--;
       return TRUE;
@@ -515,14 +519,36 @@ public U0 *StrMapGet(StrMap *map, U8 *key)
   return NULL;
 }
 
+public Bool StrMapHas(StrMap *map, U8 *key)
+{
+  I64 len = StrLen(key);
+  U64 mask = map->mask;
+  U64 probe = 1;
+  U64 idx = StrHash(key) & mask;
+  StrMapNode **entries = map->entries;
+  StrMapNode *cur = NULL;
+
+  while ((cur = map->entries[idx])) {
+    if (cur->key == NULL) {
+      return FALSE;
+    }
+    if (cur->key_len == len && !StrNCmp(cur->key,key,len)) {
+      return TRUE;
+    }
+    idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
+    probe++;
+  }
+  return FALSE;
+}
+
+
 public Bool StrMapIter(StrMap *map, I64 *_idx, StrMapNode **_node)
 {
   I64 idx = *_idx;
-  auto indexes = map->indexes;
-  while (idx < indexes->len) {
+  while (idx < map->size) {
     I64 index = map->indexes[idx];
     if (index != HT_DELETED) {
-      *_idx = idx+1;
+      *_idx = idx + 1;
       *_node = map->entries[index];
       return TRUE;
     }
@@ -551,7 +577,7 @@ public Bool StrMapKeyIter(StrMap *map, I64 *_idx, U8 **_key)
   return FALSE;
 }
 
-#ifdef HOLY_C_HT_TEST
+#ifdef HOLYC_HT_TEST
 U0 IntMapTests(U0)
 {
   IntMap *map = IntMapNew(8);
@@ -567,13 +593,15 @@ U0 IntMapTests(U0)
     "owl"
   };
   I64 len = sizeof(strs)/sizeof(strs[0]);
+
   for (I64 i = 0; i < len; i++) {
     IntMapSet(map,i,strs[i]);
   }
 
   for (I64 i = 0; i < len; i++) {
-    if (IntMapGet(map,i) != strs[i]) {
-      "Failed IntMapTests -> IntMapGet\n";
+    U8 *value = IntMapGet(map,i);
+    if (value != strs[i]) {
+      "Failed IntMapTests -> IntMapGet: %d=>%s\n",i,value;
       Exit;
     }
   }
@@ -587,8 +615,9 @@ U0 IntMapTests(U0)
 
   /* Inorder iteration */
   for (I64 i = 0; IntMapIter(map,&i,&n);) {
-    if (i != n->key || str[i] != n->value) {
-      "Failed IntMapTests -> IntMapIter\n";
+    if (strs[i-1] != n->value) {
+      "Failed IntMapTests -> IntMapIter i=%d key=%d => value=%s str = %s\n",
+        i,n->key,n->value,strs[i];
       Exit;
     }
   }
@@ -601,6 +630,7 @@ U0 IntMapTests(U0)
   }
 
   IntMapRelease(map);
+  "PASS IntMap\n";
 }
 
 U0 StrMapTests(U0)
@@ -627,7 +657,10 @@ U0 StrMapTests(U0)
     "dog",
     "owl"
   };
+
   I64 len = sizeof(strs)/sizeof(strs[0]);
+
+
   for (I64 i = 0; i < len; i++) {
     StrMapSet(map,keys[i],strs[i]);
   }
@@ -648,7 +681,7 @@ U0 StrMapTests(U0)
 
   /* Inorder iteration */
   for (I64 i = 0; StrMapIter(map,&i,&n);) {
-    if (keys[i] != n->key || str[i] != n->value) {
+    if (keys[i-1] != n->key || strs[i-1] != n->value) {
       "Failed StrMapTests -> StrMapIter\n";
       Exit;
     }
@@ -662,9 +695,10 @@ U0 StrMapTests(U0)
   }
 
   StrMapRelease(map);
+  "PASS StrMap\n";
 }
 
-U0 Main()
+U0 Main(U0)
 {
   IntMapTests;
   StrMapTests;
