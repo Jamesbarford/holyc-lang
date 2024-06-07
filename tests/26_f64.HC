@@ -3,7 +3,7 @@
 Bool FloatAddition()
 {
   I64 tests = 6, correct = 0;
-  F64 f1 = 0.0000001 + 0.0000002;
+  F64 f1 = .0000001 + .0000002;
   if (f1 == 0.0000003) correct++;
 
 
