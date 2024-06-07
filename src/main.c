@@ -311,6 +311,8 @@ void parseCliOptions(hccOpts *opts, int argc, char **argv) {
             ptr = argv[i];
             ptr += 2;
             tmp = strndup(ptr,128);
+            /*@Leak who owns this memory? This list or the macro_defs hashtable
+             * on Cctrl? */
             ListAppend(opts->defines_list,tmp);
         }
     }
