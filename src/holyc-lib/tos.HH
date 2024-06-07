@@ -191,7 +191,6 @@ public Bool StrMapKeyIter(StrMap *map, I64 *_idx, U8 **_key);
 public Bool IntMapSet(IntMap *map, I64 key, U0 *value);
 public Bool IntMapHas(IntMap *map, I64 key);
 public U0 *IntMapGet(IntMap *map, I64 key);
-public Bool IntMapHas(IntMap *map, I64 key);
 public IntMap *IntMapNew(U64 capacity = 1 << 8);
 public U0 IntMapSetFreeValue(IntMap *map, U0 (*_free_value)(U0 *value));
 public U0 IntMapRelease(IntMap *map);
