@@ -133,53 +133,51 @@ public CDate Now();
 #define HT_PROBE_1 1
 #define HT_PROBE_3 3
 
-public class MapIndex {
-  I64 capacity;
-  I64 len;
-  I64 *entries;
-};
-
-public class IntMapNode {
+public class IntMapNode
+{
   I64 key;
   U0 *value;
 };
 
-public class StrMapNode {
+public class StrMapNode
+{
   U8 *key;
   I64 key_len;
   U0 *value;
 };
 
-public class IntMap {
-  U64 size;   /* How many entries are in the hashtable */
+public class IntMap
+{
+  U64 size;     /* How many entries are in the hashtable */
   U64 capacity; /* How much capacity we have in the entries array */
-  U64 mask;   /* Used for hashing, as the capacity is always a power of 2
-           * we can use fast modulo of `<int> & capacity-1`. */
-  MapIndex *indexes; /* Where all of the values are in the entries array, in
-            * insertion order. Means we can iterate over the
-            * HashTable quickly at the cost of memory */
-  U64 threashold;  /* rebuild threashold */
+  U64 mask;     /* Used for hashing, as the capacity is always a power of 2
+                 * we can use fast modulo of `<int> & capacity-1`. */
+  I64 *indexes; /* Where all of the values are in the entries array, in 
+                 * insertion order. Means we can iterate over the HashTable 
+                 * quickly at the cost of memory */
+  U64 threashold; /* rebuild threashold */
   U0 (*_free_value)(U0 *value); /* User defined callback for freeing values */
-  IntMapNode **entries; /* All of the entries, XXX: could this be IntMapNode
-               *entries? */
+  IntMapNode **entries; /* All of the entries, XXX: could this be IntMapNode *entries? */
 };
 
-public class StrMap {
-  U64 size;   /* How many entries are in the hashtable */
+
+public class StrMap
+{
+  U64 size;     /* How many entries are in the hashtable */
   U64 capacity; /* How much capacity we have in the entries array */
-  U64 mask;   /* Used for hashing, as the capacity is always a power of 2
-           * we can use fast modulo of `<int> & capacity-1`. */
-  MapIndex *indexes; /* Where all of the values are in the entries array, in
-            * insertion order. Means we can iterate over the
-            * HashTable quickly at the cost of memory */
-  U64 threashold;  /* rebuild threashold */
-  U0 (*_free_value)(U0 *_value);        /* User defined callback for freeing values */
+  U64 mask;     /* Used for hashing, as the capacity is always a power of 2
+                 * we can use fast modulo of `<int> & capacity-1`. */
+  I64 *indexes; /* Where all of the values are in the entries array, in 
+                 * insertion order. Means we can iterate over the HashTable 
+                 * quickly at the cost of memory */
+  U64 threashold; /* rebuild threashold */
+  U0 (*_free_value)(U0 *_value); /* User defined callback for freeing values */
   U0 (*_free_key)(U0 *_key); /* User defined callback for freeing keys */
-  StrMapNode **entries; /* All of the entries, XXX: could this be IntMapNode
-               *entries? */
+  StrMapNode **entries; /* All of the entries, XXX: could this be IntMapNode *entries? */
 };
 
 public Bool StrMapSet(StrMap *map, U8 *key, U0 *value);
+public Bool StrMapHas(StrMap *map, U8 *key);
 public U0 *StrMapGet(StrMap *map, U8 *key);
 public StrMap *StrMapNew(U64 capacity = 1 << 8);
 public U0 StrMapSetFreeValue(StrMap *map, U0 (*_free_value)(U0 *value));
@@ -191,6 +189,7 @@ public Bool StrMapValueIter(StrMap *map, I64 *_idx, U0 **_value);
 public Bool StrMapKeyIter(StrMap *map, I64 *_idx, U8 **_key);
 
 public Bool IntMapSet(IntMap *map, I64 key, U0 *value);
+public Bool IntMapHas(IntMap *map, I64 key);
 public U0 *IntMapGet(IntMap *map, I64 key);
 public Bool IntMapHas(IntMap *map, I64 key);
 public IntMap *IntMapNew(U64 capacity = 1 << 8);
