@@ -4,111 +4,111 @@
 
 asm {
 _MALLOC::
-	PUSHQ	RBP
-	MOVQ	RBP, RSP 
-    SUB     RSP,16
-    MOV     -8[RBP], RDI
-    ADD     RDI, 8
-    CALL    malloc
-    MOV     RCX, -8[RBP]
-    MOV     [RAX], RCX
-    ADD     RAX, 8
+    PUSHQ  RBP
+    MOVQ   RBP, RSP 
+    SUB    RSP,16
+    MOV    -8[RBP], RDI
+    ADD    RDI, 8
+    CALL   malloc
+    MOV    RCX, -8[RBP]
+    MOV    [RAX], RCX
+    ADD    RAX, 8
     LEAVE
     RET
 
 // RDI = size
 // Different from c's calloc
 _CALLOC::
-	PUSHQ	RBP
-	MOVQ	RBP, RSP 
-    SUB     RSP,16
-    MOV     -8[RBP],RDI
-    CALL    _MALLOC
-    MOV     -16[RBP], RAX
-    MOV     RDI, -16[RBP]
-    MOV     RSI, 0
-    MOV     RDX, -8[RBP]
-    CALL    _MEMSET
-    MOV     RAX, -16[RBP]
+    PUSHQ  RBP
+    MOVQ   RBP, RSP 
+    SUB    RSP,16
+    MOV    -8[RBP],RDI
+    CALL   _MALLOC
+    MOV    -16[RBP], RAX
+    MOV    RDI, -16[RBP]
+    MOV    RSI, 0
+    MOV    RDX, -8[RBP]
+    CALL   _MEMSET
+    MOV    RAX, -16[RBP]
     LEAVE
     RET
 
 // RDI = U0 *ptr
 // RSI = U64 size
 _REALLOC::
-	PUSHQ	RBP
-	MOVQ	RBP, RSP 
-    SUB     RSP, 32
-    TEST    RDI, RDI
-    JZ      @@1
-    MOV     -8[RBP], RDI
-    MOV     -16[RBP],RSI
-    MOV     RDI, -16[RBP]
-    CALL    _MALLOC
-    MOV     -24[RBP], RAX
-    MOV     RSI, -8[RBP]
-    MOV     RDI, -24[RBP]
-    MOV     RDX, -16[RBP]
-    CALL    _MEMCPY
-    MOV     RDI, -8[RBP]
-    CALL    _FREE
-    MOV     RAX, -24[RBP]
-    JMP     @@2
+    PUSHQ  RBP
+    MOVQ   RBP, RSP 
+    SUB    RSP, 32
+    TEST   RDI, RDI
+    JZ     @@1
+    MOV    -8[RBP], RDI
+    MOV    -16[RBP],RSI
+    MOV    RDI, -16[RBP]
+    CALL   _MALLOC
+    MOV    -24[RBP], RAX
+    MOV    RSI, -8[RBP]
+    MOV    RDI, -24[RBP]
+    MOV    RDX, -16[RBP]
+    CALL   _MEMCPY
+    MOV    RDI, -8[RBP]
+    CALL   _FREE
+    MOV    RAX, -24[RBP]
+    JMP    @@2
 @@1: // If pointer is NULL
-    MOV     RDI, RSI
-    CALL    _MALLOC
+    MOV    RDI, RSI
+    CALL   _MALLOC
 @@2:
     LEAVE
     RET
 
 /* How many bytes were allocated */
 _MSIZE::
-	PUSHQ	RBP
-	MOVQ	RBP, RSP 
-    TEST    RDI, RDI
-    JZ      @@2/* NULL CHECK */
-    SUB     RDI, 8
-    MOV     RAX, [RDI]
+    PUSHQ  RBP
+    MOVQ   RBP, RSP 
+    TEST   RDI, RDI
+    JZ     @@2/* NULL CHECK */
+    SUB    RDI, 8
+    MOV    RAX, [RDI]
 @@1:
     LEAVE
     RET
 @@2:
-    MOVQ    RAX, 0
+    MOVQ   RAX, 0
     LEAVE
     RET
 
 /* Gets to the start of the actual allocated buffer 
  * And then calls free */
 _FREE::
-	PUSHQ	RBP
-	MOVQ	RBP, RSP 
-    TEST    RDI,RDI
-    JZ      @@1
-    SUB     RDI, 8
-    CALL    free
+    PUSHQ  RBP
+    MOVQ   RBP, RSP 
+    TEST   RDI,RDI
+    JZ     @@1
+    SUB    RDI, 8
+    CALL   free
 @@1:
     LEAVE
     RET
 
 _MEMSET::
-	PUSHQ	RBP
-	MOVQ	RBP, RSP 
-    MOVQ    RCX, RDX
-    MOVB    AL,  SIL
-	CLD
-	REP     STOSB
-	MOVQ	RDI, RAX
+    PUSHQ RBP
+    MOVQ  RBP, RSP 
+    MOVQ  RCX, RDX
+    MOVB  AL,  SIL
+    CLD
+    REP   STOSB
+    MOVQ  RDI, RAX
     LEAVE
     RET
 
 _MEMCPY::
-	PUSHQ   RBP
-	MOV     RBP, RSP 
-    MOVQ    RCX, RDX 
-	CLD
-	REP     MOVSB
+    PUSHQ  RBP
+    MOV    RBP, RSP 
+    MOVQ   RCX, RDX 
+    CLD
+    REP    MOVSB
     LEAVE
-	RET 
+    RET 
 }
 
 public extern "c" U0 *memchr(U0 *__s, I32 __c, U64 __n);

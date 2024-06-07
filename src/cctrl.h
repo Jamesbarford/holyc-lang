@@ -108,6 +108,7 @@ lexeme *CctrlTokenPeek(Cctrl *cc);
 void CctrlTokenIterSetCur(Cctrl *cc, List *cur);
 void CctrlTokenRewind(Cctrl *cc);
 void CctrlTokenExpect(Cctrl *cc, long expected);
+void CctrlSetCommandLineDefines(Cctrl *cc, List *defines_list);
 
 Ast *CctrlGetVar(Cctrl *cc, char *varname, int len);
 int CctrlIsKeyword(Cctrl *cc, char *name, int len);

@@ -323,3 +323,9 @@ AstType *CctrlGetKeyWord(Cctrl *cc, char *name, int len) {
 int CctrlIsKeyword(Cctrl *cc, char *name, int len) {
     return CctrlGetKeyWord(cc,name,len) != NULL;
 }
+
+void CctrlSetCommandLineDefines(Cctrl *cc, List *defines_list) {
+    ListForEach(defines_list) {
+        DictSet(cc->macro_defs,(char*)it->value,lexemeSentinal());
+    }
+}

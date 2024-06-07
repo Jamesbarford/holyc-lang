@@ -12,6 +12,7 @@
 #include "compile.h"
 #include "cctrl.h"
 #include "lexer.h"
+#include "list.h"
 #include "util.h"
 
 #define ASM_TMP_FILE "/tmp/holyc-asm.s"
@@ -32,6 +33,7 @@ typedef struct hccOpts {
     char *lib_name;
     char *output_filename;
     char *clibs;
+    List *defines_list;
 } hccOpts;
 
 typedef struct hccLib {
@@ -243,6 +245,7 @@ void usage(void) {
             "  -clibs   Link c libraries like: -clibs=`-lSDL2 -lxml2 -lcurl...`\n"
             "  -o       Output filename: hcc -o <name> ./<file>.HC\n"
             "  -g       Not implemented\n"
+            "  -D<var>  Set a compiler #define (does not accept a value)\n"
             "  --help   Print this message\n");
     exit(1);
 }
@@ -253,6 +256,9 @@ void parseCliOptions(hccOpts *opts, int argc, char **argv) {
     }
 
     char *infile = argv[argc-1];
+    char *ptr = NULL;
+    char *tmp = NULL;
+
     getASMFileName(opts,infile);
     opts->infile = infile;
     for (int i = 1; i < argc - 1; ++i) {
@@ -279,7 +285,7 @@ void parseCliOptions(hccOpts *opts, int argc, char **argv) {
             const char *error = "Invalid compile command, -clibs must be followed "
                 "by a list of libraries in single quotes for example "
                 "-clibs=\'-lxml2 ....\'.";
-            char *ptr = argv[i];
+            ptr = argv[i];
             ptr += 6;
             loggerDebug("%s\n",ptr);
             if (*ptr != '=' && *(ptr + 1) != '\'') {
@@ -298,6 +304,16 @@ void parseCliOptions(hccOpts *opts, int argc, char **argv) {
             loggerPanic("--g not implemented\n");
         } else if (!strncmp(argv[i],"--help",6)) {
             usage();
+        } else if (!strncmp(argv[i],"-D",2)) {
+            if (opts->defines_list == NULL) {
+                opts->defines_list = ListNew();
+            }
+            ptr = argv[i];
+            ptr += 2;
+            tmp = strndup(ptr,128);
+            /*@Leak who owns this memory? This list or the macro_defs hashtable
+             * on Cctrl? */
+            ListAppend(opts->defines_list,tmp);
         }
     }
 }
@@ -316,28 +332,33 @@ int main(int argc, char **argv) {
 
     memset(&opts,0,sizeof(opts));
     opts.clibs = "";
+    opts.defines_list = NULL;
     opts.output_filename = "a.out";
     /* now parse cli options */
     parseCliOptions(&opts,argc,argv);
-    
+
     cc = CctrlNew();
+    if (opts.defines_list) {
+        CctrlSetCommandLineDefines(cc,opts.defines_list);
+    }
 
     if (opts.print_tokens) {
         List *tokens = compileToTokens(cc,opts.infile,lexer_flags);
         lexemePrintList(tokens);
         lexemeListRelease(tokens);
-    } else if (opts.print_ast) {
-        compileToAst(cc,opts.infile,lexer_flags);
-        compilePrintAst(cc);
-    }
-
-    if (opts.print_tokens || opts.print_ast) {
         return 0;
     }
 
     compileToAst(cc,opts.infile,lexer_flags);
+    if (opts.print_ast) {
+        compilePrintAst(cc);
+        return 0;
+    }
+
     asmbuf = compileToAsm(cc);
 
-
     emitFile(asmbuf, &opts);
+    if (opts.defines_list) {
+        ListRelease(opts.defines_list,NULL);
+    }
 }
