@@ -36,16 +36,6 @@ static const char *cfgPrintGetLoopColor(int depth) {
     return depth_to_loop_color[depth];
 }
 
-char *bbPreviousBlockNumbersToString(BasicBlock *bb) {
-    aoStr *str = aoStrNew();
-    aoStrCatPrintf(str,"prev_cnt = %d: ",bb->prev_cnt);
-    for (int i = 0; i < bb->prev_cnt; ++i) {
-        aoStrCatPrintf(str,"%dbb", bb->prev_blocks[i]->block_no);
-        if (i + 1 != bb->prev_cnt) aoStrCatPrintf(str,", ");
-    }
-    return aoStrMove(str);
-}
-
 typedef struct CfgGraphVizBuilder {
     aoStr *viz;
     /* @Optimise, this could be a hash set for O(1), however for a small 
@@ -122,7 +112,7 @@ static aoStr *bbAstArrayToString(AstArray *ast_array, int ast_count) {
 }
 
 static void bbPrintInfo(BasicBlock *bb) {
-    char *prev = bbPreviousBlockNumbersToString(bb);
+    char *prev = (char *)bbPreviousBlockNumbersToString(bb);
     printf("bb%2d type = %-*s flags = %-*s, prev=%s\n\n",bb->block_no,
             18,
             bbTypeToString(bb->type),
@@ -662,8 +652,8 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
 static void cfgCreatePicture(CfgGraphVizBuilder *builder, CFG *cfg) {
     IntMap *map = cfg->graph;
     IntMap *seen = intMapNew(32);
-    long *index_entries = map->indexes;
     cfgCreatePictureUtil(builder,map,cfg->head,seen);
+    intMapRelease(seen);
 }
 
 static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {

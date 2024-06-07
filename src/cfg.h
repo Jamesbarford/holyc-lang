@@ -89,6 +89,7 @@ BasicBlock *bbNew(int type);
 BasicBlock *bbAddNext(BasicBlock *cur, int type, BasicBlock *next);
 const char *bbTypeToString(int type);
 const char *bbFlagsToString(unsigned int flags);
+const char *bbPreviousBlockNumbersToString(BasicBlock *bb);
 const int bbPrevHas(BasicBlock *bb, int block_no);
 BasicBlock *cfgGet(CFG *cfg, int block_no);
 CFG *cfgConstruct(Cctrl *cc);

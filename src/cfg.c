@@ -32,53 +32,58 @@ const char *bbTypeToString(int type) {
     }
 }
 
-/* probably a better way of doing this */
 const char *bbFlagsToString(unsigned int flags) {
     if (!flags) return mprintf("(NO_FLAGS)");
-    char *tmp;
     aoStr *str = aoStrNew();
     int has_flag = 0;
 
+#define _concat_flag(str_flag) \
+    has_flag ? aoStrCat(str,"|"str_flag) : aoStrCat(str,str_flag); \
+    has_flag = 1;
+
     aoStrPutChar(str,'(');
-
-    if (flags & BB_FLAG_IF_BRANCH) {
-        if (has_flag) aoStrCat(str,"|BB_FLAG_IF_BRANCH"); 
-        else          aoStrCat(str,"BB_FLAG_IF_BRANCH");
-        has_flag = 1;
-    }
-    if (flags & BB_FLAG_LOOP_HEAD) {
-        if (has_flag) aoStrCat(str,"|BB_FLAG_LOOP_HEAD");
-        aoStrCat(str,"BB_FLAG_LOOP_HEAD");
-        has_flag = 1;
-    }
-    if (flags & BB_FLAG_ELSE_BRANCH) {
-        if (has_flag) aoStrCat(str,"|BB_FLAG_ELSE_BRANCH"); 
-        else          aoStrCat(str,"BB_FLAG_ELSE_BRANCH");
-        has_flag = 1;
-    }
-    if (flags & BB_FLAG_LOOP_END) {
-        if (has_flag) aoStrCat(str,"|BB_FLAG_LOOP_END"); 
-        else          aoStrCat(str,"BB_FLAG_LOOP_END");
-        has_flag = 1;
-    }
-    if (flags & BB_FLAG_REDUNDANT_LOOP) {
-        if (has_flag) aoStrCat(str,"|BB_FLAG_LOOP_REDUNDANT_LOOP"); 
-        else          aoStrCat(str,"BB_FLAG_LOOP_REDUNDANT_LOOP");
-        has_flag = 1;
-    }
+    if (flags & BB_FLAG_IF_BRANCH)      _concat_flag("BB_FLAG_IF_BRANCH");
+    if (flags & BB_FLAG_LOOP_HEAD)      _concat_flag("BB_FLAG_LOOP_HEAD");
+    if (flags & BB_FLAG_ELSE_BRANCH)    _concat_flag("BB_FLAG_ELSE_BRANCH");
+    if (flags & BB_FLAG_LOOP_END)       _concat_flag("BB_FLAG_LOOP_END");
+    if (flags & BB_FLAG_REDUNDANT_LOOP) _concat_flag("BB_FLAG_REDUNDANT_LOOP");
+    if (flags & BB_FLAG_LABEL)          _concat_flag("BB_FLAG_LOOP_LABEL");
     if (flags & BB_FLAG_UNCONDITIONAL_JUMP) {
-        if (has_flag) aoStrCat(str,"|BB_FLAG_LOOP_UNCONDITIONAL_JUMP"); 
-        else          aoStrCat(str,"BB_FLAG_LOOP_UNCONDITIONAL_JUMP");
-        has_flag = 1;
+        _concat_flag("BB_FLAG_LOOP_UNCONDITIONAL_JUMP");
     }
-    if (flags & BB_FLAG_LABEL) {
-        if (has_flag) aoStrCat(str,"|BG_FLAG_LOOP_LABEL"); 
-        else          aoStrCat(str,"BB_FLAG_LOOP_LABEL");
-        has_flag = 1;
-    }
-
     aoStrPutChar(str,')');
+
+#undef _concat_flag
+
     return aoStrMove(str); 
+}
+
+const char *bbPreviousBlockNumbersToString(BasicBlock *bb) {
+    aoStr *str = aoStrNew();
+    aoStrCatPrintf(str,"prev_cnt = %d: ",bb->prev_cnt);
+    for (int i = 0; i < bb->prev_cnt; ++i) {
+        aoStrCatPrintf(str,"%dbb",bb->prev_blocks[i]->block_no);
+        if (i + 1 != bb->prev_cnt) aoStrCatPrintf(str,", ");
+    }
+    return aoStrMove(str);
+}
+
+const char *bbToString(BasicBlock *bb) {
+    aoStr *str = aoStrNew();
+    const char *str_flags = bbFlagsToString(bb->flags);
+    const char *str_type = bbFlagsToString(bb->type);
+    const char *str_prev = bbPreviousBlockNumbersToString(bb);
+
+    aoStrCatPrintf(str,"bb%d type = %s, flags = %s, %s, ",
+            bb->block_no,str_type,str_flags);
+    free((char*)str_flags);
+    free((char*)str_prev);
+
+    if (bb->next) aoStrCatPrintf(str,"next = bb%d, ", bb->next->block_no);
+    if (bb->_if)  aoStrCatPrintf(str,"if = bb%d, ", bb->_if->block_no);
+    if (bb->_else) aoStrCatPrintf(str,"else = bb%d ", bb->_else->block_no);
+    if (bb->prev) aoStrCatPrintf(str,"prev_ptr = bb%d ", bb->prev->block_no);
+    return aoStrMove(str);
 }
 
 static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder, int type) {
@@ -514,18 +519,19 @@ static void cfgHandleDoWhileLoop(CFGBuilder *builder, Ast *ast) {
 
 static void cfgHandleGoto(CFGBuilder *builder, Ast *ast) {
     BasicBlock *dest;
-    aoStr *label = ast->slabel;
+    aoStr *label = AstHackedGetLabel(ast);
 
     builder->bb->type = BB_GOTO;
 
     /* Try straight out the gate to resolve the goto otherwise save it for 
-     * later*/
+     * later */
     if ((dest = DictGetLen(builder->resolved_labels,label->data,
             label->len)) != NULL)
     {
         dest->flags |= BB_FLAG_LOOP_HEAD;
         builder->bb->prev = dest;
-        //builder->bb->type = BB_LOOP_BLOCK;
+        // Do we want an intermediary node?
+        // builder->bb->type = BB_LOOP_BLOCK;
         builder->bb->flags |= BB_FLAG_LOOP_END;
     } else {
         ListAppend(builder->unresoved_gotos,builder->bb);
@@ -831,51 +837,31 @@ static void bbFixLoopBlock(BasicBlock *bb) {
             BasicBlock *prev = bb->prev_blocks[0];
 
             if (prev->type == BB_BRANCH_BLOCK) {
+
                 if (prev->_else == bb) {
-                    // prev->_else = bb->prev->_else;
-                   // prev->_else->flags |= BB_FLAG_LOOP_END;
-                   // loggerDebug("yeeeeeeeee cur bb%d, else: bb%d \n",
-                   //         prev->block_no, prev->_else->block_no);
-                    prev->_else = NULL; // prev->_if;
+                    prev->_else = NULL;
                     prev->next = prev->_if;
-                //     bbAddPrev(prev->_else,prev);
-               //      return;
                 } else {
                     prev->_if = NULL;
                     prev->next = prev->_else;
                 }
 
                 BasicBlock *do_while = prev;
-                //loggerPanic("bb%d bb%d, type %s\n",bb->block_no,
-                //        prev->block_no,
-                //        bbTypeToString(bb->type));
 
                 do_while->type = BB_DO_WHILE_COND;
                 do_while->prev = bb->prev;
-    
-                printf("prev->prev = bb%d, prev = bb%d \n",
-                        prev->prev->block_no,prev->block_no);
-
                 do_while->prev->flags |= (BB_FLAG_LOOP_HEAD);
-                loggerDebug("do_while->block_no = %d, do_while->next->block_no = %d\n",
-                        do_while->block_no, do_while->next->block_no);
-                loggerDebug("do_while->flags = %s do_while->next->flags = %s do_while->prev->flags = %s\n",
-                        bbFlagsToString(do_while->flags),bbFlagsToString(do_while->next->flags),
-                        bbFlagsToString(do_while->prev->flags));
-                // do_while->next->flags |= BB_FLAG_LOOP_END;
-
                 do_while->prev->prev = bb;
-                bbAddPrev(prev,prev->prev);
-                //prev->prev_cnt = 0;
 
-                //bb->prev_blocks[0] = bb->prev;
+                bbAddPrev(prev,prev->prev);
+
                 bb->type = BB_GARBAGE;
             }
-
         }
     } else {
         if (bb->prev->type == BB_DO_WHILE_COND) {
-            loggerWarning("were %d \n", bb->block_no);
+            loggerWarning("How have we ended up here? %d \n",
+                    bb->block_no);
             bb->prev->flags &= ~BB_FLAG_LOOP_END;
             bb->flags |= BB_FLAG_LOOP_END;
         }
@@ -985,7 +971,6 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
             /* This kind of changes it to a do while as the condition will 
              * have to come last */
             if (bb_dest->type == BB_LOOP_BLOCK) {
-                //asts_to_move[ast_move_cnt+1] = dest_ast_array->entries[dest_ast_array->count-1];
                 /* And now we need to paste them in the correct place */
                 BasicBlock *loop_head = bb_dest->prev;
                 BasicBlock *loop_back = cfgBuilderAllocBasicBlock(builder,
@@ -998,7 +983,7 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
                     AstArrayPush(dest_ast_array,loop_ast_array->entries[i]);
                 }
 
-                void *tmp  = dest_ast_array->entries[bb_dest->ast_array->count-1];
+                void *tmp = dest_ast_array->entries[bb_dest->ast_array->count-1];
                 dest_ast_array->entries[bb_dest->ast_array->count-1] = dest_ast_array->entries[bb_dest->ast_array->count-2];
                 dest_ast_array->entries[bb_dest->ast_array->count-2] = tmp;
                 asts_to_move[ast_move_cnt++] = dest_ast_array->entries[bb_dest->ast_array->count-1];
@@ -1018,7 +1003,6 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
                 bb_dest->_else = loop_head->_else;
 
                 loop_back->prev = bb_dest;
-                loop_back->flags |= BB_FLAG_LOOP_END;
                 bbAddPrev(loop_back,bb_dest);
                 bbAddPrev(bb_dest, bb_goto);
                 ast_move_cnt--;
@@ -1033,7 +1017,6 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
                     bb_goto->block_no,
                     bb_dest->block_no,
                     bbTypeToString(bb_dest->type));
-
         }
         bb_dest->prev = bb_goto;
         bb_goto->next = bb_dest;
@@ -1187,14 +1170,20 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
 
             case BB_CONTROL_BLOCK:
                 /* This is a check for an orphaned node */
-                if (bb->ast_array->count == 0 && bb->next == NULL) {
+                if (bb->ast_array->count == 0 || bb->next == NULL) {
                     bb->type = BB_GARBAGE;
                     continue;
                 }
+
+                loggerDebug("bb%d next: bb%d %d next_cnt = %d\n",
+                    bb->block_no,
+                    bb->next->block_no, bb->ast_array->count,
+                    bb->next->ast_array->count);
+
             case BB_HEAD_BLOCK:
             case BB_GOTO:
                 vec = intVecNew();
-                hash = cfgHashBasicBlock(bb);
+                hash = cfgHashBasicBlock(bb->next);
                 intVecPush(vec,hash);
                 break;
 
