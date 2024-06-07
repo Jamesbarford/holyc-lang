@@ -1002,30 +1002,34 @@ int lex(lexer *l, lexeme *le) {
             }
             break;
         case '.':
-            if (lexPeekMatch(l,'.')) {
-                if (isNum(lexPeek(l))) {
-                    if ((tk_type = lexNumeric(l,1)) == -1) {
-                        loggerPanic("line %d: Lex error while lexing lexNumeric\n",
-                                l->lineno);
-                        goto error;
-                    }
-                    le->len = l->ptr - start;
-                    le->tk_type = tk_type;
-                    le->line = l->lineno;
-                    le->ishex = 0;
-                    le->f64 = l->cur_f64;
-                    return 1;
-                } else {
-                    lexNextChar(l);
-                    if (lexPeekMatch(l,'.')) {
-                        lexNextChar(l);
-                        lexemeAssignOp(le,start,3,TK_ELLIPSIS,l->lineno);
-                        return 1;
-                    }
-                    loggerPanic("line %d: .. is an invalid token sequence\n",
+            if (isNum(lexPeek(l))) {
+                if ((tk_type = lexNumeric(l,0)) == -1) {
+                    loggerPanic("line %d: Lex error while lexing lexNumeric\n",
                             l->lineno);
+                    goto error;
                 }
+                le->len = l->ptr - start;
+                le->tk_type = tk_type;
+                le->line = l->lineno;
+                if (tk_type == TK_F64) {
+                    le->f64 = l->cur_f64;
+                } else {
+                    le->i64 = l->cur_i64;
+                }
+                le->ishex = l->ishex;
+                l->ishex = 0;
+                return 1;
+            } else if (lexPeekMatch(l,'.')) {
+                lexNextChar(l);
+                if (lexPeekMatch(l,'.')) {
+                    lexNextChar(l);
+                    lexemeAssignOp(le,start,3,TK_ELLIPSIS,l->lineno);
+                    return 1;
+                }
+                loggerPanic("line %d: .. is an invalid token sequence\n",
+                        l->lineno);
             }
+            
             lexemeAssignOp(le,start,1,ch,l->lineno);
             return 1;
 
