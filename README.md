@@ -71,6 +71,26 @@ Run `make`, then run `make install` (`sudo make install` on linux) this will
 install the compiler and holyc libraries for strings, hashtables, I/O, maths,
 networking, JSON parsing etc... see ./src/holyc-lib/
  
+## Using the compiler
+Once the compiler has been compiled the following options are available, they 
+can be displayed by running `hcc --help`
+```
+HolyC Compiler 2024. UNSTABLE
+hcc [..OPTIONS] <..file>
+
+OPTIONS:
+  -ast     Print the ast and exit
+  -tokens  Print the tokens and exit
+  -S       Emit assembly only
+  -obj     Emit an objectfile
+  -lib     Emit a dynamic and static library
+  -clibs   Link c libraries like: -clibs=`-lSDL2 -lxml2 -lcurl...`
+  -o       Output filename: hcc -o <name> ./<file>.HC
+  -g       Not implemented
+  -D<var>  Set a compiler #define (does not accept a value)
+  --help   Print this message
+```
+
 ## Differences
 - `auto` key word for type inference, an addition which makes it easier
   to write code.
