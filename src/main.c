@@ -274,23 +274,6 @@ void parseCliOptions(hccOpts *opts, int argc, char **argv) {
             opts->print_ast = 1;
         } else if (!strncmp(argv[i],"-tokens",7)) {
             opts->print_tokens = 1;
-        } else if (!strncmp(argv[i],"-run",4)) {
-            opts->run = 1;
-        } else if (!strncmp(argv[i],"-S",2)) {
-            opts->assemble_only = 1;
-        } else if (!strncmp(argv[i],"-lib",4)) {
-            if (i+1 >= argc) {
-                loggerPanic("Invalid compile command, -lib must be followed "
-                        "by a string\n");
-            }
-            opts->emit_dylib = 1;
-            opts->lib_name = argv[i+1];
-            i++;
-        } else if (!strncmp(argv[i],"-o",2)) {
-            opts->output_filename = argv[i+1];
-            i++;
-        } else if (!strncmp(argv[i],"-obj",4)) {
-            opts->emit_object = 1;
         } else if (!strncmp(argv[i],"-clibs",6)) {
             const char *error = "Invalid compile command, -clibs must be followed "
                 "by a list of libraries in single quotes for example "
@@ -309,11 +292,28 @@ void parseCliOptions(hccOpts *opts, int argc, char **argv) {
                 ptr++;
             }
             opts->clibs = aoStrMove(str);
+        } else if (!strncmp(argv[i],"--help",6)) {
+            usage();
+        } else if (!strncmp(argv[i],"-run",4)) {
+            opts->run = 1;
+        } else if (!strncmp(argv[i],"-lib",4)) {
+            if (i+1 >= argc) {
+                loggerPanic("Invalid compile command, -lib must be followed "
+                        "by a string\n");
+            }
+            opts->emit_dylib = 1;
+            opts->lib_name = argv[i+1];
+            i++;
+        } else if (!strncmp(argv[i],"-obj",4)) {
+            opts->emit_object = 1;
+        } else if (!strncmp(argv[i],"-o",2)) {
+            opts->output_filename = argv[i+1];
+            i++;
         } else if (!strncmp(argv[i],"-g",2)) {
             opts->asm_debug_comments = 1;
             loggerPanic("--g not implemented\n");
-        } else if (!strncmp(argv[i],"--help",6)) {
-            usage();
+        } else if (!strncmp(argv[i],"-S",2)) {
+            opts->assemble_only = 1;
         } else if (!strncmp(argv[i],"-D",2)) {
             if (opts->defines_list == NULL) {
                 opts->defines_list = ListNew();
