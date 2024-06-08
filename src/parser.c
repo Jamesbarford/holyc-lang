@@ -875,13 +875,24 @@ Ast *ParseStatement(Cctrl *cc) {
                 env = cc->localenv;
                 cc->localenv = NULL;
                 AstType *type = ParseFullType(cc);
-                type->is_static = 1;
                 tok = CctrlTokenGet(cc);
+
                 if (tok->tk_type != TK_IDENT) {
                     loggerPanic("line %d: Expected variable name at line\n",tok->line);
                 }
-                ast = AstGVar(type,tok->start,tok->len, 1);
+                type = ParseArrayDimensions(cc,type);
+                type->is_static = 1;
+
+                ast = AstGVar(type,tok->start,tok->len,1);
                 DictSet(env,ast->gname->data,ast);
+
+                if (type->kind == AST_TYPE_ARRAY) {
+                    ast = ParseVariableInitialiser(cc,ast,PUNCT_TERM_SEMI|PUNCT_TERM_COMMA);
+                    cc->localenv = env;
+                    ListAppend(cc->ast_list,ast);
+                    return ast;
+                }
+
                 peek = CctrlTokenPeek(cc);
                 if (TokenPunctIs(peek,'=')) {
                     ast = ParseVariableInitialiser(cc,ast,PUNCT_TERM_SEMI|PUNCT_TERM_COMMA);

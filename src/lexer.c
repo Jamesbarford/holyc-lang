@@ -194,7 +194,6 @@ char *lexemeTypeToString(int tk_type) {
     case TK_CHAR_CONST: return "TK_CHAR_CONST";
     case TK_STR:   return "TK_STR";
     }
-    loggerDebug("%d\n",tk_type);
     return "UNKNOWN";
 }
 
@@ -614,7 +613,9 @@ int lexIdentifier(lexer *l, char ch) {
 
 finish:
     l->cur_strlen = i;
-    lexRewindChar(l);
+    if (ch != '\0') {
+        lexRewindChar(l);
+    }
     return TK_IDENT;
 }
 
@@ -1308,7 +1309,9 @@ void lexExpandAndCollect(lexer *l, Dict *macro_defs, List *tokens, int should_co
     int endif_count = 1;
 
     do {
-        if (!lex(l,&next)) break;
+        if (!lex(l,&next)) {
+            break;
+        }
         if (TokenPunctIs(&next,'#')) {
             lex(l,&next);
             if (next.tk_type == TK_KEYWORD) {
@@ -1382,10 +1385,7 @@ void lexExpandAndCollect(lexer *l, Dict *macro_defs, List *tokens, int should_co
                                next.line,next.len,next.start);
 
                 }
-            } else if (TokenIdentIs(&next,"error",5)) {
-                lex(l,&next);
-                loggerPanic("line %d: %.*s",next.line,next.len,next.start);
-            } 
+            }
         } else {
             if (should_collect) {
                 ListAppend(tokens,lexemeCopy(&next));
@@ -1575,6 +1575,9 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
                         loggerPanic("line %d: #%.*s invalid \n",next.line,
                                 next.len,next.start);
                 }
+            } else if (TokenIdentIs(&next,"error",5)) {
+                lex(l,&next);
+                loggerPanic("line %d: %.*s",next.line,next.len,next.start);
             }
         } else {
             copy = lexemeCopy(&le);

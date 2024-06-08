@@ -64,47 +64,47 @@ asm {
 // 'a'=97, 'z'=122
 // 'A'=65, 'Z'=90
 _STRNICMP::
-	PUSHQ	RBP
-	MOVQ	RBP, RSP
-    MOVQ    RCX, RDX
+    PUSHQ  RBP
+    MOVQ   RBP, RSP
+    MOVQ   RCX, RDX
 @@3:
-    TEST    RCX, RCX
-    JZ      @@2
-    DECQ    RCX
+    TEST   RCX, RCX
+    JZ     @@2
+    DECQ   RCX
     LODSB
-    TEST    AL,AL
-    JZ      @@6
-    CMP     AL, 97
-    JB      @@22
-    CMP     AL, 122
-    JA      @@22
-    SUB     AL, 32
+    TEST   AL,AL
+    JZ     @@6
+    CMP    AL, 97
+    JB     @@22
+    CMP    AL, 122
+    JA     @@22
+    SUB    AL, 32
 @@22:
-    MOV     BL, [RDI]
-    INCQ    RDI
-    TEST    BL,BL
-    JZ      @@6
-    CMP     BL, 97
-    JB      @@23
-    CMP     BL, 122
-    JA      @@23
-    SUB     BL, 32
+    MOV    BL, [RDI]
+    INCQ   RDI
+    TEST   BL,BL
+    JZ     @@6
+    CMP    BL, 97
+    JB     @@23
+    CMP    BL, 122
+    JA     @@23
+    SUB    BL, 32
 @@23:
-    CMP     AL, BL
-    JE      @@3
+    CMP    AL, BL
+    JE     @@3
 @@6:
-    SUBQ    RSI, RDI
-    MOVQ    RAX, RSI
+    SUBQ   RSI, RDI
+    MOVQ   RAX, RSI
     LEAVE
     RET
 @@2:
-    XORQ    RAX, RAX
+    XORQ   RAX, RAX
     LEAVE
     RET
 
 _STRNCMP::
-	PUSHQ	RBP
-	MOVQ	RBP, RSP
+    PUSHQ   RBP
+    MOVQ    RBP, RSP
     MOVQ    RCX, RDX
     TEST    RCX, RCX
     JZ      @@2
@@ -122,21 +122,21 @@ _STRNCMP::
     RET
 
 _STRCMP::
-	PUSH	RBP
-	MOV	RBP,RSP
+    PUSH  RBP
+    MOV   RBP,RSP
 @@2:
     LODSB
     SCASB
-    JNE     @@1
-    TEST AL, AL
-    JNZ @@2
-    XOR RAX, RAX
-    JMP @@3
+    JNE    @@1
+    TEST   AL, AL
+    JNZ    @@2
+    XOR    RAX, RAX
+    JMP    @@3
 @@1:
     SUB     RDI, 1
-    MOVZX RAX, AL
-    MOVZBQ  RDX,[RDI]
-    SUB RAX, RDX
+    MOVZX   RAX, AL
+    MOVZBQ  RDX, [RDI]
+    SUB     RAX, RDX
 @@3:
     LEAVE
     RET
@@ -153,51 +153,51 @@ _STRLEN_FAST::
 
 // @TempleOS - only slight tweaks
 _STRCPY:: 
-	PUSH	RBP
-	MOVQ    RBP,RSP
-	TEST    RDI,RDI
-	JZ      @@15
-	TEST    RSI, RSI
-	JNZ     @@05
-	XOR     RAX,RAX
-	JMP     @@10
+    PUSH  RBP
+    MOVQ  RBP,RSP
+    TEST  RDI,RDI
+    JZ    @@15
+    TEST  RSI, RSI
+    JNZ   @@05
+    XOR   RAX,RAX
+    JMP   @@10
 @@05:
-	LODSB
+    LODSB
 @@10:
-	STOSB
-	TEST    AL,AL
-	JNZ	@@05
+    STOSB
+    TEST  AL,AL
+    JNZ	  @@05
 @@15:
     LEAVE
-	RET
+    RET
 
 // RDI= char to convert
 _TOUPPER::
-	PUSH	RBP
-	MOVQ    RBP,RSP
-    MOVQ    RAX,RDI
-    CMP     AL, 'a'
-    JB      @@1
-    CMP     AL, 'z'
-    JA      @@1
-    SUB     AL, 32
+    PUSH  RBP
+    MOVQ  RBP,RSP
+    MOVQ  RAX,RDI
+    CMP   AL, 'a'
+    JB    @@1
+    CMP   AL, 'z'
+    JA    @@1
+    SUB   AL, 32
 @@1:
     LEAVE
-	RET
+    RET
 
 // RDI= char to convert
 _TOLOWER::
-	PUSH	RBP
-	MOVQ    RBP,RSP
-    MOVQ    RAX,RDI
-    CMP     AL, 'A'
-    JB      @@1
-    CMP     AL, 'Z'
-    JA      @@1
-    ADD     AL, 32
+    PUSH  RBP
+    MOVQ  RBP,RSP
+    MOVQ  RAX,RDI
+    CMP   AL, 'A'
+    JB    @@1
+    CMP   AL, 'Z'
+    JA    @@1
+    ADD   AL, 32
 @@1:
     LEAVE
-	RET
+    RET
 
 /* RDI= U8 character */
 _ISSPACE::

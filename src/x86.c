@@ -48,6 +48,8 @@ static int has_initialisers = 0;
 #define REG_RDI "rdi"
 
 void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast);
+#define asmGetGlabel(gvar) \
+    gvar->type->is_static ? gvar->glabel->data : gvar->gname->data
 
 uint64_t ieee754(double _f64) {
     if (_f64 == 0.0) return 0;  // Handle zero value explicitly
@@ -636,10 +638,11 @@ void AsmAssign(Cctrl *cc, aoStr *buf, Ast *variable) {
         AsmLSave(buf,variable->type,variable->loff);
         break;
 
-    case AST_GVAR: 
-        AsmGSave(buf,variable->gname->data,variable->type,0);
+    case AST_GVAR: {
+        char *label = asmGetGlabel(variable);
+        AsmGSave(buf,label,variable->type,0);
         break;
-
+    }
     default:
         loggerPanic("Cannot assign: %s\n",
                 AstToString(variable));
@@ -1458,7 +1461,7 @@ void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
         break;
     
     case AST_GVAR:
-        AsmGLoad(buf,ast->type,ast->glabel, 0);
+        AsmGLoad(buf,ast->type,ast->glabel,0);
         break;
 
     case AST_FUNPTR_CALL:
@@ -1902,9 +1905,9 @@ void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
 void AsmDataInternal(aoStr *buf, Ast *data) {
     assert(data->type->kind != AST_TYPE_ARRAY);
     switch (data->type->size) {
-        case 1: aoStrCatPrintf(buf, ".byte %d\n", data->i64); break;
-        case 4: aoStrCatPrintf(buf, ".long %d\n", data->i64); break;
-        case 8: aoStrCatPrintf(buf, ".quad %d\n", data->i64); break;
+        case 1: aoStrCatPrintf(buf, ".byte %d\n\t", data->i64); break;
+        case 4: aoStrCatPrintf(buf, ".long %d\n\t", data->i64); break;
+        case 8: aoStrCatPrintf(buf, ".quad %d\n\t", data->i64); break;
         default:
             loggerPanic("Cannot create size information for: %s\n",
                     AstToString(data));
@@ -1915,9 +1918,14 @@ void AsmGlobalVar(Dict *seen_globals, aoStr *buf, Ast* ast) {
     Ast *declvar = ast->declvar;
     Ast *declinit = ast->declinit;
     aoStr *varname = declvar->gname;
+    char *label = asmGetGlabel(declvar);
 
     if (DictGetLen(seen_globals,varname->data,varname->len)) {
         return;
+    }
+
+    if (buf->data[buf->len-1] == '\t') {
+        buf->len--;
     }
 
     DictSet(seen_globals,varname->data,ast);
@@ -1927,9 +1935,12 @@ void AsmGlobalVar(Dict *seen_globals, aoStr *buf, Ast* ast) {
          declinit->kind == AST_LITERAL))
     {
         if (!declvar->type->is_static) {
-            aoStrCatPrintf(buf,".global %s\n",varname->data);
+            aoStrCatPrintf(buf,".global %s\n",label);
+            aoStrCatPrintf(buf,"%s:\n",label);
+        } else {
+            aoStrCatPrintf(buf,".data\n");
+            aoStrCatPrintf(buf,"%s:\n\t",label);
         }
-        aoStrCatPrintf(buf,"%s:\n",varname->data);
 
         if (declinit->kind == AST_ARRAY_INIT) {
             ListForEach(declinit->arrayinit) {
@@ -1942,8 +1953,7 @@ void AsmGlobalVar(Dict *seen_globals, aoStr *buf, Ast* ast) {
             AsmDataInternal(buf,declinit);
         }
     } else {
-        aoStrCatPrintf(buf, ".lcomm %s, %d\n\t", varname->data,
-                declvar->type->size);
+        aoStrCatPrintf(buf,".lcomm %s, %d\n\t",label,declvar->type->size);
     }
 }
 

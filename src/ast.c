@@ -38,11 +38,11 @@ Ast *AstNew(void) {
 }
 
 AstType *AstTypeNew(void) {
-    AstType *at;
-    if ((at = calloc(1,sizeof(AstType))) == NULL) {
+    AstType *type;
+    if ((type = calloc(1,sizeof(AstType))) == NULL) {
         loggerPanic("OOM when allocating AstType\n");
     }
-    return at;
+    return type;
 }
 
 AstType *AstTypeCopy(AstType *type) {
