@@ -16,7 +16,6 @@
 #include "lexer.h"
 #include "util.h"
 
-
 static char *depth_to_loop_color[] = {
     [1] = "grey88",
     [2] = "grey78",
@@ -29,7 +28,6 @@ static char *depth_to_loop_color[] = {
     [9] = "grey18",
 };
 
-
 static const char *cfgPrintGetLoopColor(int depth) {
     static int len = sizeof(depth_to_loop_color)/sizeof(depth_to_loop_color[0]);
     if (depth >= len) return "grey88";
@@ -38,11 +36,6 @@ static const char *cfgPrintGetLoopColor(int depth) {
 
 typedef struct CfgGraphVizBuilder {
     aoStr *viz;
-    /* @Optimise, this could be a hash set for O(1), however for a small 
-     * enough seen count this is fairly in-expensive */
-    int *seen_blocks;
-    int seen_cnt;
-    int block_cnt;
     int loop_cnt;
 
     /* This is if a loop does not have a break clause immediately in it */
@@ -51,49 +44,17 @@ typedef struct CfgGraphVizBuilder {
 
     int loop_idx;
     BasicBlock *loop_stack[32];
-
-    List *loop_queue;
 } CfgGraphVizBuilder;
 
-static void cfgGraphVizBuilderClear(CfgGraphVizBuilder *builder) {
-    if (builder->seen_blocks) {
-        free(builder->seen_blocks);
-        builder->seen_blocks = NULL;
-        builder->block_cnt = 0;
-    }
-}
-
 static aoStr *cfgGraphVizBuilderDestroyAndReturnVizString(CfgGraphVizBuilder *builder) {
-    cfgGraphVizBuilderClear(builder);
     return builder->viz;
 }
 
 static void cfgGraphVizBuilderInit(CfgGraphVizBuilder *builder, CFG *cfg) {
-    builder->seen_blocks = (int *)calloc(cfg->bb_count,sizeof(int));
-    builder->seen_cnt = 0;
-    builder->block_cnt = cfg->bb_count;
     builder->viz = aoStrAlloc(1<<10);
     builder->loop_cnt = 0;
     builder->break_idx = 0;
     builder->loop_idx = 0;
-    builder->loop_queue = ListNew();
-}
-
-static void cfgGraphVizBuilderSetSeen(CfgGraphVizBuilder *builder, int block_no)
-{
-    builder->seen_blocks[builder->seen_cnt++] = block_no;
-}
-
-static int cfgGraphVizBuilderHasSeen(CfgGraphVizBuilder *builder, int block_no)
-{
-    int block_cnt = builder->block_cnt;
-    int *seen = builder->seen_blocks;
-    for (int i = 0; i < block_cnt; ++i) {
-        if (seen[i] == block_no) {
-            return 1;
-        }
-    }
-    return 0;
 }
 
 static aoStr *bbAstArrayToString(AstArray *ast_array, int ast_count) {
@@ -295,19 +256,6 @@ static void cfgLoopHeadPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
             cnt,loop_color,cnt);
 }
 
-static int bbIsLoopEnd(BasicBlock *bb) {
-    if (bb->type == BB_LOOP_BLOCK || bb->type == BB_DO_WHILE_COND) { //&& bb->flags & BB_FLAG_ELSE_BRANCH) { 
-        return 1;
-       // for (int i = 0; i < bb->prev_cnt; ++i) {
-       //     BasicBlock *it = bb->prev_blocks[i];
-       //     if (it->flags & BB_FLAG_LOOP_HEAD) {
-       //         return 1;
-       //     }
-       // }
-    }
-    return 0;
-}
-
 static void bbPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     switch (bb->type) {
         case BB_HEAD_BLOCK:    cfgHeadPrintf(builder,bb);    break;
@@ -318,142 +266,6 @@ static void bbPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
         case BB_END_BLOCK:
         case BB_RETURN_BLOCK:  cfgReturnPrintf(builder,bb);  break;
         default:               cfgDefaultPrintf(builder,bb); break;
-    }
-}
-
-static void cfgCreateGraphVizShapes(CfgGraphVizBuilder *builder,
-        BasicBlock *bb)
-{
-    BasicBlock *_if, *_else;
-
-    for (; bb; bb = bb->next) {
-        _if = bb->_if;
-        _else = bb->_else;
-
-        bb->visited++;
-        if (bb->type == BB_LOOP_BLOCK) {
-            if (bb->visited > 1 && bb->visited == bb->prev_cnt) {
-                aoStrCatPrintf(builder->viz, "}//1: terminating bb%d\n",bb->block_no);
-            }
-        }
-
-        if (cfgGraphVizBuilderHasSeen(builder,bb->block_no)) return;
-        else cfgGraphVizBuilderSetSeen(builder,bb->block_no);
-
-        loggerDebug("bb%d type: %s flags: %s\n",bb->block_no,
-                bbTypeToString(bb->type),bbFlagsToString(bb->flags));
-        printf("bb%2d prev_cnt = %d: ", bb->block_no,bb->prev_cnt);
-        for (int i = 0; i < bb->prev_cnt; ++i) {
-            printf("%dbb", bb->prev_blocks[i]->block_no);
-            if (i + 1 != bb->prev_cnt) printf(", ");
-        }
-        printf("\n");
-
-
-        /* @Cleanup
-         * We could do this thing in the cfg.c file and then remove the loop 
-         * head if there is an immeidate 'break'. This is not urgent */
-        if (bb->flags & BB_FLAG_LOOP_HEAD) {
-            if (!_if || (_if && _if->type != BB_BREAK_BLOCK)) {
-                int cnt = ++builder->loop_cnt;
-                const char *loop_color = cfgPrintGetLoopColor(cnt);
-                aoStrCatPrintf(builder->viz,"subgraph cluster1_%d {\nstyle=\"filled\";\n"
-                        "color=\"darkgreen\";\n"
-                        "fillcolor=\"%s\";\n"
-                        "label=\"loop %d\";\n"
-                        "labeljust=l;\n"
-                        "penwidth=2;\n",cnt,loop_color,cnt);
-            }
-        }
-
-        int is_loop_block = bb->type == BB_LOOP_BLOCK && 
-                            bb->type == BB_DO_WHILE_COND;
-
-        int is_do_while_end = bb->flags & BB_FLAG_LOOP_END && 
-                              bb->type == BB_DO_WHILE_COND;
-
-        if (is_do_while_end) {
-            loggerDebug("YUP: bb%d\n", bb->block_no);
-        }
-
-        int is_loop_end = bbIsLoopEnd(bb);
-
-        if (is_loop_end) {
-            aoStrCatPrintf(builder->viz,"}// end: bb%d\n",bb->block_no);
-        }
-
-
-   //     if (bb->flags & BB_FLAG_LOOP_END && !is_loop_block) {
-   //         if (bb->visited >= 1 && bb->visited == bb->prev_cnt) {
-   //             aoStrCatPrintf(builder->viz, "}//2: terminating loop: bb%d\n",
-   //                     bb->block_no);
-   //         }
-   //     }
-
-        switch (bb->type) {
-            case BB_HEAD_BLOCK:    cfgHeadPrintf(builder,bb);    break;
-            case BB_LOOP_BLOCK:    cfgLoopPrintf(builder,bb);    break;
-            case BB_DO_WHILE_COND: cfgDoWhileCondPrintf(builder,bb);  break;
-            case BB_BRANCH_BLOCK:  cfgBranchPrintf(builder,bb);       break;
-            case BB_BREAK_BLOCK:   cfgBreakPrintf(builder,bb);        break;
-            case BB_END_BLOCK:
-            case BB_RETURN_BLOCK:  cfgReturnPrintf(builder,bb);  break;
-            default:               cfgDefaultPrintf(builder,bb); break;
-        }
-
-
-        if (_if && _else) {
-            /* Break blocks visually live in the outer scope of the loop,
-             * so we save them for later. */
-            if (_if->type == BB_BREAK_BLOCK && _else->type == BB_BREAK_BLOCK) {
-                builder->break_blocks[builder->break_idx++] = _if;
-                builder->break_blocks[builder->break_idx++] = _else;
-            } else if (_if->type == BB_BREAK_BLOCK) {
-                cfgCreateGraphVizShapes(builder,_else);
-                builder->break_blocks[builder->break_idx++] = _if;
-            } else if (_else->type == BB_BREAK_BLOCK) {
-                cfgCreateGraphVizShapes(builder,_if);
-                builder->break_blocks[builder->break_idx++] = _else;
-            } else {
-                cfgCreateGraphVizShapes(builder,_if);
-                cfgCreateGraphVizShapes(builder,_else);
-            }
-
-            /* This is for when the body of a loop breaks immediately, then 
-             * we will never hit the bb->flags & BB_FLAG_LOOP_END. 
-             * There feels like there should be a better way of doing this 
-             * though. */
-            if ((_if->flags & BB_FLAG_REDUNDANT_LOOP) ||
-                (_else->flags & BB_FLAG_REDUNDANT_LOOP)) {
-                while (builder->break_idx) {
-                    cfgCreateGraphVizShapes(builder,
-                            builder->break_blocks[--builder->break_idx]);
-                }
-            }
-        }
-
-        if (bb->flags & BB_FLAG_LOOP_END) {
-            while (builder->break_idx) {
-                cfgCreateGraphVizShapes(builder,
-                        builder->break_blocks[--builder->break_idx]);
-            }
-        }
-
-//        if (bb->flags & BB_FLAG_LOOP_END) {// && !is_loop_block) {
-//            if (bb->visited >= 1 && bb->prev_cnt == 1) {
-//                aoStrCatPrintf(builder->viz, "}//3: terminating bb%d\n",bb->block_no);
-//            }
-//        }
-
-        /* If we have a goto we do not want to print it's bb->next as 
-         * the code is non-linear and we will eventually get there. The 
-         * link will already be printed */
-        //if (bb->type == BB_GOTO && !(bb->flags & BB_FLAG_UNCONDITIONAL_JUMP)) break;
-        if (bb->type == BB_GOTO && is_loop_block) {
-            bb->next->visited++;
-            break;
-        }
-        if (bb->type == BB_END_BLOCK) break;
     }
 }
 
@@ -541,8 +353,9 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
 {
     bb->visited++;
 
+    bbPrintInfo(bb);
     if (bb->flags & BB_FLAG_LOOP_END) {
-        int break_cnt =  cfgGraphVizGetLoopBreakCount(builder,bb); 
+        int break_cnt = cfgGraphVizGetLoopBreakCount(builder,bb); 
 
         /* @Confirm
          * Do we still need this? It implies something is incorrect */
@@ -573,10 +386,10 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
         }
     }
 
+
     if (intMapHas(seen,bb->block_no)) return;
     else intMapSet(seen,bb->block_no,NULL);
 
-    bbPrintInfo(bb);
 
     if (bb->flags & BB_FLAG_LOOP_HEAD) {
         cfgLoopHeadPrintf(builder,bb);
@@ -602,7 +415,6 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
                 cfgCreatePictureUtil(builder,map,bb->next,seen);
             }
             cfgCreatePictureUtil(builder,map,bb->prev,seen);
-            //   builder->break_blocks[builder->break_idx++] = bb->prev;
             break;
 
         case BB_BRANCH_BLOCK:
@@ -614,8 +426,13 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
             }
 
             cfgBranchPrintf(builder,bb);
+            loggerDebug("if = %d, else = %d\n",
+                    bb->_if->block_no,bb->_else->block_no);
+            bbPrintInfo(bb->_if);
+            bbPrintInfo(bb->_else);
             cfgCreatePictureUtil(builder,map,bb->_if,seen);
             cfgCreatePictureUtil(builder,map,bb->_else,seen);
+
             if (bb->flags & BB_FLAG_LOOP_HEAD) {
                 if (bb->prev && bb->prev->type == BB_DO_WHILE_COND) {
                     cfgCreatePictureUtil(builder,map,bb->prev->next,seen);
@@ -627,6 +444,10 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
         case BB_HEAD_BLOCK:
         case BB_GOTO:
             bbPrintf(builder,bb);
+            if (bb->type == BB_GOTO) {
+                loggerWarning("!!\n");
+                loggerWarning("!!\n");
+            }
             cfgCreatePictureUtil(builder,map,bb->next,seen);
             if (bb->flags & BB_FLAG_LOOP_HEAD) {
                 if (bb->prev && bb->prev->type == BB_DO_WHILE_COND) {
