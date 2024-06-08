@@ -86,6 +86,7 @@ OPTIONS:
   -lib     Emit a dynamic and static library
   -clibs   Link c libraries like: -clibs=`-lSDL2 -lxml2 -lcurl...`
   -o       Output filename: hcc -o <name> ./<file>.HC
+  -run     Immediately run the file (not JIT)
   -g       Not implemented
   -D<var>  Set a compiler #define (does not accept a value)
   --help   Print this message

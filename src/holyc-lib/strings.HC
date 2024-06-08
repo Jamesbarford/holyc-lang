@@ -245,6 +245,35 @@ _STRHASH::
 @@10:
     MOV    RAX, RCX
     RET
+
+_ATOI::
+    PUSH    RBP
+    MOV     RBP, RSP
+    MOV     RAX, 0
+    XOR     R8,  R8
+    CMPB    [RDI], '-'
+    JNE     @@01
+    ADD     RDI, 1
+    MOV     R8,  1 // mark as being negative
+@@01:
+    CMPB    [RDI], '0'
+    JL      @@02
+    CMPB    [RDI], '9'
+    JG      @@02
+    MOVB    BL, [RDI]
+    SUBB    BL, '0'
+    MOVZBQ  RBX, BL
+    IMUL    RAX, 10
+    ADD     RAX, RBX
+    ADD     RDI, 1
+    JMP     @@01
+@@02:
+    TEST    R8, R8
+    JZ      @@03
+    NEG     RAX
+@@03:
+    LEAVE
+    RET
 }
 
 public _extern _STRLEN_FAST U64 StrLen(U8 *buf);
@@ -256,6 +285,7 @@ public _extern _TOLOWER U8 ToLower(U8 ch);
 public _extern _TOUPPER U8 ToUpper(U8 ch);
 public _extern _ISSPACE Bool IsSpace(U8 ch);
 public _extern _STRHASH U64 StrHash(U8 *str);
+public _extern _ATOI I64 Atoi(U8 *str);
 
 public U8 *StrNCpy(U8 *buf, I64 len)
 {

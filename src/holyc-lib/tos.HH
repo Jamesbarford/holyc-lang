@@ -525,6 +525,8 @@ public _extern _TOLOWER U8 ToLower(U8 ch);
 public _extern _TOUPPER U8 ToUpper(U8 ch);
 public _extern _ISSPACE Bool IsSpace(U8 ch);
 public _extern _STRHASH U64 StrHash(U8 *str);
+public _extern _ATOI I64 Atoi(U8 *str);
+
 public U8 *StrNCpy(U8 *buf, I64 len);
 public U8 *FileExtDot(U8 *src);
 public U8 *FileExtRem(U8 *src, U8 *dst = NULL);
