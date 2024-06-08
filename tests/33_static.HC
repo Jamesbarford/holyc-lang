@@ -29,7 +29,7 @@ I64 TestStaticIntSetup(I64 value)
 
 Bool TestStaticInt()
 {
-  I64 tests = 2, correct = 0;
+  I64 tests = 3, correct = 0;
   I64 value = TestStaticIntSetup(16);
   if (value == 32) {
     correct++;
@@ -39,6 +39,12 @@ Bool TestStaticInt()
   if (value == 420) {
     correct++;
   }
+  
+  value = TestStaticIntSetup(32);
+  if (value == 420) {
+    correct++;
+  }
+
   return correct == tests;
 }
 
