@@ -1903,7 +1903,10 @@ void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
 }
 
 void AsmDataInternal(aoStr *buf, Ast *data) {
-    assert(data->type->kind != AST_TYPE_ARRAY);
+    if (data->kind == AST_STRING) {
+        aoStrCatPrintf(buf,".quad %s\n\t",data->slabel->data);
+        return;
+    }
     switch (data->type->size) {
         case 1: aoStrCatPrintf(buf, ".byte %d\n\t", data->i64); break;
         case 4: aoStrCatPrintf(buf, ".long %d\n\t", data->i64); break;
@@ -1934,13 +1937,21 @@ void AsmGlobalVar(Dict *seen_globals, aoStr *buf, Ast* ast) {
         (declinit->kind == AST_ARRAY_INIT || 
          declinit->kind == AST_LITERAL))
     {
+
         if (!declvar->type->is_static) {
             aoStrCatPrintf(buf,".global %s\n",label);
-            aoStrCatPrintf(buf,"%s:\n",label);
+            aoStrCatPrintf(buf,".data\n");
         } else {
             aoStrCatPrintf(buf,".data\n");
-            aoStrCatPrintf(buf,"%s:\n\t",label);
         }
+        if (declinit->kind == AST_ARRAY_INIT) {
+            Ast *head = (Ast *)declinit->arrayinit->next->value;
+            if (head->kind == AST_STRING) {
+                aoStrCatPrintf(buf,".align 4\n");
+            }
+        }
+
+        aoStrCatPrintf(buf,"%s:\n\t",label);
 
         if (declinit->kind == AST_ARRAY_INIT) {
             ListForEach(declinit->arrayinit) {
