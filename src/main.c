@@ -27,6 +27,7 @@ typedef struct hccOpts {
     int assemble_only;
     int emit_dylib;
     int emit_object;
+    int run;
     char *infile;
     char *asm_outfile;
     char *obj_outfile;
@@ -223,6 +224,12 @@ void emitFile(aoStr *asmbuf, hccOpts *opts) {
                     ASM_TMP_FILE, opts->output_filename);
         }
         system(cmd->data);
+        if (opts->run) {
+            char run_cmd[64];
+            snprintf(run_cmd,sizeof(run_cmd),"./%s",opts->output_filename);
+            system(run_cmd);
+            unlink(opts->output_filename);
+        }
     }
     if (strnlen(opts->clibs,10) > 1) {
         free(opts->clibs);
@@ -244,6 +251,7 @@ void usage(void) {
             "  -lib     Emit a dynamic and static library\n"
             "  -clibs   Link c libraries like: -clibs=`-lSDL2 -lxml2 -lcurl...`\n"
             "  -o       Output filename: hcc -o <name> ./<file>.HC\n"
+            "  -run     Immediately run the file (not JIT)\n"
             "  -g       Not implemented\n"
             "  -D<var>  Set a compiler #define (does not accept a value)\n"
             "  --help   Print this message\n");
@@ -266,6 +274,8 @@ void parseCliOptions(hccOpts *opts, int argc, char **argv) {
             opts->print_ast = 1;
         } else if (!strncmp(argv[i],"-tokens",7)) {
             opts->print_tokens = 1;
+        } else if (!strncmp(argv[i],"-run",4)) {
+            opts->run = 1;
         } else if (!strncmp(argv[i],"-S",2)) {
             opts->assemble_only = 1;
         } else if (!strncmp(argv[i],"-lib",4)) {
