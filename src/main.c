@@ -309,6 +309,22 @@ void parseCliOptions(hccOpts *opts, int argc, char **argv) {
         } else if (!strncmp(argv[i],"-o",2)) {
             opts->output_filename = argv[i+1];
             i++;
+            if (opts->output_filename == infile) {
+                fprintf(stderr, "hcc: \033[0;31mfatal error\033[0m: no input files.\n"
+                        "Usage: hcc -o <program_name> <file>.HC\n");
+                exit(1);
+            }
+            char *outfile = opts->output_filename;
+            char *infile_no_dot = (infile[0] == '.' && infile[1] == '/')
+            ? infile+2 : infile;
+            if (outfile[0] == '.' && outfile[1] == '/') {
+                outfile = opts->output_filename+2;
+            }
+            if (!strcmp(outfile,infile_no_dot)) {
+                fprintf(stderr, "hcc: \033[0;31mfatal error\033[0m: output file"
+                        " same name as input file.\n");
+                exit(1);
+            }
         } else if (!strncmp(argv[i],"-g",2)) {
             opts->asm_debug_comments = 1;
             loggerPanic("--g not implemented\n");
