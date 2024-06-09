@@ -158,8 +158,8 @@ typedef struct lexer {
 lexeme *lexemeTokNew(char *start, int len, int line, long ch);
 lexeme *lexemeNew(char *start, int len);
 lexeme *lexemeSentinal(void);
-void lexerSetBuiltinRoot(lexer *l, char *root);
-void lexerInit(lexer *l, char *source, int flag);
+void lexSetBuiltinRoot(lexer *l, char *root);
+void lexInit(lexer *l, char *source, int flag);
 void lexPushFile(lexer *l, aoStr *filename);
 int lex(lexer *l, lexeme *le);
 List *lexToLexemes(Dict *macro_defs, lexer *l);
@@ -169,9 +169,9 @@ char *lexemeTypeToString(int tk_type);
 char *lexemePunctToString(long op);
 char *lexemeToString(lexeme *tok);
 void lexemePrintList(List *tokens);
-void lexemeListRelease(List *tokens);
+void lexemelistRelease(List *tokens);
 void lexReleaseAllFiles(lexer *l);
-int TokenPunctIs(lexeme *tok, long ch);
-int TokenIdentIs(lexeme *tok, char *ident, int len);
+int tokenPunctIs(lexeme *tok, long ch);
+int tokenIdentIs(lexeme *tok, char *ident, int len);
 
 #endif // !LEXER_H

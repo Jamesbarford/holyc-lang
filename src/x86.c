@@ -47,7 +47,7 @@ static int has_initialisers = 0;
 #define REG_RIP "rip"
 #define REG_RDI "rdi"
 
-void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast);
+void asmExpression(Cctrl *cc, aoStr *buf, Ast *ast);
 
 #define asmGetGlabel(gvar) \
     gvar->is_static ? gvar->glabel->data : gvar->gname->data
@@ -84,8 +84,8 @@ uint64_t ieee754(double _f64) {
 
 /* This is a hacky, but seemingly functional way of me being able
  * to run this on Macos and Linux */
-char *AsmNormaliseFunctionName(char *fname) {
-    aoStr *newfn = AstNormaliseFunctionName(fname);
+char *asmNormaliseFunctionName(char *fname) {
+    aoStr *newfn = astNormaliseFunctionName(fname);
     if (!strncasecmp(fname, "Main", 4)) {
         if (has_initialisers) {
             aoStrCatPrintf(newfn,"Fn");
@@ -96,13 +96,13 @@ char *AsmNormaliseFunctionName(char *fname) {
     return aoStrMove(newfn);
 }
 
-void AsmRemovePreviousTab(aoStr *buf) {
+void asmRemovePreviousTab(aoStr *buf) {
     if (buf->data[buf->len-1] == '\t') {
         buf->len--;
     }
 }
 
-char *AsmGetMov(AstType *type) {
+char *asmGetMov(AstType *type) {
     if (type->kind == AST_TYPE_CLASS && type->is_intrinsic) {
         return "movq";
     }
@@ -116,7 +116,7 @@ char *AsmGetMov(AstType *type) {
     }
 }
 
-char *AsmGetMovWithSign(AstType *type) {
+char *asmGetMovWithSign(AstType *type) {
     if (type->kind == AST_TYPE_CLASS && type->is_intrinsic) {
         return "movq";
     }
@@ -136,20 +136,20 @@ char *AsmGetMovWithSign(AstType *type) {
     }
 }
 
-char *AsmGetPtrMove(AstType *type) {
+char *asmGetPtrMove(AstType *type) {
     switch (type->kind) {
         case AST_TYPE_ARRAY: return "leaq";
         default:             return "mov";
     }
 }
 
-char *AsmGetLoadReg(AstType *type, char ch) {
+char *asmGetLoadReg(AstType *type, char ch) {
     (void)type;
     if (ch == 'a') return "rax";
     else           return "rcx";
 }
 
-char *AsmGetLoadMov(AstType *type) {
+char *asmGetLoadMov(AstType *type) {
     if (type->kind == AST_TYPE_CLASS
             && type->is_intrinsic) return "movq";
     switch (type->size) {
@@ -164,11 +164,11 @@ char *AsmGetLoadMov(AstType *type) {
             return "movq";
         default:
             loggerPanic("Unknown size for loading: %s %d\n",
-                    AstTypeToString(type), type->size);
+                    astTypeToString(type), type->size);
     }
 }
 
-char *AsmGetIntReg(AstType *type, char ch) {
+char *asmGetIntReg(AstType *type, char ch) {
     if (ch == 'a') {
         if (type->kind == AST_TYPE_CLASS && type->is_intrinsic) {
             return "rax";
@@ -180,7 +180,7 @@ char *AsmGetIntReg(AstType *type, char ch) {
             case 8: return "rax";
             default:
                 loggerPanic("Unknown size for reg prefix '%c': %s %d\n",
-                        ch, AstTypeToString(type), type->size);
+                        ch, astTypeToString(type), type->size);
         }
     } else if (ch == 'c') {
         if (type->kind == AST_TYPE_CLASS && type->is_intrinsic) {
@@ -195,32 +195,32 @@ char *AsmGetIntReg(AstType *type, char ch) {
          return "rcx";
                 loggerPanic("Unknown size for reg prefix '%c': %s %d\n",
                         ch,
-                        AstTypeToString(type), type->size);
+                        astTypeToString(type), type->size);
         }
     } else {
         loggerPanic("unknown register prefix: %c\n", ch);
     }
 }
 
-void AsmToInt(aoStr *buf, AstType *type) {
+void asmToInt(aoStr *buf, AstType *type) {
     if (type->kind == AST_TYPE_FLOAT) {
         aoStrCatPrintf(buf, "cvttsd2si  %%xmm0, %%rax\n\t");
     }
 }
 
-void AsmToFloat(aoStr *buf, AstType *type) {
+void asmToFloat(aoStr *buf, AstType *type) {
     if (type->kind != AST_TYPE_FLOAT) {
         aoStrCatPrintf(buf, "cvtsi2sd  %%rax, %%xmm0\n\t");
     }
 }
 
-void AsmPushXMM(aoStr *str, int reg) {
+void asmPushXMM(aoStr *str, int reg) {
     aoStrCatPrintf(str, "sub   $8, %%rsp\n\t"
                         "movsd %%xmm%d, (%%rsp)\n\t", reg);
     stack_pointer += 8;
 }
 
-void AsmPopXMM(aoStr *str, int reg) {
+void asmPopXMM(aoStr *str, int reg) {
     aoStrCatPrintf(str, "movsd  (%%rsp), %%xmm%d\n\t"
                         "add    $8, %%rsp\n\t", reg);
     stack_pointer -= 8;
@@ -229,12 +229,12 @@ void AsmPopXMM(aoStr *str, int reg) {
     }
 }
 
-void AsmPush(aoStr *buf, char *reg) {
+void asmPush(aoStr *buf, char *reg) {
     aoStrCatPrintf(buf,"push   %%%s\n\t", reg);
     stack_pointer += 8;
 }
 
-void AsmPop(aoStr *buf, char *reg) {
+void asmPop(aoStr *buf, char *reg) {
     aoStrCatPrintf(buf,"pop    %%%s\n\t", reg);
     stack_pointer -= 8;
     if (stack_pointer < 0) {
@@ -242,21 +242,21 @@ void AsmPop(aoStr *buf, char *reg) {
     }
 }
 
-void AsmCall(aoStr *buf, char *fname) {
-    char *_fname = AsmNormaliseFunctionName(fname);
+void asmCall(aoStr *buf, char *fname) {
+    char *_fname = asmNormaliseFunctionName(fname);
     aoStrCatPrintf(buf,"call   %s\n\t", _fname);
     free(_fname);
 }
 
 /* Save a global variable */
-void AsmGSave(aoStr *buf, char *name, AstType *type, int offset) {
+void asmGSave(aoStr *buf, char *name, AstType *type, int offset) {
     assert(type->kind != AST_TYPE_ARRAY);
     char *reg;
 
     if (type->kind == AST_TYPE_FLOAT) {
         aoStrCatPrintf(buf,"movq   %%xmm0, %%rax\n\t");
     }
-    reg = AsmGetIntReg(type, 'a');
+    reg = asmGetIntReg(type, 'a');
     if (offset) {
         aoStrCatPrintf(buf, "movq  %%%s, %s+%d(%%rip)\n\t", reg, name, offset);
     } else {
@@ -264,7 +264,7 @@ void AsmGSave(aoStr *buf, char *name, AstType *type, int offset) {
     }
 }
 
-void AsmPlaceString(aoStr *buf, aoStr *str, int offset) {
+void asmPlaceString(aoStr *buf, aoStr *str, int offset) {
     int i = 0;
     /* Place string on the stack character by character */
     for (; i < str->len; ++i) {
@@ -277,7 +277,7 @@ void AsmPlaceString(aoStr *buf, aoStr *str, int offset) {
             -(offset - i));
 }
 
-void AsmGLoad(aoStr *buf, AstType *type, aoStr *label, int offset) {
+void asmGLoad(aoStr *buf, AstType *type, aoStr *label, int offset) {
     char *reg = NULL;
 
     if (type->kind == AST_TYPE_ARRAY) {
@@ -291,7 +291,7 @@ void AsmGLoad(aoStr *buf, AstType *type, aoStr *label, int offset) {
         return;
     }
 
-    reg = AsmGetIntReg(type, 'a');
+    reg = asmGetIntReg(type, 'a');
     if (type->size < 4) {
         aoStrCatPrintf(buf, "movl  $0, %%eax\n\t");
     }
@@ -307,37 +307,37 @@ void AsmGLoad(aoStr *buf, AstType *type, aoStr *label, int offset) {
     }
 }
 
-void AsmLLoad(aoStr *buf, AstType *type, int offset) {
+void asmLLoad(aoStr *buf, AstType *type, int offset) {
     char *reg = NULL;
     
     switch (type->kind) {
         case AST_TYPE_ARRAY:
-            aoStrCatPrintf(buf, "# LOAD LEAQ START: %s\n\t", AstKindToString(type->kind));
+            aoStrCatPrintf(buf, "# LOAD LEAQ START: %s\n\t", astKindToString(type->kind));
             aoStrCatPrintf(buf, "leaq   %d(%%rbp), %%rax\n\t", offset);
-            aoStrCatPrintf(buf, "# LOAD LEAQ END: %s\n\t", AstKindToString(type->kind));
+            aoStrCatPrintf(buf, "# LOAD LEAQ END: %s\n\t", astKindToString(type->kind));
             return;
         case AST_TYPE_FLOAT:
             aoStrCatPrintf(buf, "movsd  %d(%%rbp), %%xmm0\n\t", offset);
             return;
         default:
-            reg =  AsmGetLoadReg(type, 'a');
-            aoStrCatPrintf(buf, "# LOAD %s %s START\n\t",reg,AstKindToString(type->kind));
+            reg =  asmGetLoadReg(type, 'a');
+            aoStrCatPrintf(buf, "# LOAD %s %s START\n\t",reg,astKindToString(type->kind));
 
             aoStrCatPrintf(buf, "%-4s  %d(%%rbp), %%%s\n\t",
-                    AsmGetLoadMov(type), offset, reg);
+                    asmGetLoadMov(type), offset, reg);
             aoStrCatPrintf(buf, "# LOAD %s END\n\t",reg);
     }
 }
 
-void AsmLSave(aoStr *buf, AstType *type, int offset) {
+void asmLSave(aoStr *buf, AstType *type, int offset) {
     char *reg, *mov;
     switch (type->kind) {
         case AST_TYPE_FLOAT:
             aoStrCatPrintf(buf, "movsd   %%xmm0, %d(%%rbp)\n\t", offset);
             break;
         default:
-            reg = AsmGetIntReg(type,'a');
-            mov = AsmGetMov(type);
+            reg = asmGetIntReg(type,'a');
+            mov = asmGetMov(type);
             aoStrCatPrintf(buf, "%-4s   %%%s, %d(%%rbp)\n\t",mov, reg, offset);
             break;
     }
@@ -356,7 +356,7 @@ void AstUpCastInt(aoStr *buf, AstType *type, int issigned) {
     }
 }
 
-void AsmDownCastInt(aoStr *buf, AstType *type, int issigned) {
+void asmDownCastInt(aoStr *buf, AstType *type, int issigned) {
     switch(type->kind) {
     case AST_TYPE_INT:
         if (issigned) aoStrCatPrintf(buf, "movsx  %%al, %%rax\n\t");
@@ -365,41 +365,41 @@ void AsmDownCastInt(aoStr *buf, AstType *type, int issigned) {
     }
 }
 
-void AsmFloatToInt(aoStr *buf, AstType *type) {
+void asmFloatToInt(aoStr *buf, AstType *type) {
     if (type->kind == AST_TYPE_FLOAT)
         aoStrCatPrintf(buf, "cvttsd2si %%xmm0, %%eax\n\t");
 }
 
-void AsmCast(aoStr *buf, AstType *from, AstType *to) {
-    if (AstIsIntType(from) && to->kind == AST_TYPE_FLOAT)
+void asmCast(aoStr *buf, AstType *from, AstType *to) {
+    if (astIsIntType(from) && to->kind == AST_TYPE_FLOAT)
         aoStrCatPrintf(buf, "cvtsi2sd %%rax, %%xmm0\n\t");
-    else if (AstIsIntType(from) && AstIsIntType(to)) {
+    else if (astIsIntType(from) && astIsIntType(to)) {
         if (to->size > from->size) {
             if (to->is_intrinsic && from->size == 8) return;
             AstUpCastInt(buf, from, to->issigned);
         } else if (to->size < from->size) {
-            AsmDownCastInt(buf, from, to->issigned);
+            asmDownCastInt(buf, from, to->issigned);
         }
     }
-    else if (AstIsIntType(to))
-        AsmFloatToInt(buf, from);
+    else if (astIsIntType(to))
+        asmFloatToInt(buf, from);
 }
 
-void AsmTypeCast(Cctrl *cc, aoStr *buf, Ast *ast) {
-    AsmExpression(cc,buf,ast->operand);
-    AsmCast(buf,ast->operand->type,ast->type);
+void asmTypeCast(Cctrl *cc, aoStr *buf, Ast *ast) {
+    asmExpression(cc,buf,ast->operand);
+    asmCast(buf,ast->operand->type,ast->type);
 }
 
-void AsmAssignDerefInternal(aoStr *buf, AstType *type, int offset) {
+void asmAssignDerefInternal(aoStr *buf, AstType *type, int offset) {
     char *reg,*mov;
     aoStrCatPrintf(buf, "# ASSIGN DREF INTERNAL START: %s\n\t",
-            AstKindToString(type->kind));
+            astKindToString(type->kind));
 
     aoStrCatPrintf(buf, "movq   (%%rax), %%rcx #OK mov\n\t");
-    AsmPop(buf, "rcx");
+    asmPop(buf, "rcx");
 
-    reg = AsmGetIntReg(type, 'c');
-    mov = AsmGetMov(type);
+    reg = asmGetIntReg(type, 'c');
+    mov = asmGetMov(type);
 
     if (type->kind == AST_TYPE_FLOAT) {
         if (offset) {
@@ -418,30 +418,30 @@ void AsmAssignDerefInternal(aoStr *buf, AstType *type, int offset) {
     aoStrCatPrintf(buf, "# ASSIGN DREF INTERNAL end\n\t");
 }
 
-void AsmAssignDeref(Cctrl *cc,aoStr *buf, Ast *ast) {
-    AsmPush(buf, REG_RAX);
-    AsmExpression(cc,buf,ast->operand);
-    AsmAssignDerefInternal(buf,ast->operand->type->ptr, 0);
+void asmAssignDeref(Cctrl *cc,aoStr *buf, Ast *ast) {
+    asmPush(buf, REG_RAX);
+    asmExpression(cc,buf,ast->operand);
+    asmAssignDerefInternal(buf,ast->operand->type->ptr, 0);
 }
 
-void AsmLoadDeref(aoStr *buf, AstType *result, AstType *op_type, int off) {
+void asmLoadDeref(aoStr *buf, AstType *result, AstType *op_type, int off) {
     char *reg,*ptr_mov;
     if (op_type->kind == AST_TYPE_POINTER &&
             op_type->ptr->kind == AST_TYPE_ARRAY) {
         return;
     }
     aoStrCatPrintf(buf, "# LOAD DEREF: %s %s\n\t",
-            AstKindToString(result->kind),
-            AstKindToString(op_type->kind));
+            astKindToString(result->kind),
+            astKindToString(op_type->kind));
 
-    ptr_mov = AsmGetPtrMove(op_type);
+    ptr_mov = asmGetPtrMove(op_type);
 
     if (op_type->kind == AST_TYPE_FLOAT) {
         if (off) aoStrCatPrintf(buf, "movq   %d(%%rax), %%xmm1\n\t", off);
         else     aoStrCatPrintf(buf,"movq   (%%rax), %%xmm1\n\t");
         aoStrCatPrintf(buf,"movsd   %%xmm1, %%xmm0\n\t");
     } else {
-        reg = AsmGetIntReg(result,'c');
+        reg = asmGetIntReg(result,'c');
         if (result->size < 4) {
             aoStrCatPrintf(buf, "mov    $0, %%ecx\n\t");
         }
@@ -462,21 +462,21 @@ void AsmLoadDeref(aoStr *buf, AstType *result, AstType *op_type, int off) {
         aoStrCatPrintf(buf,"movq   %%%s, %%rax\n\t", reg);
     }
     aoStrCatPrintf(buf, "# LOAD DEREF END: %s %s\n\t",
-            AstKindToString(result->kind),
-            AstKindToString(op_type->kind));
+            astKindToString(result->kind),
+            astKindToString(op_type->kind));
 }
 
-void AsmPointerArithmetic(Cctrl *cc, aoStr *buf, long op, Ast *LHS, Ast *RHS) {
+void asmPointerArithmetic(Cctrl *cc, aoStr *buf, long op, Ast *LHS, Ast *RHS) {
     //assert(LHS->type->kind == AST_TYPE_POINTER);
     int size;
     char *fn;
 
     aoStrCatPrintf(buf, "# Pointer Arithmetic start: %s %s\n\t",
-            AstKindToString(LHS->kind), AstKindToString(RHS->kind));
-    AsmExpression(cc,buf,LHS);
+            astKindToString(LHS->kind), astKindToString(RHS->kind));
+    asmExpression(cc,buf,LHS);
     aoStrCatPrintf(buf, "# Pointer Arithmetic MID\n\t");
-    AsmPush(buf,REG_RAX);
-    AsmExpression(cc,buf,RHS);
+    asmPush(buf,REG_RAX);
+    asmExpression(cc,buf,RHS);
 
     /* XXX: What is going on */
     if (LHS->type->ptr->ptr != NULL) {
@@ -505,12 +505,12 @@ void AsmPointerArithmetic(Cctrl *cc, aoStr *buf, long op, Ast *LHS, Ast *RHS) {
         if (size > 1) {
             aoStrCatPrintf(buf, "imul   $%d, %%rax\n\t", size);
         }
-        AsmPop(buf,REG_RCX);
+        asmPop(buf,REG_RCX);
         aoStrCatPrintf(buf,
             "%-3s   %%rax, %%rcx\n\t"
             "movq   %%rcx, %%rax\n\t", fn);
     } else {
-        AsmPop(buf,REG_RCX);
+        asmPop(buf,REG_RCX);
         aoStrCatPrintf(buf,
                 "cmpq   %%rax, %%rcx\n\t"
                 "%-3s   %%al\n\t"
@@ -519,35 +519,35 @@ void AsmPointerArithmetic(Cctrl *cc, aoStr *buf, long op, Ast *LHS, Ast *RHS) {
     aoStrCatPrintf(buf, "# Pointer Arithmetic end\n\t");
 }
 
-void AsmAssignClassRef(Cctrl *cc, aoStr *buf, Ast *cls, AstType *field, int offset) {
+void asmAssignClassRef(Cctrl *cc, aoStr *buf, Ast *cls, AstType *field, int offset) {
     int total_offset;
     switch (cls->kind) {
         case AST_LVAR:
             total_offset = cls->loff + field->offset + offset;
-            AsmLSave(buf,field,total_offset);
+            asmLSave(buf,field,total_offset);
             break;
 
         case AST_GVAR:
-            loggerPanic("Global variables unimplemented: %s\n", AstToString(cls));
+            loggerPanic("Global variables unimplemented: %s\n", astToString(cls));
            // total_offset = field->offset + offset;
-           // AsmGSave(buf,cls->clsname->data,field,total_offset);
+           // asmGSave(buf,cls->clsname->data,field,total_offset);
             break;
 
         case AST_CLASS_REF:
             total_offset = offset + cls->type->offset;
-            AsmAssignClassRef(cc,buf,cls->cls, field, total_offset);
+            asmAssignClassRef(cc,buf,cls->cls, field, total_offset);
             break;
 
         case AST_DEREF:
             aoStrCatPrintf(buf, "\n# Problem >code START %s \n\t",
-                    AstKindToString(field->kind));
+                    astKindToString(field->kind));
             total_offset = field->offset+offset;
 
             switch (field->kind) {
                 case AST_TYPE_FLOAT:{
-                    AsmPushXMM(buf,0);
-                    AsmExpression(cc,buf,cls->operand);
-                    AsmPopXMM(buf,1);
+                    asmPushXMM(buf,0);
+                    asmExpression(cc,buf,cls->operand);
+                    asmPopXMM(buf,1);
                     if (total_offset > 0) {
                         aoStrCatPrintf(buf, "movsd   %%xmm1, %d(%%rax)\n\t",
                                 field->offset+offset);
@@ -560,9 +560,9 @@ void AsmAssignClassRef(Cctrl *cc, aoStr *buf, Ast *cls, AstType *field, int offs
                     break;
                 }
                 default: {
-                    AsmPush(buf, REG_RAX);
-                    AsmExpression(cc,buf,cls->operand);
-                    AsmPop(buf,REG_RCX);
+                    asmPush(buf, REG_RAX);
+                    asmExpression(cc,buf,cls->operand);
+                    asmPop(buf,REG_RCX);
                     if (total_offset > 0) {
                         aoStrCatPrintf(buf, "movq   %%rcx, %d(%%rax)\n\t",
                                 field->offset+offset);
@@ -581,43 +581,43 @@ void AsmAssignClassRef(Cctrl *cc, aoStr *buf, Ast *cls, AstType *field, int offs
             break;
         default:
             loggerPanic("Failed to create ASM for: %s\n",
-                    AstToString(cls));
+                    astToString(cls));
     }
 }
 
-void AsmLoadClassRef(Cctrl *cc, aoStr *buf, Ast *cls, AstType *field, int offset) {
+void asmLoadClassRef(Cctrl *cc, aoStr *buf, Ast *cls, AstType *field, int offset) {
     int total_offset;
     switch (cls->kind) {
         case AST_LVAR:
             total_offset = cls->loff + field->offset + offset;
             aoStrCatPrintf(buf, "# CLASS LOAD\n\t");
-            AsmLLoad(buf, field, total_offset);
+            asmLLoad(buf, field, total_offset);
             break;
         
         case AST_GVAR:
-            loggerPanic("Global variables unimplemented: %s\n", AstToString(cls));
+            loggerPanic("Global variables unimplemented: %s\n", astToString(cls));
             //total_offset = field->offset + offset;
             //AsmGLoad(buf,field,cls->clsname,total_offset);
             break;
 
         case AST_CLASS_REF:
             total_offset = offset + cls->type->offset;
-            AsmLoadClassRef(cc,buf,cls->cls, field,total_offset);
+            asmLoadClassRef(cc,buf,cls->cls, field,total_offset);
             break;
 
         case AST_DEREF:
             total_offset = field->offset+offset;
-            AsmExpression(cc,buf,cls->operand);
-            AsmLoadDeref(buf,cls->cls->type,field,total_offset);
+            asmExpression(cc,buf,cls->operand);
+            asmLoadDeref(buf,cls->cls->type,field,total_offset);
             break;
         
         default:
             loggerPanic("Failed to create ASM for: %s\n",
-                    AstToString(cls));
+                    astToString(cls));
     }
 }
 
-void AsmAssign(Cctrl *cc, aoStr *buf, Ast *variable) {
+void asmAssign(Cctrl *cc, aoStr *buf, Ast *variable) {
     if (variable->kind == AST_DEFAULT_PARAM) {
         variable = variable->declvar;
     }
@@ -625,50 +625,50 @@ void AsmAssign(Cctrl *cc, aoStr *buf, Ast *variable) {
     switch (variable->kind) {
     case AST_CAST:
         tmp = variable->operand->type;
-        AsmCast(buf,variable->operand->type,variable->type);
+        asmCast(buf,variable->operand->type,variable->type);
         tmp = variable->operand->type;
-        variable->operand->type = AstTypeCopy(variable->type);
+        variable->operand->type = astTypeCopy(variable->type);
         free(tmp);
-        AsmAssign(cc,buf,variable->operand);
+        asmAssign(cc,buf,variable->operand);
         break;
 
     case AST_DEREF: 
-        AsmAssignDeref(cc,buf, variable);
+        asmAssignDeref(cc,buf, variable);
         break;
 
     case AST_CLASS_REF:
-        AsmAssignClassRef(cc,buf,variable->cls,variable->type,0);
+        asmAssignClassRef(cc,buf,variable->cls,variable->type,0);
         break;
 
     case AST_FUNPTR:
     case AST_LVAR: 
-        AsmLSave(buf,variable->type,variable->loff);
+        asmLSave(buf,variable->type,variable->loff);
         break;
 
     case AST_GVAR: {
         char *label = asmGetGlabel(variable);
-        AsmGSave(buf,label,variable->type,0);
+        asmGSave(buf,label,variable->type,0);
         break;
     }
     default:
         loggerPanic("Cannot assign: %s\n",
-                AstToString(variable));
+                astToString(variable));
     }
 }
 
-void AsmCompare(Cctrl *cc, aoStr *buf, char *instruction, Ast *ast) {
+void asmCompare(Cctrl *cc, aoStr *buf, char *instruction, Ast *ast) {
     Ast *LHS,*RHS;
     LHS = ast->left;
     RHS = ast->right;
     
     if ((LHS->type->kind == AST_TYPE_FLOAT &&
                 RHS->type->kind == AST_TYPE_FLOAT)) {
-        AsmExpression(cc,buf,LHS);
-        AsmToFloat(buf,LHS->type);
-        AsmPushXMM(buf,0);
-        AsmExpression(cc,buf,RHS);
-        AsmToFloat(buf,LHS->type);
-        AsmPopXMM(buf,1);
+        asmExpression(cc,buf,LHS);
+        asmToFloat(buf,LHS->type);
+        asmPushXMM(buf,0);
+        asmExpression(cc,buf,RHS);
+        asmToFloat(buf,LHS->type);
+        asmPopXMM(buf,1);
 
         switch (ast->kind) {
             case '<': {
@@ -725,12 +725,12 @@ void AsmCompare(Cctrl *cc, aoStr *buf, char *instruction, Ast *ast) {
             }
         }
     } else {
-        AsmExpression(cc,buf,LHS);
-        AsmToInt(buf,LHS->type);
-        AsmPush(buf,REG_RAX);
-        AsmExpression(cc,buf,RHS);
-        AsmToInt(buf,RHS->type);
-        AsmPop(buf,REG_RCX);
+        asmExpression(cc,buf,LHS);
+        asmToInt(buf,LHS->type);
+        asmPush(buf,REG_RAX);
+        asmExpression(cc,buf,RHS);
+        asmToInt(buf,RHS->type);
+        asmPop(buf,REG_RCX);
 
         switch (LHS->type->size) {
             case 1: aoStrCatPrintf(buf,"cmp    %%al, %%cl\n\t");break;
@@ -746,7 +746,7 @@ void AsmCompare(Cctrl *cc, aoStr *buf, char *instruction, Ast *ast) {
     }
 }
 
-void AsmBinaryOpIntArithmetic(Cctrl *cc,aoStr *buf, Ast *ast, int reverse) {
+void asmBinaryOpIntArithmetic(Cctrl *cc,aoStr *buf, Ast *ast, int reverse) {
     aoStrCatPrintf(buf, "# INt arithmetic START \n\t");
     char *op;
     Ast *LHS,*RHS;
@@ -769,27 +769,27 @@ void AsmBinaryOpIntArithmetic(Cctrl *cc,aoStr *buf, Ast *ast, int reverse) {
     case '/': case '%': break;
     default:
         loggerPanic("Invalid operator: '%s'\n",
-                AstKindToString(ast->kind));
+                astKindToString(ast->kind));
     }
 
     if (reverse == ASM_REVERSE_ARITHMETIC) {
-        AsmExpression(cc,buf,RHS);
-        AsmToInt(buf,RHS->type);
+        asmExpression(cc,buf,RHS);
+        asmToInt(buf,RHS->type);
         aoStrCatPrintf(buf, "movq   %%rax, %%rcx\n\t");
 
-        AsmExpression(cc,buf,LHS);
-        AsmToInt(buf,LHS->type);
-        AsmPush(buf,REG_RAX);
+        asmExpression(cc,buf,LHS);
+        asmToInt(buf,LHS->type);
+        asmPush(buf,REG_RAX);
     } else {
-        AsmExpression(cc,buf,LHS);
-        AsmToInt(buf,LHS->type);
-        AsmPush(buf,REG_RAX);
+        asmExpression(cc,buf,LHS);
+        asmToInt(buf,LHS->type);
+        asmPush(buf,REG_RAX);
 
-        AsmExpression(cc,buf,RHS);
-        AsmToInt(buf,RHS->type);
+        asmExpression(cc,buf,RHS);
+        asmToInt(buf,RHS->type);
         aoStrCatPrintf(buf, "movq   %%rax, %%rcx\n\t");
     }
-    AsmPop(buf,REG_RAX);
+    asmPop(buf,REG_RAX);
 
     if (ast->kind == '/' || ast->kind == '%') {
         aoStrCatPrintf(buf, "movq   $0, %%rdx\n\t");
@@ -808,7 +808,7 @@ void AsmBinaryOpIntArithmetic(Cctrl *cc,aoStr *buf, Ast *ast, int reverse) {
     aoStrCatPrintf(buf, "# INt arithmetic END \n\t");
 }
 
-void AsmBinaryOpFloatArithmetic(Cctrl *cc, aoStr *buf, Ast *ast, int reverse) {
+void asmBinaryOpFloatArithmetic(Cctrl *cc, aoStr *buf, Ast *ast, int reverse) {
     char *op;
     Ast *LHS,*RHS;
     LHS = ast->left;
@@ -823,46 +823,46 @@ void AsmBinaryOpFloatArithmetic(Cctrl *cc, aoStr *buf, Ast *ast, int reverse) {
     }
 
     if (reverse == ASM_REVERSE_ARITHMETIC) {
-        AsmExpression(cc,buf,RHS);
-        AsmToFloat(buf,RHS->type);
+        asmExpression(cc,buf,RHS);
+        asmToFloat(buf,RHS->type);
         aoStrCatPrintf(buf, "movsd  %%xmm0, %%xmm1\n\t");
 
-        AsmExpression(cc,buf,LHS);
-        AsmToFloat(buf,LHS->type);
-        AsmPushXMM(buf,0);
+        asmExpression(cc,buf,LHS);
+        asmToFloat(buf,LHS->type);
+        asmPushXMM(buf,0);
     } else {
-        AsmExpression(cc,buf,LHS);
-        AsmToFloat(buf,LHS->type);
-        AsmPushXMM(buf,0);
+        asmExpression(cc,buf,LHS);
+        asmToFloat(buf,LHS->type);
+        asmPushXMM(buf,0);
 
-        AsmExpression(cc,buf,RHS);
-        AsmToFloat(buf,RHS->type);
+        asmExpression(cc,buf,RHS);
+        asmToFloat(buf,RHS->type);
         aoStrCatPrintf(buf, "movsd  %%xmm0, %%xmm1\n\t");
     }
-    AsmPopXMM(buf,0);
+    asmPopXMM(buf,0);
 
     aoStrCatPrintf(buf, "%s     %%xmm1, %%xmm0\n\t", op);
 }
 
-void AsmLoadConvert(aoStr *buf, AstType *to, AstType *from) {
+void asmLoadConvert(aoStr *buf, AstType *to, AstType *from) {
     if (to->kind == AST_TYPE_FLOAT) {
-        AsmToFloat(buf,from);
+        asmToFloat(buf,from);
     } else {
-        AsmToInt(buf,from);
+        asmToInt(buf,from);
     }
 }
 
-void AsmSaveConvert(aoStr *buf, AstType *to, AstType *from) {
-    if (AstIsIntType(from) && AstIsFloatType(to)) {
+void asmSaveConvert(aoStr *buf, AstType *to, AstType *from) {
+    if (astIsIntType(from) && astIsFloatType(to)) {
         aoStrCatPrintf(buf, "cvtsi2ss %%eax, %%xmm0\n\t");
-    } else if (AstIsFloatType(from) && AstIsFloatType(to)) {
+    } else if (astIsFloatType(from) && astIsFloatType(to)) {
         return;
     } else {
-        AsmLoadConvert(buf,to,from);
+        asmLoadConvert(buf,to,from);
     }
 }
 
-static char *AsmGetCompartor(long op) {
+static char *asmGetCompartor(long op) {
     switch (op) {
     case '<': return "setl";
     case '>': return "setg";
@@ -870,7 +870,7 @@ static char *AsmGetCompartor(long op) {
     case TK_LESS_EQU: return "setle";
     default:
         loggerPanic("Operation: %ld -> %s is not supported for ranges\n",
-                op, AstKindToString(op));
+                op, astKindToString(op));
     }
 }
 
@@ -882,16 +882,16 @@ static char *AsmGetCompartor(long op) {
  * '0' < ch > '9'
  * Etc...
  * */
-void AsmRangeOperation(Cctrl *cc, aoStr *buf, Ast *ast) {
-    char *op2 = AsmGetCompartor(ast->kind);
-    char *op1 = AsmGetCompartor(ast->left->kind);
-    aoStr *label_end = AstMakeLabel();
+void asmRangeOperation(Cctrl *cc, aoStr *buf, Ast *ast) {
+    char *op2 = asmGetCompartor(ast->kind);
+    char *op1 = asmGetCompartor(ast->left->kind);
+    aoStr *label_end = astMakeLabel();
 
     aoStrCatPrintf(buf, "# RANGE Start\n\t");
-    AsmExpression(cc,buf,ast->left->left);
-    AsmPush(buf,REG_RAX);
-    AsmExpression(cc,buf,ast->left->right);
-    AsmPop(buf,REG_RCX);
+    asmExpression(cc,buf,ast->left->left);
+    asmPush(buf,REG_RAX);
+    asmExpression(cc,buf,ast->left->right);
+    asmPop(buf,REG_RCX);
     aoStrCatPrintf(buf,
             "cmp    %%rax, %%rcx\n\t"
             "%-5s   %%al\n\t"
@@ -899,10 +899,10 @@ void AsmRangeOperation(Cctrl *cc, aoStr *buf, Ast *ast) {
             "test   %%rax, %%rax\n\t"
             "movq   $0, %%rax\n\t"
             "je     %s\n\t", op1, label_end->data);
-    AsmExpression(cc,buf,ast->left->right);
-    AsmPush(buf,REG_RAX);
-    AsmExpression(cc,buf,ast->right);
-    AsmPop(buf,REG_RCX);
+    asmExpression(cc,buf,ast->left->right);
+    asmPush(buf,REG_RAX);
+    asmExpression(cc,buf,ast->right);
+    asmPop(buf,REG_RCX);
     aoStrCatPrintf(buf,
             "cmp    %%rax, %%rcx\n\t"
             "%-5s   %%al\n\t"
@@ -915,7 +915,7 @@ void AsmRangeOperation(Cctrl *cc, aoStr *buf, Ast *ast) {
     aoStrCatPrintf(buf, "# Range END \n\t\n\t");
 }
 
-int AsmOpIsCompoundAssign(Ast *ast) {
+int asmOpIsCompoundAssign(Ast *ast) {
     switch (ast->kind) {
     case '-':
     case '+':
@@ -931,18 +931,18 @@ int AsmOpIsCompoundAssign(Ast *ast) {
     return 0;
 }
 
-int AsmShouldReverseMaths(Ast *RHS) {
-    return AsmOpIsCompoundAssign(RHS) && 
+int asmShouldReverseMaths(Ast *RHS) {
+    return asmOpIsCompoundAssign(RHS) && 
         RHS->right && (RHS->right->kind == AST_FUNCALL || 
          RHS->right->kind == AST_FUNPTR_CALL ||
          RHS->right->kind == AST_ASM_FUNCALL);
 }
 
-void AsmBinOpFunctionAssign(Cctrl *cc, aoStr *buf, Ast *fnptr, Ast *fn) {
+void asmBinOpFunctionAssign(Cctrl *cc, aoStr *buf, Ast *fnptr, Ast *fn) {
     char *normalised;
     switch (fn->kind) {
         case AST_FUNC:
-            normalised = AsmNormaliseFunctionName(fn->fname->data);
+            normalised = asmNormaliseFunctionName(fn->fname->data);
             aoStrCatPrintf(buf,
                     "leaq   %s(%%rip), %%rax\n\t"
                     "movq    %%rax, %d(%%rbp)\n\t",
@@ -968,77 +968,77 @@ void AsmBinOpFunctionAssign(Cctrl *cc, aoStr *buf, Ast *fnptr, Ast *fn) {
             break;
         default:
             loggerPanic("Cannot assign: %s to a function pointer type\n",
-                    AstKindToString(fn->kind));
+                    astKindToString(fn->kind));
     }
 }
 
-void AsmBinaryOp(Cctrl *cc, aoStr *buf, Ast *ast) {
+void asmBinaryOp(Cctrl *cc, aoStr *buf, Ast *ast) {
     if (ast->kind == '=') {
         /* If it is compound and the value is being assigned to the return of 
          * a function we need to perform the integer arithmetic in reversed 
          * order */
-        if (AsmShouldReverseMaths(ast->right)) {
+        if (asmShouldReverseMaths(ast->right)) {
             if (ast->type->kind == AST_TYPE_INT) { 
-                AsmBinaryOpIntArithmetic(cc,buf,ast->right,
+                asmBinaryOpIntArithmetic(cc,buf,ast->right,
                         ASM_REVERSE_ARITHMETIC);
             } else if (ast->type->kind == AST_TYPE_FLOAT) {
-                AsmBinaryOpFloatArithmetic(cc,buf,ast->right,
+                asmBinaryOpFloatArithmetic(cc,buf,ast->right,
                         ASM_REVERSE_ARITHMETIC);
             }
         } else {
-            AsmExpression(cc,buf,ast->right);
-            // AsmLoadConvert(buf,ast->type,ast->right->type);
+            asmExpression(cc,buf,ast->right);
+            // asmLoadConvert(buf,ast->type,ast->right->type);
         }
-        if (ast->right->kind == AST_DEREF && AstIsFloatType(ast->left->type)) {
+        if (ast->right->kind == AST_DEREF && astIsFloatType(ast->left->type)) {
             aoStrCatPrintf(buf, "movq    %%rax, %%xmm0\n\t");
-            AsmAssign(cc,buf, ast->left);
+            asmAssign(cc,buf, ast->left);
         } else {
-            AsmLoadConvert(buf,ast->type,ast->right->type);
-            AsmAssign(cc,buf, ast->left);
+            asmLoadConvert(buf,ast->type,ast->right->type);
+            asmAssign(cc,buf, ast->left);
         }
         return;
     }
 
     if (ast->type->kind == AST_TYPE_POINTER) {
-        AsmPointerArithmetic(cc,buf,ast->kind,ast->left,ast->right);
+        asmPointerArithmetic(cc,buf,ast->kind,ast->left,ast->right);
         return;
     }
 
     /* This is pretty loose! */
-    if (AstIsRangeOperator(ast->kind) && AstIsRangeOperator(ast->left->kind)) {
-        AsmRangeOperation(cc,buf,ast);
+    if (astIsRangeOperator(ast->kind) && astIsRangeOperator(ast->left->kind)) {
+        asmRangeOperation(cc,buf,ast);
         return;
     }
 
     switch (ast->kind) {
-        case '<': AsmCompare(cc,buf,"setl",ast); return;
-        case '>': AsmCompare(cc,buf,"setg",ast); return;
-        case TK_EQU_EQU: AsmCompare(cc,buf,"sete",ast); return;
-        case TK_GREATER_EQU: AsmCompare(cc,buf,"setge",ast); return;
-        case TK_LESS_EQU: AsmCompare(cc,buf,"setle",ast); return;
-        case TK_NOT_EQU: AsmCompare(cc,buf,"setne",ast); return;
+        case '<': asmCompare(cc,buf,"setl",ast); return;
+        case '>': asmCompare(cc,buf,"setg",ast); return;
+        case TK_EQU_EQU: asmCompare(cc,buf,"sete",ast); return;
+        case TK_GREATER_EQU: asmCompare(cc,buf,"setge",ast); return;
+        case TK_LESS_EQU: asmCompare(cc,buf,"setle",ast); return;
+        case TK_NOT_EQU: asmCompare(cc,buf,"setne",ast); return;
     }
 
     if (ast->type->kind == AST_TYPE_INT || ast->type->kind == AST_TYPE_CHAR) {
-        AsmBinaryOpIntArithmetic(cc,buf,ast,ASM_INORDER_ARITHMETIC);
+        asmBinaryOpIntArithmetic(cc,buf,ast,ASM_INORDER_ARITHMETIC);
     } else if (ast->type->kind == AST_TYPE_FLOAT) {
-        AsmBinaryOpFloatArithmetic(cc,buf,ast,ASM_INORDER_ARITHMETIC);
+        asmBinaryOpFloatArithmetic(cc,buf,ast,ASM_INORDER_ARITHMETIC);
     } else if (ast->type->kind == AST_TYPE_FUNC) {
         char *fname;
         if (ast->kind == AST_ASM_FUNC_BIND) {
             fname = strndup(ast->asmfname->data,ast->asmfname->len);
         } else {
-            fname = AsmNormaliseFunctionName(ast->fname->data);
+            fname = asmNormaliseFunctionName(ast->fname->data);
         }
         aoStrCatPrintf(buf,"leaq    %s(%%rip), %%rax\n\t",fname);
         free(fname);
     } else {
-        loggerPanic("Cannot handle>: %s\n", AstToString(ast));
+        loggerPanic("Cannot handle>: %s\n", astToString(ast));
     }
 }
 
-void AsmPreIncrDecr(Cctrl *cc, aoStr *buf, Ast *ast, char *op) {
-    AsmExpression(cc,buf,ast->operand);
+void asmPreIncrDecr(Cctrl *cc, aoStr *buf, Ast *ast, char *op) {
+    asmExpression(cc,buf,ast->operand);
     int size = 1;
     if (ast->operand->type->ptr) {
         size = ast->operand->type->ptr->size;
@@ -1047,22 +1047,22 @@ void AsmPreIncrDecr(Cctrl *cc, aoStr *buf, Ast *ast, char *op) {
         /* This is essentially pointer juggling like:
          * '*++ptr' or '*--ptr' */
         aoStrCatPrintf(buf, "%s   $%d, %%rax\n\t", op, size);
-        AsmAssign(cc,buf,ast->operand);
+        asmAssign(cc,buf,ast->operand);
         if (ast->operand->type->ptr) {
             aoStrCatPrintf(buf, "movq   %%rax, %%rcx\n\t");
         }
     } else {
         aoStrCatPrintf(buf, "%s   $%d, %%rax\n\t", op, size);
-        AsmAssign(cc,buf,ast->operand);
+        asmAssign(cc,buf,ast->operand);
         if (ast->operand->type->ptr) {
             aoStrCatPrintf(buf, "movq   %%rax, %%rcx\n\t");
         }
     }
 }
 
-void AsmIncrDecr(Cctrl *cc, aoStr *buf, Ast *ast, char *op) {
-    AsmExpression(cc,buf,ast->operand);
-    AsmPush(buf, REG_RAX);
+void asmIncrDecr(Cctrl *cc, aoStr *buf, Ast *ast, char *op) {
+    asmExpression(cc,buf,ast->operand);
+    asmPush(buf, REG_RAX);
     int size = 1;
     if (ast->operand->type->ptr) {
         size = ast->operand->type->ptr->size;
@@ -1072,20 +1072,20 @@ void AsmIncrDecr(Cctrl *cc, aoStr *buf, Ast *ast, char *op) {
         /* This is essentially pointer juggling like:
          * '*ptr++' or '*ptr--' */
         aoStrCatPrintf(buf, "%s   $%d, %%rax\n\t", op, size);
-        AsmAssign(cc,buf,ast->operand);
+        asmAssign(cc,buf,ast->operand);
     } else {
         aoStrCatPrintf(buf, "%s   $1, %%rax\n\t", op);
-        AsmAssign(cc,buf,ast->operand);
+        asmAssign(cc,buf,ast->operand);
     }
 
-    AsmPop(buf,REG_RAX);
+    asmPop(buf,REG_RAX);
 }
 
 /* This function is seriouly bjorked */
-void AsmAddr(Cctrl *cc, aoStr *buf, Ast *ast) {
+void asmAddr(Cctrl *cc, aoStr *buf, Ast *ast) {
     aoStrCatPrintf(buf, "# ADDR %s START %s \n\t", 
-        AstKindToString(ast->operand->kind), 
-        AstKindToString(ast->operand->type->kind));
+        astKindToString(ast->operand->kind), 
+        astKindToString(ast->operand->type->kind));
 
     /* This is gross */
     switch (ast->operand->kind) {
@@ -1093,7 +1093,7 @@ void AsmAddr(Cctrl *cc, aoStr *buf, Ast *ast) {
             if (ast->operand->type->kind == AST_TYPE_POINTER) {
                 /* XXX: this feels extremely hacky */
                 aoStrCatPrintf(buf, "# ADDR of %s\n\t",
-                        AstKindToString(ast->operand->type->ptr->kind));
+                        astKindToString(ast->operand->type->ptr->kind));
                 switch (ast->operand->type->ptr->kind) {
                     case AST_TYPE_ARRAY:
                     case AST_TYPE_CHAR:
@@ -1126,70 +1126,70 @@ void AsmAddr(Cctrl *cc, aoStr *buf, Ast *ast) {
                 aoStrCatPrintf(buf,"addq   $%d, %%rax\n\t",ast->cls->type->offset);
             } else {
                 loggerPanic("Cannot produce ASM for: %s %s %s %s\n",
-                    AstKindToString(ast->operand->operand->kind),
-                    AstTypeToString(ast->type),
-                    AstTypeToString(ast->operand->type),
-                    AstTypeToString(ast->cls->type));
+                    astKindToString(ast->operand->operand->kind),
+                    astTypeToString(ast->type),
+                    astTypeToString(ast->operand->type),
+                    astTypeToString(ast->cls->type));
             }
             break;
         }
         case AST_DEREF: {
             /* That is the class */
             Ast *cls = ast->operand;
-            AsmExpression(cc,buf,cls);
+            asmExpression(cc,buf,cls);
             break;
         }
         default:
             loggerPanic("Cannot turn Kind AST:%s %s into assembly\n",
-                    AstKindToString(ast->kind),
-                    AstToString(ast));
+                    astKindToString(ast->kind),
+                    astToString(ast));
     }
     aoStrCatPrintf(buf, "# ADDR %s END %s \n\t", 
-        AstKindToString(ast->operand->kind),
-        AstKindToString(ast->operand->type->kind));
+        astKindToString(ast->operand->kind),
+        astKindToString(ast->operand->type->kind));
 }
 
-int AsmPlaceArgs(Cctrl *cc, aoStr *buf, List *argv, int reverse) {
+int asmPlaceArgs(Cctrl *cc, aoStr *buf, List *argv, int reverse) {
     int r = 0;
     Ast *ast;
     if (reverse) {
         for (List *it = argv->prev; it != argv; it = it->prev) {
             ast = it->value;
-            AsmExpression(cc,buf,ast);
-            if (AstIsFloatType(ast->type)) AsmPushXMM(buf,0);
-            else AsmPush(buf,REG_RAX);
+            asmExpression(cc,buf,ast);
+            if (astIsFloatType(ast->type)) asmPushXMM(buf,0);
+            else asmPush(buf,REG_RAX);
             r += 8;
         }
     } else {
         for (List *it = argv->next; it != argv; it = it->next) {
             ast = it->value;
-            AsmExpression(cc,buf,ast);
-            if (AstIsFloatType(ast->type)) AsmPushXMM(buf,0);
-            else AsmPush(buf,REG_RAX);
+            asmExpression(cc,buf,ast);
+            if (astIsFloatType(ast->type)) asmPushXMM(buf,0);
+            else asmPush(buf,REG_RAX);
             r += 8;
         }
     }
     return align(r,8);
 }
 
-void AsmPopIntArgs(aoStr *buf, List *argv) {
-    int count = ListCount(argv);
+void asmPopIntArgs(aoStr *buf, List *argv) {
+    int count = listCount(argv);
     for (int i = count - 1; i >= 0; --i) {
-        AsmPop(buf, REGISTERS[i]);
+        asmPop(buf, REGISTERS[i]);
     }
 }
 
-void AsmPopFloatArgs(aoStr *buf, List *argv) {
-    int count = ListCount(argv);
+void asmPopFloatArgs(aoStr *buf, List *argv) {
+    int count = listCount(argv);
     for (int i = count - 1; i >= 0; --i) {
-        AsmPopXMM(buf,i);
+        asmPopXMM(buf,i);
     }
 }
 
 #define FUN_EXISTS 0x1
 #define FUN_EXTERN 0x2
 #define FUN_VARARG 0x4
-void AsmPrepFuncCallArgs(Cctrl *cc, aoStr *buf, Ast *funcall) {
+void asmPrepFuncCallArgs(Cctrl *cc, aoStr *buf, Ast *funcall) {
     int int_cnt,float_cnt,stack_cnt,stackoffset,needs_padding,var_arg_start,argc,
         flags;
     List *int_args, *float_args, *stack_args, 
@@ -1197,7 +1197,7 @@ void AsmPrepFuncCallArgs(Cctrl *cc, aoStr *buf, Ast *funcall) {
     Ast *tmp, *fun, *arg;
 
     flags = 0;
-    fun = DictGetLen(cc->global_env,funcall->fname->data,funcall->fname->len);
+    fun = dictGetLen(cc->global_env,funcall->fname->data,funcall->fname->len);
     funarg = funparam = params = NULL;
 
     /* This should exist on the AST */
@@ -1217,7 +1217,7 @@ void AsmPrepFuncCallArgs(Cctrl *cc, aoStr *buf, Ast *funcall) {
     var_arg_start = -1;
     argc = 0;
     if (flags & (FUN_EXISTS|FUN_VARARG) && !(flags & FUN_EXTERN)) {
-        ListForEach(fun->params) {
+        listForEach(fun->params) {
             var_arg_start++;
             arg = it->value;
             if (arg->kind == AST_VAR_ARGS) {
@@ -1247,15 +1247,15 @@ void AsmPrepFuncCallArgs(Cctrl *cc, aoStr *buf, Ast *funcall) {
 
     int_cnt = float_cnt = stack_cnt = stackoffset = 0;
     
-    int_args = ListNew();
-    float_args = ListNew();
-    stack_args = ListNew();
+    int_args = listNew();
+    float_args = listNew();
+    stack_args = listNew();
 
     while (1) {
         if (funarg != NULL) {
             tmp = funarg->value;
             if (tmp->kind == AST_PLACEHOLDER) {
-                loggerDebug("place holder: %s\n",AstToString(funparam->value));
+                loggerDebug("place holder: %s\n",astToString(funparam->value));
                 tmp = ((Ast *)funparam->value)->declinit;
                 if (tmp == NULL) {
                     loggerPanic("Default parameter not provided for function call: %s()\n",
@@ -1279,26 +1279,26 @@ void AsmPrepFuncCallArgs(Cctrl *cc, aoStr *buf, Ast *funcall) {
             !(flags & FUN_EXTERN) && 
             var_arg_start == argc)
         {
-            ListAppend(stack_args,tmp);
+            listAppend(stack_args,tmp);
             stack_cnt++;
-        } else if (AstIsFloatType(tmp->type)) {
+        } else if (astIsFloatType(tmp->type)) {
             argc++;
             if (float_cnt < 8) {
-                ListAppend(float_args,tmp);
+                listAppend(float_args,tmp);
                 float_cnt++;
             }
             else {
-                ListAppend(stack_args,tmp);
+                listAppend(stack_args,tmp);
                 stack_cnt++;
             }
         } else {
             argc++;
             if (int_cnt < 6) {
-                ListAppend(int_args,tmp);
+                listAppend(int_args,tmp);
                 int_cnt++;
             }
             else {
-                ListAppend(stack_args,tmp);
+                listAppend(stack_args,tmp);
                 stack_cnt++;
             }
         }
@@ -1331,27 +1331,27 @@ void AsmPrepFuncCallArgs(Cctrl *cc, aoStr *buf, Ast *funcall) {
     if (funcall->kind == AST_FUNPTR_CALL) {
         switch (funcall->ref->kind) {
             case AST_CLASS_REF:
-                AsmLoadClassRef(cc,buf,funcall->ref->cls,funcall->ref->type,0);
+                asmLoadClassRef(cc,buf,funcall->ref->cls,funcall->ref->type,0);
                 break;
 
             case AST_FUNPTR:
             case AST_LVAR:
-                AsmLLoad(buf,funcall->ref->type,funcall->ref->loff);
+                asmLLoad(buf,funcall->ref->type,funcall->ref->loff);
                 break;
 
             case AST_GVAR:
-                AsmGLoad(buf,funcall->ref->type,funcall->ref->gname,0);
+                asmGLoad(buf,funcall->ref->type,funcall->ref->gname,0);
                 break;
         }
         aoStrCatPrintf(buf,"movq    %%rax,%%r11\n\t");
     }
 
-    stackoffset = AsmPlaceArgs(cc,buf,stack_args,1);
-    AsmPlaceArgs(cc,buf,int_args,0);
-    AsmPlaceArgs(cc,buf,float_args,0);
+    stackoffset = asmPlaceArgs(cc,buf,stack_args,1);
+    asmPlaceArgs(cc,buf,int_args,0);
+    asmPlaceArgs(cc,buf,float_args,0);
 
-    AsmPopFloatArgs(buf,float_args);
-    AsmPopIntArgs(buf,int_args);
+    asmPopFloatArgs(buf,float_args);
+    asmPopIntArgs(buf,int_args);
 
     if (float_cnt) {
         aoStrCatPrintf(buf, "movl   $%d, %%eax\n\t", float_cnt);
@@ -1360,7 +1360,7 @@ void AsmPrepFuncCallArgs(Cctrl *cc, aoStr *buf, Ast *funcall) {
     if (funcall->kind == AST_FUNPTR_CALL) {
         aoStrCatPrintf(buf, "call    *%%r11\n\t");
     } else {
-        AsmCall(buf, funcall->fname->data);
+        asmCall(buf, funcall->fname->data);
     }
 
     if (float_cnt) {
@@ -1379,23 +1379,23 @@ void AsmPrepFuncCallArgs(Cctrl *cc, aoStr *buf, Ast *funcall) {
         stack_pointer -= 8;
     }
 
-    ListRelease(int_args,NULL);
-    ListRelease(float_args,NULL);
-    ListRelease(stack_args,NULL);
+    listRelease(int_args,NULL);
+    listRelease(float_args,NULL);
+    listRelease(stack_args,NULL);
 }
 
 /* Function call for ASM, PTR and normal functions */
-void AsmFunCall(Cctrl *cc, aoStr *buf, Ast *ast) {
-    AsmPrepFuncCallArgs(cc,buf,ast);
+void asmFunCall(Cctrl *cc, aoStr *buf, Ast *ast) {
+    asmPrepFuncCallArgs(cc,buf,ast);
 }
 
-void AsmArrayInit(Cctrl *cc, aoStr *buf, Ast *ast, AstType *type, int offset) {
+void asmArrayInit(Cctrl *cc, aoStr *buf, Ast *ast, AstType *type, int offset) {
     Ast *tmp;
 
-    ListForEach(ast->arrayinit) {
+    listForEach(ast->arrayinit) {
         tmp = it->value;
         if (tmp->kind == AST_ARRAY_INIT) {
-            AsmArrayInit(cc,buf,tmp,type->ptr,offset);
+            asmArrayInit(cc,buf,tmp,type->ptr,offset);
             offset += type->ptr->size;
             continue;
         }
@@ -1410,16 +1410,16 @@ void AsmArrayInit(Cctrl *cc, aoStr *buf, Ast *ast, AstType *type, int offset) {
             }
             break;
         default:
-            AsmExpression(cc, buf, it->value);
+            asmExpression(cc, buf, it->value);
             break;
         }
 
-        AsmLSave(buf,type->ptr,offset);
+        asmLSave(buf,type->ptr,offset);
         offset += type->ptr->size;
     }
 }
 
-void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
+void asmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
     aoStr *label_begin, *label_end;
 
     switch (ast->kind) {
@@ -1440,10 +1440,10 @@ void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
                 f64_label = ast->f64_label->data;
             }
             if (!f64_label) {
-                ast->f64_label = AstMakeLabel();
+                ast->f64_label = astMakeLabel();
                 f64_label = ast->f64_label->data;
                 double f = ast->f64;
-                AsmRemovePreviousTab(buf);
+                asmRemovePreviousTab(buf);
                 aoStrCatPrintf(buf, ".data\n %s:\n\t"
                                     ".quad 0x%lX #%.9f\n"
                                     ".text\n\t",f64_label,
@@ -1454,7 +1454,7 @@ void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
         }
         default:
             loggerPanic("Unknown literal type: %s\n",
-                    AstKindToString(ast->kind));
+                    astKindToString(ast->kind));
         }
         break;
     }
@@ -1464,22 +1464,22 @@ void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
         break;
     
     case AST_LVAR:
-        AsmLLoad(buf,ast->type,ast->loff);
+        asmLLoad(buf,ast->type,ast->loff);
         break;
     
     case AST_GVAR:
-        AsmGLoad(buf,ast->type,ast->glabel,0);
+        asmGLoad(buf,ast->type,ast->glabel,0);
         break;
 
     case AST_FUNPTR_CALL:
     case AST_ASM_FUNCALL:
     case AST_FUNCALL: {
-        AsmFunCall(cc,buf,ast);
+        asmFunCall(cc,buf,ast);
         break;
     }
 
     case AST_DEFAULT_PARAM:
-        AsmExpression(cc,buf,ast->declvar);
+        asmExpression(cc,buf,ast->declvar);
         break;
     
     case AST_DECL: {
@@ -1488,18 +1488,18 @@ void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
         }
 
         if (ast->declinit->kind == AST_ARRAY_INIT) {
-            AsmArrayInit(cc,buf,ast->declinit,ast->declvar->type,ast->declvar->loff);
+            asmArrayInit(cc,buf,ast->declinit,ast->declvar->type,ast->declvar->loff);
         } else if (ast->declvar->type->kind == AST_TYPE_ARRAY) {
             assert(ast->declinit->kind == AST_STRING);
-            AsmPlaceString(buf,ast->declinit->sval,ast->declvar->loff);
+            asmPlaceString(buf,ast->declinit->sval,ast->declvar->loff);
         } else if (ast->declinit->kind == AST_STRING) {
-            AsmGLoad(buf, ast->declinit->type, ast->declinit->slabel, 0);
-            AsmLSave(buf, ast->declvar->type, ast->declvar->loff);
+            asmGLoad(buf, ast->declinit->type, ast->declinit->slabel, 0);
+            asmLSave(buf, ast->declvar->type, ast->declvar->loff);
         } else if (ast->declinit->kind == AST_FUNC) {
-            AsmBinOpFunctionAssign(cc,buf,ast->declvar,ast->declinit);
+            asmBinOpFunctionAssign(cc,buf,ast->declvar,ast->declinit);
         } else {
-            AsmExpression(cc,buf, ast->declinit);
-            AsmLSave(buf, ast->declvar->type, ast->declvar->loff);
+            asmExpression(cc,buf, ast->declinit);
+            asmLSave(buf, ast->declvar->type, ast->declvar->loff);
         }
         return;
     }
@@ -1509,16 +1509,16 @@ void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
         break;
 
     case AST_ADDR:
-        AsmAddr(cc,buf,ast);
+        asmAddr(cc,buf,ast);
         break;
 
     case AST_CAST:
-        AsmTypeCast(cc,buf,ast);
+        asmTypeCast(cc,buf,ast);
         break;
 
     case AST_DEREF: {
         assert(ast->operand->type->kind == AST_TYPE_POINTER);
-        AsmExpression(cc,buf,ast->operand);
+        asmExpression(cc,buf,ast->operand);
 
         AstType *op_type =  ast->operand->type;
         AstType *result = ast->type;
@@ -1530,9 +1530,9 @@ void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
         }
 
 
-        reg = "rcx"; // AsmGetIntReg(result,'c');
+        reg = "rcx"; // asmGetIntReg(result,'c');
 
-        aoStrCatPrintf(buf, "##__DEREF_START: %s\n\t", AstKindToString(result->kind));
+        aoStrCatPrintf(buf, "##__DEREF_START: %s\n\t", astKindToString(result->kind));
         if (result->size < 4) {
             aoStrCatPrintf(buf, "movq   %%rax, %%rcx\n\t"
                                 "movzbl (%%%s), %%eax\n\t"
@@ -1544,7 +1544,7 @@ void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
                 aoStrCatPrintf(buf, "movq   %%rax, %%rcx\n\t"
                         "leaq (%%%s), %%rax\n\t", reg);
             } else if (result->kind != AST_TYPE_POINTER) {
-                aoStrCatPrintf(buf,"# deref not ptr start: %s %s\n\t", AstKindToString(result->kind), AstKindToString(op_type->kind));
+                aoStrCatPrintf(buf,"# deref not ptr start: %s %s\n\t", astKindToString(result->kind), astKindToString(op_type->kind));
                // aoStrCatPrintf(buf,"movq   (%%%s), %%rax\n\t", reg);
                
 
@@ -1552,15 +1552,15 @@ void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
                     aoStrCatPrintf(buf, "movq   %%rax, %%rcx\n\t"
                                         "movq   (%%%s), %%xmm0\n\t", reg);
                 } else {
-                    // reg = AsmGetIntReg(result,'c');
-                    char *mov = AsmGetPtrMove(result);
+                    // reg = asmGetIntReg(result,'c');
+                    char *mov = asmGetPtrMove(result);
                     aoStrCatPrintf(buf, "movq   %%rax, %%rcx\n\t"
                                         "%s   (%%%s), %%rax\n\t",mov, reg);
                 }
                 aoStrCatPrintf(buf,"# deref not ptr start\n\t");
             } else if (result->kind == AST_TYPE_POINTER) {
-                reg = AsmGetIntReg(result,'a');
-                char *mov = AsmGetMov(result);
+                reg = asmGetIntReg(result,'a');
+                char *mov = asmGetMov(result);
                 switch (result->ptr->kind) {
                     case AST_TYPE_CHAR:
                         aoStrCatPrintf(buf,"# deref char start\n\t");
@@ -1598,24 +1598,24 @@ void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
     }
 
     case AST_IF: {
-        AsmExpression(cc,buf,ast->cond);
-        label_begin = AstMakeLabel();
+        asmExpression(cc,buf,ast->cond);
+        label_begin = astMakeLabel();
         aoStrCatPrintf(buf,
                 "test   %%rax, %%rax\n\t"
                 "je     %s\n\t", label_begin->data);
-        AsmExpression(cc,buf,ast->then);
+        asmExpression(cc,buf,ast->then);
         if (ast->els) {
-            label_end = AstMakeLabel();
+            label_end = astMakeLabel();
             aoStrCatPrintf(buf,
                     "jmp    %s\n"
                     "%s:\n\t"
                     ,label_end->data,
                     label_begin->data);
-            AsmExpression(cc,buf,ast->els);
-            AsmRemovePreviousTab(buf);
+            asmExpression(cc,buf,ast->els);
+            asmRemovePreviousTab(buf);
             aoStrCatPrintf(buf, "%s:\n\t", label_end->data);
         } else {
-            AsmRemovePreviousTab(buf);
+            asmRemovePreviousTab(buf);
             aoStrCatPrintf(buf, "%s:\n\t", label_begin->data);
         }
         break;
@@ -1632,7 +1632,7 @@ void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
         break;
 
     case AST_LABEL:
-        AsmRemovePreviousTab(buf);
+        asmRemovePreviousTab(buf);
         if (ast->sval) {
             aoStrCatPrintf(buf, "%s:\n\t", ast->sval->data);
         } else {
@@ -1641,12 +1641,12 @@ void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
         break;
 
     case AST_DO_WHILE: {
-        AsmRemovePreviousTab(buf);
+        asmRemovePreviousTab(buf);
         aoStrCatPrintf(buf, "%s:\n\t", ast->while_begin->data);
         if (ast->whilebody) {
-            AsmExpression(cc,buf, ast->whilebody);
+            asmExpression(cc,buf, ast->whilebody);
         }
-        AsmExpression(cc,buf,ast->whilecond);
+        asmExpression(cc,buf,ast->whilecond);
         aoStrCatPrintf(buf,
                 "test   %%rax, %%rax\n\t"
                 "je     %s\n\t",
@@ -1661,15 +1661,15 @@ void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
     }
 
     case AST_WHILE: {
-        AsmRemovePreviousTab(buf);
+        asmRemovePreviousTab(buf);
         aoStrCatPrintf(buf, "%s:\n\t", ast->while_begin->data);
-        AsmExpression(cc,buf,ast->whilecond);
+        asmExpression(cc,buf,ast->whilecond);
         aoStrCatPrintf(buf,
                 "test   %%rax, %%rax\n\t"
                 "je     %s\n\t",
                 ast->while_end->data);
         if (ast->whilebody) {
-            AsmExpression(cc,buf, ast->whilebody);
+            asmExpression(cc,buf, ast->whilebody);
         }
         aoStrCatPrintf(buf,
                 "jmp    %s\n"
@@ -1685,28 +1685,28 @@ void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
             break;
         }
         if (ast->forinit) {
-            AsmExpression(cc,buf,ast->forinit);
+            asmExpression(cc,buf,ast->forinit);
         }
 
-        AsmRemovePreviousTab(buf);
+        asmRemovePreviousTab(buf);
         aoStrCatPrintf(buf, "%s:\n\t", ast->for_begin->data);
 
         if (ast->forcond) {
-            AsmExpression(cc,buf,ast->forcond);
+            asmExpression(cc,buf,ast->forcond);
             aoStrCatPrintf(buf,
                     "test   %%rax, %%rax\n\t"
                     "je     %s\n\t",
                     ast->for_end->data);
         }
 
-        AsmExpression(cc,buf, ast->forbody);
+        asmExpression(cc,buf, ast->forbody);
 
         /* To help with continue statements */
-        AsmRemovePreviousTab(buf);
+        asmRemovePreviousTab(buf);
         aoStrCatPrintf(buf, "%s:\n\t", ast->for_middle->data);
 
         if (ast->forstep) {
-            AsmExpression(cc,buf,ast->forstep);
+            asmExpression(cc,buf,ast->forstep);
         }
 
         aoStrCatPrintf(buf,
@@ -1722,83 +1722,83 @@ void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
             aoStrCatPrintf(buf, "leave\n\tret\n");
             break;
         }
-        AsmExpression(cc,buf, ast->retval);
-        AsmSaveConvert(buf,ast->type,ast->retval->type);
+        asmExpression(cc,buf, ast->retval);
+        asmSaveConvert(buf,ast->type,ast->retval->type);
         aoStrCatPrintf(buf, "leave\n\tret\n");
         break;
 
     case AST_COMPOUND_STMT:
-        ListForEach(ast->stms) {
-            AsmExpression(cc,buf,it->value);
+        listForEach(ast->stms) {
+            asmExpression(cc,buf,it->value);
         }
         break;
 
     case AST_CLASS_REF:
-        AsmLoadClassRef(cc,buf,ast->cls,ast->type,0);
+        asmLoadClassRef(cc,buf,ast->cls,ast->type,0);
         break;
 
     case AST_CASE:
-        AsmRemovePreviousTab(buf);
+        asmRemovePreviousTab(buf);
         aoStrCatPrintf(buf, "%s:\n\t", ast->case_label->data);
         break;
 
 
     case TK_PRE_PLUS_PLUS: {
         if (ast->type->kind == AST_TYPE_FLOAT) {
-            AsmExpression(cc,buf,ast->operand);
+            asmExpression(cc,buf,ast->operand);
             aoStrCatPrintf(buf,
                     "movsd   one_dbl(%%rip), %%xmm1\n\t"
                     "addsd   %%xmm1, %%xmm0\n\t");
-            AsmAssign(cc,buf,ast->operand);
+            asmAssign(cc,buf,ast->operand);
         } else {
-            AsmPreIncrDecr(cc,buf,ast,"addq");
+            asmPreIncrDecr(cc,buf,ast,"addq");
         }
         break;
      }
 
     case TK_PLUS_PLUS: {
         if (ast->type->kind == AST_TYPE_FLOAT) {
-            AsmExpression(cc,buf,ast->operand);
-            AsmPushXMM(buf,0);
+            asmExpression(cc,buf,ast->operand);
+            asmPushXMM(buf,0);
             aoStrCatPrintf(buf,
                     "movsd   one_dbl(%%rip), %%xmm1\n\t"
                     "addsd   %%xmm1, %%xmm0\n\t");
-            AsmAssign(cc,buf,ast->operand);
-            AsmPopXMM(buf,0);
+            asmAssign(cc,buf,ast->operand);
+            asmPopXMM(buf,0);
         } else {
-            AsmIncrDecr(cc,buf,ast,"addq");
+            asmIncrDecr(cc,buf,ast,"addq");
         }
         break;
     }
 
     case TK_PRE_MINUS_MINUS:
         if (ast->type->kind == AST_TYPE_FLOAT) {
-            AsmExpression(cc,buf,ast->operand);
+            asmExpression(cc,buf,ast->operand);
             aoStrCatPrintf(buf,
                     "movsd   one_dbl(%%rip), %%xmm1\n\t"
                     "subsd   %%xmm1, %%xmm0\n\t");
-            AsmAssign(cc,buf,ast->operand);
+            asmAssign(cc,buf,ast->operand);
         } else {
-            AsmPreIncrDecr(cc,buf,ast,"subq");
+            asmPreIncrDecr(cc,buf,ast,"subq");
         }
         break;
 
     case TK_MINUS_MINUS:
         if (ast->type->kind == AST_TYPE_FLOAT) {
-            AsmExpression(cc,buf,ast->operand);
-            AsmPushXMM(buf,0);
+            asmExpression(cc,buf,ast->operand);
+            asmPushXMM(buf,0);
             aoStrCatPrintf(buf,
                     "movsd   one_dbl(%%rip), %%xmm1\n\t"
                     "subsd   %%xmm1, %%xmm0\n\t");
-            AsmAssign(cc,buf,ast->operand);
-            AsmPopXMM(buf,0);
+            asmAssign(cc,buf,ast->operand);
+            asmPopXMM(buf,0);
         } else {
-            AsmIncrDecr(cc,buf,ast,"subq");
+            asmIncrDecr(cc,buf,ast,"subq");
         }
         break;
 
     case '!': {
-        AsmExpression(cc,buf, ast->operand);
+        asmExpression(cc,buf, ast->operand);
         aoStrCatPrintf(buf,
                 "cmp    $0, %%rax\n\t"
                 "sete   %%al\n\t"
@@ -1807,24 +1807,24 @@ void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
     }
 
     case '~': {
-        AsmExpression(cc,buf, ast->operand);
+        asmExpression(cc,buf, ast->operand);
         aoStrCatPrintf(buf, "not    %%rax\n\t");
         break;
     }
 
     case TK_OR_OR: {
         aoStrCat(buf,"# OR OR Start\n\t");
-        label_end = AstMakeLabel();
-        AsmExpression(cc,buf,ast->left);
+        label_end = astMakeLabel();
+        asmExpression(cc,buf,ast->left);
 
         if (ast->type->kind == AST_TYPE_FLOAT) {
-            AsmExpression(cc,buf,ast->left);
+            asmExpression(cc,buf,ast->left);
             aoStrCatPrintf(buf,
                     "xorpd   %%xmm1, %%xmm1\n\t"
                     "ucomisd %%xmm1, %%xmm0\n\t"
                     "movq    $1, %%rax\n\t"
                     "jne     %s\n\t", label_end->data);
-            AsmExpression(cc,buf,ast->right);
+            asmExpression(cc,buf,ast->right);
             aoStrCatPrintf(buf,
                     "xorpd   %%xmm1, %%xmm1\n\t"
                     "ucomisd %%xmm1, %%xmm0\n\t"
@@ -1837,7 +1837,7 @@ void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
                     "test   %%rax, %%rax\n\t"
                     "movq   $1, %%rax\n\t"
                     "jne    %s\n\t", label_end->data);
-            AsmExpression(cc,buf,ast->right);
+            asmExpression(cc,buf,ast->right);
             aoStrCatPrintf(buf,
                     "test   %%rax, %%rax\n\t"
                     "movq   $1, %%rax\n\t"
@@ -1851,15 +1851,15 @@ void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
 
     case TK_AND_AND: {
         aoStrCat(buf,"# AND AND Start\n\t");
-        label_end = AstMakeLabel();
+        label_end = astMakeLabel();
 
         if (ast->type->kind == AST_TYPE_FLOAT) {
-            AsmExpression(cc,buf,ast->left);
+            asmExpression(cc,buf,ast->left);
             aoStrCatPrintf(buf,
                     "xorpd   %%xmm1, %%xmm1\n\t"
                     "ucomisd %%xmm1, %%xmm0\n\t"
                     "je    %s\n\t", label_end->data);
-            AsmExpression(cc,buf,ast->right);
+            asmExpression(cc,buf,ast->right);
             aoStrCatPrintf(buf,
                     "xorpd   %%xmm1, %%xmm1\n\t"
                     "ucomisd %%xmm1, %%xmm0\n\t"
@@ -1868,12 +1868,12 @@ void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
                     "movq    $1, %%rax\n\t"
                     "%s:\n\t", label_end->data, label_end->data);
         } else {
-            AsmExpression(cc,buf,ast->left);
+            asmExpression(cc,buf,ast->left);
             aoStrCatPrintf(buf,
                     "test   %%rax, %%rax\n\t"
                     "movq   $0, %%rax\n\t"
                     "je    %s\n\t", label_end->data);
-            AsmExpression(cc,buf,ast->right);
+            asmExpression(cc,buf,ast->right);
             aoStrCatPrintf(buf,
                     "test   %%rax, %%rax\n\t"
                     "movq   $0, %%rax\n\t"
@@ -1887,7 +1887,7 @@ void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
 
     case '-': {
       if (ast->right == NULL) {
-          AsmExpression(cc,buf, ast->left);
+          asmExpression(cc,buf, ast->left);
           if (ast->left->type->kind == AST_TYPE_FLOAT) {
               aoStrCatPrintf(buf,
                       "movsd   sign_bit(%%rip), %%xmm1\n\t"
@@ -1898,18 +1898,18 @@ void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
                       "addq    $1, %%rax\n\t");
           }
       } else {
-          AsmBinaryOp(cc,buf,ast);
+          asmBinaryOp(cc,buf,ast);
       }
       break;
     }
 
     default:
-        AsmBinaryOp(cc,buf,ast);
+        asmBinaryOp(cc,buf,ast);
         break;
     }
 }
 
-void AsmDataInternal(aoStr *buf, Ast *data) {
+void asmDataInternal(aoStr *buf, Ast *data) {
     if (data->kind == AST_STRING) {
         aoStrCatPrintf(buf,".quad %s\n\t",data->slabel->data);
         return;
@@ -1928,17 +1928,17 @@ void AsmDataInternal(aoStr *buf, Ast *data) {
         case 8: aoStrCatPrintf(buf, ".quad %d\n\t", data->i64); break;
         default:
             loggerPanic("Cannot create size information for: %s\n",
-                    AstToString(data));
+                    astToString(data));
     }
 }
 
-void AsmGlobalVar(Dict *seen_globals, aoStr *buf, Ast* ast) {
+void asmGlobalVar(Dict *seen_globals, aoStr *buf, Ast* ast) {
     Ast *declvar = ast->declvar;
     Ast *declinit = ast->declinit;
     aoStr *varname = declvar->gname;
     char *label = asmGetGlabel(declvar);
 
-    if (DictGetLen(seen_globals,varname->data,varname->len)) {
+    if (dictGetLen(seen_globals,varname->data,varname->len)) {
         return;
     }
 
@@ -1946,7 +1946,7 @@ void AsmGlobalVar(Dict *seen_globals, aoStr *buf, Ast* ast) {
         buf->len--;
     }
 
-    DictSet(seen_globals,varname->data,ast);
+    dictSet(seen_globals,varname->data,ast);
 
     if (declinit &&
         (declinit->kind == AST_ARRAY_INIT || 
@@ -1968,19 +1968,19 @@ void AsmGlobalVar(Dict *seen_globals, aoStr *buf, Ast* ast) {
         aoStrCatPrintf(buf,"%s:\n\t",label);
 
         if (declinit->kind == AST_ARRAY_INIT) {
-            ListForEach(declinit->arrayinit) {
-                AsmDataInternal(buf,it->value);
+            listForEach(declinit->arrayinit) {
+                asmDataInternal(buf,it->value);
             }
             return;
         } else {
-            AsmDataInternal(buf,declinit);
+            asmDataInternal(buf,declinit);
         }
     } else {
         aoStrCatPrintf(buf,".lcomm %s, %d\n\t",label,declvar->type->size);
     }
 }
 
-void AsmDataSection(Cctrl *cc, aoStr *buf) {
+void asmDataSection(Cctrl *cc, aoStr *buf) {
     List *it;
     Ast *ast;
     char *label, *str, *ptr;
@@ -2027,7 +2027,7 @@ void AsmDataSection(Cctrl *cc, aoStr *buf) {
     aoStrPutChar(buf,'\t');
 } 
 
-void AsmStoreParam(aoStr *buf, int *_ireg, int *_arg, int offset) {
+void asmStoreParam(aoStr *buf, int *_ireg, int *_arg, int offset) {
     int arg = *_arg, ireg = *_ireg;
     if (ireg == 6) {
         aoStrCatPrintf(buf,
@@ -2041,7 +2041,7 @@ void AsmStoreParam(aoStr *buf, int *_ireg, int *_arg, int offset) {
         *_ireg = ireg;
     }
 }
-void AsmStoreParamFloat(aoStr *buf, int *_freg, int *_arg, int offset) {
+void asmStoreParamFloat(aoStr *buf, int *_freg, int *_arg, int offset) {
     int arg = *_arg, freg = *_freg;
     if (freg == 9) {
         aoStrCatPrintf(buf,
@@ -2056,16 +2056,16 @@ void AsmStoreParamFloat(aoStr *buf, int *_freg, int *_arg, int offset) {
     }
 }
 
-void AsmGetRegisterCounts(List *params, int *ireg, int *freg) {
+void asmGetRegisterCounts(List *params, int *ireg, int *freg) {
     Ast *param;
-    ListForEach(params) {
+    listForEach(params) {
         param = (Ast*)it->value;
-        if (AstIsFloatType(param->type)) (*freg)++;
+        if (astIsFloatType(param->type)) (*freg)++;
         else                             (*ireg)++;
     }
 }
 
-int AsmSaveRegisters(Cctrl *cc, aoStr *buf) {
+int asmSaveRegisters(Cctrl *cc, aoStr *buf) {
     static const int save_size = 176;
     aoStrCatPrintf(buf,
             "subq    $%d, %%rsp\n\t"
@@ -2087,13 +2087,13 @@ int AsmSaveRegisters(Cctrl *cc, aoStr *buf) {
     return save_size;
 }
 
-int AsmFunctionInit(Cctrl *cc, aoStr *buf, Ast *func) {
+int asmFunctionInit(Cctrl *cc, aoStr *buf, Ast *func) {
     int offset = 0;
     int ireg = 0, freg = 0, locals = 0, arg = 2;
     Ast *ast_tmp = NULL;
     char *fname = NULL;
 
-    fname = AsmNormaliseFunctionName(func->fname->data);
+    fname = asmNormaliseFunctionName(func->fname->data);
 
     aoStrCatPrintf(buf, ".text"            "\n\t"
                         ".global %s\n"
@@ -2105,7 +2105,7 @@ int AsmFunctionInit(Cctrl *cc, aoStr *buf, Ast *func) {
 
     int new_offset = 0, alignment = 0;
     /* Now assign offsets */
-    ListForEach(func->locals) {
+    listForEach(func->locals) {
         ast_tmp = it->value;
         /* Calculate how much stackspace is required for locals */
         alignment = align(ast_tmp->type->size, 8);
@@ -2121,7 +2121,7 @@ int AsmFunctionInit(Cctrl *cc, aoStr *buf, Ast *func) {
         }
     }
 
-    ListForEach(func->params) {
+    listForEach(func->params) {
         ast_tmp = it->value;
         switch (ast_tmp->kind) {
         case AST_DEFAULT_PARAM:
@@ -2141,19 +2141,19 @@ int AsmFunctionInit(Cctrl *cc, aoStr *buf, Ast *func) {
     if (locals) {
         stack_space = align(locals, 16);
         aoStrCatPrintf(buf, "subq   $%d, %%rsp #STACK LOCAL COUNT %d\n\t", 
-                stack_space, ListCount(func->locals));
+                stack_space, listCount(func->locals));
         stack_pointer = stack_space;
     }
 
     /* We can use register arguments */
     offset = stack_space;
-    ListForEach(func->params) {
+    listForEach(func->params) {
         ast_tmp = it->value;
 
-        if (ast_tmp->kind != AST_VAR_ARGS && AstIsFloatType(ast_tmp->type)) {
-            AsmStoreParamFloat(buf,&freg,&arg,offset);
+        if (ast_tmp->kind != AST_VAR_ARGS && astIsFloatType(ast_tmp->type)) {
+            asmStoreParamFloat(buf,&freg,&arg,offset);
         } else {
-            AsmStoreParam(buf,&ireg,&arg,offset);
+            asmStoreParam(buf,&ireg,&arg,offset);
         }
         switch (ast_tmp->kind) {
             case AST_DEFAULT_PARAM:
@@ -2167,11 +2167,11 @@ int AsmFunctionInit(Cctrl *cc, aoStr *buf, Ast *func) {
                 /* XXX: varargs limited to 4 */
                 ast_tmp->argv->loff = align(16,8);
                 for (int i = ireg; i < 6; ++i) {
-                    AsmStoreParam(buf,&ireg,&arg,offset);
+                    asmStoreParam(buf,&ireg,&arg,offset);
                     offset -= 8;
                 }
                 for (int i = freg; i < 8; ++i) {
-                    AsmStoreParamFloat(buf,&freg,&arg,offset);
+                    asmStoreParamFloat(buf,&freg,&arg,offset);
                     offset -= 8;
                 }
                 break;
@@ -2186,11 +2186,11 @@ int AsmFunctionInit(Cctrl *cc, aoStr *buf, Ast *func) {
     return stack_space;
 }
 
-void AsmFunctionLeave(aoStr *buf) {
+void asmFunctionLeave(aoStr *buf) {
     aoStrCatPrintf(buf,"leave\n\tret\n");
 }
 
-int AsmHasRet(aoStr *buf) {
+int asmHasRet(aoStr *buf) {
     static char *match = "leave\n\tret\n";
     int len = 11;
     int curlen = buf->len-1;
@@ -2206,16 +2206,16 @@ int AsmHasRet(aoStr *buf) {
     return 1;
 }
 
-void AsmFunction(Cctrl *cc, aoStr *buf, Ast *func) {
+void asmFunction(Cctrl *cc, aoStr *buf, Ast *func) {
     assert(func->kind == AST_FUNC);
-    cc->stack_local_space = AsmFunctionInit(cc,buf,func);
-    AsmExpression(cc,buf,func->body);
-    if (!AsmHasRet(buf)) {
-        AsmFunctionLeave(buf);
+    cc->stack_local_space = asmFunctionInit(cc,buf,func);
+    asmExpression(cc,buf,func->body);
+    if (!asmHasRet(buf)) {
+        asmFunctionLeave(buf);
     }
 }
 
-void AsmPasteAsmBlocks(aoStr *buf, Cctrl *cc) {
+void asmPasteAsmBlocks(aoStr *buf, Cctrl *cc) {
     List *it = cc->asm_blocks->next;
     List *func_it;
     Ast *asm_block, *asm_func;
@@ -2243,8 +2243,8 @@ void AsmPasteAsmBlocks(aoStr *buf, Cctrl *cc) {
     }
 }
 
-void AsmInitaliser(Cctrl *cc, aoStr *buf) {
-    if (ListEmpty(cc->initalisers)) return;
+void asmInitaliser(Cctrl *cc, aoStr *buf) {
+    if (listEmpty(cc->initalisers)) return;
     char *fname = NULL;
     int locals = 0, stack_space;
 
@@ -2260,14 +2260,14 @@ void AsmInitaliser(Cctrl *cc, aoStr *buf) {
                         "movq   %%rsp, %%rbp" "\n\t",
                         fname, fname);
     /* Calculate how much stackspace is required for locals */
-    ListForEach(cc->initaliser_locals) {
+    listForEach(cc->initaliser_locals) {
         Ast *ast_tmp = it->value;
         locals += align(ast_tmp->type->size, 8);
     }
 
     int new_offset = 0;
     /* Now take chunks out of the total size */
-    ListForEach(cc->initaliser_locals) {
+    listForEach(cc->initaliser_locals) {
         Ast *ast_tmp = it->value;
         new_offset -= ast_tmp->type->size;
         switch (ast_tmp->kind) {
@@ -2287,31 +2287,31 @@ void AsmInitaliser(Cctrl *cc, aoStr *buf) {
             stack_space);
     stack_pointer = stack_space;
 
-    ListForEach(cc->initalisers) {
-        AsmExpression(cc,buf,it->value);
+    listForEach(cc->initalisers) {
+        asmExpression(cc,buf,it->value);
     }
     aoStrCatPrintf(buf, "leave\n\tret\n");
 }
 
 /* Create assembly */
-aoStr *AsmGenerate(Cctrl *cc) {
+aoStr *asmGenerate(Cctrl *cc) {
     Ast *ast;
-    Dict *seen_globals = DictNew(&default_table_type);
+    Dict *seen_globals = dictNew(&default_table_type);
     aoStr *asmbuf = aoStrAlloc(1<<10);
  
-    if (!ListEmpty(cc->initalisers)) {
+    if (!listEmpty(cc->initalisers)) {
         has_initialisers = 1;
     }
-    AsmPasteAsmBlocks(asmbuf,cc);
-    AsmDataSection(cc,asmbuf);
+    asmPasteAsmBlocks(asmbuf,cc);
+    asmDataSection(cc,asmbuf);
 
 
-    ListForEach(cc->ast_list) {
+    listForEach(cc->ast_list) {
         ast = (Ast *)it->value;
         if (ast->kind == AST_FUNC) {
-            AsmFunction(cc,asmbuf,ast);
+            asmFunction(cc,asmbuf,ast);
         } else if (ast->kind == AST_DECL || ast->kind == AST_GVAR) {
-            AsmGlobalVar(seen_globals,asmbuf,ast);
+            asmGlobalVar(seen_globals,asmbuf,ast);
         } else if (ast->kind == AST_ASM_STMT) {
            // aoStrCatLen(asmbuf, ast->asm_stmt->data, ast->asm_stmt->len);
            // loggerDebug("%s\n", ast->asm_stmt->data);
@@ -2319,11 +2319,11 @@ aoStr *AsmGenerate(Cctrl *cc) {
            // aoStrCatPrintf(asmbuf, ".text\n\t.global %s\n\t", 
            //         ast->asmfname->data);
         } else {
-            loggerPanic("Cannot handle: %s\n", AstToString(ast));
+            loggerPanic("Cannot handle: %s\n", astToString(ast));
         }
     }
-    if (!ListEmpty(cc->initalisers)) {
-        AsmInitaliser(cc,asmbuf);
+    if (!listEmpty(cc->initalisers)) {
+        asmInitaliser(cc,asmbuf);
     }
     return asmbuf;
 }

@@ -4,6 +4,6 @@
 #include "ast.h"
 #include "cctrl.h"
 
-Ast *PrsAsm(Cctrl *cc);
+Ast *prsAsm(Cctrl *cc);
 
 #endif /* PRS_ASM */

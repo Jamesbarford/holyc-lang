@@ -56,7 +56,7 @@ static BuiltInType built_in_types[] = {
     {"private",AST_TYPE_VIS_MODIFIER,0,0},
 };
 
-static void CctrlAddBuiltinMacros(Cctrl *cc) {
+static void cctrlAddBuiltinMacros(Cctrl *cc) {
     lexeme *le;
     struct tm *ptm;
     struct timeval tm;
@@ -66,20 +66,20 @@ static void CctrlAddBuiltinMacros(Cctrl *cc) {
     long bufsize = sizeof(char)*128;
 
     le = lexemeSentinal();
-    if (IS_BSD)        DictSet(cc->macro_defs,"IS_BSD",le);
-    if (IS_MACOS)      DictSet(cc->macro_defs,"IS_MACOS",le);
-    else if (IS_LINUX) DictSet(cc->macro_defs,"IS_LINUX",le);
+    if (IS_BSD)        dictSet(cc->macro_defs,"IS_BSD",le);
+    if (IS_MACOS)      dictSet(cc->macro_defs,"IS_MACOS",le);
+    else if (IS_LINUX) dictSet(cc->macro_defs,"IS_LINUX",le);
     
     if (IS_X86_64)      {
-        DictSet(cc->macro_defs,"IS_X86_64",le);
+        dictSet(cc->macro_defs,"IS_X86_64",le);
         le = lexemeNew("X86_64",6);
         le->tk_type = TK_STR;
-        DictSet(cc->macro_defs,"__ARCH__",le);
+        dictSet(cc->macro_defs,"__ARCH__",le);
     } else if (IS_ARM_64) {
-        DictSet(cc->macro_defs,"IS_ARM_64",le);
+        dictSet(cc->macro_defs,"IS_ARM_64",le);
         le = lexemeNew("ARM_64",6);
         le->tk_type = TK_STR;
-        DictSet(cc->macro_defs,"__ARCH__",le);
+        dictSet(cc->macro_defs,"__ARCH__",le);
     }
 
     gettimeofday(&tm,NULL);
@@ -98,14 +98,14 @@ static void CctrlAddBuiltinMacros(Cctrl *cc) {
     time[len] = '\0';
     le = lexemeNew(time,len);
     le->tk_type = TK_STR;
-    DictSet(cc->macro_defs,"__TIME__",le);
+    dictSet(cc->macro_defs,"__TIME__",le);
 
     len = snprintf(date,bufsize,"%04d/%02d/%02d",
             ptm->tm_year+1900,ptm->tm_mon+1,ptm->tm_mday);
     date[len] = '\0';
     le = lexemeNew(date,len);
     le->tk_type = TK_STR;
-    DictSet(cc->macro_defs,"__DATE__",le);
+    dictSet(cc->macro_defs,"__DATE__",le);
 
     len = snprintf(time_stamp,bufsize,
             "%d-%02d-%02d %02d:%02d:%02d",
@@ -115,44 +115,44 @@ static void CctrlAddBuiltinMacros(Cctrl *cc) {
     date[len] = '\0';
     le = lexemeNew(time_stamp,len);
     le->tk_type = TK_STR;
-    DictSet(cc->macro_defs,"__TIMESTAMP__",le);
+    dictSet(cc->macro_defs,"__TIMESTAMP__",le);
 
     len = snprintf(version,bufsize,"v0.0.2-alpha");
     version[len] = '\0';
     le = lexemeNew(version,len);
     le->tk_type = TK_STR;
-    DictSet(cc->macro_defs,"__HCC_VERSION__",le);
+    dictSet(cc->macro_defs,"__HCC_VERSION__",le);
 }
 
-Cctrl *CcMacroProcessor(Dict *macro_defs) {
+Cctrl *ccMacroProcessor(Dict *macro_defs) {
     Cctrl *cc = malloc(sizeof(Cctrl));
     cc->tkit = malloc(sizeof(TokenIter));
     cc->macro_defs = macro_defs;
-    cc->strings = ListNew();
+    cc->strings = listNew();
     return cc;
 }
 
 /* Instantiate a new compiler control struct */
-Cctrl *CctrlNew(void) {
+Cctrl *cctrlNew(void) {
     Cctrl *cc = malloc(sizeof(Cctrl));
     AstType *type;
     BuiltInType *bilt;
     aoStr **str_array;
     int len;
 
-    cc->global_env = DictNew(&default_table_type);
-    cc->clsdefs = DictNew(&default_table_type);
-    cc->uniondefs = DictNew(&default_table_type);
-    cc->symbol_table = DictNew(&default_table_type);
-    cc->asm_funcs = DictNew(&default_table_type);
-    cc->macro_defs = DictNew(&default_table_type);
-    cc->x86_registers = DictNew(&default_table_type);
-    cc->libc_functions = DictNew(&default_table_type);
-    cc->strings = ListNew();
-    cc->asm_blocks = ListNew();
-    cc->ast_list = ListNew();
-    cc->initalisers = ListNew();
-    cc->initaliser_locals = ListNew();
+    cc->global_env = dictNew(&default_table_type);
+    cc->clsdefs = dictNew(&default_table_type);
+    cc->uniondefs = dictNew(&default_table_type);
+    cc->symbol_table = dictNew(&default_table_type);
+    cc->asm_funcs = dictNew(&default_table_type);
+    cc->macro_defs = dictNew(&default_table_type);
+    cc->x86_registers = dictNew(&default_table_type);
+    cc->libc_functions = dictNew(&default_table_type);
+    cc->strings = listNew();
+    cc->asm_blocks = listNew();
+    cc->ast_list = listNew();
+    cc->initalisers = listNew();
+    cc->initaliser_locals = listNew();
     cc->tkit = malloc(sizeof(TokenIter));
     /* These are temoraries that the parser will allocate and 
      * NULL out between parses of classes and functions */
@@ -166,14 +166,14 @@ Cctrl *CctrlNew(void) {
     str_array = aoStrSplit(x86_registers,',',&len);
     for (int i = 0; i < len; ++i) {
         char *reg = aoStrMove(str_array[i]);
-        DictSet(cc->x86_registers,reg,reg);
+        dictSet(cc->x86_registers,reg,reg);
     }
     free(str_array);
 
     str_array = aoStrSplit(libc_functions,',',&len);
     for (int i = 0; i < len; ++i) {
         char *libc_func = aoStrMove(str_array[i]);
-        DictSet(cc->libc_functions,libc_func,libc_func);
+        dictSet(cc->libc_functions,libc_func,libc_func);
     }
     free(str_array);
 
@@ -184,31 +184,27 @@ Cctrl *CctrlNew(void) {
         type->issigned = bilt->issigned;
         type->kind = bilt->kind;
         type->ptr = NULL;
-        DictSet(cc->symbol_table, bilt->name, type);
+        dictSet(cc->symbol_table, bilt->name, type);
     }
 
-    CctrlAddBuiltinMacros(cc);
+    cctrlAddBuiltinMacros(cc);
 
-    Ast *cmd_args = AstGlobalCmdArgs();
-    ListAppend(cc->ast_list,cmd_args->argc);
-    ListAppend(cc->ast_list,cmd_args->argv);
-    DictSet(cc->global_env,"argc",cmd_args->argc->declvar);
-    DictSet(cc->global_env,"argv",cmd_args->argv->declvar);
+    Ast *cmd_args = astGlobalCmdArgs();
+    listAppend(cc->ast_list,cmd_args->argc);
+    listAppend(cc->ast_list,cmd_args->argv);
+    dictSet(cc->global_env,"argc",cmd_args->argc->declvar);
+    dictSet(cc->global_env,"argv",cmd_args->argv->declvar);
     return cc;
 }
 
-void CctrlInitTokenIter(Cctrl *cc, List *tokens) {
+void cctrlInitTokenIter(Cctrl *cc, List *tokens) {
     cc->tkit->tokens = tokens;
-    ListPrepend(tokens,lexemeSentinal());
+    listPrepend(tokens,lexemeSentinal());
     cc->tkit->cur = tokens->next->next;
 }
 
-void CctrlTokenIterSetCur(Cctrl *cc, List *cur) {
-    cc->tkit->cur = cur;
-}
-
 /* Have a look at the next lexeme but don't consume */
-lexeme *CctrlTokenPeek(Cctrl *cc) {
+lexeme *cctrlTokenPeek(Cctrl *cc) {
     TokenIter *it = cc->tkit;
     lexeme *retval, *macro;
 
@@ -218,7 +214,7 @@ lexeme *CctrlTokenPeek(Cctrl *cc) {
 
     retval = (lexeme *)it->cur->value;
     if (retval->tk_type == TK_IDENT) {
-        if ((macro = DictGetLen(cc->macro_defs,retval->start,retval->len)) != NULL) {
+        if ((macro = dictGetLen(cc->macro_defs,retval->start,retval->len)) != NULL) {
             return macro;
         }
     }
@@ -228,9 +224,9 @@ lexeme *CctrlTokenPeek(Cctrl *cc) {
 /** 
  * Get the current lexeme pointed to by cur and set cur to the 
  * next lexeme */
-lexeme *CctrlTokenGet(Cctrl *cc) {
+lexeme *cctrlTokenGet(Cctrl *cc) {
     lexeme *tok;
-    if ((tok = CctrlTokenPeek(cc)) != NULL) {
+    if ((tok = cctrlTokenPeek(cc)) != NULL) {
         cc->lineno = tok->line;
         cc->tkit->cur = cc->tkit->cur->next;
         return tok;
@@ -238,11 +234,11 @@ lexeme *CctrlTokenGet(Cctrl *cc) {
     return NULL;
 }
 
-/* Assert the token we are currently pointing at is a TK_PUNCT and the 'i64'
+/* assert the token we are currently pointing at is a TK_PUNCT and the 'i64'
  * matches 'expected'. Then consume this token else throw an error */
-void CctrlTokenExpect(Cctrl *cc, long expected) {
-    lexeme *tok = CctrlTokenGet(cc);
-    if (!TokenPunctIs(tok, expected)) {
+void cctrlTokenExpect(Cctrl *cc, long expected) {
+    lexeme *tok = cctrlTokenGet(cc);
+    if (!tokenPunctIs(tok, expected)) {
         if (!tok) {
             lexemePrintList(cc->tkit->tokens->next);
             loggerPanic("line %ld: Ran out of tokens\n",cc->lineno);
@@ -255,47 +251,39 @@ void CctrlTokenExpect(Cctrl *cc, long expected) {
 }
 
 /* Go back one */
-void CctrlTokenRewind(Cctrl *cc) {
+void cctrlTokenRewind(Cctrl *cc) {
     cc->tkit->cur = cc->tkit->cur->prev;
     lexeme *current = (lexeme *)cc->tkit->cur->value;
     cc->lineno = current->line;
 }
 
-/* Set a global variable in the global hashtable */
-void CctrlSetGlobalVar(Cctrl *cc, Ast *ast_var) {
-    int ok = DictSet(cc->global_env,ast_var->sval->data,ast_var);
-    if (!ok) {
-        loggerWarning("Variable: %s was not set as it already exists\n", ast_var->sval->data);
-    }
-}
-
 /* Get variable either from the local or global scope */
-Ast *CctrlGetVar(Cctrl *cc, char *varname, int len) {
+Ast *cctrlGetVar(Cctrl *cc, char *varname, int len) {
     Ast *ast_var;
     lexeme *tok;
 
-    if (cc->localenv && (ast_var = DictGetLen(cc->localenv, varname, len)) != NULL) {
+    if (cc->localenv && (ast_var = dictGetLen(cc->localenv, varname, len)) != NULL) {
         return ast_var;
     }
 
-    if ((ast_var = DictGetLen(cc->global_env, varname, len)) != NULL) {
+    if ((ast_var = dictGetLen(cc->global_env, varname, len)) != NULL) {
         return ast_var;
     }
 
-    if ((ast_var = DictGetLen(cc->asm_funcs, varname, len)) != NULL) {
+    if ((ast_var = dictGetLen(cc->asm_funcs, varname, len)) != NULL) {
         return ast_var;
     }
 
     /* Expand a macro definition */
-    if ((tok = DictGetLen(cc->macro_defs, varname, len)) != NULL) {
+    if ((tok = dictGetLen(cc->macro_defs, varname, len)) != NULL) {
         switch (tok->tk_type) {
         case TK_I64:
-            return AstI64Type(tok->i64);
+            return astI64Type(tok->i64);
         case TK_F64:
-            return AstF64Type(tok->f64);
+            return astF64Type(tok->f64);
         case TK_STR:
-            ast_var = AstString(tok->start, tok->len);
-            ListAppend(cc->strings, ast_var);
+            ast_var = astString(tok->start, tok->len);
+            listAppend(cc->strings, ast_var);
             return ast_var;
         default:
             return NULL;
@@ -304,28 +292,28 @@ Ast *CctrlGetVar(Cctrl *cc, char *varname, int len) {
     return NULL;
 }
 
-AstType *CctrlGetKeyWord(Cctrl *cc, char *name, int len) {
+AstType *cctrlGetKeyWord(Cctrl *cc, char *name, int len) {
     AstType *type;
     assert(name != NULL);
-    if ((type = DictGetLen(cc->symbol_table,name,len)) != NULL) {
+    if ((type = dictGetLen(cc->symbol_table,name,len)) != NULL) {
         return type;
     }
     /* Classes are types */
-    if ((type = DictGetLen(cc->clsdefs,name,len)) != NULL) {
+    if ((type = dictGetLen(cc->clsdefs,name,len)) != NULL) {
         return type;
     }
-    if ((type = DictGetLen(cc->uniondefs,name,len)) != NULL) {
+    if ((type = dictGetLen(cc->uniondefs,name,len)) != NULL) {
         return type;
     }
     return NULL;
 }
 
-int CctrlIsKeyword(Cctrl *cc, char *name, int len) {
-    return CctrlGetKeyWord(cc,name,len) != NULL;
+int cctrlIsKeyword(Cctrl *cc, char *name, int len) {
+    return cctrlGetKeyWord(cc,name,len) != NULL;
 }
 
-void CctrlSetCommandLineDefines(Cctrl *cc, List *defines_list) {
-    ListForEach(defines_list) {
-        DictSet(cc->macro_defs,(char*)it->value,lexemeSentinal());
+void cctrlSetCommandLineDefines(Cctrl *cc, List *defines_list) {
+    listForEach(defines_list) {
+        dictSet(cc->macro_defs,(char*)it->value,lexemeSentinal());
     }
 }

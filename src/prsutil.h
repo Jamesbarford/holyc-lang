@@ -18,22 +18,22 @@ int align(int n, int m);
 
 
 /* Is the lexeme both of type TK_PUNCT and does 'ch' match */
-int ParseIsFunctionCall(Ast *ast);
-AstType *ParseGetType(Cctrl *cc, lexeme *tok);
-int ParseIsKeyword(lexeme *tok, Cctrl *cc);
-long EvalIntConstExpr(Ast *ast);
-double EvalFloatExpr(Ast *ast);
-int EvalClassRef(Ast *ast, int offset);
-void AssertLValue(Ast *ast, long lineno);
-int ParseIsFloatOrInt(Ast *ast);
-int ParseIsClassOrUnion(int kind);
-int ParseIsFunction(Ast *ast);
+int parseIsFunctionCall(Ast *ast);
+AstType *parseGetType(Cctrl *cc, lexeme *tok);
+int parseIsKeyword(lexeme *tok, Cctrl *cc);
+long evalIntConstExpr(Ast *ast);
+double evalFloatExpr(Ast *ast);
+int evalClassRef(Ast *ast, int offset);
+void assertLValue(Ast *ast, long lineno);
+int parseIsFloatOrInt(Ast *ast);
+int parseIsClassOrUnion(int kind);
+int parseIsFunction(Ast *ast);
 
-void AssertTokenIsTerminator(lexeme *tok, long terminator_flags);
-void AssertUniqueSwitchCaseLabels(List *case_list, Ast *case_);
-void AssertIsFloatOrInt(Ast *ast, long lineno);
-void AssertIsInt(Ast *ast, long lineno);
-void AssertIsFloat(Ast *ast, long lineno);
-void AssertIsPointer(Ast *ast, long lineno);
+void assertTokenIsTerminator(lexeme *tok, long terminator_flags);
+void assertUniqueSwitchCaseLabels(List *case_list, Ast *case_);
+void assertIsFloatOrInt(Ast *ast, long lineno);
+void assertIsInt(Ast *ast, long lineno);
+void assertIsFloat(Ast *ast, long lineno);
+void assertIsPointer(Ast *ast, long lineno);
 
 #endif // PRS_UTIL

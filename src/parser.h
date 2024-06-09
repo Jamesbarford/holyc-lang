@@ -14,8 +14,8 @@
 #define PUNCT_TERM_LSQR   (1<<6) // '['
 #define PUNCT_TERM_RSQR   (1<<7) // ']'
 
-void ParseToAst(Cctrl *cc);
-Ast *ParseStatement(Cctrl *cc);
-long EvalIntConstExpr(Ast *ast);
+void parseToAst(Cctrl *cc);
+Ast *parseStatement(Cctrl *cc);
+long evalIntConstExpr(Ast *ast);
 
 #endif // !PARSER_H

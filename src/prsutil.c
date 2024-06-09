@@ -11,17 +11,17 @@ int align(int n, int m) {
     return n - rem + m;
 }
 
-inline int ParseIsFloatOrInt(Ast *ast) {
-    return AstIsIntType(ast->type) || 
-           AstIsFloatType(ast->type);
+inline int parseIsFloatOrInt(Ast *ast) {
+    return astIsIntType(ast->type) || 
+           astIsFloatType(ast->type);
 }
 
-inline int ParseIsClassOrUnion(int kind) {
+inline int parseIsClassOrUnion(int kind) {
     return kind == AST_TYPE_CLASS || 
            kind == AST_TYPE_UNION;
 }
 
-inline int ParseIsFunction(Ast *ast) {
+inline int parseIsFunction(Ast *ast) {
     if (ast) {
         switch (ast->kind) {
             case AST_FUNC:
@@ -37,45 +37,45 @@ inline int ParseIsFunction(Ast *ast) {
     return 0;
 }
 
-int ParseIsFunctionCall(Ast *ast) {
+int parseIsFunctionCall(Ast *ast) {
     return ast && (ast->type->kind == AST_FUNCALL || 
            ast->type->kind == AST_FUNPTR_CALL || 
            ast->type->kind == AST_ASM_FUNCALL);
 }
 
-void AssertIsFloat(Ast *ast, long lineno) {
-    if (ast && !AstIsFloatType(ast->type)) {
+void assertIsFloat(Ast *ast, long lineno) {
+    if (ast && !astIsFloatType(ast->type)) {
         loggerPanic("line %ld: Expected float type got %s\n",
-                lineno,AstTypeToString(ast->type));
+                lineno,astTypeToString(ast->type));
     }
 }
 
-void AssertIsInt(Ast *ast, long lineno) {
-    if (ast && !AstIsIntType(ast->type)) {
+void assertIsInt(Ast *ast, long lineno) {
+    if (ast && !astIsIntType(ast->type)) {
         loggerPanic("line %ld: Expected int type got %s\n",
-                lineno, AstTypeToString(ast->type));
+                lineno, astTypeToString(ast->type));
     }
 }
 
-void AssertIsFloatOrInt(Ast *ast, long lineno) {
-    if (!ParseIsFloatOrInt(ast)) {
+void assertIsFloatOrInt(Ast *ast, long lineno) {
+    if (!parseIsFloatOrInt(ast)) {
         loggerPanic("line %ld: Expected float got %s\n",
-                lineno, AstTypeToString(ast->type));
+                lineno, astTypeToString(ast->type));
     }
 }
 
-void AssertIsPointer(Ast *ast, long lineno) {
+void assertIsPointer(Ast *ast, long lineno) {
     if (!ast || ast->type->kind != AST_TYPE_POINTER) {
         loggerPanic("line %ld: Expected float got %s\n",
-                lineno,AstTypeToString(ast->type));
+                lineno,astTypeToString(ast->type));
     }
 }
 
 /* Check if one of the characters matches and the flag wants that character to
  * terminate */
-void AssertTokenIsTerminator(lexeme *tok, long terminator_flags) {
+void assertTokenIsTerminator(lexeme *tok, long terminator_flags) {
     if (tok == NULL) {
-        loggerPanic("NULL token passed to AssertTokenIsTerminator\n");
+        loggerPanic("NULL token passed to assertTokenIsTerminator\n");
     }
 
     if (tok->tk_type != TK_PUNCT) {
@@ -108,104 +108,104 @@ void AssertTokenIsTerminator(lexeme *tok, long terminator_flags) {
     }
 }
 
-AstType *ParseGetType(Cctrl *cc, lexeme *tok) {
+AstType *parseGetType(Cctrl *cc, lexeme *tok) {
     if (!tok) {
         return NULL;
     }
     if (tok->tk_type != TK_IDENT && tok->tk_type != TK_KEYWORD) {
         return NULL;
     }
-    return CctrlGetKeyWord(cc,tok->start,tok->len);
+    return cctrlGetKeyWord(cc,tok->start,tok->len);
 }
 
-int ParseIsKeyword(lexeme *tok, Cctrl *cc) {
-    return CctrlIsKeyword(cc,tok->start,tok->len) || NULL;
+int parseIsKeyword(lexeme *tok, Cctrl *cc) {
+    return cctrlIsKeyword(cc,tok->start,tok->len) || NULL;
 }
 
-int EvalClassRef(Ast *ast, int offset) {
+int evalClassRef(Ast *ast, int offset) {
     if (ast->kind == AST_CLASS_REF)
-        return EvalClassRef(ast->cls, ast->type->offset + offset);
-    return EvalIntConstExpr(ast) + offset;
+        return evalClassRef(ast->cls, ast->type->offset + offset);
+    return evalIntConstExpr(ast) + offset;
 }
 
-double EvalFloatExpr(Ast *ast) {
+double evalFloatExpr(Ast *ast) {
     switch (ast->kind) {
     case AST_LITERAL:
-        if (AstIsFloatType(ast->type)) {
+        if (astIsFloatType(ast->type)) {
             return ast->f64;
-        } else if (AstIsIntType(ast->type)) {
+        } else if (astIsIntType(ast->type)) {
             return (double)ast->i64;
         }
-    case '+': return EvalFloatExpr(ast->left) + EvalFloatExpr(ast->right);
+    case '+': return evalFloatExpr(ast->left) + evalFloatExpr(ast->right);
     case '-': {
         if (ast->right == NULL && ast->operand != NULL) {
             return -ast->operand->f64;
         }
-        return EvalFloatExpr(ast->left) - EvalFloatExpr(ast->right);
+        return evalFloatExpr(ast->left) - evalFloatExpr(ast->right);
     }
-    case '/': return EvalFloatExpr(ast->left) / EvalFloatExpr(ast->right);
-    case '*': return EvalFloatExpr(ast->left) * EvalFloatExpr(ast->right);
-    case TK_EQU_EQU: return EvalFloatExpr(ast->left) == EvalFloatExpr(ast->right);
-    case TK_GREATER_EQU: return EvalFloatExpr(ast->left) >= EvalFloatExpr(ast->right);
-    case TK_LESS_EQU: return EvalFloatExpr(ast->left) <= EvalFloatExpr(ast->right);
-    case TK_NOT_EQU: return EvalFloatExpr(ast->left) != EvalFloatExpr(ast->right);
-    case TK_OR_OR: return EvalFloatExpr(ast->left) || EvalFloatExpr(ast->right);
-    case TK_AND_AND: return EvalFloatExpr(ast->left) && EvalFloatExpr(ast->right);
+    case '/': return evalFloatExpr(ast->left) / evalFloatExpr(ast->right);
+    case '*': return evalFloatExpr(ast->left) * evalFloatExpr(ast->right);
+    case TK_EQU_EQU: return evalFloatExpr(ast->left) == evalFloatExpr(ast->right);
+    case TK_GREATER_EQU: return evalFloatExpr(ast->left) >= evalFloatExpr(ast->right);
+    case TK_LESS_EQU: return evalFloatExpr(ast->left) <= evalFloatExpr(ast->right);
+    case TK_NOT_EQU: return evalFloatExpr(ast->left) != evalFloatExpr(ast->right);
+    case TK_OR_OR: return evalFloatExpr(ast->left) || evalFloatExpr(ast->right);
+    case TK_AND_AND: return evalFloatExpr(ast->left) && evalFloatExpr(ast->right);
     default:
         loggerPanic("%s is an invalid floating point constant expression operator\n",
-                AstKindToString(ast->kind));
+                astKindToString(ast->kind));
     }
 }
 
-long EvalIntConstExpr(Ast *ast) {
+long evalIntConstExpr(Ast *ast) {
     switch (ast->kind) {
     case AST_LITERAL:
-        if (AstIsIntType(ast->type)) {
+        if (astIsIntType(ast->type)) {
             return ast->i64;
-        } else if (AstIsFloatType(ast->type)) {
+        } else if (astIsFloatType(ast->type)) {
             return (long)ast->f64;
         }
     case AST_ADDR:
         if (ast->operand->kind == AST_CLASS_REF) {
-            return EvalClassRef(ast->operand, 0);
+            return evalClassRef(ast->operand, 0);
         }
     case AST_DEREF:
         if (ast->operand->type->kind == AST_TYPE_POINTER) {
-            return EvalIntConstExpr(ast->operand);
+            return evalIntConstExpr(ast->operand);
         }
-    case '+': return EvalIntConstExpr(ast->left) + EvalIntConstExpr(ast->right);
+    case '+': return evalIntConstExpr(ast->left) + evalIntConstExpr(ast->right);
     case '-': {
         if (ast->right == NULL && ast->operand != NULL) {
             return -ast->operand->i64;
         }
-        return EvalIntConstExpr(ast->left) - EvalIntConstExpr(ast->right);
+        return evalIntConstExpr(ast->left) - evalIntConstExpr(ast->right);
     }
-    case TK_SHL: return EvalIntConstExpr(ast->left) << EvalIntConstExpr(ast->right);
-    case TK_SHR: return EvalIntConstExpr(ast->left) >> EvalIntConstExpr(ast->right);
-    case '&': return EvalIntConstExpr(ast->left) & EvalIntConstExpr(ast->right);
-    case '|': return EvalIntConstExpr(ast->left) | EvalIntConstExpr(ast->right);
-    case '^': return EvalIntConstExpr(ast->left) ^ EvalIntConstExpr(ast->right);
-    case '*': return EvalIntConstExpr(ast->left) * EvalIntConstExpr(ast->right);
-    case '/': return EvalIntConstExpr(ast->left) / EvalIntConstExpr(ast->right);
-    case '%': return EvalIntConstExpr(ast->left) % EvalIntConstExpr(ast->right);
+    case TK_SHL: return evalIntConstExpr(ast->left) << evalIntConstExpr(ast->right);
+    case TK_SHR: return evalIntConstExpr(ast->left) >> evalIntConstExpr(ast->right);
+    case '&': return evalIntConstExpr(ast->left) & evalIntConstExpr(ast->right);
+    case '|': return evalIntConstExpr(ast->left) | evalIntConstExpr(ast->right);
+    case '^': return evalIntConstExpr(ast->left) ^ evalIntConstExpr(ast->right);
+    case '*': return evalIntConstExpr(ast->left) * evalIntConstExpr(ast->right);
+    case '/': return evalIntConstExpr(ast->left) / evalIntConstExpr(ast->right);
+    case '%': return evalIntConstExpr(ast->left) % evalIntConstExpr(ast->right);
     case '~': {
         if (ast->operand != NULL) {
             return ~ast->operand->i64;
         }
     }
-    case '!': return !EvalIntConstExpr(ast->operand);
-    case TK_EQU_EQU: return EvalIntConstExpr(ast->left) == EvalIntConstExpr(ast->right);
-    case TK_GREATER_EQU: return EvalIntConstExpr(ast->left) >= EvalIntConstExpr(ast->right);
-    case TK_LESS_EQU: return EvalIntConstExpr(ast->left) <= EvalIntConstExpr(ast->right);
-    case TK_NOT_EQU: return EvalIntConstExpr(ast->left) != EvalIntConstExpr(ast->right);
-    case TK_OR_OR: return EvalIntConstExpr(ast->left) || EvalIntConstExpr(ast->right);
-    case TK_AND_AND: return EvalIntConstExpr(ast->left) && EvalIntConstExpr(ast->right);
+    case '!': return !evalIntConstExpr(ast->operand);
+    case TK_EQU_EQU: return evalIntConstExpr(ast->left) == evalIntConstExpr(ast->right);
+    case TK_GREATER_EQU: return evalIntConstExpr(ast->left) >= evalIntConstExpr(ast->right);
+    case TK_LESS_EQU: return evalIntConstExpr(ast->left) <= evalIntConstExpr(ast->right);
+    case TK_NOT_EQU: return evalIntConstExpr(ast->left) != evalIntConstExpr(ast->right);
+    case TK_OR_OR: return evalIntConstExpr(ast->left) || evalIntConstExpr(ast->right);
+    case TK_AND_AND: return evalIntConstExpr(ast->left) && evalIntConstExpr(ast->right);
     default:
-        loggerPanic("Expected integer expression: %s\n", AstToString(ast));
+        loggerPanic("Expected integer expression: %s\n", astToString(ast));
     }
 }
 
-void AssertLValue(Ast *ast, long lineno) {
+void assertLValue(Ast *ast, long lineno) {
     switch (ast->kind) {
     case AST_LVAR:
     case AST_GVAR:
@@ -216,11 +216,11 @@ void AssertLValue(Ast *ast, long lineno) {
     case AST_CAST:
         return;
     default:
-        loggerPanic("line %ld: Expected lvalue, got: %s\n",lineno,AstToString(ast));
+        loggerPanic("line %ld: Expected lvalue, got: %s\n",lineno,astToString(ast));
     }
 }
 
-void AssertUniqueSwitchCaseLabels(List *case_list, Ast *case_) {
+void assertUniqueSwitchCaseLabels(List *case_list, Ast *case_) {
     Ast *cur;
     for (List *it = case_list->next; it != case_list; it = it->next) {
         cur = it->value;

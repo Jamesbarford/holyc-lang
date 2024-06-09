@@ -12,20 +12,20 @@
 #include "prslib.h"
 #include "util.h"
 
-static AstType *ParseArrayDimensionsInternal(Cctrl *cc, AstType *base_type);
+static AstType *parseArrayDimensionsInternal(Cctrl *cc, AstType *base_type);
 
-void ParseAssignAuto(Cctrl *cc, Ast *ast) {
+void parseAssignAuto(Cctrl *cc, Ast *ast) {
     if (ast->declinit == NULL) {
         loggerPanic("line %ld: auto must have an initaliser\n", cc->lineno);
     }
 
     if (ast->declinit->kind == AST_FUNC) {
-        ast->declvar->type = AstMakeFunctionType(
+        ast->declvar->type = astMakeFunctionType(
                 ast->declinit->type->rettype,
                 ast->declinit->params);
         ast->declvar->type->has_var_args = ast->declinit->type->has_var_args;
         ast->declvar->type->rettype->has_var_args = ast->declinit->type->has_var_args;
-    //return AstMakeFunctionType(rettype,params);
+    //return astMakeFunctionType(rettype,params);
         return;
         loggerPanic("line %ld: auto with functions is not yet supported\n",
                 cc->lineno);
@@ -33,7 +33,7 @@ void ParseAssignAuto(Cctrl *cc, Ast *ast) {
     ast->declvar->type = ast->declinit->type;
 }
 
-AstType *ParseReturnAuto(Cctrl *cc, Ast *retval) {
+AstType *parseReturnAuto(Cctrl *cc, Ast *retval) {
     AstType *copy;
     switch (retval->kind) {
         case AST_LVAR:
@@ -80,51 +80,51 @@ AstType *ParseReturnAuto(Cctrl *cc, Ast *retval) {
     }
 }
 
-AstType *ParsePointerType(Cctrl *cc, AstType *type) {
+AstType *parsePointerType(Cctrl *cc, AstType *type) {
     lexeme *tok;
     while (1) {
-        tok = CctrlTokenGet(cc);
-        if (!TokenPunctIs(tok, '*')) {
-            CctrlTokenRewind(cc);
+        tok = cctrlTokenGet(cc);
+        if (!tokenPunctIs(tok, '*')) {
+            cctrlTokenRewind(cc);
             return type;
         }
-        type = AstMakePointerType(type);
+        type = astMakePointerType(type);
     }
     return type;
 }
 
-AstType *ParseFunctionPointerType(Cctrl *cc,
+AstType *parseFunctionPointerType(Cctrl *cc,
         char **fnptr_name, int *fnptr_name_len, AstType *rettype)
 {
     int has_var_args;
     lexeme *fname;
     List *params;
-    CctrlTokenExpect(cc,'*');
-    fname = CctrlTokenGet(cc);
+    cctrlTokenExpect(cc,'*');
+    fname = cctrlTokenGet(cc);
     if (fname->tk_type != TK_IDENT) {
         loggerPanic("line %d: Expected function pointer name got: %s\n",
                 fname->line, lexemeToString(fname));
     }
     *fnptr_name = fname->start;
     *fnptr_name_len = fname->len;
-    CctrlTokenExpect(cc,')');
-    CctrlTokenExpect(cc,'(');
-    params = ParseParams(cc,')',&has_var_args,0);
-    return AstMakeFunctionType(rettype,params);
+    cctrlTokenExpect(cc,')');
+    cctrlTokenExpect(cc,'(');
+    params = parseParams(cc,')',&has_var_args,0);
+    return astMakeFunctionType(rettype,params);
 }
 
-Ast *ParseFunctionPointer(Cctrl *cc, AstType *rettype) {
+Ast *parseFunctionPointer(Cctrl *cc, AstType *rettype) {
     Ast *ast;
     char *fnptr_name;
     int fnptr_name_len;
     AstType *fnptr_type;
 
-    fnptr_type = ParseFunctionPointerType(cc,
+    fnptr_type = parseFunctionPointerType(cc,
             &fnptr_name,
             &fnptr_name_len,
             rettype);
 
-    ast = AstFunctionPtr(
+    ast = astFunctionPtr(
             fnptr_type,
             fnptr_name,
             fnptr_name_len,
@@ -132,52 +132,52 @@ Ast *ParseFunctionPointer(Cctrl *cc, AstType *rettype) {
     return ast;
 }
 
-Ast *ParseDefaultFunctionParam(Cctrl *cc, Ast *var) {
+Ast *parseDefaultFunctionParam(Cctrl *cc, Ast *var) {
     if (var->type->kind == AST_TYPE_ARRAY) {
         loggerPanic("line %ld: Cannot have a default value of type array.\n",
                 cc->lineno);
     }
-    Ast *init = ParseExpr(cc,16);
-    return AstFunctionDefaultParam(var,init);
+    Ast *init = parseExpr(cc,16);
+    return astFunctionDefaultParam(var,init);
 }
 
-List *ParseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
-    List *params = ListNew();
+List *parseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
+    List *params = listNew();
     lexeme *tok, *pname;
     AstType *type;
     Ast *var;
     int arg_count = 0;
 
-    tok = CctrlTokenGet(cc);
-    if (TokenPunctIs(tok,terminator)) {
+    tok = cctrlTokenGet(cc);
+    if (tokenPunctIs(tok,terminator)) {
         return params;
     }
-    CctrlTokenRewind(cc);
+    cctrlTokenRewind(cc);
     
     while (1) {
-        pname = CctrlTokenPeek(cc);
+        pname = cctrlTokenPeek(cc);
 
         /* VarArgs */
-        if (TokenPunctIs(pname, TK_ELLIPSIS)) {
-            CctrlTokenGet(cc);
-            var = AstVarArgs();
-            DictSet(cc->localenv,var->argc->lname->data,var->argc);
-            DictSet(cc->localenv,var->argv->lname->data,var->argv);
-            ListAppend(params,var);
+        if (tokenPunctIs(pname, TK_ELLIPSIS)) {
+            cctrlTokenGet(cc);
+            var = astVarArgs();
+            dictSet(cc->localenv,var->argc->lname->data,var->argc);
+            dictSet(cc->localenv,var->argv->lname->data,var->argv);
+            listAppend(params,var);
             if (cc->tmp_locals) {
-                ListAppend(cc->tmp_locals, var->argc);
-                ListAppend(cc->tmp_locals, var->argv);
+                listAppend(cc->tmp_locals, var->argc);
+                listAppend(cc->tmp_locals, var->argv);
             }
             *has_var_args = 1;
             /* Var args _has_ to be last */
-            CctrlTokenExpect(cc,terminator);
+            cctrlTokenExpect(cc,terminator);
             return params;
         }
 
-        type = ParseDeclSpec(cc);
-        pname = CctrlTokenGet(cc);
+        type = parseDeclSpec(cc);
+        pname = cctrlTokenGet(cc);
 
-        if (TokenPunctIs(pname, ')') && arg_count == 0) {
+        if (tokenPunctIs(pname, ')') && arg_count == 0) {
             if (type->kind == AST_TYPE_VOID) {
                 return params;
             }
@@ -186,33 +186,33 @@ List *ParseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
         arg_count++;
         if (pname->tk_type != TK_IDENT) {
             /* Function pointer */
-            if (TokenPunctIs(pname, '(')) {
-                type = ParseArrayDimensions(cc,type);
+            if (tokenPunctIs(pname, '(')) {
+                type = parseArrayDimensions(cc,type);
                 if (type->kind == AST_TYPE_ARRAY) {
-                    type = AstMakePointerType(type->ptr);
+                    type = astMakePointerType(type->ptr);
                 }
-                var = ParseFunctionPointer(cc,type);
-                DictSet(cc->localenv,var->fname->data,var);
+                var = parseFunctionPointer(cc,type);
+                dictSet(cc->localenv,var->fname->data,var);
                 if (cc->tmp_locals) {
-                    ListAppend(cc->tmp_locals, var);
+                    listAppend(cc->tmp_locals, var);
                 }
-                ListAppend(params, var);
-                tok = CctrlTokenGet(cc);
-                if (TokenPunctIs(tok, terminator)) {
+                listAppend(params, var);
+                tok = cctrlTokenGet(cc);
+                if (tokenPunctIs(tok, terminator)) {
                     return params;
                 }
                 continue;
-            } else if (TokenPunctIs(pname,',') || TokenPunctIs(pname,')')) {
-                type = ParseArrayDimensions(cc,type);
+            } else if (tokenPunctIs(pname,',') || tokenPunctIs(pname,')')) {
+                type = parseArrayDimensions(cc,type);
                 if (type->kind == AST_TYPE_ARRAY) {
-                    type = AstMakePointerType(type->ptr);
+                    type = astMakePointerType(type->ptr);
                 }
-                var = AstLVar(type,"_unknown",7);
+                var = astLVar(type,"_unknown",7);
                 if (cc->tmp_locals) {
-                    ListAppend(cc->tmp_locals, var);
+                    listAppend(cc->tmp_locals, var);
                 }
-                ListAppend(params, var);
-                if (TokenPunctIs(pname, terminator)) {
+                listAppend(params, var);
+                if (tokenPunctIs(pname, terminator)) {
                     return params;
                 }
                 continue;
@@ -222,42 +222,42 @@ List *ParseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
             }
         }
 
-        type = ParseArrayDimensions(cc,type);
+        type = parseArrayDimensions(cc,type);
         if (type->kind == AST_TYPE_ARRAY) {
-            type = AstMakePointerType(type->ptr);
+            type = astMakePointerType(type->ptr);
         }
-        var = AstLVar(type,pname->start,pname->len);
+        var = astLVar(type,pname->start,pname->len);
 
-        tok = CctrlTokenGet(cc);
-        if (TokenPunctIs(tok, '=')) {
-            var = ParseDefaultFunctionParam(cc,var);
+        tok = cctrlTokenGet(cc);
+        if (tokenPunctIs(tok, '=')) {
+            var = parseDefaultFunctionParam(cc,var);
             if (store) {
-                if (!DictSet(cc->localenv,var->declvar->lname->data,var)) {
+                if (!dictSet(cc->localenv,var->declvar->lname->data,var)) {
                     loggerPanic("line: %ld variable %s already declared\n",
-                            cc->lineno,AstLValueToString(var));
+                            cc->lineno,astLValueToString(var));
                 }
             }
-            tok = CctrlTokenGet(cc);
+            tok = cctrlTokenGet(cc);
         } else {
             if (store) {
-                if (!DictSet(cc->localenv,var->lname->data,var)) {
+                if (!dictSet(cc->localenv,var->lname->data,var)) {
                     loggerPanic("line: %ld variable %s already declared\n",
-                            cc->lineno,AstLValueToString(var));
+                            cc->lineno,astLValueToString(var));
                 }
             }
        }
 
         if (cc->tmp_locals) {
-            ListAppend(cc->tmp_locals, var);
+            listAppend(cc->tmp_locals, var);
         }
 
-        ListAppend(params, var);
+        listAppend(params, var);
 
-        if (TokenPunctIs(tok,terminator)) {
+        if (tokenPunctIs(tok,terminator)) {
             return params;
         }
 
-        if (!TokenPunctIs(tok,',')) {
+        if (!tokenPunctIs(tok,',')) {
             loggerPanic("line %d: Comma expected, got %s\n",
                     tok->line,lexemeToString(tok));
         }
@@ -265,8 +265,8 @@ List *ParseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
 }
 
 /* Does not parse pointer types, only the base type */
-AstType *ParseBaseDeclSpec(Cctrl *cc) {
-    lexeme *tok = CctrlTokenGet(cc);
+AstType *parseBaseDeclSpec(Cctrl *cc) {
+    lexeme *tok = cctrlTokenGet(cc);
     AstType *type;
 
     if (!tok) {
@@ -274,7 +274,7 @@ AstType *ParseBaseDeclSpec(Cctrl *cc) {
     }
 
     if (tok->tk_type == TK_KEYWORD || tok->tk_type == TK_IDENT) {
-        if ((type = ParseGetType(cc, tok)) == NULL) {
+        if ((type = parseGetType(cc, tok)) == NULL) {
             loggerPanic("line %ld: Type %.*s not found\n",cc->lineno,
                     tok->len,tok->start);
         }
@@ -287,44 +287,44 @@ AstType *ParseBaseDeclSpec(Cctrl *cc) {
     return type;
 }
 
-AstType *ParseDeclSpec(Cctrl *cc) {
-    AstType *type = ParseBaseDeclSpec(cc);
-    type = ParsePointerType(cc,type);
+AstType *parseDeclSpec(Cctrl *cc) {
+    AstType *type = parseBaseDeclSpec(cc);
+    type = parsePointerType(cc,type);
     return type;
 }
 
-static AstType *ParseArrayDimensionsInternal(Cctrl *cc, AstType *base_type) {
+static AstType *parseArrayDimensionsInternal(Cctrl *cc, AstType *base_type) {
     Ast *size;
     lexeme *tok, *next_tok;
     int dimension;
 
-    tok = CctrlTokenGet(cc);
+    tok = cctrlTokenGet(cc);
     dimension = -1;
 
-    if (!TokenPunctIs(tok, '[')) {
-        CctrlTokenRewind(cc);
+    if (!tokenPunctIs(tok, '[')) {
+        cctrlTokenRewind(cc);
         return NULL;
     }
 
-    next_tok = CctrlTokenPeek(cc);
-    if (!TokenPunctIs(next_tok, ']')) {
-        size = ParseExpr(cc,16);
-        dimension = EvalIntConstExpr(size);
+    next_tok = cctrlTokenPeek(cc);
+    if (!tokenPunctIs(next_tok, ']')) {
+        size = parseExpr(cc,16);
+        dimension = evalIntConstExpr(size);
     }
-    CctrlTokenExpect(cc,']');
-    AstType *sub_type = ParseArrayDimensionsInternal(cc,base_type);
+    cctrlTokenExpect(cc,']');
+    AstType *sub_type = parseArrayDimensionsInternal(cc,base_type);
     if (sub_type) {
         if (sub_type->len == -1 && dimension == -1) {
             loggerPanic("line %ld: Array size not specified.\n",cc->lineno);
         }
-        return AstMakeArrayType(sub_type,dimension);
+        return astMakeArrayType(sub_type,dimension);
     }
 
-    return AstMakeArrayType(base_type,dimension);
+    return astMakeArrayType(base_type,dimension);
 }
 
-AstType *ParseArrayDimensions(Cctrl *cc, AstType *base_type) {
-    AstType *type = ParseArrayDimensionsInternal(cc,base_type);
+AstType *parseArrayDimensions(Cctrl *cc, AstType *base_type) {
+    AstType *type = parseArrayDimensionsInternal(cc,base_type);
     if (type) {
         return type;
     }
@@ -332,50 +332,50 @@ AstType *ParseArrayDimensions(Cctrl *cc, AstType *base_type) {
 } 
 
 /* Calls TokenGet internally so ensure you are 1 token behind the type */
-AstType *ParseFullType(Cctrl *cc) {
-    AstType *type = ParseDeclSpec(cc);
-    return ParseArrayDimensions(cc,type);
+AstType *parseFullType(Cctrl *cc) {
+    AstType *type = parseDeclSpec(cc);
+    return parseArrayDimensions(cc,type);
 }
 
-void ParseDeclInternal(Cctrl *cc, lexeme **tok, AstType **type) {
-    AstType *_type = ParseDeclSpec(cc);
-    lexeme *_tok = CctrlTokenGet(cc);
-    if (TokenPunctIs(_tok,';')) {
-        CctrlTokenRewind(cc);
+void parseDeclInternal(Cctrl *cc, lexeme **tok, AstType **type) {
+    AstType *_type = parseDeclSpec(cc);
+    lexeme *_tok = cctrlTokenGet(cc);
+    if (tokenPunctIs(_tok,';')) {
+        cctrlTokenRewind(cc);
         *tok = NULL;
         return;
     }
 
     if (_tok->tk_type != TK_IDENT) {
-        CctrlTokenRewind(cc);
+        cctrlTokenRewind(cc);
         *tok = NULL;
     } else {
         *tok = _tok;
     }
-    *type = ParseArrayDimensions(cc,_type);
+    *type = parseArrayDimensions(cc,_type);
 }
 
 
 static Ast *findFunctionDecl(Cctrl *cc, char *fname, int len) {
     Ast *decl;
-    if ((decl = DictGetLen(cc->global_env,fname,len)) != NULL) {
+    if ((decl = dictGetLen(cc->global_env,fname,len)) != NULL) {
         if (decl->kind == AST_FUNC ||
             decl->kind == AST_EXTERN_FUNC ||
             decl->kind == AST_FUN_PROTO) {
             return decl;
         }
-    } else if (cc->localenv && (decl = DictGetLen(cc->localenv,fname,len)) != NULL) {
+    } else if (cc->localenv && (decl = dictGetLen(cc->localenv,fname,len)) != NULL) {
         if (decl->kind == AST_FUNPTR || decl->kind == AST_LVAR) {
             return decl;
         }
-    } else if ((decl = DictGetLen(cc->asm_funcs,fname,len)) != NULL) {
+    } else if ((decl = dictGetLen(cc->asm_funcs,fname,len)) != NULL) {
         /* Assembly function */
         return decl;
     }
     return NULL;
 }
 
-List *ParseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
+List *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
     List *argv, *var_args = NULL, *params = NULL, *parameter = NULL; 
     Ast *ast, *param = NULL;
     AstType *check, *rettype;
@@ -395,18 +395,18 @@ List *ParseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
     }
 
 
-    argv = ListNew();
-    tok = CctrlTokenPeek(cc);
+    argv = listNew();
+    tok = cctrlTokenPeek(cc);
     if (params) {
         parameter = params->next;
         param = parameter->value;
     }
 
-    argv = ListNew();
-    tok = CctrlTokenPeek(cc);
+    argv = listNew();
+    tok = cctrlTokenPeek(cc);
 
-    while (tok && !TokenPunctIs(tok, terminator)) {
-        ast = ParseExpr(cc,16);
+    while (tok && !tokenPunctIs(tok, terminator)) {
+        ast = parseExpr(cc,16);
         if (ast == NULL) {
             if (param && param->kind == AST_DEFAULT_PARAM) {
                 ast = param->declinit;
@@ -415,28 +415,28 @@ List *ParseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
 
         if (param != NULL && param->kind == AST_VAR_ARGS) {
             if (decl && decl->kind == AST_EXTERN_FUNC) {
-                ListAppend(argv,ast);
+                listAppend(argv,ast);
             } else {
                 if (var_args == NULL) {
-                    var_args = ListNew();
+                    var_args = listNew();
                 }
-                ListAppend(var_args,ast);
+                listAppend(var_args,ast);
             }
         } else {
             /* Does a distinctly adequate job of type checking function parameters */
             if (param && param->kind != AST_DEFAULT_PARAM) {
-                if ((check = AstTypeCheck(param->type,ast)) == NULL) {
+                if ((check = astTypeCheck(param->type,ast)) == NULL) {
                     Ast *func = findFunctionDecl(cc,fname,len);
                     char *fstring, *expected, *got, *ast_str;
                     if (func) {
-                        fstring = AstFunctionToString(func);
+                        fstring = astFunctionToString(func);
                     } else {
-                        fstring = AstFunctionNameToString(rettype,fname,len);
+                        fstring = astFunctionNameToString(rettype,fname,len);
                     }
 
-                    expected = AstTypeToColorString(param->type);
-                    got = AstTypeToColorString(ast->type);
-                    ast_str = AstLValueToString(ast);
+                    expected = astTypeToColorString(param->type);
+                    got = astTypeToColorString(ast->type);
+                    ast_str = astLValueToString(ast);
                     loggerWarning("line %ld: %s incompatiable function argument %s got %s %s\n",
                             cc->lineno,fstring,expected,got,ast_str);
                     free(fstring);
@@ -445,16 +445,16 @@ List *ParseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
                     free(ast_str);
                 }
             }
-            ListAppend(argv,ast);
+            listAppend(argv,ast);
         }
 
-        tok = CctrlTokenGet(cc);
+        tok = cctrlTokenGet(cc);
 
-        if (TokenPunctIs(tok, terminator)) {
+        if (tokenPunctIs(tok, terminator)) {
             break;
         }
 
-        if (!TokenPunctIs(tok,',')) {
+        if (!tokenPunctIs(tok,',')) {
             loggerPanic("line %d: Unexpected token: Expected: ',' got: '%s'\n",
                    tok->line,lexemeToString(tok));
         }
@@ -465,24 +465,24 @@ List *ParseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
                 param = parameter->value;
             }
         }
-        tok = CctrlTokenPeek(cc);
+        tok = cctrlTokenPeek(cc);
     }
 
     if (var_args) {
         /* set the argument count and merge lists */
-        ListAppend(argv, AstI64Type(ListCount(var_args)));
-        ListMergeAppend(argv,var_args);
+        listAppend(argv, astI64Type(listCount(var_args)));
+        listMergeAppend(argv,var_args);
     }
 
     if (argv->next == argv) {
-        CctrlTokenGet(cc);
+        cctrlTokenGet(cc);
     }
 
     return argv;
 }
 
 /* Read function arguments for a function being called */
-Ast *ParseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
+Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
     List *argv, *params = NULL; 
     AstType *rettype;
     Ast *decl;
@@ -492,36 +492,36 @@ Ast *ParseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
         rettype = decl->type->rettype;
     }
 
-    argv = ParseArgv(cc,decl,terminator,fname,len);
+    argv = parseArgv(cc,decl,terminator,fname,len);
 
     if (!decl) {
         if ((len == 6 && !strncmp(fname,"printf",6))) {
-            params = ListNew();
+            params = listNew();
             rettype = ast_int_type;
-            return AstFunctionCall(rettype,fname,len,argv,params);
+            return astFunctionCall(rettype,fname,len,argv,params);
         }
         loggerPanic("line %ld: Function: %.*s() not defined\n",
                 cc->lineno,len,fname);
     }
 
     if (argv->next == argv) {
-        params = ListNew();
+        params = listNew();
     }
 
     switch (decl->kind) {
         case AST_LVAR:
         case AST_FUNPTR:
-            return AstFunctionPtrCall(rettype,fname,len,argv,params,decl);
+            return astFunctionPtrCall(rettype,fname,len,argv,params,decl);
 
         case AST_ASM_FUNCDEF:
         case AST_ASM_FUNC_BIND:
-            return AstAsmFunctionCall(rettype,
+            return astAsmFunctionCall(rettype,
                     aoStrDup(decl->asmfname),argv,params);
 
         case AST_EXTERN_FUNC:
         case AST_FUNC:
         case AST_FUN_PROTO:
-            return AstFunctionCall(rettype,fname,len,argv,params);
+            return astFunctionCall(rettype,fname,len,argv,params);
         default: {
             loggerPanic("line %ld: Unknown function: %.*s\n",
                     cc->lineno,len,fname);
@@ -529,36 +529,36 @@ Ast *ParseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
     }
 }
 
-/* Parse either a function call or a variable being used */
-static Ast *ParseIdentifierOrFunction(Cctrl *cc, char *name, int len,
+/* parse either a function call or a variable being used */
+static Ast *parseIdentifierOrFunction(Cctrl *cc, char *name, int len,
         int can_call_function)
 {
     Ast *ast;
     int is_lparen;
     lexeme *tok,*peek;
 
-    tok = CctrlTokenGet(cc);
-    peek = CctrlTokenPeek(cc);
-    is_lparen = TokenPunctIs(tok,'(');
+    tok = cctrlTokenGet(cc);
+    peek = cctrlTokenPeek(cc);
+    is_lparen = tokenPunctIs(tok,'(');
 
     if (!is_lparen) {
-        CctrlTokenRewind(cc);
-        if ((ast = CctrlGetVar(cc, name, len)) == NULL) {
+        cctrlTokenRewind(cc);
+        if ((ast = cctrlGetVar(cc, name, len)) == NULL) {
             loggerPanic("line %ld: Cannot find variable: %.*s\n",
                     cc->lineno,len,name);
         }
 
         if (can_call_function) {
             /* Function calls with no arguments are 'Function;' */
-            if ((TokenPunctIs(tok,';') || TokenPunctIs(tok,',') || 
-                TokenPunctIs(tok,')'))  
-                    && ParseIsFunction(ast)) {
+            if ((tokenPunctIs(tok,';') || tokenPunctIs(tok,',') || 
+                tokenPunctIs(tok,')'))  
+                    && parseIsFunction(ast)) {
                 if (ast->kind == AST_ASM_FUNC_BIND || ast->kind == AST_ASM_FUNCDEF) {
-                    return AstAsmFunctionCall(ast->type->rettype,
-                            aoStrDup(ast->asmfname),ListNew(),ListNew());
+                    return astAsmFunctionCall(ast->type->rettype,
+                            aoStrDup(ast->asmfname),listNew(),listNew());
                 } else {
-                    return AstFunctionCall(ast->type->rettype,
-                            ast->fname->data,ast->fname->len,ListNew(),ListNew());
+                    return astFunctionCall(ast->type->rettype,
+                            ast->fname->data,ast->fname->len,listNew(),listNew());
                 }
             }
         }
@@ -566,79 +566,79 @@ static Ast *ParseIdentifierOrFunction(Cctrl *cc, char *name, int len,
     }
 
     /* Is a function call if the next char is '(' and the peek is not a type */
-    if (!CctrlIsKeyword(cc,peek->start,peek->len)) {
-        return ParseFunctionArguments(cc,name,len,')');
+    if (!cctrlIsKeyword(cc,peek->start,peek->len)) {
+        return parseFunctionArguments(cc,name,len,')');
     }
 
     /* Is a postfix typecast, need to grap the variable and 'ParsePostFixExpr' will do the cast */
-    if ((ast = CctrlGetVar(cc, name, len)) == NULL) {
+    if ((ast = cctrlGetVar(cc, name, len)) == NULL) {
         loggerPanic("line %ld: Cannot find variable: %.*s\n",cc->lineno,
                 len, name);
     }
-    CctrlTokenRewind(cc);
+    cctrlTokenRewind(cc);
     return ast;
 }
 
-static Ast *ParsePrimary(Cctrl *cc) {
+static Ast *parsePrimary(Cctrl *cc) {
     Ast *ast;
     lexeme *prev,*tok;
     int can_call_function = 1;
-    CctrlTokenRewind(cc);
+    cctrlTokenRewind(cc);
 
-    prev = CctrlTokenGet(cc);
-    tok = CctrlTokenGet(cc);
+    prev = cctrlTokenGet(cc);
+    tok = cctrlTokenGet(cc);
 
     if (!tok) {
         return NULL;
     }
 
-    if (TokenPunctIs(prev,'&')) {
+    if (tokenPunctIs(prev,'&')) {
         can_call_function = 0;
     }
 
     switch (tok->tk_type) {
     case TK_IDENT: {
-        ast = ParseIdentifierOrFunction(cc, tok->start, tok->len,
+        ast = parseIdentifierOrFunction(cc, tok->start, tok->len,
                 can_call_function);
         return ast;
     }
     case TK_I64: {
-        ast = AstI64Type(tok->i64);
+        ast = astI64Type(tok->i64);
         return ast;
     }
     case TK_F64:
-        return AstF64Type(tok->f64);
+        return astF64Type(tok->f64);
     case TK_CHAR_CONST:
-        ast = AstCharType(tok->i64);
+        ast = astCharType(tok->i64);
         ast->type = ast_uint_type;
         return ast;
     case TK_STR: {
         aoStr *str = aoStrNew();
-        CctrlTokenRewind(cc);
+        cctrlTokenRewind(cc);
         /* Concatinate adjacent strings together */
-        while ((tok = CctrlTokenGet(cc)) != NULL && tok->tk_type == TK_STR) {
+        while ((tok = cctrlTokenGet(cc)) != NULL && tok->tk_type == TK_STR) {
             aoStrCatPrintf(str,"%.*s",tok->len,tok->start);
         }
-        CctrlTokenRewind(cc);
-        ast = AstString(str->data, str->len);
+        cctrlTokenRewind(cc);
+        ast = astString(str->data, str->len);
         if (cc->strings) {
-            ListAppend(cc->strings, ast);
+            listAppend(cc->strings, ast);
         }
         free(str);
         return ast;
     }
     case TK_PUNCT:
-        CctrlTokenRewind(cc);
+        cctrlTokenRewind(cc);
         return NULL;
     case TK_EOF:
         loggerPanic("line %d: Unexpected EOF\n", tok->line);
         break;
     default:
-        loggerPanic("line %d: Unexpected input %s\n",tok->line,AstKindToString(tok->tk_type));
+        loggerPanic("line %d: Unexpected input %s\n",tok->line,astKindToString(tok->tk_type));
     }
 }
 
-static int ParseGetPriority(lexeme *tok) {
+static int parseGetPriority(lexeme *tok) {
     switch (tok->i64) {
     case '.': case '[': case TK_ARROW: case '(':
         return 1;
@@ -701,25 +701,25 @@ static int ParseGetPriority(lexeme *tok) {
     }
 }
 
-Ast *ParseSubscriptExpr(Cctrl *cc, Ast *ast) {
-    Ast *subscript = ParseExpr(cc,16);
-    CctrlTokenExpect(cc, ']');
-    Ast *binop = AstBinaryOp('+', ast, subscript);
-    return AstUnaryOperator(binop->type->ptr, AST_DEREF, binop);
+Ast *parseSubscriptExpr(Cctrl *cc, Ast *ast) {
+    Ast *subscript = parseExpr(cc,16);
+    cctrlTokenExpect(cc, ']');
+    Ast *binop = astBinaryOp('+', ast, subscript);
+    return astUnaryOperator(binop->type->ptr, AST_DEREF, binop);
 }
 
-Ast *ParseGetClassField(Cctrl *cc, Ast *cls) {
+Ast *parseGetClassField(Cctrl *cc, Ast *cls) {
     AstType *type;
-    if (!ParseIsClassOrUnion(cls->type->kind)) {
+    if (!parseIsClassOrUnion(cls->type->kind)) {
         loggerPanic("line %ld: Expected class got: %s %s\n",
                 cc->lineno,
-                AstKindToString(cls->kind),
-                AstToString(cls));
+                astKindToString(cls->kind),
+                astToString(cls));
     }
 
     type = cls->type;
 
-    lexeme *tok = CctrlTokenGet(cc);
+    lexeme *tok = cctrlTokenGet(cc);
     if (tok->tk_type != TK_IDENT) {
         loggerPanic("line %d: Expected class member got: %s\n",
                 tok->line,
@@ -730,16 +730,16 @@ Ast *ParseGetClassField(Cctrl *cc, Ast *cls) {
     if (type->fields == NULL && cls->kind == AST_DEREF) {
         type = cls->cls->type;
     }
-    AstType *field = DictGetLen(type->fields, tok->start, tok->len);
+    AstType *field = dictGetLen(type->fields, tok->start, tok->len);
     if (!field) {
         loggerPanic("line %d: Property: %.*s does not exist on class\n", 
                 tok->line,tok->len, tok->start);
     }
     aoStr *field_name = aoStrDupRaw(tok->start, tok->len);
-    return AstClassRef(field, cls, aoStrMove(field_name));
+    return astClassRef(field, cls, aoStrMove(field_name));
 }
 
-static int ParseCompoundAssign(lexeme *tok) {
+static int parseCompoundAssign(lexeme *tok) {
     if (tok->tk_type != TK_PUNCT) {
         return 0;
     }
@@ -759,72 +759,72 @@ static int ParseCompoundAssign(lexeme *tok) {
     }
 }
 
-Ast *ParseExpr(Cctrl *cc, int prec) {
+Ast *parseExpr(Cctrl *cc, int prec) {
     Ast *LHS, *RHS;
     lexeme *tok;
     int prec2, next_prec, compound_assign;
 
-    if ((LHS = ParseUnaryExpr(cc)) == NULL) {
+    if ((LHS = parseUnaryExpr(cc)) == NULL) {
         return NULL;
     }
 
     while (1) {
         /* Can be TK_IDENT, or TK_F64 or TK_I64 or when type casting exists '(' TK_PUNCT */
-        if ((tok = CctrlTokenGet(cc)) == NULL) {
+        if ((tok = cctrlTokenGet(cc)) == NULL) {
             return LHS;
         }
 
         if (tok->tk_type != TK_PUNCT) {
-            CctrlTokenRewind(cc);
+            cctrlTokenRewind(cc);
             return LHS;
         }
 
-        prec2 = ParseGetPriority(tok);
+        prec2 = parseGetPriority(tok);
         if (prec2 < 0 || prec <= prec2) {
-            CctrlTokenRewind(cc);
+            cctrlTokenRewind(cc);
             return LHS;
         }
 
-        if (TokenPunctIs(tok,'.')) {
-            LHS = ParseGetClassField(cc,LHS);
+        if (tokenPunctIs(tok,'.')) {
+            LHS = parseGetClassField(cc,LHS);
             continue;
         }
 
-        if (TokenPunctIs(tok,'(')) {
+        if (tokenPunctIs(tok,'(')) {
             /* XXX: Should this check still be here ? Not sure as 
              * casting _anything_ makes sense */
-            // AssertLValue(LHS,cc->lineno);
-            AstType *type = ParseDeclSpec(cc);
-            LHS = AstCast(LHS,type);
-            CctrlTokenExpect(cc,')');
+            // assertLValue(LHS,cc->lineno);
+            AstType *type = parseDeclSpec(cc);
+            LHS = astCast(LHS,type);
+            cctrlTokenExpect(cc,')');
             continue;
         }
 
-        if (TokenPunctIs(tok, TK_PLUS_PLUS) || TokenPunctIs(tok, TK_MINUS_MINUS)) {
-            AssertLValue(LHS,cc->lineno);
-            LHS = AstUnaryOperator(LHS->type, tok->i64, LHS);
+        if (tokenPunctIs(tok, TK_PLUS_PLUS) || tokenPunctIs(tok, TK_MINUS_MINUS)) {
+            assertLValue(LHS,cc->lineno);
+            LHS = astUnaryOperator(LHS->type, tok->i64, LHS);
             continue;
         }
 
-        if (TokenPunctIs(tok,'[')) {
-            LHS = ParseSubscriptExpr(cc,LHS);
+        if (tokenPunctIs(tok,'[')) {
+            LHS = parseSubscriptExpr(cc,LHS);
             continue;
         }
 
-        if (TokenPunctIs(tok, TK_ARROW)) {
+        if (tokenPunctIs(tok, TK_ARROW)) {
             if (LHS->type->kind != AST_TYPE_POINTER) {
                 loggerPanic("line %d: Pointer expected got: %s %s\n",
                         tok->line,
-                        AstTypeToString(LHS->type), AstToString(LHS));
+                        astTypeToString(LHS->type), astToString(LHS));
             }
-            LHS = AstUnaryOperator(LHS->type->ptr, AST_DEREF, LHS);
-            LHS = ParseGetClassField(cc, LHS);
+            LHS = astUnaryOperator(LHS->type->ptr, AST_DEREF, LHS);
+            LHS = parseGetClassField(cc, LHS);
             continue;
         }
 
-        compound_assign = ParseCompoundAssign(tok);
-        if (TokenPunctIs(tok, '=') || compound_assign) {
-            AssertLValue(LHS,cc->lineno);
+        compound_assign = parseCompoundAssign(tok);
+        if (tokenPunctIs(tok, '=') || compound_assign) {
+            assertLValue(LHS,cc->lineno);
         }
         
         next_prec = prec2;
@@ -832,81 +832,81 @@ Ast *ParseExpr(Cctrl *cc, int prec) {
             next_prec++;
         }
 
-        RHS = ParseExpr(cc,next_prec);
+        RHS = parseExpr(cc,next_prec);
         if (!RHS) {
             loggerPanic("line %d: Second operand missing to: %s\n",
-                tok->line,AstToString(LHS));
+                tok->line,astToString(LHS));
         }
 
         if (compound_assign) {
-            LHS = AstBinaryOp('=', LHS, 
-                    AstBinaryOp(compound_assign, LHS, RHS));
+            LHS = astBinaryOp('=', LHS, 
+                    astBinaryOp(compound_assign, LHS, RHS));
         } else {
-            LHS = AstBinaryOp(tok->i64,LHS,RHS);
+            LHS = astBinaryOp(tok->i64,LHS,RHS);
         }
     }
 }
 
-static Ast *ParseCast(Cctrl *cc) {
+static Ast *parseCast(Cctrl *cc) {
     Ast *ast;
     AstType *cast_type;
 
-    CctrlTokenExpect(cc,'<');
-    cast_type = ParseDeclSpec(cc);
-    CctrlTokenExpect(cc,'>');
-    CctrlTokenExpect(cc,'(');
-    ast = ParseExpr(cc,16);
-    CctrlTokenExpect(cc,')');
-    ast = AstCast(ast,cast_type);
+    cctrlTokenExpect(cc,'<');
+    cast_type = parseDeclSpec(cc);
+    cctrlTokenExpect(cc,'>');
+    cctrlTokenExpect(cc,'(');
+    ast = parseExpr(cc,16);
+    cctrlTokenExpect(cc,')');
+    ast = astCast(ast,cast_type);
     return ast;
 }
 
-static AstType *ParseSizeOfType(Cctrl *cc) {
+static AstType *parseSizeOfType(Cctrl *cc) {
     lexeme *tok,*peek;
     AstType *type;
     Ast *ast;
 
-    tok = CctrlTokenGet(cc);
-    peek = CctrlTokenPeek(cc);
+    tok = cctrlTokenGet(cc);
+    peek = cctrlTokenPeek(cc);
 
-    if (TokenPunctIs(tok,'(') && CctrlIsKeyword(cc,peek->start,peek->len)) {
-        type = ParseFullType(cc);
-        CctrlTokenExpect(cc,')');
-        peek = CctrlTokenPeek(cc);
+    if (tokenPunctIs(tok,'(') && cctrlIsKeyword(cc,peek->start,peek->len)) {
+        type = parseFullType(cc);
+        cctrlTokenExpect(cc,')');
+        peek = cctrlTokenPeek(cc);
         return type;
     }
 
-    CctrlTokenRewind(cc);
-    ast = ParseUnaryExpr(cc);
+    cctrlTokenRewind(cc);
+    ast = parseUnaryExpr(cc);
     return ast->type;
 }
 
-static Ast *ParseSizeof(Cctrl *cc) {
-    AstType *type = ParseSizeOfType(cc);
+static Ast *parseSizeof(Cctrl *cc) {
+    AstType *type = parseSizeOfType(cc);
     long size = type->size;
     assert(size >= 0);
-    return AstI64Type(size);
+    return astI64Type(size);
 }
 
-Ast *ParsePostFixExpr(Cctrl *cc) {
+Ast *parsePostFixExpr(Cctrl *cc) {
     Ast *ast;
     AstType *type;
     lexeme *tok,*peek;
 
-    /* Parse primary rightly or wrongly, amongst other things, either gets a 
+    /* parse primary rightly or wrongly, amongst other things, either gets a 
      * variable or parses a function call. */
-    if ((ast = ParsePrimary(cc)) == NULL) {
+    if ((ast = parsePrimary(cc)) == NULL) {
         return NULL;
     }
 
-    if (ParseIsFunctionCall(ast)) {
+    if (parseIsFunctionCall(ast)) {
         return ast;
     }
 
     while (1) {
-        tok = CctrlTokenGet(cc);
+        tok = cctrlTokenGet(cc);
 
-        if (TokenPunctIs(tok,'[')) {
+        if (tokenPunctIs(tok,'[')) {
             /* XXX: something is wrong with the below however, if a pointer gets 
              * parsed as a binary expression it works, but does not for arrays.
              * However if you put parenthesis around the pointer access it blows 
@@ -915,40 +915,40 @@ Ast *ParsePostFixExpr(Cctrl *cc) {
 
             /* This is for normal arrays */
             if (ast->type->kind == AST_TYPE_ARRAY) {
-                ast = ParseSubscriptExpr(cc,ast);
-                if (TokenPunctIs(CctrlTokenPeek(cc),'(')) {
+                ast = parseSubscriptExpr(cc,ast);
+                if (tokenPunctIs(cctrlTokenPeek(cc),'(')) {
                     continue;
                 } else {
                     return ast;
                 }
             }
-            peek = CctrlTokenPeek(cc);
-            if (TokenPunctIs(peek,'(')) {
+            peek = cctrlTokenPeek(cc);
+            if (tokenPunctIs(peek,'(')) {
                 continue;
             } else {
-                CctrlTokenRewind(cc);
+                cctrlTokenRewind(cc);
                 return ast;
             }
         }
 
 
-        if (TokenPunctIs(tok,'.')) {
-            ast = ParseGetClassField(cc,ast);
+        if (tokenPunctIs(tok,'.')) {
+            ast = parseGetClassField(cc,ast);
             continue;
         }
 
         /* Postfix type cast OR function pointer on a class */
-        if (TokenPunctIs(tok,'(')) {
-            peek = CctrlTokenPeek(cc);
-            if (CctrlIsKeyword(cc,peek->start,peek->len)) {
-                type = ParseDeclSpec(cc);
-                CctrlTokenExpect(cc,')');
-                ast = AstCast(ast,type);
+        if (tokenPunctIs(tok,'(')) {
+            peek = cctrlTokenPeek(cc);
+            if (cctrlIsKeyword(cc,peek->start,peek->len)) {
+                type = parseDeclSpec(cc);
+                cctrlTokenExpect(cc,')');
+                ast = astCast(ast,type);
                 continue;
             } else if (ast->kind == AST_CLASS_REF) { 
                 int len = strlen(ast->field);
-                List *argv = ParseArgv(cc,ast,')',ast->field,len);
-                ast = AstFunctionPtrCall(
+                List *argv = parseArgv(cc,ast,')',ast->field,len);
+                ast = astFunctionPtrCall(
                         ast->type->rettype,
                         ast->field,
                         len,
@@ -959,55 +959,55 @@ Ast *ParsePostFixExpr(Cctrl *cc) {
             }
         }
 
-        if (TokenPunctIs(tok,TK_ARROW)) {
+        if (tokenPunctIs(tok,TK_ARROW)) {
             if (ast->type->kind != AST_TYPE_POINTER) {
                 loggerPanic("line %d: Pointer expected got: %s\n",
                         tok->line,
-                        AstKindToString(ast->type->kind));
+                        astKindToString(ast->type->kind));
             }
-            ast = AstUnaryOperator(ast->type->ptr,AST_DEREF,ast);
-            ast = ParseGetClassField(cc,ast);
+            ast = astUnaryOperator(ast->type->ptr,AST_DEREF,ast);
+            ast = parseGetClassField(cc,ast);
             continue;
         }
 
-        if (TokenPunctIs(tok,TK_PLUS_PLUS) ||
-                TokenPunctIs(tok,TK_MINUS_MINUS)) {
-            AssertLValue(ast,cc->lineno);
+        if (tokenPunctIs(tok,TK_PLUS_PLUS) ||
+                tokenPunctIs(tok,TK_MINUS_MINUS)) {
+            assertLValue(ast,cc->lineno);
             if (tok->i64 == TK_PLUS_PLUS) {
-                return AstUnaryOperator(ast->type,TK_PLUS_PLUS,ast);
+                return astUnaryOperator(ast->type,TK_PLUS_PLUS,ast);
             } else {
-                return AstUnaryOperator(ast->type,TK_MINUS_MINUS,ast);
+                return astUnaryOperator(ast->type,TK_MINUS_MINUS,ast);
             }
         }
 
-        CctrlTokenRewind(cc);
+        cctrlTokenRewind(cc);
         return ast;
     }
 }
 
-Ast *ParseUnaryExpr(Cctrl *cc) {
+Ast *parseUnaryExpr(Cctrl *cc) {
     lexeme *tok;
     Ast *ast;
 
-    if ((tok = CctrlTokenGet(cc)) == NULL) {
+    if ((tok = cctrlTokenGet(cc)) == NULL) {
         loggerPanic("line %ld: Unexpected end of input\n",cc->lineno);
     }
 
     if (tok->tk_type == TK_KEYWORD) {
         switch (tok->i64) {
-            case KW_SIZEOF: return ParseSizeof(cc);
-            case KW_CAST:   return ParseCast(cc);
+            case KW_SIZEOF: return parseSizeof(cc);
+            case KW_CAST:   return parseCast(cc);
             case KW_DEFINED: {
-                CctrlTokenExpect(cc,'(');
-                tok = CctrlTokenGet(cc);
+                cctrlTokenExpect(cc,'(');
+                tok = cctrlTokenGet(cc);
 
                 if (tok->i64 != ')') {
-                    ast = AstI64Type(1);
+                    ast = astI64Type(1);
                 } else {
-                    ast = AstI64Type(0);
+                    ast = astI64Type(0);
                 }
                 if (tok->i64 != ')') {
-                    CctrlTokenExpect(cc,')');
+                    cctrlTokenExpect(cc,')');
                 }
                 return ast;
             }
@@ -1017,58 +1017,58 @@ Ast *ParseUnaryExpr(Cctrl *cc) {
         }
     }
 
-    if (TokenPunctIs(tok,'(')) {
-        ast = ParseExpr(cc,16);
-        CctrlTokenExpect(cc,')');
+    if (tokenPunctIs(tok,'(')) {
+        ast = parseExpr(cc,16);
+        cctrlTokenExpect(cc,')');
         return ast;
     }
 
     /* Obtaining the address of a variable */
-    if (TokenPunctIs(tok, '&')) {
-        Ast *operand = ParseUnaryExpr(cc);
+    if (tokenPunctIs(tok, '&')) {
+        Ast *operand = parseUnaryExpr(cc);
         /* We do not take the address of a function */
-        if (ParseIsFunction(operand)) {
+        if (parseIsFunction(operand)) {
             return operand;
         }
-        return AstUnaryOperator(AstMakePointerType(operand->type),
+        return astUnaryOperator(astMakePointerType(operand->type),
                 AST_ADDR,operand);
     }
 
     /* Dereferencing */
-    if (TokenPunctIs(tok, '*')) {
-        Ast *operand = ParseUnaryExpr(cc);
-        return AstUnaryOperator(operand->type->ptr,
+    if (tokenPunctIs(tok, '*')) {
+        Ast *operand = parseUnaryExpr(cc);
+        return astUnaryOperator(operand->type->ptr,
                 AST_DEREF,operand);
     }
 
-    if (TokenPunctIs(tok, TK_PLUS_PLUS)) {
-        Ast *operand = ParseUnaryExpr(cc);
-        return AstUnaryOperator(operand->type,
+    if (tokenPunctIs(tok, TK_PLUS_PLUS)) {
+        Ast *operand = parseUnaryExpr(cc);
+        return astUnaryOperator(operand->type,
                 TK_PRE_PLUS_PLUS,operand);
     }
 
-    if (TokenPunctIs(tok, TK_MINUS_MINUS)) {
-        Ast *operand = ParseUnaryExpr(cc);
-        return AstUnaryOperator(operand->type,
+    if (tokenPunctIs(tok, TK_MINUS_MINUS)) {
+        Ast *operand = parseUnaryExpr(cc);
+        return astUnaryOperator(operand->type,
                 TK_PRE_MINUS_MINUS,operand);
     }
 
-    if (TokenPunctIs(tok,'~')) {
-        Ast *operand = ParseUnaryExpr(cc);
-        return AstUnaryOperator(ast_int_type,'~',operand);
+    if (tokenPunctIs(tok,'~')) {
+        Ast *operand = parseUnaryExpr(cc);
+        return astUnaryOperator(ast_int_type,'~',operand);
     }
 
-    if (TokenPunctIs(tok,'!')) {
-        Ast *operand = ParseUnaryExpr(cc);
-        return AstUnaryOperator(operand->type,'!',operand);
+    if (tokenPunctIs(tok,'!')) {
+        Ast *operand = parseUnaryExpr(cc);
+        return astUnaryOperator(operand->type,'!',operand);
     }
 
-    if (TokenPunctIs(tok,'-')) {
-        Ast *operand = ParseUnaryExpr(cc);
-        operand = AstUnaryOperator(operand->type,'-',operand);
+    if (tokenPunctIs(tok,'-')) {
+        Ast *operand = parseUnaryExpr(cc);
+        operand = astUnaryOperator(operand->type,'-',operand);
         return operand;
     }
 
-    CctrlTokenRewind(cc);
-    return ParsePostFixExpr(cc);
+    cctrlTokenRewind(cc);
+    return parsePostFixExpr(cc);
 }

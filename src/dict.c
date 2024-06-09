@@ -6,16 +6,16 @@
 #include "dict.h"
 #include "util.h"
 
-#define DictShouldResize(d) ((d)->size >= (d)->threashold)
+#define dictShouldResize(d) ((d)->size >= (d)->threashold)
 
 DictType default_table_type = {
     .freeKey = free,
     .freeValue = NULL,
-    .keyCmp = DictStrCmp,
-    .hashFunction = DictGenericHashFunction,
+    .keyCmp = dictStrCmp,
+    .hashFunction = dictGenericHashFunction,
 };
 
-size_t DictGenericHashFunctionLen(void *key, int len) {
+size_t dictGenericHashFunctionLen(void *key, int len) {
     char *s = (char *)key;
     size_t h = (size_t)*s;
     for (int i = 1; i < len; ++i) {
@@ -24,7 +24,7 @@ size_t DictGenericHashFunctionLen(void *key, int len) {
     return h;
 }
 
-size_t DictGenericHashFunction(void *key) {
+size_t dictGenericHashFunction(void *key) {
     char *s = (char *)key;
     size_t h = (size_t)*s;
 
@@ -36,11 +36,11 @@ size_t DictGenericHashFunction(void *key) {
     return h;
 }
 
-int DictStrCmp(void *s1, void *s2) {
+int dictStrCmp(void *s1, void *s2) {
     return !strcmp(s1, s2);
 }
 
-void DictDefaultInit(Dict *ht) {
+void dictDefaultInit(Dict *ht) {
     ht->type = &default_table_type;
     ht->capacity = DICT_INTITAL_CAPACITY;
     ht->hash_mask = ht->capacity - 1;
@@ -49,13 +49,13 @@ void DictDefaultInit(Dict *ht) {
     ht->threashold = ~~((size_t)(DICT_LOAD * ht->capacity));
 }
 
-Dict *DictNewWithParent(Dict *parent) {
-    Dict *d = DictNew(&default_table_type);
+Dict *dictNewWithParent(Dict *parent) {
+    Dict *d = dictNew(&default_table_type);
     d->parent = parent;
     return d;
 }
 
-Dict *DictNew(DictType *type) {
+Dict *dictNew(DictType *type) {
     DictNode **body = (DictNode **)calloc(DICT_INTITAL_CAPACITY,
             sizeof(DictNode *));
     Dict *d = malloc(sizeof(Dict));
@@ -72,7 +72,7 @@ Dict *DictNew(DictType *type) {
     return d;
 }
 
-static DictNode *DictNodeNew(void *key, void *value) {
+static DictNode *dictNodeNew(void *key, void *value) {
     DictNode *n = (DictNode *)malloc(sizeof(DictNode));
     n->val = value;
     n->key = key;
@@ -80,14 +80,14 @@ static DictNode *DictNodeNew(void *key, void *value) {
     return n;
 }
 
-void DictRelease(Dict *d) {
+void dictRelease(Dict *d) {
     if (d) {
         DictNode *next = NULL;
         for (size_t i = 0; i < d->size; ++i) {
             DictNode *n = d->body[i];
             while (n) {
                 next = n->next;
-                DictFreeKey(d, n->key);
+                dictFreeKey(d, n->key);
                 DictFreeValue(d, n->val);
                 free(n);
                 d->size--;
@@ -98,8 +98,8 @@ void DictRelease(Dict *d) {
     }
 }
 
-DictNode *DictFindLen(Dict *d, void *key, int len) {
-    size_t hash = DictGenericHashFunctionLen(key,len);
+DictNode *dictFindLen(Dict *d, void *key, int len) {
+    size_t hash = dictGenericHashFunctionLen(key,len);
     size_t idx = hash & d->hash_mask;
     int key_len = 0;
     DictNode *n;
@@ -117,14 +117,14 @@ DictNode *DictFindLen(Dict *d, void *key, int len) {
     return NULL;
 }
 
-DictNode *DictFind(Dict *d, void *key) {
-    size_t hash = DictHashFunction(d, key);
+DictNode *dictFind(Dict *d, void *key) {
+    size_t hash = dictHashFunction(d, key);
     size_t idx = hash & d->hash_mask;
     DictNode *n = d->body[idx];
 
     for (; d; d = d->parent) {
         for (; n != NULL; n = n->next) {
-            if (DictKeyCmp(key, n->key)) {
+            if (dictKeyCmp(key, n->key)) {
                 return n;
             }
         }
@@ -133,21 +133,21 @@ DictNode *DictFind(Dict *d, void *key) {
     return NULL;
 }
 
-void *DictGet(Dict *d, void *key) {
-    DictNode *needle = DictFind(d, key);
+void *dictGet(Dict *d, void *key) {
+    DictNode *needle = dictFind(d, key);
     return needle ? needle->val : NULL;
 }
 
-void *DictGetLen(Dict *d, void *key, int len) {
-    DictNode *needle = DictFindLen(d, key, len);
+void *dictGetLen(Dict *d, void *key, int len) {
+    DictNode *needle = dictFindLen(d, key, len);
     return needle ? needle->val : NULL;
 }
 
-static size_t DictGetIndex(Dict *d, void *key, size_t idx, int *ok) {
+static size_t dictGetIndex(Dict *d, void *key, size_t idx, int *ok) {
     DictNode *n = d->body[idx];
 
     for (; n != NULL; n = n->next) {
-        if (DictKeyCmp(key, n->key)) {
+        if (dictKeyCmp(key, n->key)) {
             *ok = 0;
             return idx;
         }
@@ -171,7 +171,7 @@ static void DictResize(Dict *d) {
         size_t idx = 0;
 
         while (n) {
-            idx = DictHashFunction(d, n->key) & new_mask;
+            idx = dictHashFunction(d, n->key) & new_mask;
             next = n->next;
             n->next = new_entries[idx];
             new_entries[idx] = n;
@@ -186,75 +186,75 @@ static void DictResize(Dict *d) {
     free(old_entries);
 }
 
-void DictSetOrReplace(Dict *d, void *key, void *value) {
-    if (DictShouldResize(d)) {
+void dictSetOrReplace(Dict *d, void *key, void *value) {
+    if (dictShouldResize(d)) {
         DictResize(d);
     }
 
-    size_t hash = DictHashFunction(d, key);
+    size_t hash = dictHashFunction(d, key);
     size_t idx = hash & d->hash_mask;
 
     DictNode *n = d->body[idx];
     if (n == NULL) {
-        DictNode *newnode = DictNodeNew(key, value);
+        DictNode *newnode = dictNodeNew(key, value);
         d->body[idx] = newnode;
         newnode->next = d->body[idx];
     } else {
         /* This could be a collision or we have the exact key and thus are
          * replacing */
         while (n) {
-            if (DictKeyCmp(key, n->key)) {
+            if (dictKeyCmp(key, n->key)) {
                 /* Update the value */
                 n->val = value;
                 return;
             }
             n = n->next;
         }
-        DictNode *newnode = DictNodeNew(key, value);
+        DictNode *newnode = dictNodeNew(key, value);
         newnode->next = d->body[idx];
         d->body[idx] = newnode;
     }
     d->size++;
 }
 
-int DictSet(Dict *d, void *key, void *value) {
-    if (DictShouldResize(d)) {
+int dictSet(Dict *d, void *key, void *value) {
+    if (dictShouldResize(d)) {
         DictResize(d);
     }
 
-    size_t hash = DictHashFunction(d, key);
+    size_t hash = dictHashFunction(d, key);
     size_t idx = hash & d->hash_mask;
     int ok = 0;
 
-    idx = DictGetIndex(d, key, idx, &ok);
+    idx = dictGetIndex(d, key, idx, &ok);
 
     /* Key exists and we do not want to update the value */
     if (ok == 0) {
         return 0;
     }
 
-    DictNode *newnode = DictNodeNew(key, value);
+    DictNode *newnode = dictNodeNew(key, value);
     newnode->next = d->body[idx];
     d->body[idx] = newnode;
     d->size++;
     return 1;
 }
 
-int DictDelete(Dict *d, void *key) {
-    size_t hash = DictHashFunction(d, key);
+int dictDelete(Dict *d, void *key) {
+    size_t hash = dictHashFunction(d, key);
     size_t idx = hash & d->hash_mask;
     DictNode *n = d->body[idx];
     DictNode *prev = NULL;
 
     for (; n != NULL; n = n->next) {
-        if (DictKeyCmp(n->key, key)) {
+        if (dictKeyCmp(n->key, key)) {
             if (prev) {
                 prev->next = n->next;
             } else {
                 d->body[idx] = n->next;
             }
             d->size--;
-            DictFreeKey(d, n->key);
+            dictFreeKey(d, n->key);
             DictFreeValue(d, n->val);
             free(n);
             return 1;
@@ -264,7 +264,7 @@ int DictDelete(Dict *d, void *key) {
     return 0;
 }
 
-void DictPrint(Dict *d, void (*printfn)(void *)) {
+void dictPrint(Dict *d, void (*printfn)(void *)) {
     for (size_t i = 0; i < d->capacity; ++i) {
         for (DictNode *dn = d->body[i]; dn; dn = dn->next) {
             if (printfn) {
