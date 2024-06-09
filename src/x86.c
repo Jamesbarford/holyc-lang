@@ -1961,7 +1961,7 @@ void AsmGlobalVar(Dict *seen_globals, aoStr *buf, Ast* ast) {
         if (declinit->kind == AST_ARRAY_INIT) {
             Ast *head = (Ast *)declinit->arrayinit->next->value;
             if (head->kind == AST_STRING) {
-                aoStrCatPrintf(buf,".align 3\n");
+                aoStrCatPrintf(buf,".align 4\n");
             }
         }
 
@@ -2018,7 +2018,7 @@ void AsmDataSection(Cctrl *cc, aoStr *buf) {
             aoStrCatPrintf(buf,
                     ".string \"%s\\0\"\n\t"
                     ".data\n\t"
-                    ".align 3\n"
+                    ".align 4\n"
                     , escaped->data);
         }
         aoStrRelease(escaped);
