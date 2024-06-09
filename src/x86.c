@@ -48,8 +48,9 @@ static int has_initialisers = 0;
 #define REG_RDI "rdi"
 
 void AsmExpression(Cctrl *cc, aoStr *buf, Ast *ast);
+
 #define asmGetGlabel(gvar) \
-    gvar->type->is_static ? gvar->glabel->data : gvar->gname->data
+    gvar->is_static ? gvar->glabel->data : gvar->gname->data
 
 uint64_t ieee754(double _f64) {
     if (_f64 == 0.0) return 0;  // Handle zero value explicitly
@@ -252,6 +253,9 @@ void AsmGSave(aoStr *buf, char *name, AstType *type, int offset) {
     assert(type->kind != AST_TYPE_ARRAY);
     char *reg;
 
+    if (type->kind == AST_TYPE_FLOAT) {
+        aoStrCatPrintf(buf,"movq   %%xmm0, %%rax\n\t");
+    }
     reg = AsmGetIntReg(type, 'a');
     if (offset) {
         aoStrCatPrintf(buf, "movq  %%%s, %s+%d(%%rip)\n\t", reg, name, offset);
@@ -297,6 +301,9 @@ void AsmGLoad(aoStr *buf, AstType *type, aoStr *label, int offset) {
     } else {
         aoStrCatPrintf(buf, "movq  %s(%%rip), %%%s\n\t",
                 label->data, reg);
+    }
+    if (type->kind == AST_TYPE_FLOAT) {
+        aoStrCatPrintf(buf,"movq   %%rax, %%xmm0\n\t");
     }
 }
 
@@ -1907,6 +1914,14 @@ void AsmDataInternal(aoStr *buf, Ast *data) {
         aoStrCatPrintf(buf,".quad %s\n\t",data->slabel->data);
         return;
     }
+
+    if (data->type->kind == AST_TYPE_FLOAT) {
+        aoStrCatPrintf(buf,".quad 0x%lX #%.9f\n\t",
+                ieee754(data->f64),
+                data->f64);
+        return;
+    }
+
     switch (data->type->size) {
         case 1: aoStrCatPrintf(buf, ".byte %d\n\t", data->i64); break;
         case 4: aoStrCatPrintf(buf, ".long %d\n\t", data->i64); break;
@@ -1935,10 +1950,9 @@ void AsmGlobalVar(Dict *seen_globals, aoStr *buf, Ast* ast) {
 
     if (declinit &&
         (declinit->kind == AST_ARRAY_INIT || 
-         declinit->kind == AST_LITERAL))
+         declinit->kind == AST_LITERAL || declinit->kind == AST_STRING))
     {
-
-        if (!declvar->type->is_static) {
+        if (!ast->is_static) {
             aoStrCatPrintf(buf,".global %s\n",label);
             aoStrCatPrintf(buf,".data\n");
         } else {
@@ -1947,7 +1961,7 @@ void AsmGlobalVar(Dict *seen_globals, aoStr *buf, Ast* ast) {
         if (declinit->kind == AST_ARRAY_INIT) {
             Ast *head = (Ast *)declinit->arrayinit->next->value;
             if (head->kind == AST_STRING) {
-                aoStrCatPrintf(buf,".align 4\n");
+                aoStrCatPrintf(buf,".align 3\n");
             }
         }
 
@@ -1959,8 +1973,6 @@ void AsmGlobalVar(Dict *seen_globals, aoStr *buf, Ast* ast) {
             }
             return;
         } else {
-            assert(declinit->kind == AST_LITERAL && 
-                    AstIsIntType(declinit->type));
             AsmDataInternal(buf,declinit);
         }
     } else {
@@ -1976,7 +1988,6 @@ void AsmDataSection(Cctrl *cc, aoStr *buf) {
     
     it = cc->strings->next;
 
-    aoStrCatLen(buf, ".data\n", 6);
     aoStrCatPrintf(buf, "sign_bit:\n\t.quad 0x8000000000000000\n");
     aoStrCatPrintf(buf, "one_dbl:\n\t.double 1.0\n");
 
@@ -2004,7 +2015,11 @@ void AsmDataSection(Cctrl *cc, aoStr *buf) {
 
         if (escaped->len) {
             aoStrCatPrintf(buf,"%s:\n\t",label);
-            aoStrCatPrintf(buf, ".string \"%s\\0\"\n", escaped->data);
+            aoStrCatPrintf(buf,
+                    ".string \"%s\\0\"\n\t"
+                    ".data\n\t"
+                    ".align 3\n"
+                    , escaped->data);
         }
         aoStrRelease(escaped);
         it = it->next;

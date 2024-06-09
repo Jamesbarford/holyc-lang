@@ -145,12 +145,13 @@ static void AstFreeLVar(Ast *ast) {
     free(ast);
 }
 
-Ast *AstGVar(AstType *type, char *name, int len, int local_file) {
+Ast *AstGVar(AstType *type, char *name, int len, int is_static) {
     Ast *ast = AstNew();
     ast->kind = AST_GVAR;
     ast->type = type;
     ast->gname = aoStrDupRaw(name, len);
-    ast->glabel = local_file ? AstMakeLabel() : ast->gname;
+    ast->is_static = is_static;
+    ast->glabel = is_static ? AstMakeLabel() : ast->gname;
     return ast;
 }
 static void AstFreeGVar(Ast *ast) {
@@ -1125,8 +1126,16 @@ void _AstToString(aoStr *str, Ast *ast, int depth) {
         tmp = AstTypeToString(ast->declvar->type);
         if (ast->declvar->kind == AST_FUNPTR) {
             aoStrCatPrintf(str,"<decl> %s %s\n", tmp, ast->declvar->fname->data);
-        } else {
+        } else if (ast->declvar->kind == AST_LVAR) {
             aoStrCatPrintf(str,"<decl> %s %s\n", tmp, ast->declvar->lname->data);
+        } else if (ast->declvar->kind == AST_GVAR) {
+            if (ast->declvar->is_static) {
+                aoStrCatPrintf(str,"<decl> static %s %s\n", tmp, ast->declvar->gname->data);
+            } else {
+                aoStrCatPrintf(str,"<decl> %s %s\n", tmp, ast->declvar->gname->data);
+            }
+        } else {
+            loggerPanic("Unhandled declaration: %s\n", tmp);
         }
         free(tmp);
         if (ast->declinit) {
@@ -1689,6 +1698,7 @@ static void _AstLValueToString(aoStr *str, Ast *ast) {
                 aoStrCatPrintf(str,"%s",ast->declvar->lname->data);
             }
             if (ast->declinit) {
+                aoStrCat(str, " = ");
                 _AstLValueToString(str,ast->declinit);
             }
             break;
