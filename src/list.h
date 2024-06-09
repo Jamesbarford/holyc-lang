@@ -7,21 +7,21 @@ typedef struct List {
     void *value;
 } List;
 
-#define ListForEach(l) \
+#define listForEach(l) \
     for (List *it = l->next; it != l; it = it->next)
 
-void ListInit(List *l);
-List *ListNew(void);
-int ListEmpty(List *l);
-void ListAppend(List *head, void *value);
-void ListPrepend(List *head, void *value);
-void ListInsertBefore(List *ll, List *new_node);
-void ListInsertValueBefore(List *ll, void *value);
-void *ListDeque(void *l);
-void *ListPop(void *l);
-void ListRelease(List *ll, void (*freeValue)(void *));
-int ListCount(List *ll);
-void ListMergeAppend(List *l1, List *l2);
-void ListMergePrepend(List *l1, List *l2);
+void listInit(List *l);
+List *listNew(void);
+int listEmpty(List *l);
+void listAppend(List *head, void *value);
+void listPrepend(List *head, void *value);
+void listInsertBefore(List *ll, List *new_node);
+void listInsertValueBefore(List *ll, void *value);
+void *listDeque(void *l);
+void *listPop(void *l);
+void listRelease(List *ll, void (*freeValue)(void *));
+int listCount(List *ll);
+void listMergeAppend(List *l1, List *l2);
+void listMergePrepend(List *l1, List *l2);
 
 #endif // !LIST_H

@@ -32,33 +32,33 @@ typedef struct Dict {
     DictNode **body;
 } Dict;
 
-#define DictSetHashFunction(d, fn) ((d)->type->hashFunction = (fn))
-#define DictSetFreeKey(d, fn)      ((d)->type->freeKey = (fn))
-#define DictSetFreeValue(d, fn)    ((d)->type->freeValue = (fn))
-#define DictSetKeyCmp(d, fn)       ((d)->type->keyCmp = (fn))
+#define dictSetHashFunction(d, fn) ((d)->type->hashFunction = (fn))
+#define dictSetFreeKey(d, fn)      ((d)->type->freeKey = (fn))
+#define dictSetFreeValue(d, fn)    ((d)->type->freeValue = (fn))
+#define dictSetKeyCmp(d, fn)       ((d)->type->keyCmp = (fn))
 
-#define DictHashFunction(d, k) ((d)->type->hashFunction(k))
-#define DictFreeKey(d, k)      ((d)->type->freeKey ? d->type->freeKey(k) : (void)k)
+#define dictHashFunction(d, k) ((d)->type->hashFunction(k))
+#define dictFreeKey(d, k)      ((d)->type->freeKey ? d->type->freeKey(k) : (void)k)
 #define DictFreeValue(d, k) \
     ((d)->type->freeValue ? d->type->freeValue(k) : (void)k)
-#define DictKeyCmp(k1, k2) \
+#define dictKeyCmp(k1, k2) \
     ((d)->type->keyCmp ? d->type->keyCmp(k1, k2) : (k1 == k2))
 
-void DictDefaultInit(Dict *ht);
-Dict *DictNewWithParent(Dict *parent);
-Dict *DictNew(DictType *type);
-void DictRelease(Dict *d);
-DictNode *DictFind(Dict *d, void *key);
-void *DictGet(Dict *d, void *key);
-size_t DictGenericHashFunction(void *key);
-int DictDelete(Dict *d, void *key);
-int DictStrCmp(void *s1, void *s2);
-void *DictGetLen(Dict *d, void *key, int len);
+void dictDefaultInit(Dict *ht);
+Dict *dictNewWithParent(Dict *parent);
+Dict *dictNew(DictType *type);
+void dictRelease(Dict *d);
+DictNode *dictFind(Dict *d, void *key);
+void *dictGet(Dict *d, void *key);
+size_t dictGenericHashFunction(void *key);
+int dictDelete(Dict *d, void *key);
+int dictStrCmp(void *s1, void *s2);
+void *dictGetLen(Dict *d, void *key, int len);
 
 /* For adding things */
-int DictSet(Dict *d, void *key, void *value);
-void DictSetOrReplace(Dict *d, void *key, void *value);
-void DictPrint(Dict *d, void (*printfn)(void *));
+int dictSet(Dict *d, void *key, void *value);
+void dictSetOrReplace(Dict *d, void *key, void *value);
+void dictPrint(Dict *d, void (*printfn)(void *));
 
 extern DictType default_table_type;
 

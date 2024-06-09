@@ -332,14 +332,14 @@ void parseCliOptions(hccOpts *opts, int argc, char **argv) {
             opts->assemble_only = 1;
         } else if (!strncmp(argv[i],"-D",2)) {
             if (opts->defines_list == NULL) {
-                opts->defines_list = ListNew();
+                opts->defines_list = listNew();
             }
             ptr = argv[i];
             ptr += 2;
             tmp = strndup(ptr,128);
             /*@Leak who owns this memory? This list or the macro_defs hashtable
              * on Cctrl? */
-            ListAppend(opts->defines_list,tmp);
+            listAppend(opts->defines_list,tmp);
         }
     }
 }
@@ -363,15 +363,15 @@ int main(int argc, char **argv) {
     /* now parse cli options */
     parseCliOptions(&opts,argc,argv);
 
-    cc = CctrlNew();
+    cc = cctrlNew();
     if (opts.defines_list) {
-        CctrlSetCommandLineDefines(cc,opts.defines_list);
+        cctrlSetCommandLineDefines(cc,opts.defines_list);
     }
 
     if (opts.print_tokens) {
         List *tokens = compileToTokens(cc,opts.infile,lexer_flags);
         lexemePrintList(tokens);
-        lexemeListRelease(tokens);
+        lexemelistRelease(tokens);
         return 0;
     }
 
@@ -385,6 +385,6 @@ int main(int argc, char **argv) {
 
     emitFile(asmbuf, &opts);
     if (opts.defines_list) {
-        ListRelease(opts.defines_list,NULL);
+        listRelease(opts.defines_list,NULL);
     }
 }
