@@ -62,7 +62,7 @@ static aoStr *bbAstArrayToString(AstArray *ast_array, int ast_count) {
     char *lvalue_str;
     for (int i = 0; i < ast_count; ++i) {
         Ast *ast = ast_array->entries[i];
-        lvalue_str = AstLValueToString(ast,LEXEME_ENCODE_PUNCT);
+        lvalue_str = astLValueToString(ast,LEXEME_ENCODE_PUNCT);
         aoStrCatPrintf(ast_str,"%s\\l\\\n",lvalue_str);
         if (i + 1 != ast_count) {
             aoStrPutChar(ast_str,'|');
@@ -92,7 +92,7 @@ static void cfgBranchPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     Ast *cond = ast_array->entries[ast_count - 1];
 
     assert(cond != NULL);
-    char *lvalue_str = AstLValueToString(cond,LEXEME_ENCODE_PUNCT);
+    char *lvalue_str = astLValueToString(cond,LEXEME_ENCODE_PUNCT);
 
     if (bb->flags & BB_FLAG_LOOP_HEAD) {
         fillcolor = "lightpink";
@@ -132,7 +132,7 @@ static void cfgDoWhileCondPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
         fillcolor = "lightskyblue";
     }
 
-    char *lvalue_str = AstLValueToString(cond,LEXEME_ENCODE_PUNCT);
+    char *lvalue_str = astLValueToString(cond,LEXEME_ENCODE_PUNCT);
 
     aoStrCatPrintf(builder->viz,
             "    bb%d [shape=record,style=filled,fillcolor=%s,label=\"{\\<bb %d\\>|\n",

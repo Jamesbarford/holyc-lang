@@ -126,7 +126,7 @@ static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder, int type) {
     bb->block_no = builder->bb_count++;
     /* @Leak
      * This should probably be a memory pool as well */
-    bb->ast_array = AstArrayNew(16);
+    bb->ast_array = astArrayNew(16);
     bb->visited = 0;
     bb->next = bb->prev = bb->_else = bb->_if = NULL;
     return bb;
@@ -155,9 +155,9 @@ static void cfgBuilderInit(CFGBuilder *builder, Cctrl *cc) {
     builder->flags = 0;
     builder->bb_cur_loop = NULL;
 
-    builder->unresoved_gotos = ListNew();
-    builder->resolved_labels = DictNew(&default_table_type);
-    DictSetFreeKey(builder->resolved_labels,NULL);
+    builder->unresoved_gotos = listNew();
+    builder->resolved_labels = dictNew(&default_table_type);
+    dictSetFreeKey(builder->resolved_labels,NULL);
 }
 
 static void cfgBuilderSetCFG(CFGBuilder *builder, CFG *cfg) {
@@ -224,7 +224,7 @@ static void cgfHandleBranchBlock(CFGBuilder *builder, Ast *ast) {
     int in_conditional = builder->flags & CFG_BUILDER_FLAG_IN_CONDITIONAL;
     BasicBlock *bb = builder->bb;
     bb->type = BB_BRANCH_BLOCK;
-    AstArrayPush(bb->ast_array,ast->cond);
+    astArrayPush(bb->ast_array,ast->cond);
     builder->flags |= CFG_BUILDER_FLAG_IN_CONDITIONAL;
 
     BasicBlock *else_body = cfgBuilderAllocBasicBlock(builder,
@@ -296,7 +296,7 @@ static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
      * builder->bb != bb_body */
     BasicBlock *bb_body = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
 
-    if (ast_init) AstArrayPush(bb->ast_array,ast_init);
+    if (ast_init) astArrayPush(bb->ast_array,ast_init);
 
     bb_cond->flags |= BB_FLAG_LOOP_HEAD;
 
@@ -486,7 +486,7 @@ static void cfgHandleReturn(CFGBuilder *builder, Ast *ast) {
         bb_return->prev = bb;
     }
     bb_return->next = NULL;
-    AstArrayPush(bb_return->ast_array,ast);
+    astArrayPush(bb_return->ast_array,ast);
     cfgBuilderSetBasicBlock(builder,bb_return);
 }
 
@@ -522,7 +522,7 @@ static void cfgHandleDoWhileLoop(CFGBuilder *builder, Ast *ast) {
     builder->bb->prev->flags |= BB_FLAG_LOOP_HEAD;
 
     builder->bb->next = bb_cond_else;
-    AstArrayPush(builder->bb->ast_array,ast_cond);
+    astArrayPush(builder->bb->ast_array,ast_cond);
 
     if (!bb_prev_loop) {
         builder->flags &= ~(CFG_BUILDER_FLAG_IN_LOOP);
@@ -534,13 +534,13 @@ static void cfgHandleDoWhileLoop(CFGBuilder *builder, Ast *ast) {
 
 static void cfgHandleGoto(CFGBuilder *builder, Ast *ast) {
     BasicBlock *dest;
-    aoStr *label = AstHackedGetLabel(ast);
+    aoStr *label = astHackedGetLabel(ast);
 
     builder->bb->type = BB_GOTO;
 
     /* Try straight out the gate to resolve the goto otherwise save it for 
      * later */
-    if ((dest = DictGetLen(builder->resolved_labels,label->data,
+    if ((dest = dictGetLen(builder->resolved_labels,label->data,
             label->len)) != NULL)
     {
         dest->flags |= BB_FLAG_LOOP_HEAD;
@@ -549,10 +549,10 @@ static void cfgHandleGoto(CFGBuilder *builder, Ast *ast) {
         // builder->bb->type = BB_LOOP_BLOCK;
         builder->bb->flags |= BB_FLAG_LOOP_END;
     } else {
-        ListAppend(builder->unresoved_gotos,builder->bb);
+        listAppend(builder->unresoved_gotos,builder->bb);
     }
 
-    AstArrayPush(builder->bb->ast_array,ast);
+    astArrayPush(builder->bb->ast_array,ast);
     
     /* If this is an unconditional jump */
     if (!(builder->flags & CFG_BUILDER_FLAG_IN_CONDITIONAL)) {
@@ -576,9 +576,9 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
      * A new basic block will start with an `if`, `for`, `while`, `goto` */
     switch (kind) {
         case AST_LABEL: {
-            AstArrayPush(bb->ast_array,ast);
-            aoStr *label = AstHackedGetLabel(ast);
-            DictSet(builder->resolved_labels,label->data,builder->bb);
+            astArrayPush(bb->ast_array,ast);
+            aoStr *label = astHackedGetLabel(ast);
+            dictSet(builder->resolved_labels,label->data,builder->bb);
             builder->bb->flags |= BB_FLAG_LABEL;
             /* I guess if it is in a loop and the label is out of a loop ?*/
             //if ((builder->flags & CFG_BUILDER_FLAG_IN_LOOP)) {
@@ -600,7 +600,7 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
         case AST_FUNPTR_CALL:
         case AST_DECL:
         case AST_LVAR: {
-            AstArrayPush(bb->ast_array,ast);
+            astArrayPush(bb->ast_array,ast);
             break;
         }
 
@@ -658,8 +658,8 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
         /* We are in a jump */
         case AST_COMPOUND_STMT: {
             stmts = ast->stms;
-            if (ListEmpty(stmts)) return;
-            ListForEach(stmts) {
+            if (listEmpty(stmts)) return;
+            listForEach(stmts) {
                 Ast *ast = cast(Ast *,it->value);
                 bb = builder->bb;
                 cfgHandleAstNode(builder,ast);
@@ -683,10 +683,10 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
 
         default:
             /* @Refactor */
-            if (AstIsAssignment(kind)) {
-                AstArrayPush(bb->ast_array,ast);
+            if (astIsAssignment(kind)) {
+                astArrayPush(bb->ast_array,ast);
             } else {
-                AstArrayPush(bb->ast_array,ast);
+                astArrayPush(bb->ast_array,ast);
             }
             break;
     }
@@ -928,7 +928,7 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
         for (int i = 0; i < dest_ast_array->count; ++i) {
             Ast *needle = dest_ast_array->entries[i];
             if (needle->kind == AST_LABEL && aoStrCmp(goto_label,
-                        AstHackedGetLabel(needle))) {
+                        astHackedGetLabel(needle))) {
                 break;
             } else {
                 asts_to_move[ast_move_cnt++] = needle;
@@ -936,7 +936,7 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
         }
 
         for (int i = 0; i < ast_move_cnt; ++i) {
-            AstPrint(asts_to_move[i]);
+            astPrint(asts_to_move[i]);
         }
 
         BasicBlock *loop_head = bb_dest->prev;
@@ -949,17 +949,17 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
 
         /* Add asts from the loop_head */
         for (int i = 0; i < ast_move_cnt; ++i) {
-            AstArrayPush(loop_back->ast_array,asts_to_move[i]);
+            astArrayPush(loop_back->ast_array,asts_to_move[i]);
         }
 
         for (int i = 0; i < loop_back->ast_array->count; ++i) {
-            AstPrint(loop_back->ast_array->entries[i]);
+            astPrint(loop_back->ast_array->entries[i]);
         }
 
         if (loop_head->_else) {
             loggerWarning("%s\n", bbToString(loop_head->_else));
             for (int i = 0; i < loop_head->_else->ast_array->count; ++i) {
-                AstPrint(loop_head->_else->ast_array->entries[i]);
+                astPrint(loop_head->_else->ast_array->entries[i]);
             }
             loop_head->_else->prev = loop_head;
             bbAddPrev(loop_head->_else,loop_head);
@@ -1012,7 +1012,7 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
     //    for (int i = 0; i < dest_ast_array->count; ++i) {
     //        Ast *needle = dest_ast_array->entries[i];
     //        if (needle->kind == AST_LABEL && aoStrCmp(goto_label,
-    //                    AstHackedGetLabel(needle))) {
+    //                    astHackedGetLabel(needle))) {
     //            break;
     //        } else {
     //            asts_to_move[ast_move_cnt++] = needle;
@@ -1032,7 +1032,7 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
     //        loop_head->type = BB_GARBAGE;
 
     //        for (int i = 0; i < loop_head->ast_array->count; ++i) {
-    //            AstArrayPush(dest_ast_array,loop_ast_array->entries[i]);
+    //            astArrayPush(dest_ast_array,loop_ast_array->entries[i]);
     //        }
 
     //        void *tmp = dest_ast_array->entries[bb_dest->ast_array->count-1];
@@ -1042,7 +1042,7 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
 
     //        /* Add asts from the loop_head */
     //        for (int i = 0; i < ast_move_cnt; ++i) {
-    //            AstArrayPush(loop_back->ast_array,asts_to_move[i]);
+    //            astArrayPush(loop_back->ast_array,asts_to_move[i]);
     //        }
 
     //        bb_dest->ast_array->count -= (ast_move_cnt);
@@ -1076,16 +1076,16 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
 
 /* Split out to make it simpler to reason with */
 static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
-    if (ListEmpty(stmts)) return;
+    if (listEmpty(stmts)) return;
     builder->ast_list = stmts;
-    ListForEach(stmts) {
+    listForEach(stmts) {
         Ast *ast = cast(Ast *,it->value);
         builder->ast_iter = it;
         cfgHandleAstNode(builder,ast);
     }
 
     /* Reconcile any non linear jumps */
-    ListForEach(builder->unresoved_gotos) {
+    listForEach(builder->unresoved_gotos) {
         BasicBlock *bb_goto = cast(BasicBlock *,it->value);
         BasicBlock *bb_dest = NULL;
         AstArray *ast_array = bb_goto->ast_array;
@@ -1098,11 +1098,11 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
             }
         }
 
-        aoStr *goto_label = AstHackedGetLabel(ast);
+        aoStr *goto_label = astHackedGetLabel(ast);
 
         assert(ast->kind == AST_GOTO);
 
-        bb_dest = DictGetLen(builder->resolved_labels,ast->slabel->data,
+        bb_dest = dictGetLen(builder->resolved_labels,ast->slabel->data,
                 ast->slabel->len);
         assert(bb_dest != NULL);
         cfgRelocateGoto(builder,bb_goto,bb_dest,goto_label);
@@ -1115,14 +1115,14 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
     for (int i = 0; i < builder->bb_count; ++i) {
         BasicBlock *_bb = &builder->bb_pool[i];
         if (_bb->type == BB_GARBAGE) {
-            AstArrayRelease(_bb->ast_array);
+            astArrayRelease(_bb->ast_array);
         }
     }
 
     /* We still want these structures but don't want their contents for the 
      * next functions. */
-    DictClear(builder->resolved_labels);
-    ListClear(builder->unresoved_gotos,NULL);
+    dictClear(builder->resolved_labels);
+    listClear(builder->unresoved_gotos,NULL);
 }
 
 void cfgSCCUtil(BasicBlock *bb, int *disc, int *low, List *st, 
@@ -1131,7 +1131,7 @@ void cfgSCCUtil(BasicBlock *bb, int *disc, int *low, List *st,
     static int time = 0;
 
     disc[bb->block_no] = low[bb->block_no] = ++time;
-    ListAppend(st,bb);
+    listAppend(st,bb);
     stack_member[bb->block_no] = 1;
     BasicBlock *adjacent[4] = {bb->next, bb->prev, bb->_if, bb->_else};
     if (bb->type != BB_LOOP_BLOCK || bb->type != BB_DO_WHILE_COND) {
@@ -1152,13 +1152,13 @@ void cfgSCCUtil(BasicBlock *bb, int *disc, int *low, List *st,
 
     if (low[bb->block_no] == disc[bb->block_no]) {
         BasicBlock *it;
-        while (ListHead(st) != bb) {
-            it = ListPop(st);
+        while (listHead(st) != bb) {
+            it = listPop(st);
             if (!it) break;
             printf("%d ", it->block_no);
             stack_member[it->block_no] = 0;
         }
-        it = ListPop(st);
+        it = listPop(st);
         if (it) {
             printf("%d ", it->block_no);
             stack_member[it->block_no] = 0;
@@ -1170,7 +1170,7 @@ void cfgGetStronglyConnectedComponents(CFG *cfg) {
     int *disc = cast(int *,malloc(sizeof(int) * cfg->bb_count));
     int *low = cast(int *,malloc(sizeof(int) * cfg->bb_count));
     int *stack_member = cast(int *,malloc(sizeof(int) * cfg->bb_count));
-    List *st = ListNew();
+    List *st = listNew();
 
     for (int i = 0; i < cfg->bb_count; ++i) {
         disc[i] = low[i] = -1;
@@ -1305,7 +1305,7 @@ CFG *cfgConstruct(Cctrl *cc) {
 
     cfgBuilderInit(&builder,cc);
 
-    ListForEach(cc->ast_list) {
+    listForEach(cc->ast_list) {
         ast = (Ast *)it->value;
         if (ast->kind == AST_FUNC) {
             bb = cfgBuilderAllocBasicBlock(&builder,BB_HEAD_BLOCK);
@@ -1324,8 +1324,8 @@ CFG *cfgConstruct(Cctrl *cc) {
 
     cfgAdjacencyListPrint(cfg->graph);
  //   cfgGetStronglyConnectedComponents(cfg);
-    DictRelease(builder.resolved_labels);
-    ListRelease(builder.unresoved_gotos,NULL);
+    dictRelease(builder.resolved_labels);
+    listRelease(builder.unresoved_gotos,NULL);
 
     loggerDebug("completed the construction\n");
     return cfg;

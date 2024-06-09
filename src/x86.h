@@ -5,5 +5,5 @@
 #include "cctrl.h"
 #include "list.h"
 
-aoStr *AsmGenerate(Cctrl *cc);
+aoStr *asmGenerate(Cctrl *cc);
 #endif // !ASM_H

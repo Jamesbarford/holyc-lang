@@ -4,25 +4,25 @@
 
 #include "list.h"
 
-void ListInit(List *ll) {
+void listInit(List *ll) {
     ll->next = ll->prev = ll;
     ll->value = NULL;
 }
 
-List *ListNew(void) {
+List *listNew(void) {
     List *ll = malloc(sizeof(List));
     ll->next = ll->prev = ll;
     ll->value = NULL;
     return ll;
 }
 
-int ListEmpty(List *l) {
+int listEmpty(List *l) {
     if (l == NULL) return 1;
     return l->next == l;
 }
 
-void ListAppend(List *head, void *value) {
-    List *node = ListNew();
+void listAppend(List *head, void *value) {
+    List *node = listNew();
     List *tail = head->prev;
     node->value = value;
     node->prev = tail;
@@ -31,8 +31,8 @@ void ListAppend(List *head, void *value) {
     head->prev = node;
 }
 
-void ListPrepend(List *head, void *value) {
-    List *node = ListNew();
+void listPrepend(List *head, void *value) {
+    List *node = listNew();
     node->value = value;
     node->prev = head;
     node->next = head->next;
@@ -40,7 +40,7 @@ void ListPrepend(List *head, void *value) {
     head->next = node;
 }
 
-void *ListDeque(void *l) {
+void *listDeque(void *l) {
     List *ll = (List *)l;
     if (ll->next == ll) {
         return NULL;
@@ -53,24 +53,24 @@ void *ListDeque(void *l) {
     return val;
 }
 
-void ListInsertBefore(List *ll, List *new_node) {
+void listInsertBefore(List *ll, List *new_node) {
     new_node->next = ll;
     new_node->prev = ll->prev;
     ll->prev->next = new_node;
     ll->prev = new_node;
 }
 
-void ListInsertValueBefore(List *ll, void *value) {
-    List *prev = ListNew();
+void listInsertValueBefore(List *ll, void *value) {
+    List *prev = listNew();
     prev->value = value;
-    ListInsertBefore(ll,prev);
+    listInsertBefore(ll,prev);
 }
 
-void *ListHead(List *ll) {
+void *listHead(List *ll) {
     return ll->prev->value;
 }
 
-void *ListPop(void *l) {
+void *listPop(void *l) {
     List *ll = (List *)l;
     if (ll->next == ll) {
         return NULL;
@@ -83,7 +83,7 @@ void *ListPop(void *l) {
     return val;
 }
 
-void ListClear(List *ll, void (*freeValue)(void *)) {
+void listClear(List *ll, void (*freeValue)(void *)) {
     if (!ll) return;
     List *node = ll->next;
     List *next;
@@ -98,16 +98,16 @@ void ListClear(List *ll, void (*freeValue)(void *)) {
     ll->next = ll->prev = ll;
 }
 
-void ListRelease(List *ll, void (*freeValue)(void *)) {
+void listRelease(List *ll, void (*freeValue)(void *)) {
     if (!ll) return;
-    ListClear(ll,freeValue);
+    listClear(ll,freeValue);
     free(ll);
 }
 
-int ListCount(List *ll) {
+int listCount(List *ll) {
     if (!ll) return 0;
     int count = 0;
-    ListForEach(ll) {
+    listForEach(ll) {
         count++;
     }
     return count;
@@ -117,11 +117,11 @@ int ListCount(List *ll) {
  * Example
  * l1 = [1,2,3]
  * l2 = [4,5,6]
- * ListMerge(l1,l2);
+ * listMerge(l1,l2);
  * l1 = [4,5,6,1,2,3] (and linked the otherway too)
  * l2 = nullptr
  */
-void ListMergePrepend(List *l1, List *l2) {
+void listMergePrepend(List *l1, List *l2) {
     List *h1 = l1->next;
 
     List *h2 = l2->next;
@@ -139,11 +139,11 @@ void ListMergePrepend(List *l1, List *l2) {
  * Example
  * l1 = [1,2,3]
  * l2 = [4,5,6]
- * ListMerge(l1,l2);
+ * listMerge(l1,l2);
  * l1 = [1,2,3,4,5,6] (and linked the otherway too)
  * l2 = nullptr
  * */
-void ListMergeAppend(List *l1, List *l2) {
+void listMergeAppend(List *l1, List *l2) {
     List *h1 = l1->next;
     List *t1 = l1->prev;
 
@@ -165,20 +165,20 @@ typedef struct Int {
     int i;
 } Int;
 
-Int *IntNew(int i) {
+Int *intNew(int i) {
     Int *_in = malloc(sizeof(Int));
     _in->i = i;
     return _in;
 }
 
-void ListTestPrint(List *ll) {
+void listTestPrint(List *ll) {
     for (List *it = ll->next; it != ll; it = it->next) {
         printf("%d ", ((Int *)it->value)->i);
     }
     printf("\n");
 }
 
-void ListTestPrintReverse(List *ll) {
+void listTestPrintReverse(List *ll) {
     for (List *it = ll->prev; it != ll; it = it->prev) {
         printf("%d ", ((Int *)it->value)->i);
     }
@@ -186,21 +186,21 @@ void ListTestPrintReverse(List *ll) {
 }
 
 int main(void) {
-    List *l1 = ListNew();
-    List *l2 = ListNew();
+    List *l1 = listNew();
+    List *l2 = listNew();
 
-    ListAppend(l1,IntNew(1));
-    ListAppend(l1,IntNew(2));
-    ListAppend(l1,IntNew(3));
-    ListTestPrint(l1);
+    listAppend(l1,intNew(1));
+    listAppend(l1,intNew(2));
+    listAppend(l1,intNew(3));
+    listTestPrint(l1);
 
-    ListAppend(l2,IntNew(4));
-    ListAppend(l2,IntNew(5));
-    ListAppend(l2,IntNew(6));
-    ListTestPrint(l2);
+    listAppend(l2,intNew(4));
+    listAppend(l2,intNew(5));
+    listAppend(l2,intNew(6));
+    listTestPrint(l2);
 
-    ListMergePrepend(l1,l2);
-    ListTestPrint(l1);
-    ListTestPrintReverse(l1);
+    listMergePrepend(l1,l2);
+    listTestPrint(l1);
+    listTestPrintReverse(l1);
 }
 #endif

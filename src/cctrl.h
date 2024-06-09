@@ -42,7 +42,7 @@ typedef struct Cctrl {
     /* libc function names */
     Dict *libc_functions;
 
-    /* Asm blocks */
+    /* asm blocks */
     List *asm_blocks;
 
     /* Strings */
@@ -99,19 +99,18 @@ typedef struct Cctrl {
 } Cctrl;
 
 /* Instantiate a new compiler control struct */
-Cctrl *CctrlNew(void);
+Cctrl *cctrlNew(void);
 /* Slimmed down Cctrl, for expanding macros */
-Cctrl *CcMacroProcessor(Dict *macro_defs);
-void CctrlInitTokenIter(Cctrl *cc, List *tokens);
-lexeme *CctrlTokenGet(Cctrl *cc);
-lexeme *CctrlTokenPeek(Cctrl *cc);
-void CctrlTokenIterSetCur(Cctrl *cc, List *cur);
-void CctrlTokenRewind(Cctrl *cc);
-void CctrlTokenExpect(Cctrl *cc, long expected);
-void CctrlSetCommandLineDefines(Cctrl *cc, List *defines_list);
+Cctrl *ccMacroProcessor(Dict *macro_defs);
+void cctrlInitTokenIter(Cctrl *cc, List *tokens);
+lexeme *cctrlTokenGet(Cctrl *cc);
+lexeme *cctrlTokenPeek(Cctrl *cc);
+void cctrlTokenRewind(Cctrl *cc);
+void cctrlTokenExpect(Cctrl *cc, long expected);
+void cctrlSetCommandLineDefines(Cctrl *cc, List *defines_list);
 
-Ast *CctrlGetVar(Cctrl *cc, char *varname, int len);
-int CctrlIsKeyword(Cctrl *cc, char *name, int len);
-AstType *CctrlGetKeyWord(Cctrl *cc, char *name, int len);
+Ast *cctrlGetVar(Cctrl *cc, char *varname, int len);
+int cctrlIsKeyword(Cctrl *cc, char *name, int len);
+AstType *cctrlGetKeyWord(Cctrl *cc, char *name, int len);
 
 #endif // !CCTRL_H

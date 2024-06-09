@@ -142,7 +142,7 @@ lexeme *lexemeNewOp(char *start, int len, long op, int line) {
 
 static Cctrl *macro_proccessor = NULL;
 
-void lexerInit(lexer *l, char *source, int flags) {
+void lexInit(lexer *l, char *source, int flags) {
     l->ptr = source;
     l->cur_ch = -1;
     l->lineno = 1;
@@ -153,32 +153,32 @@ void lexerInit(lexer *l, char *source, int flags) {
     l->cur_file = NULL;
     l->ishex = 0;
     l->flags = flags;
-    l->files = ListNew();
-    l->all_source = ListNew();
-    l->symbol_table = DictNew(&default_table_type);
-    DictSetFreeKey(l->symbol_table, NULL);
+    l->files = listNew();
+    l->all_source = listNew();
+    l->symbol_table = dictNew(&default_table_type);
+    dictSetFreeKey(l->symbol_table, NULL);
     if (macro_proccessor == NULL) {
-        macro_proccessor = CcMacroProcessor(NULL);
+        macro_proccessor = ccMacroProcessor(NULL);
     }
     /* XXX: create one symbol table for the whole application ;
      * hoist to 'compile.c'*/
     for (int i = 0; i < static_size(lexer_types); ++i) {
         LexerTypes *bilt = &lexer_types[i]; 
-        DictSet(l->symbol_table, bilt->name, bilt);
+        dictSet(l->symbol_table, bilt->name, bilt);
     }
 }
 
-void lexerSetBuiltinRoot(lexer *l, char *root) {
+void lexSetBuiltinRoot(lexer *l, char *root) {
     l->builtin_root = root;
 }
 
 /* Is the lexeme both of type TK_PUNCT and does 'ch' match */
-int TokenPunctIs(lexeme *tok, long ch) {
+int tokenPunctIs(lexeme *tok, long ch) {
     return tok && (tok->tk_type == TK_PUNCT || tok->tk_type == TK_EOF) && tok->i64 == ch;
 }
 
 /* Is the token an identifier and does the string match */
-int TokenIdentIs(lexeme *tok, char *ident, int len) {
+int tokenIdentIs(lexeme *tok, char *ident, int len) {
     return tok && tok->tk_type == TK_IDENT 
                && tok->len == len 
                && !memcmp(tok->start,ident,len);
@@ -426,8 +426,8 @@ static char lexNextChar(lexer *l) {
         ch = *l->ptr;
     }
     if (ch == '\0') {
-        if (ListEmpty(l->files)) return '\0';
-        if ((lex_file = ListPop(l->files)) == NULL) {
+        if (listEmpty(l->files)) return '\0';
+        if ((lex_file = listPop(l->files)) == NULL) {
             return '\0';
         }
         l->cur_file = lex_file;
@@ -495,9 +495,9 @@ void lexPushFile(lexer *l, aoStr *filename) {
     f->ptr = src;
     f->lineno = 1;
     f->filename = filename;
-    DictSet(l->seen_files,filename->data,filename);
+    dictSet(l->seen_files,filename->data,filename);
     if (l->cur_file) {
-        ListAppend(l->files,l->cur_file);
+        listAppend(l->files,l->cur_file);
     }
     l->cur_file = f;
     l->ptr = f->ptr;
@@ -891,7 +891,7 @@ int lex(lexer *l, lexeme *le) {
             le->tk_type = tk_type;
             le->line = l->lineno;
 
-            if ((type = DictGetLen(l->symbol_table,le->start,le->len)) != NULL) {
+            if ((type = dictGetLen(l->symbol_table,le->start,le->len)) != NULL) {
                 le->tk_type = TK_KEYWORD;
                 le->i64 = type->kind;
                 type = NULL;
@@ -1157,7 +1157,7 @@ error:
 }
 
 int lexHasFile(lexer *l, aoStr *file) {
-    return DictGet(l->seen_files,file->data) != NULL;
+    return dictGet(l->seen_files,file->data) != NULL;
 }
 
 void lexInclude(lexer *l) {
@@ -1165,7 +1165,7 @@ void lexInclude(lexer *l) {
     lexeme next;
 
     lex(l, &next);
-    if (TokenPunctIs(&next, '<')) {
+    if (tokenPunctIs(&next, '<')) {
         lex(l, &next);
         ident = aoStrNew();
         do {
@@ -1201,7 +1201,7 @@ lexeme *lexDefine(Dict *macro_defs, lexer *l) {
 
 
     tk_type = -1;
-    macro_tokens = ListNew();
+    macro_tokens = listNew();
     /* <ident> <value> */
     lex(l, &next);
     if (next.tk_type != TK_IDENT) {
@@ -1216,8 +1216,8 @@ lexeme *lexDefine(Dict *macro_defs, lexer *l) {
         if (!lex(l,&next)) break;
 
         if (next.tk_type == TK_IDENT) {
-            if ((macro = DictGetLen(macro_defs,next.start,next.len)) != NULL) {
-                ListAppend(macro_tokens,lexemeCopy(macro));
+            if ((macro = dictGetLen(macro_defs,next.start,next.len)) != NULL) {
+                listAppend(macro_tokens,lexemeCopy(macro));
                 tk_type = macro->tk_type;
                 continue;
             }
@@ -1233,10 +1233,10 @@ lexeme *lexDefine(Dict *macro_defs, lexer *l) {
                     break;
             }
         }
-        if (!TokenPunctIs(&next,'\n') && !TokenPunctIs(&next,'\0')) {
-            ListAppend(macro_tokens,lexemeCopy(&next));
+        if (!tokenPunctIs(&next,'\n') && !tokenPunctIs(&next,'\0')) {
+            listAppend(macro_tokens,lexemeCopy(&next));
         }
-    } while (!TokenPunctIs(&next,'\n') && !TokenPunctIs(&next,'\0'));
+    } while (!tokenPunctIs(&next,'\n') && !tokenPunctIs(&next,'\0'));
     /* Turn off the flag */
     l->flags &= ~CCF_ACCEPT_NEWLINES;
 
@@ -1244,8 +1244,8 @@ lexeme *lexDefine(Dict *macro_defs, lexer *l) {
     end = macro_tokens->prev->value;
 
     if (start==end && iters == 1) {
-        DictSet(macro_defs,ident->data,lexemeSentinal());
-        ListRelease(macro_tokens,NULL);
+        dictSet(macro_defs,ident->data,lexemeSentinal());
+        listRelease(macro_tokens,NULL);
         return NULL;
     }
 
@@ -1259,16 +1259,16 @@ lexeme *lexDefine(Dict *macro_defs, lexer *l) {
 
     if (start == end) {
         expanded = lexemeCopy(start);
-        DictSet(macro_defs,ident->data,expanded);
+        dictSet(macro_defs,ident->data,expanded);
     } else {
-        CctrlInitTokenIter(macro_proccessor,macro_tokens);
-        Ast *ast = ParseExpr(macro_proccessor,16);
+        cctrlInitTokenIter(macro_proccessor,macro_tokens);
+        Ast *ast = parseExpr(macro_proccessor,16);
         expanded = lexemeNew(start->start,end->len-start->len);
         expanded->tk_type = tk_type;
         if (tk_type == TK_STR) {
             if (ast->kind != TK_STR && ast->kind != AST_STRING) {
                 loggerPanic("line %d: #define %s expected string but got: %s\n",
-                        next.line,ident->data,AstKindToString(ast->kind));
+                        next.line,ident->data,astKindToString(ast->kind));
             }
             if (ast->kind == AST_STRING) {
                 /* Copy as we will free the AST which will free the string*/
@@ -1276,16 +1276,16 @@ lexeme *lexDefine(Dict *macro_defs, lexer *l) {
                 expanded->len = ast->sval->len;
             }
         } else if (tk_type == TK_F64) {
-            expanded->f64 = (long double)EvalFloatExpr(ast);
+            expanded->f64 = (long double)evalFloatExpr(ast);
             expanded->line = start->line;
         } else if (tk_type == TK_I64 || tk_type == TK_CHAR_CONST) {
-            expanded->i64 = EvalIntConstExpr(ast);
+            expanded->i64 = evalIntConstExpr(ast);
             expanded->line = start->line;
         }
-        DictSet(macro_defs,ident->data,expanded);
-        AstRelease(ast);
+        dictSet(macro_defs,ident->data,expanded);
+        astRelease(ast);
     }
-    lexemeListRelease(macro_tokens);
+    lexemelistRelease(macro_tokens);
     return expanded;
 }
 
@@ -1301,7 +1301,7 @@ void lexUndef(Dict *macro_defs, lexer *l) {
     tmp_len = snprintf(tmp,sizeof(tmp),"%.*s",
             next.len,next.start);
     tmp[tmp_len] = '\0';
-    DictDelete(macro_defs,tmp);
+    dictDelete(macro_defs,tmp);
 }
 
 void lexExpandAndCollect(lexer *l, Dict *macro_defs, List *tokens, int should_collect) {
@@ -1312,7 +1312,7 @@ void lexExpandAndCollect(lexer *l, Dict *macro_defs, List *tokens, int should_co
         if (!lex(l,&next)) {
             break;
         }
-        if (TokenPunctIs(&next,'#')) {
+        if (tokenPunctIs(&next,'#')) {
             lex(l,&next);
             if (next.tk_type == TK_KEYWORD) {
                 switch (next.i64) {
@@ -1337,7 +1337,7 @@ void lexExpandAndCollect(lexer *l, Dict *macro_defs, List *tokens, int should_co
                     case KW_ELIF_DEF: {
                         lex(l,&next);
                         should_collect = 0;
-                        if ((macro = DictGetLen(macro_defs,next.start,next.len)) != NULL) {
+                        if ((macro = dictGetLen(macro_defs,next.start,next.len)) != NULL) {
                             should_collect = 1;
                         }
                         break;
@@ -1353,7 +1353,7 @@ void lexExpandAndCollect(lexer *l, Dict *macro_defs, List *tokens, int should_co
                     case KW_IF_DEF: {
                         lex(l,&next);
                         should_collect = 0;
-                        if ((macro = DictGetLen(macro_defs,next.start,next.len)) != NULL) {
+                        if ((macro = dictGetLen(macro_defs,next.start,next.len)) != NULL) {
                             should_collect = 1;
                         }
                         endif_count++;
@@ -1362,7 +1362,7 @@ void lexExpandAndCollect(lexer *l, Dict *macro_defs, List *tokens, int should_co
                     case KW_IF_NDEF: {
                         lex(l,&next);
                         should_collect = 0;
-                        if ((macro = DictGetLen(macro_defs,next.start,next.len)) == NULL) {
+                        if ((macro = dictGetLen(macro_defs,next.start,next.len)) == NULL) {
                             should_collect = 1;
                         }
                         endif_count++;
@@ -1388,7 +1388,7 @@ void lexExpandAndCollect(lexer *l, Dict *macro_defs, List *tokens, int should_co
             }
         } else {
             if (should_collect) {
-                ListAppend(tokens,lexemeCopy(&next));
+                listAppend(tokens,lexemeCopy(&next));
             }
         }
     } while (1);
@@ -1403,7 +1403,7 @@ int lexPreProcIf(Dict *macro_defs, lexer *l) {
 
     tk_type = -1;
     should_collect = 0;
-    macro_tokens = ListNew();
+    macro_tokens = listNew();
 
     /* An if must be on one line a \n determines the end of a define */
     l->flags |= CCF_ACCEPT_NEWLINES;
@@ -1413,12 +1413,12 @@ int lexPreProcIf(Dict *macro_defs, lexer *l) {
         loggerPanic("line %d: Run out of tokens\n", l->lineno);
     }
 
-    while (!TokenPunctIs(&next,'\n') && !TokenPunctIs(&next,'\0')){ 
+    while (!tokenPunctIs(&next,'\n') && !tokenPunctIs(&next,'\0')){ 
         iters++;
 
-        if (TokenPunctIs(&next,'\\')) {
+        if (tokenPunctIs(&next,'\\')) {
             if (!lex(l,&next)) break;
-            if (!TokenPunctIs(&next,'\n')) {
+            if (!tokenPunctIs(&next,'\n')) {
                 loggerPanic("line %d: Invalid use of '\\' should be \\ \\n got %s\n",
                         next.line, lexemeToString(&next));
             }
@@ -1426,8 +1426,8 @@ int lexPreProcIf(Dict *macro_defs, lexer *l) {
         } 
 
         if (next.tk_type == TK_IDENT) {
-            if ((macro = DictGetLen(macro_defs,next.start,next.len)) != NULL) {
-                ListAppend(macro_tokens,lexemeCopy(macro));
+            if ((macro = dictGetLen(macro_defs,next.start,next.len)) != NULL) {
+                listAppend(macro_tokens,lexemeCopy(macro));
                 tk_type = macro->tk_type;
             }
             if (!lex(l,&next)) break;
@@ -1442,8 +1442,8 @@ int lexPreProcIf(Dict *macro_defs, lexer *l) {
                     break;
             }
         }
-        if (!TokenPunctIs(&next,'\n') && !TokenPunctIs(&next,'\0')) {
-            ListAppend(macro_tokens,lexemeCopy(&next));
+        if (!tokenPunctIs(&next,'\n') && !tokenPunctIs(&next,'\0')) {
+            listAppend(macro_tokens,lexemeCopy(&next));
         }
         if (!lex(l,&next)) break;
     }
@@ -1461,28 +1461,28 @@ int lexPreProcIf(Dict *macro_defs, lexer *l) {
     start = macro_tokens->next->value;
     end = macro_tokens->prev->value;
 
-    CctrlInitTokenIter(macro_proccessor,macro_tokens);
-    Ast *ast = ParseExpr(macro_proccessor,16);
+    cctrlInitTokenIter(macro_proccessor,macro_tokens);
+    Ast *ast = parseExpr(macro_proccessor,16);
     expanded = lexemeNew(start->start,end->len-start->len);
     expanded->tk_type = tk_type;
 
     if (tk_type == TK_STR) {
         should_collect = 1;
     } else if (tk_type == TK_F64) {
-        expanded->f64 = (long double)EvalFloatExpr(ast);
+        expanded->f64 = (long double)evalFloatExpr(ast);
         if (expanded->f64 != 0) {
             should_collect = 1;
         }
         expanded->line = start->line;
     } else {
-        expanded->i64 = EvalIntConstExpr(ast);
+        expanded->i64 = evalIntConstExpr(ast);
         if (expanded->i64 != 0) {
             should_collect = 1;
         }
         expanded->line = start->line;
     }
-    AstRelease(ast);
-    lexemeListRelease(macro_tokens);
+    astRelease(ast);
+    lexemelistRelease(macro_tokens);
     return should_collect;
 }
 
@@ -1494,7 +1494,7 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
     char prevous_to;
 
     prevous_to = to;
-    tokens = ListNew();
+    tokens = listNew();
     macro_proccessor->macro_defs = macro_defs;
 
     while (1) {
@@ -1503,9 +1503,9 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
             break;
         }
 
-        if (l->flags & (CCF_ASM_BLOCK) && TokenPunctIs(&le, to)) {
+        if (l->flags & (CCF_ASM_BLOCK) && tokenPunctIs(&le, to)) {
             copy = lexemeCopy(&le);
-            ListAppend(tokens, copy);
+            listAppend(tokens, copy);
             /* turn off assembly lexing */
             l->flags &= ~(CCF_MULTI_COLON|CCF_ACCEPT_NEWLINES|CCF_ASM_BLOCK);
             to = prevous_to;
@@ -1516,14 +1516,14 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
             switch (le.i64) {
                 case KW_ASM:
                     lex(l,&next);
-                    if (!TokenPunctIs(&next,'{')) {
+                    if (!tokenPunctIs(&next,'{')) {
                         loggerPanic("line %d: asm '{' expected Got: %s\n",
                                 next.line, lexemeToString(&next));
                     }
                     copy = lexemeCopy(&le);
-                    ListAppend(tokens, copy);
+                    listAppend(tokens, copy);
                     copy = lexemeCopy(&next);
-                    ListAppend(tokens, copy);
+                    listAppend(tokens, copy);
 
                     l->flags |= (CCF_MULTI_COLON|CCF_ACCEPT_NEWLINES|CCF_ASM_BLOCK);
 
@@ -1531,23 +1531,23 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
                     continue;
                 default:
                     copy = lexemeCopy(&le);
-                    ListAppend(tokens, copy);
+                    listAppend(tokens, copy);
                     continue;
             }
         }
         
         if (le.tk_type == TK_IDENT) {
-            if ((macro = DictGetLen(macro_defs,le.start,le.len)) != NULL) {
+            if ((macro = dictGetLen(macro_defs,le.start,le.len)) != NULL) {
                 copy = lexemeCopy(macro);
-                ListAppend(tokens, copy);
+                listAppend(tokens, copy);
                 continue;
             }
             copy = lexemeCopy(&le);
-            ListAppend(tokens, copy);
+            listAppend(tokens, copy);
             continue;
         }
 
-        if (l->flags & CCF_PRE_PROC && TokenPunctIs(&le, '#')) {
+        if (l->flags & CCF_PRE_PROC && tokenPunctIs(&le, '#')) {
             if (lex(l,&next) && next.tk_type == TK_KEYWORD) {
                 switch (next.i64) {
                     case KW_INCLUDE: lexInclude(l); break;
@@ -1564,7 +1564,7 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
                         if (next.tk_type != TK_IDENT) {
                             loggerPanic("line %d: Syntax is: #ifdef <TK_IDENT>\n",next.line);
                         }
-                        macro = DictGetLen(macro_defs,next.start,next.len);
+                        macro = dictGetLen(macro_defs,next.start,next.len);
                         if ((next.i64 == KW_IF_DEF && macro) || (next.i64 == KW_IF_NDEF && !macro))  {
                             lexExpandAndCollect(l,macro_defs,tokens,1);
                         } else {
@@ -1575,13 +1575,13 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
                         loggerPanic("line %d: #%.*s invalid \n",next.line,
                                 next.len,next.start);
                 }
-            } else if (TokenIdentIs(&next,"error",5)) {
+            } else if (tokenIdentIs(&next,"error",5)) {
                 lex(l,&next);
                 loggerPanic("line %d: %.*s",next.line,next.len,next.start);
             }
         } else {
             copy = lexemeCopy(&le);
-            ListAppend(tokens, copy);
+            listAppend(tokens, copy);
         }
     }
     return tokens;
@@ -1598,8 +1598,8 @@ void lexemeFree(void *_le) {
     }
 }
 
-void lexemeListRelease(List *tokens) {
-    ListRelease(tokens,lexemeFree);
+void lexemelistRelease(List *tokens) {
+    listRelease(tokens,lexemeFree);
 }
 
 static void lexReleaseLexFile(lexFile *lex_file) {
@@ -1609,12 +1609,12 @@ static void lexReleaseLexFile(lexFile *lex_file) {
 }
 
 void lexReleaseAllFiles(lexer *l) {
-    ListRelease(l->all_source,
+    listRelease(l->all_source,
             ((void (*))&lexReleaseLexFile));
 }
 
 void lexemePrintList(List *tokens) {
-    ListForEach(tokens) {
+    listForEach(tokens) {
         lexemePrint(it->value);
     }
 }

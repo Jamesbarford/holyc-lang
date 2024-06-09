@@ -60,14 +60,13 @@
 /* @Cleanup
  * Urgently get rid of this, we do not need `n` ways of setting a label on 
  * an AST it is extremely confusing */
-#define AstHackedGetLabel(ast) ((ast)->slabel ? (ast)->slabel : (ast)->sval)
+#define astHackedGetLabel(ast) ((ast)->slabel ? (ast)->slabel : (ast)->sval)
 
 typedef struct AstType AstType;
 /* Type of the variable or type of return type of a function */
 typedef struct AstType {
     int kind;
     int size;
-    int is_static;
     int has_var_args;
 
     /* Alignment of a struct or union */
@@ -109,7 +108,7 @@ typedef struct Ast {
             aoStr *f64_label;
         };
 
-        /* Asm block */
+        /* asm block */
         struct {
             aoStr *asm_stmt;
             List *funcs;
@@ -128,6 +127,7 @@ typedef struct Ast {
 
         /* Global variable */
         struct {
+            int is_static;
             aoStr *gname;
             aoStr *glabel;
         };
@@ -157,7 +157,7 @@ typedef struct Ast {
 
         /* Function call, declaration, pointer or assembly */
         struct {
-            /* Asm function binding */
+            /* asm function binding */
             aoStr *asmfname;
             aoStr *fname;
             List *args;
@@ -260,108 +260,108 @@ extern AstType *ast_i32_type;
 extern AstType *ast_u32_type;
 extern Ast *placeholder_arg;
 
-Ast *AstNew(void);
-AstType *AstTypeCopy(AstType *type);
-void AstRelease(Ast *ast);
-void AstReleaseList(List *ast_list);
+Ast *astNew(void);
+AstType *astTypeCopy(AstType *type);
+void astRelease(Ast *ast);
+void astReleaseList(List *ast_list);
 
 /* Literals */
-Ast *AstI64Type(long long val);
-Ast *AstF64Type(double val);
-Ast *AstCharType(long ch);
-Ast *AstString(char *str, int len);
+Ast *astI64Type(long long val);
+Ast *astF64Type(double val);
+Ast *astCharType(long ch);
+Ast *astString(char *str, int len);
 
 /* Declarations */
-Ast *AstDecl(Ast *var, Ast *init);
+Ast *astDecl(Ast *var, Ast *init);
 
 /* Symbol operators i.e: +-*&^><*/
-Ast *AstBinaryOp(long operation, Ast *left, Ast *right);
-Ast *AstUnaryOperator(AstType *type, long kind, Ast *operand);
+Ast *astBinaryOp(long operation, Ast *left, Ast *right);
+Ast *astUnaryOperator(AstType *type, long kind, Ast *operand);
 
 /* Variable definitions */
-Ast *AstLVar(AstType *type, char *name, int len);
-Ast *AstGVar(AstType *type, char *name, int len, int local_file);
+Ast *astLVar(AstType *type, char *name, int len);
+Ast *astGVar(AstType *type, char *name, int len, int is_static);
 
 /* More beefy data structures */
-Ast *AstArrayInit(List *init);
-Ast *AstCompountStatement(List *stmts);
+Ast *astArrayInit(List *init);
+Ast *astCompountStatement(List *stmts);
 
 /* Control */
-Ast *AstFor(Ast *init, Ast *cond, Ast *step, Ast *body, aoStr *for_begin,
+Ast *astFor(Ast *init, Ast *cond, Ast *step, Ast *body, aoStr *for_begin,
         aoStr *for_middle, aoStr *for_end);
-Ast *AstIf(Ast *cond, Ast *then, Ast *els);
-Ast *AstWhile(Ast *whilecond, Ast *whilebody, aoStr *while_begin,
+Ast *astIf(Ast *cond, Ast *then, Ast *els);
+Ast *astWhile(Ast *whilecond, Ast *whilebody, aoStr *while_begin,
         aoStr *while_end);
-Ast *AstDoWhile(Ast *whilecond, Ast *whilebody, aoStr *while_begin, 
+Ast *astDoWhile(Ast *whilecond, Ast *whilebody, aoStr *while_begin, 
         aoStr *while_end);
-Ast *AstContinue(aoStr *continue_label);
-Ast *AstBreak(aoStr *break_label);
-Ast *AstCase(aoStr *case_label, long case_begin, long case_end);
+Ast *astContinue(aoStr *continue_label);
+Ast *astBreak(aoStr *break_label);
+Ast *astCase(aoStr *case_label, long case_begin, long case_end);
 
 /* Functions */
-Ast *AstFunctionCall(AstType *type, char *fname, int len, List *argv,
+Ast *astFunctionCall(AstType *type, char *fname, int len, List *argv,
                      List *paramtypes);
-Ast *AstFunction(AstType *rettype, char *fname, int len, List *params,
+Ast *astFunction(AstType *rettype, char *fname, int len, List *params,
                  Ast *body, List *locals, int has_var_args);
-Ast *AstReturn(Ast *retval, AstType *rettype);
-Ast *AstFunctionPtr(AstType *type, char *fname, int len, 
+Ast *astReturn(Ast *retval, AstType *rettype);
+Ast *astFunctionPtr(AstType *type, char *fname, int len, 
         List *params);
-Ast *AstFunctionPtrCall(AstType *type, char *fname, int len,
+Ast *astFunctionPtrCall(AstType *type, char *fname, int len,
         List *argv, List *paramtypes, Ast *ref);
-Ast *AstFunctionDefaultParam(Ast *var, Ast *init);
-Ast *AstVarArgs(void);
+Ast *astFunctionDefaultParam(Ast *var, Ast *init);
+Ast *astVarArgs(void);
 
-Ast *AstAsmBlock(aoStr *asm_stmt, List *funcs);
-Ast *AstAsmFunctionBind(AstType *rettype, aoStr *asm_fname, 
+Ast *astAsmBlock(aoStr *asm_stmt, List *funcs);
+Ast *astAsmFunctionBind(AstType *rettype, aoStr *asm_fname, 
         aoStr *fname, List *params);
-Ast *AstAsmFunctionCall(AstType *rettype, aoStr *asm_fname, List *argv,
+Ast *astAsmFunctionCall(AstType *rettype, aoStr *asm_fname, List *argv,
         List *paramtypes);
-Ast *AstAsmFunctionDef(aoStr *asm_fname, aoStr *asm_stmt);
+Ast *astAsmFunctionDef(aoStr *asm_fname, aoStr *asm_stmt);
 
 /* Gotos */
-Ast *AstGoto(aoStr *label);
-Ast *AstLabel(aoStr *label);
-Ast *AstJump(char *jumpname, int len);
-Ast *AstDest(char *label, int len);
+Ast *astGoto(aoStr *label);
+Ast *astLabel(aoStr *label);
+Ast *astJump(char *jumpname, int len);
+Ast *astDest(char *label, int len);
 
 /* Pointers */
-AstType *AstMakePointerType(AstType *type);
-AstType *AstMakeArrayType(AstType *type, int len);
-AstType *AstMakeClassField(AstType *type, int offset);
-AstType *AstMakeFunctionType(AstType *rettype, List *param_types);
-AstType *AstConvertArray(AstType *ast_type);
-List *AstParamTypes(List *params);
-Ast *AstClassRef(AstType *type, Ast *cls, char *field_name);
-AstType *AstClassType(Dict *fields, aoStr *clsname, int size, int is_intrinsic);
-Ast *AstCast(Ast *var, AstType *to);
+AstType *astMakePointerType(AstType *type);
+AstType *astMakeArrayType(AstType *type, int len);
+AstType *astMakeClassField(AstType *type, int offset);
+AstType *astMakeFunctionType(AstType *rettype, List *param_types);
+AstType *astConvertArray(AstType *ast_type);
+List *astParamTypes(List *params);
+Ast *astClassRef(AstType *type, Ast *cls, char *field_name);
+AstType *astClassType(Dict *fields, aoStr *clsname, int size, int is_intrinsic);
+Ast *astCast(Ast *var, AstType *to);
 
-AstType *AstGetResultType(long op, AstType *a, AstType *b);
-AstType *AstTypeCheck(AstType *expected, Ast *ast);
+AstType *astGetResultType(long op, AstType *a, AstType *b);
+AstType *astTypeCheck(AstType *expected, Ast *ast);
 
-aoStr *AstMakeLabel(void);
-aoStr *AstMakeTmpName(void);
-int AstIsIntType(AstType *type);
-int AstIsFloatType(AstType *type);
-int AstIsRangeOperator(long op);
-Ast *AstGlobalCmdArgs(void);
+aoStr *astMakeLabel(void);
+aoStr *astMakeTmpName(void);
+int astIsIntType(AstType *type);
+int astIsFloatType(AstType *type);
+int astIsRangeOperator(long op);
+Ast *astGlobalCmdArgs(void);
 
-aoStr *AstNormaliseFunctionName(char *fname);
-int AstIsAssignment(long op);
+aoStr *astNormaliseFunctionName(char *fname);
+int astIsAssignment(long op);
 
-AstArray *AstArrayNew(int capacity);
-void AstArrayPush(AstArray *ast_array, Ast *ast);
-void AstArrayRelease(AstArray *ast_array);
+AstArray *astArrayNew(int capacity);
+void astArrayPush(AstArray *ast_array, Ast *ast);
+void astArrayRelease(AstArray *ast_array);
 
 /* For debugging */
-char *AstTypeToString(AstType *type);
-char *AstTypeToColorString(AstType *type);
-char *AstKindToString(int kind);
-char *AstFunctionToString(Ast *func);
-char *AstFunctionNameToString(AstType *rettype, char *fname, int len);
-char *AstToString(Ast *ast);
-char *AstLValueToString(Ast *ast, unsigned long lexme_flags);
-void AstPrint(Ast *ast);
-void AstTypePrint(AstType *type);
-void AstKindPrint(int kind);
+char *astTypeToString(AstType *type);
+char *astTypeToColorString(AstType *type);
+char *astKindToString(int kind);
+char *astFunctionToString(Ast *func);
+char *astFunctionNameToString(AstType *rettype, char *fname, int len);
+char *astToString(Ast *ast);
+char *astLValueToString(Ast *ast, unsigned long lexme_flags);
+void astPrint(Ast *ast);
+void astTypePrint(AstType *type);
+void astKindPrint(int kind);
 
 #endif

@@ -34,7 +34,7 @@ void compilePrintAst(Cctrl *cc) {
     //for (int i = 0; i < cc->clsdefs->capacity; ++i) {
     //    dn = cc->clsdefs->body[i];
     //    while (dn) {
-    //        tmp = AstTypeToString(dn->val);
+    //        tmp = astTypeToString(dn->val);
     //        printf("%s\n", tmp);
     //        free(tmp);
     //        dn = dn->next;
@@ -52,7 +52,7 @@ void compilePrintAst(Cctrl *cc) {
             ast->kind != AST_EXTERN_FUNC && 
             ast->kind != AST_ASM_FUNC_BIND)
         {
-            tmp = AstToString(ast);
+            tmp = astToString(ast);
             printf("%s\n", tmp);
             free(tmp);
         }
@@ -66,7 +66,7 @@ aoStr *compileToAsm(Cctrl *cc) {
         return NULL;
     }
 
-    aoStr *asmbuf = AsmGenerate(cc);
+    aoStr *asmbuf = asmGenerate(cc);
     return asmbuf;
 }
 
@@ -76,14 +76,14 @@ List *compileToTokens(Cctrl *cc, char *entrypath, int lexer_flags) {
     aoStr *builtin_path;
     Dict *seen_files;
 
-    seen_files = DictNew(&default_table_type);
-    tokens = ListNew();
-    builtin_path = aoStrDupRaw("/usr/local/include/tos.HH",25);
+    seen_files = dictNew(&default_table_type);
+    tokens = listNew();
+    builtin_path = aoStrDupRaw("/usr/local/include/tos.HH",25); //aoStrNew();
 
-    lexerInit(&l,NULL,CCF_PRE_PROC);
+    lexInit(&l,NULL,CCF_PRE_PROC);
     l.seen_files = seen_files;
     l.lineno = 1;
-    lexerSetBuiltinRoot(&l,"/usr/local/include/");
+    lexSetBuiltinRoot(&l,"/usr/local/include/");
 
     /* library files */
     lexPushFile(&l,aoStrDupRaw(entrypath,strlen(entrypath)));
@@ -92,7 +92,7 @@ List *compileToTokens(Cctrl *cc, char *entrypath, int lexer_flags) {
 
     tokens = lexToLexemes(cc->macro_defs,&l);
     lexemePrintList(tokens);
-    DictRelease(seen_files);
+    dictRelease(seen_files);
     return tokens;
 }
 
@@ -102,14 +102,14 @@ int compileToAst(Cctrl *cc, char *entrypath, int lexer_flags) {
     aoStr *builtin_path;
     Dict *seen_files;
 
-    seen_files = DictNew(&default_table_type);
-    tokens = ListNew();
+    seen_files = dictNew(&default_table_type);
+    tokens = listNew();
     builtin_path = aoStrDupRaw("/usr/local/include/tos.HH",25); //aoStrNew();
 
-    lexerInit(&l,NULL,CCF_PRE_PROC);
+    lexInit(&l,NULL,CCF_PRE_PROC);
     l.seen_files = seen_files;
     l.lineno = 1;
-    lexerSetBuiltinRoot(&l,"/usr/local/include/");
+    lexSetBuiltinRoot(&l,"/usr/local/include/");
 
     /* library files */
     lexPushFile(&l,aoStrDupRaw(entrypath,strlen(entrypath)));
@@ -118,16 +118,17 @@ int compileToAst(Cctrl *cc, char *entrypath, int lexer_flags) {
 
     tokens = lexToLexemes(cc->macro_defs,&l);
 
-    DictRelease(seen_files);
-    CctrlInitTokenIter(cc,tokens);
-    ParseToAst(cc);
+    dictRelease(seen_files);
+    cctrlInitTokenIter(cc,tokens);
+    parseToAst(cc);
     CFG *cfg = cfgConstruct(cc);
     cfgToFile(cfg,"./loop.dot");
+
     lexReleaseAllFiles(&l);
     aoStrRelease(builtin_path);
-    // ListRelease(code_list,free);
-    ListRelease(l.files,NULL);
-    lexemeListRelease(tokens);
+    // listRelease(code_list,free);
+    listRelease(l.files,NULL);
+    lexemelistRelease(tokens);
     return 1;
 }
 
@@ -135,12 +136,12 @@ aoStr *compileCode(Cctrl *cc, char *code, int lexer_flags) {
     aoStr *asm_str;
     List *tokens;
     lexer l;
-    lexerInit(&l,code,lexer_flags);
+    lexInit(&l,code,lexer_flags);
     tokens = lexToLexemes(cc->macro_defs,&l);
-    CctrlInitTokenIter(cc,tokens);
-    ParseToAst(cc);
+    cctrlInitTokenIter(cc,tokens);
+    parseToAst(cc);
     asm_str = compileToAsm(cc);
-    lexemeListRelease(tokens);
+    lexemelistRelease(tokens);
     free(l.files);
     return asm_str;
 }
