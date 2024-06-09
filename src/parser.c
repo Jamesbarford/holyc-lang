@@ -466,7 +466,7 @@ Ast *ParseVariableAssignment(Cctrl *cc, Ast *var, long terminator_flags) {
     init = ParseExpr(cc,16);
     lexeme *tok = CctrlTokenGet(cc);
     AssertTokenIsTerminator(tok,terminator_flags);
-    if (var->kind == AST_GVAR) {
+    if (var->kind == AST_GVAR && var->type->kind == AST_TYPE_INT) {
         init = AstI64Type(EvalIntConstExpr(init));
     }
     return AstDecl(var,init);
@@ -874,6 +874,7 @@ Ast *ParseStatement(Cctrl *cc) {
             case KW_STATIC: {
                 env = cc->localenv;
                 cc->localenv = NULL;
+
                 AstType *type = ParseFullType(cc);
                 tok = CctrlTokenGet(cc);
 
@@ -881,28 +882,52 @@ Ast *ParseStatement(Cctrl *cc) {
                     loggerPanic("line %d: Expected variable name at line\n",tok->line);
                 }
                 type = ParseArrayDimensions(cc,type);
-                type->is_static = 1;
 
-                ast = AstGVar(type,tok->start,tok->len,1);
-                DictSet(env,ast->gname->data,ast);
+                Ast *gvar_ast = AstGVar(type,tok->start,tok->len,1);
+
 
                 if (type->kind == AST_TYPE_ARRAY) {
-                    ast = ParseVariableInitialiser(cc,ast,PUNCT_TERM_SEMI|PUNCT_TERM_COMMA);
+                    ast = ParseVariableInitialiser(cc,gvar_ast,
+                            PUNCT_TERM_SEMI|PUNCT_TERM_COMMA);
+
                     cc->localenv = env;
+                    DictSet(env,gvar_ast->gname->data,gvar_ast);
                     ListAppend(cc->ast_list,ast);
                     return ast;
                 }
 
                 peek = CctrlTokenPeek(cc);
                 if (TokenPunctIs(peek,'=')) {
-                    ast = ParseVariableInitialiser(cc,ast,PUNCT_TERM_SEMI|PUNCT_TERM_COMMA);
+                    ast = ParseVariableInitialiser(cc,gvar_ast,
+                            PUNCT_TERM_SEMI|PUNCT_TERM_COMMA);
+
                     if (type->kind == AST_TYPE_AUTO) {
-                        ParseAssignAuto(cc,ast);
+                        gvar_ast->type = ast->declinit->type;
+                        if (ast->declinit->kind == AST_STRING) {
+                            /* @Leak: we've just lost the original string array
+                             * that was parsed... or have we? Possibly not as it
+                             * would exist on the declinit->type and we do not 
+                             * change it */
+                            gvar_ast->type = AstMakePointerType(ast_u8_type);
+                            gvar_ast->type->len = ast->declinit->type->len;
+                        }
+                    }
+
+                    if (ast->declinit->kind == AST_ASM_FUNCALL ||
+                        ParseIsFunctionCall(ast->declinit))
+                    {
+                        loggerPanic("line %ld: '%s %s' must be a compile time "
+                                "constant\n",
+                                cc->lineno,
+                                AstTypeToColorString(gvar_ast->type),
+                                AstLValueToString(ast));
                     }
                 } else {
                     CctrlTokenExpect(cc,';');
+                    ast = AstDecl(gvar_ast,NULL);
                 }
                 cc->localenv = env;
+                DictSet(env,gvar_ast->gname->data,gvar_ast);
                 ListAppend(cc->ast_list,ast);
                 return ast;
             }
@@ -1216,6 +1241,7 @@ Ast *ParseToplevelDef(Cctrl *cc, int *is_global) {
     Ast *variable, *asm_block, *asm_func, *extern_func, *ast;
     AstType *type;
     lexeme *tok, *name, *peek;
+    int is_static = 0;
 
     while (1) {
         if ((tok = CctrlTokenGet(cc)) == NULL) {
@@ -1267,7 +1293,9 @@ Ast *ParseToplevelDef(Cctrl *cc, int *is_global) {
                     if (type == NULL) {
                         loggerPanic("line %ld: Expected type declaration\n",cc->lineno);
                     }
-                    type->is_static = 1;
+                    /* static at the global scope does not yet do anything */
+                    is_static = 1;
+                    (void)is_static;
                     break;
                 
                 case KW_CLASS:

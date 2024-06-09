@@ -37,7 +37,7 @@ inline int ParseIsFunction(Ast *ast) {
     return 0;
 }
 
-inline int ParseIsFunctionCall(Ast *ast) {
+int ParseIsFunctionCall(Ast *ast) {
     return ast && (ast->type->kind == AST_FUNCALL || 
            ast->type->kind == AST_FUNPTR_CALL || 
            ast->type->kind == AST_ASM_FUNCALL);

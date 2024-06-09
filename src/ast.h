@@ -62,7 +62,6 @@ typedef struct AstType AstType;
 typedef struct AstType {
     int kind;
     int size;
-    int is_static;
     int has_var_args;
 
     /* Alignment of a struct or union */
@@ -122,6 +121,7 @@ typedef struct Ast {
 
         /* Global variable */
         struct {
+            int is_static;
             aoStr *gname;
             aoStr *glabel;
         };
@@ -265,7 +265,7 @@ Ast *AstUnaryOperator(AstType *type, long kind, Ast *operand);
 
 /* Variable definitions */
 Ast *AstLVar(AstType *type, char *name, int len);
-Ast *AstGVar(AstType *type, char *name, int len, int local_file);
+Ast *AstGVar(AstType *type, char *name, int len, int is_static);
 
 /* More beefy data structures */
 Ast *AstArrayInit(List *init);
