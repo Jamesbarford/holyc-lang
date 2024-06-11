@@ -61,7 +61,10 @@ const char *bbFlagsToString(unsigned int flags) {
         _concat_flag("BB_FLAG_LOOP_LABEL");
     }
     if (flags & BB_FLAG_UNCONDITIONAL_JUMP) {
-        _concat_flag("BB_FLAG_LOOP_UNCONDITIONAL_JUMP");
+        _concat_flag("BB_FLAG_UNCONDITIONAL_JUMP");
+    }
+    if (flags & BB_FLAG_LOOP_JUMP) {
+        _concat_flag("BB_FLAG_LOOP_JUMP");
     }
     aoStrPutChar(str,')');
 
@@ -538,6 +541,10 @@ static void cfgHandleGoto(CFGBuilder *builder, Ast *ast) {
 
     builder->bb->type = BB_GOTO;
 
+    if (builder->flags & CFG_BUILDER_FLAG_IN_LOOP) {
+        builder->bb->flags |= BB_FLAG_LOOP_JUMP;
+    }
+
     /* Try straight out the gate to resolve the goto otherwise save it for 
      * later */
     if ((dest = dictGetLen(builder->resolved_labels,label->data,
@@ -912,6 +919,10 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
 
     BasicBlock *bb_prev = bb_goto->prev;
 
+    if (bb_goto->flags & BB_FLAG_LOOP_JUMP) {
+        bb_goto->type = BB_BREAK_BLOCK;
+        loggerDebug("jumping out of a loop\n");
+    }
 
     if (bb_dest->type == BB_LOOP_BLOCK) {
         if (bb_prev->type == BB_BRANCH_BLOCK) {
@@ -1227,7 +1238,8 @@ long cfgHashBasicBlock(BasicBlock *bb) {
     return hash;
 }
 
-/* This is for creating a very compact control flow graph that feels more like 
+/**
+ * This is for creating a very compact control flow graph that feels more like 
  * a classical datascructure than the basic block node graph. It's significantly 
  * faster to traverse and also easier to reason with.
  *
@@ -1274,11 +1286,18 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
                 intVecPush(vec,hash);
                 break;
 
-            case BB_LOOP_BLOCK:
+            case BB_LOOP_BLOCK: {
+                BasicBlock *loop_head = bb->prev;
+                if (loop_head->_if != bb && loop_head->_else != bb) {
+                    bb->type = BB_GARBAGE;
+                    continue;
+                }
+
                 vec = intVecNew();
                 hash = cfgHashBasicBlock(bb->prev);
                 intVecPush(vec,hash);
                 break;
+            }
 
             case BB_DO_WHILE_COND:
                 vec = intVecNew();

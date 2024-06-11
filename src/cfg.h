@@ -31,6 +31,8 @@
 #define BB_FLAG_LABEL              (0x10)
 #define BB_FLAG_ELSE_BRANCH        (0x20)
 #define BB_FLAG_IF_BRANCH          (0x40)
+#define BB_FLAG_LOOP_JUMP          (0x80) /* this is for when a goto is jumping
+                                           * out of a loop */
 
 typedef struct BasicBlock {
     /* @Confirm:
