@@ -353,7 +353,6 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
 {
     bb->visited++;
 
-    bbPrintInfo(bb);
     if (bb->flags & BB_FLAG_LOOP_END) {
         int break_cnt = cfgGraphVizGetLoopBreakCount(builder,bb); 
 
@@ -484,6 +483,7 @@ static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
     for (int i = 0; i < map->size; ++i) {
         long idx = index_entries[i];
         BasicBlock *cur = &cfg->head[idx-1];
+        bbPrintInfo(cur);
 
         switch (cur->type) {
             case BB_LOOP_BLOCK:
