@@ -941,10 +941,10 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
     /* we want to jump out of the loop, however this could be breaking out 
      * of multiple loops */
     if (bb_goto->flags & BB_FLAG_LOOP_JUMP) {
-        bb_goto->type = BB_BREAK_BLOCK;
+        //bb_goto->type = BB_BREAK_BLOCK;
     }
 
-    if (bb_dest->type == BB_LOOP_BLOCK) {
+    if (bb_dest->type == BB_LOOP_BLOCK && !(bb_goto->flags & BB_FLAG_LOOP_JUMP)) {
         if (bb_prev->type == BB_BRANCH_BLOCK) {
             if (bb_prev->_if == bb_goto) bb_goto->flags |= BB_FLAG_IF_BRANCH;
             else                         bb_goto->flags |= BB_FLAG_ELSE_BRANCH;
@@ -1046,8 +1046,6 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
         assert(bb_dest != NULL);
         cfgRelocateGoto(builder,bb_goto,bb_dest,goto_label);
     }
-
-
 
     /* We don't need the memory... do we want to free this now or later? */
     for (int i = 0; i < builder->bb_count; ++i) {

@@ -329,6 +329,17 @@ static void bbFindAllLoopNodes(BasicBlock *loop_head, BasicBlock *bb, IntMap *no
     }
 }
 
+/* how many of the previous blocks were gotos? */
+int cfgGraphVizGetLoopGotoCount(BasicBlock *bb) {
+    int goto_cnt = 0;
+    for (int i = 0; i < bb->prev_cnt; ++i) {
+        if (bb->prev_blocks[i]->type == BB_GOTO) {
+            goto_cnt++;
+        }
+    }
+    return goto_cnt;
+}
+
 int cfgGraphVizGetLoopBreakCount(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     BasicBlock *head = builder->loop_stack[builder->loop_idx-1];
     if (builder->break_idx == 0) return 0;
@@ -355,6 +366,9 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
 
     if (bb->flags & BB_FLAG_LOOP_END) {
         int break_cnt = cfgGraphVizGetLoopBreakCount(builder,bb); 
+        int goto_cnt = cfgGraphVizGetLoopGotoCount(bb); 
+        int other_paths = break_cnt + goto_cnt;
+
 
         /* @Confirm
          * Do we still need this? It implies something is incorrect */
@@ -362,7 +376,7 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
             return;
         }
 
-        if ((bb->visited == bb->prev_cnt) || ((bb->visited + break_cnt) >= bb->prev_cnt)) {
+        if ((bb->visited == bb->prev_cnt) || ((bb->visited + other_paths) >= bb->prev_cnt)) {
             BasicBlock *head = builder->loop_stack[--builder->loop_idx];
 //            loggerDebug("head = bb%d end: bb%d breaks: %d prev_cnt = %d\n",
 //                    head->block_no,
@@ -389,6 +403,7 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
     if (intMapHas(seen,bb->block_no)) return;
     else intMapSet(seen,bb->block_no,NULL);
 
+    bbPrint(bb);
 
     if (bb->flags & BB_FLAG_LOOP_HEAD) {
         cfgLoopHeadPrintf(builder,bb);
@@ -424,10 +439,6 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
             }
 
             cfgBranchPrintf(builder,bb);
-            loggerDebug("if = %d, else = %d\n",
-                    bb->_if->block_no,bb->_else->block_no);
-            bbPrintInfo(bb->_if);
-            bbPrintInfo(bb->_else);
             cfgCreatePictureUtil(builder,map,bb->_if,seen);
             cfgCreatePictureUtil(builder,map,bb->_else,seen);
 
@@ -437,10 +448,21 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
                 }
             }
             break;
+        
+        case BB_GOTO:
+            bbPrintf(builder,bb);
+            if (bb->next->prev_cnt == 1) {
+                cfgCreatePictureUtil(builder,map,bb->next,seen);
+            }
+            if (bb->flags & BB_FLAG_LOOP_HEAD) {
+                if (bb->prev && bb->prev->type == BB_DO_WHILE_COND) {
+                    cfgCreatePictureUtil(builder,map,bb->prev->next,seen);
+                }
+            }
+            break;
 
         case BB_CONTROL_BLOCK:
         case BB_HEAD_BLOCK:
-        case BB_GOTO:
             bbPrintf(builder,bb);
             cfgCreatePictureUtil(builder,map,bb->next,seen);
             if (bb->flags & BB_FLAG_LOOP_HEAD) {

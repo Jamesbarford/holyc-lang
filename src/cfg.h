@@ -7,16 +7,18 @@
 #include "cctrl.h"
 #include "map.h"
 
-#define BB_GARBAGE        (-1)
-#define BB_END_BLOCK      (0)
-#define BB_HEAD_BLOCK     (1)
-#define BB_CONTROL_BLOCK  (2)
-#define BB_BRANCH_BLOCK   (3)
-#define BB_LOOP_BLOCK     (4)
-#define BB_RETURN_BLOCK   (5)
-#define BB_BREAK_BLOCK    (6)
-#define BB_DO_WHILE_COND  (7)
-#define BB_GOTO           (8)
+enum bbType {
+    BB_GARBAGE       = -1,
+    BB_END_BLOCK     = 0,
+    BB_HEAD_BLOCK    = 1,
+    BB_CONTROL_BLOCK = 2,
+    BB_BRANCH_BLOCK  = 3,
+    BB_LOOP_BLOCK    = 4,
+    BB_RETURN_BLOCK  = 5,
+    BB_BREAK_BLOCK   = 6,
+    BB_DO_WHILE_COND = 7,
+    BB_GOTO          = 8,
+};
 
 #define CFG_MAX_PREV    (32)
 
@@ -95,5 +97,6 @@ const char *bbPreviousBlockNumbersToString(BasicBlock *bb);
 const int bbPrevHas(BasicBlock *bb, int block_no);
 BasicBlock *cfgGet(CFG *cfg, int block_no);
 CFG *cfgConstruct(Cctrl *cc);
+void bbPrint(BasicBlock *bb);
 
 #endif
