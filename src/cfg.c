@@ -951,7 +951,7 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
         }
 
         AstArray *dest_ast_array = bb_dest->ast_array;
-        BasicBlock *loop_head = bb_dest->prev;
+        BasicBlock *loop_cond = bb_dest->prev;
         BasicBlock *loop_back = cfgBuilderAllocBasicBlock(builder,BB_LOOP_BLOCK);
 
         Ast *asts_to_move[100];
@@ -969,7 +969,7 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
             }
         }
 
-        /* Add asts from the loop_head */
+        /* Add asts from the loop_cond */
         for (int i = 0; i < ast_move_cnt; ++i) {
             astArrayPush(loop_back->ast_array,asts_to_move[i]);
         }
@@ -988,21 +988,20 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
 
         /* Destination, whatever it might be, is the loop head 
          * @Test - how does this work if we jump into an if branch?*/
-        bb_dest->next = loop_head;
+        bb_dest->next = loop_cond;
         bb_dest->prev = bb_goto;
         bb_dest->flags = BB_FLAG_LOOP_HEAD;
         bb_dest->type = BB_CONTROL_BLOCK;
 
         loop_back->prev = bb_dest;
 
-        /* the loop condition is now loop_head apart from the head of the loop 
-         * is the goto destination */
-        loop_head->_if = loop_back;
-        loop_head->_else->flags = BB_FLAG_LOOP_END;
-        loop_head->type = BB_BRANCH_BLOCK;
-        loop_head->flags = 0;
+        /* the loop condition is now after the goto's destination */
+        loop_cond->_if = loop_back;
+        loop_cond->_else->flags = BB_FLAG_LOOP_END;
+        loop_cond->type = BB_BRANCH_BLOCK;
+        loop_cond->flags = 0;
 
-        bbAddPrev(loop_back,loop_head);
+        bbAddPrev(loop_back,loop_cond);
         bbAddPrev(loop_back,bb_dest);
         bbAddPrev(bb_dest,loop_back);
     } else {
