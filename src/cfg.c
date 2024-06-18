@@ -104,6 +104,21 @@ const char *bbToString(BasicBlock *bb) {
     return aoStrMove(str);
 }
 
+void bbPrint(BasicBlock *bb) {
+    const char *bb_str = bbToString(bb);
+    aoStr *str = aoStrDupRaw((char*)bb_str, strlen(bb_str)); 
+    aoStrPutChar(str,'\n');
+    for (int i = 0; i < bb->ast_array->count; ++i) {
+        char *ast_str = astLValueToString(bb->ast_array->entries[i],0);
+        aoStrCat(str,ast_str);
+        aoStrPutChar(str,'\n');
+        free(ast_str);
+    }
+    free((char*)bb_str);
+    printf("========\n%s========\n",str->data);
+    aoStrRelease(str);
+}
+
 static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder, int type) {
     /* @Bug, @HashTable
      * This can and will create a new pointer sometimes and thus all references
@@ -562,13 +577,13 @@ static void cfgHandleGoto(CFGBuilder *builder, Ast *ast) {
     astArrayPush(builder->bb->ast_array,ast);
     
     /* If this is an unconditional jump */
-    if (!(builder->flags & CFG_BUILDER_FLAG_IN_CONDITIONAL)) {
-       BasicBlock *bb_next = cfgBuilderAllocBasicBlock(builder,
-               BB_CONTROL_BLOCK);
-       builder->bb->flags |= BB_FLAG_UNCONDITIONAL_JUMP;
-       builder->bb->next = bb_next;
-       cfgBuilderSetBasicBlock(builder,bb_next);
-    }
+    //if (!(builder->flags & CFG_BUILDER_FLAG_IN_CONDITIONAL)) {
+    //   BasicBlock *bb_next = cfgBuilderAllocBasicBlock(builder,
+    //           BB_CONTROL_BLOCK);
+    //   builder->bb->flags |= BB_FLAG_UNCONDITIONAL_JUMP;
+    //   builder->bb->next = bb_next;
+    //   cfgBuilderSetBasicBlock(builder,bb_next);
+    //}
 }
 
 static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
@@ -913,15 +928,20 @@ static void bbFix(BasicBlock *bb) {
     }
 }
 
+/* a lot of the code in this function is absolutely ridiculous, as 
+ * what you can do with goto is absolutely ridiculous */
 static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
         BasicBlock *bb_dest, aoStr *goto_label)
 {
+    /* Can happen... if the block we want to goto is itself */
+    if (bb_goto == bb_dest) return;
 
     BasicBlock *bb_prev = bb_goto->prev;
 
+    /* we want to jump out of the loop, however this could be breaking out 
+     * of multiple loops */
     if (bb_goto->flags & BB_FLAG_LOOP_JUMP) {
         bb_goto->type = BB_BREAK_BLOCK;
-        loggerDebug("jumping out of a loop\n");
     }
 
     if (bb_dest->type == BB_LOOP_BLOCK) {
@@ -931,6 +951,9 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
         }
 
         AstArray *dest_ast_array = bb_dest->ast_array;
+        BasicBlock *loop_head = bb_dest->prev;
+        BasicBlock *loop_back = cfgBuilderAllocBasicBlock(builder,BB_LOOP_BLOCK);
+
         Ast *asts_to_move[100];
         int ast_move_cnt = 0;
 
@@ -946,143 +969,47 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
             }
         }
 
-        for (int i = 0; i < ast_move_cnt; ++i) {
-            astPrint(asts_to_move[i]);
-        }
-
-        BasicBlock *loop_head = bb_dest->prev;
-        loop_head->type = BB_BRANCH_BLOCK;
-
-        loggerDebug("%s ast_count = %d\n",
-                bbToString(loop_head),
-                loop_head->ast_array->count);
-        BasicBlock *loop_back = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
-
         /* Add asts from the loop_head */
         for (int i = 0; i < ast_move_cnt; ++i) {
             astArrayPush(loop_back->ast_array,asts_to_move[i]);
         }
 
-        for (int i = 0; i < loop_back->ast_array->count; ++i) {
-            astPrint(loop_back->ast_array->entries[i]);
-        }
-
-        if (loop_head->_else) {
-            loggerWarning("%s\n", bbToString(loop_head->_else));
-            for (int i = 0; i < loop_head->_else->ast_array->count; ++i) {
-                astPrint(loop_head->_else->ast_array->entries[i]);
-            }
-            loop_head->_else->prev = loop_head;
-            bbAddPrev(loop_head->_else,loop_head);
-        }
-
-        loop_head->_if  = loop_back;
-        loop_back->prev = loop_head;
-        loop_back->next = bb_dest;
-        loop_back->flags |= (BB_FLAG_IF_BRANCH);
-        bb_dest->flags |= BB_FLAG_LOOP_HEAD;
-
-        loop_head->flags = 0;
-        bb_dest->type = BB_LOOP_BLOCK;
-        bb_dest->prev = loop_head;
-
-        bb_dest->ast_array->count -= (ast_move_cnt);
-        bb_dest->flags &= ~BB_FLAG_LOOP_END;
-
-        // loop_head->_else->flags |= BB_FLAG_LOOP_END;
+        /* resize the array */
+        dest_ast_array->count -= ast_move_cnt;
 
         /* Remove asts that no longer exist in the block */
         for (int i = 0; i < dest_ast_array->count; ++i) {
             dest_ast_array->entries[i] = dest_ast_array->entries[ast_move_cnt+i];
         }
+
+
+        /* Obvious, the goto has to point to it's destination */
+        bb_goto->next = bb_dest;
+
+        /* Destination, whatever it might be, is the loop head 
+         * @Test - how does this work if we jump into an if branch?*/
+        bb_dest->next = loop_head;
+        bb_dest->prev = bb_goto;
+        bb_dest->flags = BB_FLAG_LOOP_HEAD;
+        bb_dest->type = BB_CONTROL_BLOCK;
+
+        loop_back->prev = bb_dest;
+
+        /* the loop condition is now loop_head apart from the head of the loop 
+         * is the goto destination */
+        loop_head->_if = loop_back;
+        loop_head->_else->flags = BB_FLAG_LOOP_END;
+        loop_head->type = BB_BRANCH_BLOCK;
+        loop_head->flags = 0;
+
+        bbAddPrev(loop_back,loop_head);
+        bbAddPrev(loop_back,bb_dest);
+        bbAddPrev(bb_dest,loop_back);
     } else {
+        bb_goto->next = bb_dest;
         bbAddPrev(bb_dest,bb_goto);
         bb_dest->prev = bb_goto;
     }
-
-    bb_goto->next = bb_dest;
-    //if (bb_goto->flags & BB_FLAG_UNCONDITIONAL_JUMP) {
-    //    loggerWarning("bb%d unconditional jump to bb%d type %s\n",
-    //            bb_goto->block_no,
-    //            bb_dest->block_no,
-    //            bbTypeToString(bb_dest->type));
-
-    //    /* If we are doing an unconditional jump into a loop, a switch or 
-    //     * a branch we need to re-order things as the flow changes. These 
-    //     * are somewhat contrived edge cases but _can_ happen. 
-    //     *
-    //     * If we are jumping into an if or a switch we can remove all of the 
-    //     * other branches as they will never be hit
-    //     * */
-    //    AstArray *dest_ast_array = bb_dest->ast_array;
-    //    Ast *asts_to_move[100];
-    //    int ast_move_cnt = 0;
-
-    //    /* We need to get the statements that happened before the 
-    //     * label */
-    //    for (int i = 0; i < dest_ast_array->count; ++i) {
-    //        Ast *needle = dest_ast_array->entries[i];
-    //        if (needle->kind == AST_LABEL && aoStrCmp(goto_label,
-    //                    astHackedGetLabel(needle))) {
-    //            break;
-    //        } else {
-    //            asts_to_move[ast_move_cnt++] = needle;
-    //        }
-    //    }
-
-    //    /* This kind of changes it to a do while as the condition will 
-    //     * have to come last */
-
-    //    if (bb_dest->type == BB_LOOP_BLOCK) {
-    //        /* And now we need to paste them in the correct place */
-    //        BasicBlock *loop_head = bb_dest->prev;
-    //        BasicBlock *loop_back = cfgBuilderAllocBasicBlock(builder,
-    //                BB_LOOP_BLOCK);
-    //        AstArray *loop_ast_array = loop_head->ast_array;
-
-    //        loop_head->type = BB_GARBAGE;
-
-    //        for (int i = 0; i < loop_head->ast_array->count; ++i) {
-    //            astArrayPush(dest_ast_array,loop_ast_array->entries[i]);
-    //        }
-
-    //        void *tmp = dest_ast_array->entries[bb_dest->ast_array->count-1];
-    //        dest_ast_array->entries[bb_dest->ast_array->count-1] = dest_ast_array->entries[bb_dest->ast_array->count-2];
-    //        dest_ast_array->entries[bb_dest->ast_array->count-2] = tmp;
-    //        asts_to_move[ast_move_cnt++] = dest_ast_array->entries[bb_dest->ast_array->count-1];
-
-    //        /* Add asts from the loop_head */
-    //        for (int i = 0; i < ast_move_cnt; ++i) {
-    //            astArrayPush(loop_back->ast_array,asts_to_move[i]);
-    //        }
-
-    //        bb_dest->ast_array->count -= (ast_move_cnt);
-
-    //        bb_dest->type = BB_BRANCH_BLOCK;
-    //        bb_dest->flags |= BB_FLAG_LOOP_HEAD;
-    //        bb_dest->flags &= ~BB_FLAG_LOOP_END;
-
-    //        bb_dest->_if = loop_back;
-    //        bb_dest->_else = loop_head->_else;
-
-    //        loop_back->prev = bb_dest;
-    //        bbAddPrev(loop_back,bb_dest);
-    //        bbAddPrev(bb_dest, bb_goto);
-    //        ast_move_cnt--;
-    //    }
-
-    //    /* Remove asts that no longer exist in the block */
-    //    for (int i = 0; i < dest_ast_array->count; ++i) {
-    //        dest_ast_array->entries[i] = dest_ast_array->entries[ast_move_cnt+i];
-    //    }
-    //    bb_dest->prev = bb_goto;
-    //} else {
-    //    loggerWarning("bb%d unhandled conditional jump to bb%d type %s\n",
-    //            bb_goto->block_no,
-    //            bb_dest->block_no,
-    //            bbTypeToString(bb_dest->type));
-    //    // bb_dest->prev = bb_goto;
-    //}
 }
 
 /* Split out to make it simpler to reason with */
@@ -1095,6 +1022,8 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
         cfgHandleAstNode(builder,ast);
     }
 
+    BasicBlock *bb = &builder->bb_pool[0];
+    bbFix(bb);
     /* Reconcile any non linear jumps */
     listForEach(builder->unresoved_gotos) {
         BasicBlock *bb_goto = cast(BasicBlock *,it->value);
@@ -1119,8 +1048,7 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
         cfgRelocateGoto(builder,bb_goto,bb_dest,goto_label);
     }
 
-    BasicBlock *bb = &builder->bb_pool[0];
-    bbFix(bb);
+
 
     /* We don't need the memory... do we want to free this now or later? */
     for (int i = 0; i < builder->bb_count; ++i) {
@@ -1212,6 +1140,7 @@ void cfgAdjacencyListPrint(IntMap *map) {
             long block_no = hash & 0x7FF;
             long type = hash >> 11 & 0x1F;
             long flags = hash >> 16;
+            printf("      %d\n", block_no);
             printf("    bb%2ld type = %-*s flags = %-*s\n",block_no,
                 18,
                 bbTypeToString(type),
@@ -1262,6 +1191,7 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
             case BB_RETURN_BLOCK:
             case BB_END_BLOCK: {
                 vec = intVecNew();
+                intVecPush(vec,hash);
                 break;
             }
 
@@ -1288,7 +1218,8 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
 
             case BB_LOOP_BLOCK: {
                 BasicBlock *loop_head = bb->prev;
-                if (loop_head->_if != bb && loop_head->_else != bb) {
+                if (bb->prev_cnt == 0 && loop_head->_if != bb && 
+                        loop_head->_else != bb) {
                     bb->type = BB_GARBAGE;
                     continue;
                 }
@@ -1333,6 +1264,7 @@ CFG *cfgConstruct(Cctrl *cc) {
             bb->next->prev = bb;
             cfgBuilderSetCFG(&builder,cfg);
             cfgBuilderSetBasicBlock(&builder,bb->next);
+
             cfgConstructFunction(&builder,ast->body->stms);
 
             cfg->bb_count = builder.bb_count;
@@ -1341,7 +1273,7 @@ CFG *cfgConstruct(Cctrl *cc) {
         }
     }
 
-    cfgAdjacencyListPrint(cfg->graph);
+ //   cfgAdjacencyListPrint(cfg->graph);
  //   cfgGetStronglyConnectedComponents(cfg);
     dictRelease(builder.resolved_labels);
     listRelease(builder.unresoved_gotos,NULL);

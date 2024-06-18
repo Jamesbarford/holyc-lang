@@ -409,7 +409,6 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
                builder->break_blocks[builder->break_idx++] = bb;
             }
             cfgDoWhileCondPrintf(builder,bb);
-            // builder->break_blocks[builder->break_idx++] = bb->next;
             if (bb->flags & BB_FLAG_LOOP_HEAD) {
                 cfgCreatePictureUtil(builder,map,bb->next,seen);
             }
@@ -443,10 +442,6 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
         case BB_HEAD_BLOCK:
         case BB_GOTO:
             bbPrintf(builder,bb);
-            if (bb->type == BB_GOTO) {
-                loggerWarning("!!\n");
-                loggerWarning("!!\n");
-            }
             cfgCreatePictureUtil(builder,map,bb->next,seen);
             if (bb->flags & BB_FLAG_LOOP_HEAD) {
                 if (bb->prev && bb->prev->type == BB_DO_WHILE_COND) {
@@ -465,7 +460,7 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
             break;
 
         default:
-            loggerWarning("how?\n");
+            loggerWarning("how? bb%d\n", bb->block_no);
     }
 }
 
