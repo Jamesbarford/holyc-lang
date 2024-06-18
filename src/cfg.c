@@ -326,6 +326,7 @@ static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
     bb_cond->_else = bb_cond_else;
     /* And the previously met block was the condition */
     bb_cond_else->prev = bb_cond;
+    bb_cond->_if->prev = bb_cond;
 
     builder->bb_cur_loop = bb_cond;
 
@@ -401,8 +402,6 @@ static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
         builder->bb->type = BB_LOOP_BLOCK;
         builder->bb->prev = bb_cond;
     }
-
-    //builder->bb->flags |= BB_FLAG_LOOP_END;
 
     /* This is a loop which immediately hit a break; */
     if (builder->bb->type == BB_BREAK_BLOCK && 
@@ -523,11 +522,6 @@ static void cfgHandleDoWhileLoop(CFGBuilder *builder, Ast *ast) {
     BasicBlock *bb_do_while = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
 
     bb->next = bb_do_while;
-    loggerDebug("DO WHILE: bb%d\n",bb_do_while->block_no);
-
-    //builder->bb->flags |= BB_FLAG_LOOP_HEAD;
-    //bb_cond_else->flags |= BB_FLAG_LOOP_END;
-    //bb_do_while->flags |= BB_FLAG_LOOP_END;
 
     builder->bb_cur_loop = bb_do_while;
     builder->flags |= CFG_BUILDER_FLAG_IN_LOOP;
@@ -1007,7 +1001,10 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
     } else {
         bb_goto->next = bb_dest;
         bbAddPrev(bb_dest,bb_goto);
-        bb_dest->prev = bb_goto;
+        /* We don't want to destroy the loop */
+        if (bb_dest->type != BB_LOOP_BLOCK) {
+            bb_dest->prev = bb_goto;
+        }
     }
 }
 
