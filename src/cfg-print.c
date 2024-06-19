@@ -366,11 +366,6 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
 
         if ((bb->visited == bb->prev_cnt) || ((bb->visited + other_paths) >= bb->prev_cnt)) {
             BasicBlock *head = builder->loop_stack[--builder->loop_idx];
-//            loggerDebug("head = bb%d end: bb%d breaks: %d prev_cnt = %d\n",
-//                    head->block_no,
-//                    bb->block_no,
-//                    builder->break_idx,
-//                    bb->prev_cnt);
 
             aoStrCat(builder->viz,"}\n");
 
@@ -390,8 +385,6 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
 
     if (intMapHas(seen,bb->block_no)) return;
     else intMapSet(seen,bb->block_no,NULL);
-
-    bbPrint(bb);
 
     if (bb->flags & BB_FLAG_LOOP_HEAD) {
         cfgLoopHeadPrintf(builder,bb);
