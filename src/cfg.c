@@ -168,6 +168,7 @@ static void cfgBuilderInit(CFGBuilder *builder, Cctrl *cc) {
     builder->bb_pos = 0;
     builder->flags = 0;
     builder->bb_cur_loop = NULL;
+    builder->bb_cur_else = NULL;
 
     builder->unresoved_gotos = listNew();
     builder->resolved_labels = dictNew(&default_table_type);
@@ -236,6 +237,7 @@ static void cgfHandleBranchBlock(CFGBuilder *builder, Ast *ast) {
      */
 
     int in_conditional = builder->flags & CFG_BUILDER_FLAG_IN_CONDITIONAL;
+    BasicBlock *current_else = builder->bb_cur_else;
     BasicBlock *bb = builder->bb;
     bb->type = BB_BRANCH_BLOCK;
     ptrVecPush(bb->ast_array,ast->cond);
@@ -257,6 +259,8 @@ static void cgfHandleBranchBlock(CFGBuilder *builder, Ast *ast) {
     /* Start of a new basic block */
     cfgBuilderSetBasicBlock(builder,if_body);
     cfgHandleAstNode(builder,ast->then);
+
+    builder->bb_cur_else = else_body;
 
     if (ast->els) {
         cfgBuilderSetBasicBlock(builder,else_body);
@@ -291,6 +295,7 @@ static void cgfHandleBranchBlock(CFGBuilder *builder, Ast *ast) {
     if (!in_conditional) {
         builder->flags &= ~(CFG_BUILDER_FLAG_IN_CONDITIONAL);
     }
+    builder->bb_cur_else = current_else;
 }
 
 static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
@@ -576,14 +581,16 @@ static void cfgHandleReturn(CFGBuilder *builder, Ast *ast) {
 static void cfgHandleLabel(CFGBuilder *builder, Ast *ast) {
     ptrVecPush(builder->bb->ast_array,ast);
     aoStr *label = astHackedGetLabel(ast);
+    loggerWarning("l: %s\n",label->data);
     dictSet(builder->resolved_labels,label->data,builder->bb);
     builder->bb->flags |= BB_FLAG_LABEL;
 }
 
 static void cfgHandleBreak(CFGBuilder *builder, Ast *ast) {
-    assert(builder->flags & CFG_BUILDER_FLAG_IN_LOOP);
-    builder->bb->type = BB_BREAK_BLOCK;
-    builder->bb->next = builder->bb_cur_loop->_else;
+    if (builder->flags & CFG_BUILDER_FLAG_IN_LOOP) {
+        builder->bb->type = BB_BREAK_BLOCK;
+        builder->bb->next = builder->bb_cur_loop->_else;
+    }
 }
 
 static void cfgHandleCompound(CFGBuilder *builder, Ast *ast) {
@@ -600,7 +607,12 @@ static void cfgHandleContinue(CFGBuilder *builder, Ast *ast) {
 }
 
 static void cfgHandleCase(CFGBuilder *builder, Ast *ast) {
-    loggerPanic("'CASE' unimplemented\n");
+    cfgHandleLabel(builder,ast);
+    //loggerPanic("'CASE' unimplemented\n");
+}
+
+static void cfgHandleJump(CFGBuilder *builder, Ast *ast) {
+    cfgHandleGoto(builder,ast);
 }
 
 static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
@@ -614,16 +626,24 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
      * A new basic block will start with an `if`, `for`, `while`, `goto` */
     switch (kind) {
         case AST_BREAK:         cfgHandleBreak(builder,ast);       break;
-        case AST_CASE:          cfgHandleCase(builder,ast);        break;
         case AST_COMPOUND_STMT: cfgHandleCompound(builder,ast);    break;
         case AST_CONTINUE:      cfgHandleContinue(builder,ast);    break;
         case AST_DO_WHILE:      cfgHandleDoWhileLoop(builder,ast); break;
         case AST_FOR:           cfgHandleForLoop(builder,ast);     break;
         case AST_GOTO:          cfgHandleGoto(builder,ast);        break;
-        case AST_IF:            cgfHandleBranchBlock(builder,ast); break;
+        case AST_IF:            {
+                                    loggerWarning("here\n");
+                                    astPrint(ast);
+            cgfHandleBranchBlock(builder,ast);
+            break;
+        }
         case AST_LABEL:         cfgHandleLabel(builder,ast);       break;
         case AST_RETURN:        cfgHandleReturn(builder,ast);      break;
         case AST_WHILE:         cfgHandleWhileLoop(builder,ast);   break;
+
+        case AST_CASE:         cfgHandleCase(builder,ast);        break;
+        case AST_JUMP:         cfgHandleJump(builder,ast);        break;
+ //           astPrint(ast);
 
         case AST_ADDR:
         case AST_FUNC:
@@ -637,7 +657,6 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
         case AST_EXTERN_FUNC:
         case AST_FUNPTR:
         case AST_FUN_PROTO:
-        case AST_JUMP:
         case AST_LITERAL:
         case AST_OP_ADD:
         case AST_PLACEHOLDER:
@@ -983,17 +1002,19 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
 
         for (int i = 0; i < bb_goto->ast_array->size; ++i) {
             ast = (Ast *)bb_goto->ast_array->entries[i];
-            if (ast->kind == AST_GOTO) {
+            if (ast->kind == AST_GOTO || ast->kind == AST_JUMP) {
                 break;
             }
         }
 
         aoStr *goto_label = astHackedGetLabel(ast);
+        aoStr *dest_label = astHackedGetLabel(ast);
 
-        assert(ast->kind == AST_GOTO);
+        assert(ast->kind == AST_GOTO || ast->kind == AST_JUMP);
 
-        bb_dest = dictGetLen(builder->resolved_labels,ast->slabel->data,
-                ast->slabel->len);
+        bb_dest = dictGetLen(builder->resolved_labels,dest_label->data,
+                dest_label->len);
+
         assert(bb_dest != NULL);
         cfgRelocateGoto(builder,bb_goto,bb_dest,goto_label);
     }

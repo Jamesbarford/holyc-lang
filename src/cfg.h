@@ -80,9 +80,12 @@ typedef struct CFGBuilder {
     unsigned long flags;
     Cctrl *cc;
     CFG *cfg;
+
     BasicBlock *bb;
     BasicBlock *bb_pool;
     BasicBlock *bb_cur_loop;
+    BasicBlock *bb_cur_else;
+
     List *ast_list;
     List *ast_iter;
     int bb_pos;

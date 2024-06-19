@@ -60,7 +60,10 @@
 /* @Cleanup
  * Urgently get rid of this, we do not need `n` ways of setting a label on 
  * an AST it is extremely confusing */
-#define astHackedGetLabel(ast) ((ast)->slabel ? (ast)->slabel : (ast)->sval)
+#define astHackedGetLabel(ast) \
+    ((ast)->kind == AST_GOTO || (ast)->kind == AST_LABEL ? ((ast)->slabel ? (ast)->slabel : (ast)->sval) : \
+    ((ast)->kind == AST_JUMP ? (ast)->jump_label : (ast)->kind == AST_CASE ? (ast)->case_label : NULL))
+
 
 typedef struct AstType AstType;
 /* Type of the variable or type of return type of a function */
