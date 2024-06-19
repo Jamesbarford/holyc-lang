@@ -1965,32 +1965,3 @@ void astRelease(Ast *ast) {
                 break;
     }
 }
-
-AstArray *astArrayNew(int capacity) {
-    AstArray *ast_array = cast(AstArray *,malloc(sizeof(AstArray)));
-    ast_array->capacity = capacity;
-    ast_array->count = 0;
-    ast_array->entries = cast(Ast **,malloc(sizeof(Ast *)*capacity));
-    return ast_array;
-}
-
-void astArrayPush(AstArray *ast_array, Ast *ast) {
-    if (ast_array->count + 1 >= ast_array->capacity) {
-        int new_capacity = ast_array->capacity + 20;
-        Ast **new_entries = cast(Ast **,realloc(ast_array->entries,
-                    sizeof(Ast **)*new_capacity));
-        if (new_entries == NULL) {
-            loggerPanic("Failed to allocate memory for AstArray\n");
-        }
-        ast_array->entries = new_entries;
-        ast_array->capacity = new_capacity;
-    }
-    ast_array->entries[ast_array->count++] = ast;
-}
-
-void astArrayRelease(AstArray *ast_array) {
-    if (ast_array) {
-        free(ast_array->entries);
-        free(ast_array);
-    }
-}

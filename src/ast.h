@@ -240,14 +240,6 @@ typedef struct Ast {
     };
 } Ast;
 
-typedef struct AstArray {
-    /* While int's it's absurd to think this would have 2^32 ast's in it's array 
-     * realistically it would max be something like 20? */
-    int count;
-    int capacity;
-    Ast **entries;
-} AstArray;
-
 extern AstType *ast_int_type;
 extern AstType *ast_uint_type;
 extern AstType *ast_u8_type;
@@ -347,10 +339,6 @@ Ast *astGlobalCmdArgs(void);
 
 aoStr *astNormaliseFunctionName(char *fname);
 int astIsAssignment(long op);
-
-AstArray *astArrayNew(int capacity);
-void astArrayPush(AstArray *ast_array, Ast *ast);
-void astArrayRelease(AstArray *ast_array);
 
 /* For debugging */
 char *astTypeToString(AstType *type);
