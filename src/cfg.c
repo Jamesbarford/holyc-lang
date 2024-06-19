@@ -58,13 +58,16 @@ const char *bbFlagsToString(unsigned int flags) {
         _concat_flag("BB_FLAG_REDUNDANT_LOOP");
     }
     if (flags & BB_FLAG_LABEL) {
-        _concat_flag("BB_FLAG_LOOP_LABEL");
+        _concat_flag("BB_FLAG_LABEL");
     }
     if (flags & BB_FLAG_UNCONDITIONAL_JUMP) {
         _concat_flag("BB_FLAG_UNCONDITIONAL_JUMP");
     }
     if (flags & BB_FLAG_LOOP_JUMP) {
         _concat_flag("BB_FLAG_LOOP_JUMP");
+    }
+    if (flags & BB_FLAG_GOTO_LOOP) {
+        _concat_flag("BB_FLAG_GOTO_LOOP");
     }
     aoStrPutChar(str,')');
 
@@ -559,11 +562,14 @@ static void cfgHandleGoto(CFGBuilder *builder, Ast *ast) {
     if ((dest = dictGetLen(builder->resolved_labels,label->data,
             label->len)) != NULL)
     {
-        dest->flags |= BB_FLAG_LOOP_HEAD;
-        builder->bb->prev = dest;
+        /* This forms a loop but over a potentially large number of graph nodes 
+         * making it difficult to classify as a _conventional_ loop */
+
+        // dest->flags |= BB_FLAG_LOOP_HEAD;
         // Do we want an intermediary node?
-        // builder->bb->type = BB_LOOP_BLOCK;
-        builder->bb->flags |= BB_FLAG_LOOP_END;
+        builder->bb->prev = dest;
+        builder->bb->flags |= BB_FLAG_GOTO_LOOP;
+        builder->bb->next = NULL;
     } else {
         listAppend(builder->unresoved_gotos,builder->bb);
     }
@@ -571,13 +577,13 @@ static void cfgHandleGoto(CFGBuilder *builder, Ast *ast) {
     astArrayPush(builder->bb->ast_array,ast);
     
     /* If this is an unconditional jump */
-    //if (!(builder->flags & CFG_BUILDER_FLAG_IN_CONDITIONAL)) {
+    if (!(builder->flags & CFG_BUILDER_FLAG_IN_CONDITIONAL)) {
     //   BasicBlock *bb_next = cfgBuilderAllocBasicBlock(builder,
     //           BB_CONTROL_BLOCK);
-    //   builder->bb->flags |= BB_FLAG_UNCONDITIONAL_JUMP;
+       builder->bb->flags |= BB_FLAG_UNCONDITIONAL_JUMP;
     //   builder->bb->next = bb_next;
     //   cfgBuilderSetBasicBlock(builder,bb_next);
-    //}
+    }
 }
 
 static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
@@ -596,10 +602,6 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
             aoStr *label = astHackedGetLabel(ast);
             dictSet(builder->resolved_labels,label->data,builder->bb);
             builder->bb->flags |= BB_FLAG_LABEL;
-            /* I guess if it is in a loop and the label is out of a loop ?*/
-            //if ((builder->flags & CFG_BUILDER_FLAG_IN_LOOP)) {
-            //    builder->bb->type = BB_BREAK_BLOCK;
-            //}
             break;
         }
         case AST_ADDR:
@@ -915,8 +917,11 @@ static void bbFix(BasicBlock *bb) {
             bb->prev->prev = bb;
         }
 
-        if (bb->type != BB_GARBAGE && bb->next && 
-                bb->next->ast_array->count > 0) {
+        if (bb->flags & BB_FLAG_GOTO_LOOP) {
+            continue;
+        }
+
+        if (bb->type != BB_GARBAGE && bb->next && bb->next->ast_array->count > 0) {
             bbAddPrev(bb->next,bb);
         }
     }
@@ -928,15 +933,11 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
         BasicBlock *bb_dest, aoStr *goto_label)
 {
     /* Can happen... if the block we want to goto is itself */
-    if (bb_goto == bb_dest) return;
+    if (bb_goto == bb_dest) {
+        return;
+    }
 
     BasicBlock *bb_prev = bb_goto->prev;
-
-    /* we want to jump out of the loop, however this could be breaking out 
-     * of multiple loops */
-    if (bb_goto->flags & BB_FLAG_LOOP_JUMP) {
-        //bb_goto->type = BB_BREAK_BLOCK;
-    }
 
     if (bb_dest->type == BB_LOOP_BLOCK && !(bb_goto->flags & BB_FLAG_LOOP_JUMP)) {
         if (bb_prev->type == BB_BRANCH_BLOCK) {
@@ -999,10 +1000,15 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
         bbAddPrev(loop_back,bb_dest);
         bbAddPrev(bb_dest,loop_back);
     } else {
-        bb_goto->next = bb_dest;
         bbAddPrev(bb_dest,bb_goto);
+
+        /* Making a backwards goto loop */
+        if (bb_goto->flags & BB_FLAG_GOTO_LOOP) bb_goto->prev = bb_dest;
+        else                                    bb_goto->next = bb_dest;
+
         /* We don't want to destroy the loop */
-        if (bb_dest->type != BB_LOOP_BLOCK) {
+        if (bb_dest->type != BB_LOOP_BLOCK && 
+             !(bb_dest->flags & BB_FLAG_GOTO_LOOP)) {
             bb_dest->prev = bb_goto;
         }
     }
