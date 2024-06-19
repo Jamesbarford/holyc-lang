@@ -131,14 +131,7 @@ static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder, int type) {
      * numerical references in a hash table.
      * */
     if (builder->bb_pos + 1 >= builder->bb_cap) {
-        int new_cap = builder->bb_cap * 2;
-        BasicBlock *bb_pool = cast(BasicBlock *,
-                realloc(builder->bb_pool,new_cap * sizeof(BasicBlock)));
-        if (bb_pool == NULL) {
-            loggerPanic("Failed to reallocate memory for basic block pool\n");
-        }
-        builder->bb_pool = bb_pool;
-        builder->bb_cap = new_cap;
+        loggerPanic("Out of memory - implement resizable pool");
     }
     BasicBlock *bb = &builder->bb_pool[builder->bb_pos++];
     bb->type = type;
@@ -493,23 +486,6 @@ static void cfgHandleWhileLoop(CFGBuilder *builder, Ast *ast) {
     builder->bb_cur_loop = bb_prev_loop;
 }
 
-static void cfgHandleReturn(CFGBuilder *builder, Ast *ast) {
-    BasicBlock *bb = builder->bb;
-    BasicBlock *bb_return;
-
-    if (bb->ast_array->size == 0) {
-        bb_return = bb;
-        bb_return->type = BB_RETURN_BLOCK;
-    } else {
-        bb_return = cfgBuilderAllocBasicBlock(builder,BB_RETURN_BLOCK);
-        bb->next = bb_return;
-        bb_return->prev = bb;
-    }
-    bb_return->next = NULL;
-    ptrVecPush(bb_return->ast_array,ast);
-    cfgBuilderSetBasicBlock(builder,bb_return);
-}
-
 /* @CopyPaste
  * This is a copy and paste of the above for loop code with the ast_step removed
  * it can almost certainly be merged together
@@ -563,10 +539,8 @@ static void cfgHandleGoto(CFGBuilder *builder, Ast *ast) {
             label->len)) != NULL)
     {
         /* This forms a loop but over a potentially large number of graph nodes 
-         * making it difficult to classify as a _conventional_ loop */
-
-        // dest->flags |= BB_FLAG_LOOP_HEAD;
-        // Do we want an intermediary node?
+         * making it difficult to classify as a _conventional_ loop. 
+         * Do we want an intermediary node? */
         builder->bb->prev = dest;
         builder->bb->flags |= BB_FLAG_GOTO_LOOP;
         builder->bb->next = NULL;
@@ -578,36 +552,97 @@ static void cfgHandleGoto(CFGBuilder *builder, Ast *ast) {
     
     /* If this is an unconditional jump */
     if (!(builder->flags & CFG_BUILDER_FLAG_IN_CONDITIONAL)) {
-    //   BasicBlock *bb_next = cfgBuilderAllocBasicBlock(builder,
-    //           BB_CONTROL_BLOCK);
        builder->bb->flags |= BB_FLAG_UNCONDITIONAL_JUMP;
-    //   builder->bb->next = bb_next;
-    //   cfgBuilderSetBasicBlock(builder,bb_next);
     }
+}
+
+static void cfgHandleReturn(CFGBuilder *builder, Ast *ast) {
+    BasicBlock *bb = builder->bb;
+    BasicBlock *bb_return;
+
+    if (bb->ast_array->size == 0) {
+        bb_return = bb;
+        bb_return->type = BB_RETURN_BLOCK;
+    } else {
+        bb_return = cfgBuilderAllocBasicBlock(builder,BB_RETURN_BLOCK);
+        bb->next = bb_return;
+        bb_return->prev = bb;
+    }
+    bb_return->next = NULL;
+    ptrVecPush(bb_return->ast_array,ast);
+    cfgBuilderSetBasicBlock(builder,bb_return);
+}
+
+static void cfgHandleLabel(CFGBuilder *builder, Ast *ast) {
+    ptrVecPush(builder->bb->ast_array,ast);
+    aoStr *label = astHackedGetLabel(ast);
+    dictSet(builder->resolved_labels,label->data,builder->bb);
+    builder->bb->flags |= BB_FLAG_LABEL;
+}
+
+static void cfgHandleBreak(CFGBuilder *builder, Ast *ast) {
+    assert(builder->flags & CFG_BUILDER_FLAG_IN_LOOP);
+    builder->bb->type = BB_BREAK_BLOCK;
+    builder->bb->next = builder->bb_cur_loop->_else;
+}
+
+static void cfgHandleCompound(CFGBuilder *builder, Ast *ast) {
+    if (listEmpty(ast->stms)) return;
+    listForEach(ast->stms) {
+        Ast *ast = cast(Ast *,it->value);
+        cfgHandleAstNode(builder,ast);
+    }
+}
+
+static void cfgHandleContinue(CFGBuilder *builder, Ast *ast) {
+    assert(builder->flags & CFG_BUILDER_FLAG_IN_LOOP);
+    loggerPanic("'CONTINUE' unimplemented\n");
+}
+
+static void cfgHandleCase(CFGBuilder *builder, Ast *ast) {
+    loggerPanic("'CASE' unimplemented\n");
 }
 
 static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
     assert(ast != NULL);
     int kind = ast->kind;
     BasicBlock *bb = builder->bb;
-    List *stmts;
 
     /* We are only interested in the AST nodes that are the start of a new 
      * basic block or a top level `I64 x = 10;` type declaration or assignment 
      * 
      * A new basic block will start with an `if`, `for`, `while`, `goto` */
     switch (kind) {
-        case AST_LABEL: {
-            ptrVecPush(bb->ast_array,ast);
-            aoStr *label = astHackedGetLabel(ast);
-            dictSet(builder->resolved_labels,label->data,builder->bb);
-            builder->bb->flags |= BB_FLAG_LABEL;
-            break;
-        }
+        case AST_BREAK:         cfgHandleBreak(builder,ast);       break;
+        case AST_CASE:          cfgHandleCase(builder,ast);        break;
+        case AST_COMPOUND_STMT: cfgHandleCompound(builder,ast);    break;
+        case AST_CONTINUE:      cfgHandleContinue(builder,ast);    break;
+        case AST_DO_WHILE:      cfgHandleDoWhileLoop(builder,ast); break;
+        case AST_FOR:           cfgHandleForLoop(builder,ast);     break;
+        case AST_GOTO:          cfgHandleGoto(builder,ast);        break;
+        case AST_IF:            cgfHandleBranchBlock(builder,ast); break;
+        case AST_LABEL:         cfgHandleLabel(builder,ast);       break;
+        case AST_RETURN:        cfgHandleReturn(builder,ast);      break;
+        case AST_WHILE:         cfgHandleWhileLoop(builder,ast);   break;
+
         case AST_ADDR:
         case AST_FUNC:
-            break;
- 
+        case AST_ASM_FUNCDEF:
+        case AST_ASM_FUNC_BIND:
+        case AST_ASM_STMT:
+        case AST_CAST:
+        case AST_CLASS_REF:
+        case AST_DEFAULT_PARAM:
+        case AST_DEREF:
+        case AST_EXTERN_FUNC:
+        case AST_FUNPTR:
+        case AST_FUN_PROTO:
+        case AST_JUMP:
+        case AST_LITERAL:
+        case AST_OP_ADD:
+        case AST_PLACEHOLDER:
+        case AST_STRING:
+        case AST_VAR_ARGS:
         case TK_PRE_PLUS_PLUS:
         case TK_PLUS_PLUS:   
         case TK_PRE_MINUS_MINUS:
@@ -617,95 +652,10 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
         case AST_FUNCALL:
         case AST_FUNPTR_CALL:
         case AST_DECL:
-        case AST_LVAR: {
-            ptrVecPush(bb->ast_array,ast);
-            break;
-        }
-
-        case AST_IF: {
-            cgfHandleBranchBlock(builder,ast);
-            break;
-        }
-
-        case AST_FOR: {
-            cfgHandleForLoop(builder,ast);
-            break;
-        }
-                      
-        case AST_DO_WHILE: {
-            cfgHandleDoWhileLoop(builder,ast);
-            break;
-        }
-
-        case AST_WHILE: {
-            cfgHandleWhileLoop(builder,ast);
-            break;
-        }
-
-        case AST_RETURN: {
-            cfgHandleReturn(builder,ast);
-            break;
-        }
-
-        case AST_GOTO: {
-            cfgHandleGoto(builder,ast);
-            break;
-        }
-
-        case AST_CLASS_REF:
-        case AST_DEREF:
-
-        case AST_JUMP:
-        case AST_CASE:
-            break;
-
-        case AST_BREAK: {
-            /* This is a goto */
-            /* Switch not implemented */
-            assert(builder->flags & CFG_BUILDER_FLAG_IN_LOOP);
-            builder->bb->type = BB_BREAK_BLOCK;
-            builder->bb->next = builder->bb_cur_loop->_else;
-            break;
-        }
-
-        case AST_CONTINUE: {
-            assert(builder->flags & CFG_BUILDER_FLAG_IN_LOOP);
-            break;
-        }
-
-        /* We are in a jump */
-        case AST_COMPOUND_STMT: {
-            stmts = ast->stms;
-            if (listEmpty(stmts)) return;
-            listForEach(stmts) {
-                Ast *ast = cast(Ast *,it->value);
-                bb = builder->bb;
-                cfgHandleAstNode(builder,ast);
-            }
-            break;
-        }
-
-        case AST_STRING:
-        case AST_LITERAL:
-        case AST_OP_ADD:
-        case AST_ASM_STMT:
-        case AST_ASM_FUNC_BIND:
-        case AST_FUNPTR:
-        case AST_DEFAULT_PARAM:
-        case AST_VAR_ARGS:
-        case AST_ASM_FUNCDEF:
-        case AST_CAST:
-        case AST_FUN_PROTO:
-        case AST_EXTERN_FUNC:
-        case AST_PLACEHOLDER:
+        case AST_LVAR:
 
         default:
-            /* @Refactor */
-            if (astIsAssignment(kind)) {
-                ptrVecPush(bb->ast_array,ast);
-            } else {
-                ptrVecPush(bb->ast_array,ast);
-            }
+            ptrVecPush(bb->ast_array,ast);
             break;
     }
 }
@@ -721,7 +671,6 @@ static void bbFixLeafNode(BasicBlock *bb) {
     PtrVec *next_array = bb->next ? bb->next->ast_array : NULL;
 
     if (!bb->ast_array || bb->ast_array->size == 0) {
-        loggerPanic("yupt\n");
         bb->type = BB_GARBAGE;
         return;
     }
