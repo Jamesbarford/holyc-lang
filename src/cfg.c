@@ -15,7 +15,7 @@
 
 static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast);
 
-const char *bbTypeToString(int type) {
+char *bbTypeToString(int type) {
     switch (type) {
         case BB_GARBAGE:            return "BB_GARBAGE";
         case BB_END_BLOCK:          return "BB_END_BLOCK";
@@ -32,7 +32,7 @@ const char *bbTypeToString(int type) {
     }
 }
 
-const char *bbFlagsToString(unsigned int flags) {
+char *bbFlagsToString(unsigned int flags) {
     if (!flags) return mprintf("(NO_FLAGS)");
     aoStr *str = aoStrNew();
     int has_flag = 0;
@@ -76,7 +76,7 @@ const char *bbFlagsToString(unsigned int flags) {
     return aoStrMove(str); 
 }
 
-const char *bbPreviousBlockNumbersToString(BasicBlock *bb) {
+char *bbPreviousBlockNumbersToString(BasicBlock *bb) {
     aoStr *str = aoStrNew();
     aoStrCatPrintf(str,"prev_cnt = %d: ",bb->prev_cnt);
     for (int i = 0; i < bb->prev_cnt; ++i) {
@@ -86,11 +86,11 @@ const char *bbPreviousBlockNumbersToString(BasicBlock *bb) {
     return aoStrMove(str);
 }
 
-const char *bbToString(BasicBlock *bb) {
+char *bbToString(BasicBlock *bb) {
     aoStr *str = aoStrNew();
-    const char *str_flags = bbFlagsToString(bb->flags);
-    const char *str_type =  bbTypeToString(bb->type);
-    const char *str_prev =  bbPreviousBlockNumbersToString(bb);
+    char *str_flags = bbFlagsToString(bb->flags);
+    char *str_type =  bbTypeToString(bb->type);
+    char *str_prev =  bbPreviousBlockNumbersToString(bb);
 
     aoStrCatPrintf(str,"bb%d type = %s, flags = %s, %s, ",
             bb->block_no,
@@ -108,7 +108,7 @@ const char *bbToString(BasicBlock *bb) {
 }
 
 void bbPrint(BasicBlock *bb) {
-    const char *bb_str = bbToString(bb);
+    char *bb_str = bbToString(bb);
     aoStr *str = aoStrDupRaw((char*)bb_str, strlen(bb_str)); 
     aoStrPutChar(str,'\n');
     for (int i = 0; i < bb->ast_array2->size; ++i) {
@@ -201,7 +201,7 @@ BasicBlock *cfgGet(CFG *cfg, int block_no) {
     return &(bb_array[block_no]);
 }
 
-const int bbPrevHas(BasicBlock *bb, int block_no) {
+int bbPrevHas(BasicBlock *bb, int block_no) {
     int prev_cnt = bb->prev_cnt;
     for (int i = 0; i < prev_cnt; ++i) {
         if (bb->prev_blocks[i]->block_no == block_no) return 1;
