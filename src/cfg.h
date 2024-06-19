@@ -56,7 +56,7 @@ typedef struct BasicBlock {
     struct BasicBlock *prev;
     struct BasicBlock *prev_blocks[32];
  //    IntSet *prev_block_ids;
-    PtrVec *ast_array2;
+    PtrVec *ast_array;
 } BasicBlock;
 
 /* Head of a CFG is a function */

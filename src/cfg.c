@@ -111,8 +111,8 @@ void bbPrint(BasicBlock *bb) {
     char *bb_str = bbToString(bb);
     aoStr *str = aoStrDupRaw((char*)bb_str, strlen(bb_str)); 
     aoStrPutChar(str,'\n');
-    for (int i = 0; i < bb->ast_array2->size; ++i) {
-        char *ast_str = astLValueToString(bb->ast_array2->entries[i],0);
+    for (int i = 0; i < bb->ast_array->size; ++i) {
+        char *ast_str = astLValueToString(bb->ast_array->entries[i],0);
         aoStrCat(str,ast_str);
         aoStrPutChar(str,'\n');
         free(ast_str);
@@ -147,7 +147,7 @@ static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder, int type) {
     bb->block_no = builder->bb_count++;
     /* @Leak
      * This should probably be a memory pool as well */
-    bb->ast_array2 = ptrVecNew();
+    bb->ast_array = ptrVecNew();
     bb->visited = 0;
     bb->next = bb->prev = bb->_else = bb->_if = NULL;
     return bb;
@@ -245,7 +245,7 @@ static void cgfHandleBranchBlock(CFGBuilder *builder, Ast *ast) {
     int in_conditional = builder->flags & CFG_BUILDER_FLAG_IN_CONDITIONAL;
     BasicBlock *bb = builder->bb;
     bb->type = BB_BRANCH_BLOCK;
-    ptrVecPush(bb->ast_array2,ast->cond);
+    ptrVecPush(bb->ast_array,ast->cond);
     builder->flags |= CFG_BUILDER_FLAG_IN_CONDITIONAL;
 
     BasicBlock *else_body = cfgBuilderAllocBasicBlock(builder,
@@ -317,7 +317,7 @@ static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
      * builder->bb != bb_body */
     BasicBlock *bb_body = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
 
-    if (ast_init) ptrVecPush(bb->ast_array2,ast_init);
+    if (ast_init) ptrVecPush(bb->ast_array,ast_init);
 
     bb_cond->flags |= BB_FLAG_LOOP_HEAD;
 
@@ -497,7 +497,7 @@ static void cfgHandleReturn(CFGBuilder *builder, Ast *ast) {
     BasicBlock *bb = builder->bb;
     BasicBlock *bb_return;
 
-    if (bb->ast_array2->size == 0) {
+    if (bb->ast_array->size == 0) {
         bb_return = bb;
         bb_return->type = BB_RETURN_BLOCK;
     } else {
@@ -506,7 +506,7 @@ static void cfgHandleReturn(CFGBuilder *builder, Ast *ast) {
         bb_return->prev = bb;
     }
     bb_return->next = NULL;
-    ptrVecPush(bb_return->ast_array2,ast);
+    ptrVecPush(bb_return->ast_array,ast);
     cfgBuilderSetBasicBlock(builder,bb_return);
 }
 
@@ -537,7 +537,7 @@ static void cfgHandleDoWhileLoop(CFGBuilder *builder, Ast *ast) {
     builder->bb->prev->flags |= BB_FLAG_LOOP_HEAD;
 
     builder->bb->next = bb_cond_else;
-    ptrVecPush(builder->bb->ast_array2,ast_cond);
+    ptrVecPush(builder->bb->ast_array,ast_cond);
 
     if (!bb_prev_loop) {
         builder->flags &= ~(CFG_BUILDER_FLAG_IN_LOOP);
@@ -574,7 +574,7 @@ static void cfgHandleGoto(CFGBuilder *builder, Ast *ast) {
         listAppend(builder->unresoved_gotos,builder->bb);
     }
 
-    ptrVecPush(builder->bb->ast_array2,ast);
+    ptrVecPush(builder->bb->ast_array,ast);
     
     /* If this is an unconditional jump */
     if (!(builder->flags & CFG_BUILDER_FLAG_IN_CONDITIONAL)) {
@@ -598,7 +598,7 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
      * A new basic block will start with an `if`, `for`, `while`, `goto` */
     switch (kind) {
         case AST_LABEL: {
-            ptrVecPush(bb->ast_array2,ast);
+            ptrVecPush(bb->ast_array,ast);
             aoStr *label = astHackedGetLabel(ast);
             dictSet(builder->resolved_labels,label->data,builder->bb);
             builder->bb->flags |= BB_FLAG_LABEL;
@@ -618,7 +618,7 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
         case AST_FUNPTR_CALL:
         case AST_DECL:
         case AST_LVAR: {
-            ptrVecPush(bb->ast_array2,ast);
+            ptrVecPush(bb->ast_array,ast);
             break;
         }
 
@@ -702,9 +702,9 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
         default:
             /* @Refactor */
             if (astIsAssignment(kind)) {
-                ptrVecPush(bb->ast_array2,ast);
+                ptrVecPush(bb->ast_array,ast);
             } else {
-                ptrVecPush(bb->ast_array2,ast);
+                ptrVecPush(bb->ast_array,ast);
             }
             break;
     }
@@ -718,9 +718,9 @@ static void bbFixLeafNode(BasicBlock *bb) {
     BasicBlock *prev = bb->prev;
     assert(prev != NULL);
 
-    PtrVec *next_array = bb->next ? bb->next->ast_array2 : NULL;
+    PtrVec *next_array = bb->next ? bb->next->ast_array : NULL;
 
-    if (!bb->ast_array2 || bb->ast_array2->size == 0) {
+    if (!bb->ast_array || bb->ast_array->size == 0) {
         loggerPanic("yupt\n");
         bb->type = BB_GARBAGE;
         return;
@@ -774,13 +774,13 @@ static void bbRelinkBranch(BasicBlock *branch, BasicBlock *bb) {
     if (!bb) return;
     if (bb->type == BB_GARBAGE) return;
 
-    PtrVec *current_array = bb->ast_array2;
-    PtrVec *next_array = bb->next ? bb->next->ast_array2 : NULL;
+    PtrVec *current_array = bb->ast_array;
+    PtrVec *next_array = bb->next ? bb->next->ast_array : NULL;
     bbAddPrev(bb,branch);
 
     if (bb->type == BB_BRANCH_BLOCK) {
         if (next_array) {
-            PtrVec *els_array = bb->_else->ast_array2;
+            PtrVec *els_array = bb->_else->ast_array;
             if (next_array->size != 0 && els_array->size == 0) {
                 /* mark as destroyed */
                 bb->_else->type = BB_GARBAGE;
@@ -791,7 +791,7 @@ static void bbRelinkBranch(BasicBlock *branch, BasicBlock *bb) {
                 /* This seems to happen if the bb->next is a control block 
                  * where bb is of type branch and its in a loop */
                 if (bb->_else->next == bb->_if->next) {
-                    if (bb->_else->next->ast_array2->size == 0) {
+                    if (bb->_else->next->ast_array->size == 0) {
                         bb->_else->next = bb->next;
                         bb->_if->next = bb->next;
                     }
@@ -821,7 +821,7 @@ static void bbRelinkBranch(BasicBlock *branch, BasicBlock *bb) {
                     bbAddPrev(branch->_else,branch);
                 }
             } else {
-                if (branch->_if->next->ast_array2->size == 0) {
+                if (branch->_if->next->ast_array->size == 0) {
                     branch->_if->next = branch->next;
                 }
             }
@@ -849,7 +849,7 @@ static void bbFixBranchBlock(BasicBlock *bb) {
 }
 
 static void bbFixLoopBlock(BasicBlock *bb) {
-    if (bb->ast_array2->size == 0) {
+    if (bb->ast_array->size == 0) {
         if (bb->prev_cnt == 1) {
             BasicBlock *prev = bb->prev_blocks[0];
 
@@ -893,7 +893,7 @@ static void bbFix(BasicBlock *bb) {
                 bbFixLeafNode(bb);
             } else if (bb == bb->next) {
                 bb->type = BB_GARBAGE;
-            } else if (!bb->ast_array2 || bb->ast_array2->size == 0) {
+            } else if (!bb->ast_array || bb->ast_array->size == 0) {
                 bb->type = BB_GARBAGE;
             }
         }
@@ -921,7 +921,7 @@ static void bbFix(BasicBlock *bb) {
             continue;
         }
 
-        if (bb->type != BB_GARBAGE && bb->next && bb->next->ast_array2->size > 0) {
+        if (bb->type != BB_GARBAGE && bb->next && bb->next->ast_array->size > 0) {
             bbAddPrev(bb->next,bb);
         }
     }
@@ -945,7 +945,7 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
             else                         bb_goto->flags |= BB_FLAG_ELSE_BRANCH;
         }
 
-        PtrVec *dest_ast_array = bb_dest->ast_array2;
+        PtrVec *dest_ast_array = bb_dest->ast_array;
         BasicBlock *loop_cond = bb_dest->prev;
         BasicBlock *loop_back = cfgBuilderAllocBasicBlock(builder,BB_LOOP_BLOCK);
 
@@ -966,7 +966,7 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
 
         /* Add asts from the loop_cond */
         for (int i = 0; i < ast_move_cnt; ++i) {
-            ptrVecPush(loop_back->ast_array2,asts_to_move[i]);
+            ptrVecPush(loop_back->ast_array,asts_to_move[i]);
         }
 
         /* resize the array */
@@ -1032,8 +1032,8 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
         BasicBlock *bb_dest = NULL;
         Ast *ast = NULL; 
 
-        for (int i = 0; i < bb_goto->ast_array2->size; ++i) {
-            ast = (Ast *)bb_goto->ast_array2->entries[i];
+        for (int i = 0; i < bb_goto->ast_array->size; ++i) {
+            ast = (Ast *)bb_goto->ast_array->entries[i];
             if (ast->kind == AST_GOTO) {
                 break;
             }
@@ -1053,7 +1053,7 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
     for (int i = 0; i < builder->bb_count; ++i) {
         BasicBlock *_bb = &builder->bb_pool[i];
         if (_bb->type == BB_GARBAGE) {
-            ptrVecRelease(_bb->ast_array2);
+            ptrVecRelease(_bb->ast_array);
         }
     }
 
@@ -1072,7 +1072,7 @@ void cfgSCCUtil(BasicBlock *bb, int *disc, int *low, List *st,
     listAppend(st,bb);
     stack_member[bb->block_no] = 1;
     BasicBlock *adjacent[4] = {bb->next, bb->prev, bb->_if, bb->_else};
-    if (bb->type != BB_LOOP_BLOCK || bb->type != BB_DO_WHILE_COND) {
+    if (bb->type != BB_LOOP_BLOCK && bb->type != BB_DO_WHILE_COND) {
         adjacent[1] = NULL;
     }
 
@@ -1139,7 +1139,7 @@ void cfgAdjacencyListPrint(IntMap *map) {
             long block_no = hash & 0x7FF;
             long type = hash >> 11 & 0x1F;
             long flags = hash >> 16;
-            printf("      %d\n", block_no);
+            printf("      %ld\n", block_no);
             printf("    bb%2ld type = %-*s flags = %-*s\n",block_no,
                 18,
                 bbTypeToString(type),
@@ -1196,7 +1196,7 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
 
             case BB_CONTROL_BLOCK:
                 /* This is a check for an orphaned node */
-                if (bb->ast_array2->size == 0 || bb->next == NULL) {
+                if (bb->ast_array->size == 0 || bb->next == NULL) {
                     bb->type = BB_GARBAGE;
                     continue;
                 }
