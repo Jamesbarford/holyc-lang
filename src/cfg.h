@@ -35,6 +35,8 @@ enum bbType {
 #define BB_FLAG_IF_BRANCH          (0x40)
 #define BB_FLAG_LOOP_JUMP          (0x80) /* this is for when a goto is jumping
                                            * out of a loop */
+#define BB_FLAG_GOTO_LOOP          (0x100) /* this is for when a goto forms a 
+                                            * loop */
 
 typedef struct BasicBlock {
     /* @Confirm:
