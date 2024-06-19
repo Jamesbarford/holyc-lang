@@ -451,7 +451,7 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
         
         case BB_GOTO:
             bbPrintf(builder,bb);
-            if (bb->next->prev_cnt == 1) {
+            if (bb->next->prev_cnt == 1 || bb->flags & BB_FLAG_UNCONDITIONAL_JUMP) {
                 cfgCreatePictureUtil(builder,map,bb->next,seen);
             }
             if (bb->flags & BB_FLAG_LOOP_HEAD) {
@@ -531,9 +531,20 @@ static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
                         cur->block_no,
                         cur->_if->block_no);
                 break;
-
-            case BB_HEAD_BLOCK:
             case BB_GOTO:
+                if (cur->flags & (BB_FLAG_GOTO_LOOP)) {
+                    aoStrCatPrintf(builder->viz,
+                            "    bb%d:s -> bb%d:n [style=\"dotted,bold\",color=blue,weight=10,constraint=false];\n",
+                            cur->block_no,
+                            cur->prev->block_no);
+                } else {
+                    aoStrCatPrintf(builder->viz,
+                            "    bb%d:s -> bb%d:n [style=\"solid,bold\",color=black,weight=100,constraint=true];\n",
+                            cur->block_no,
+                            cur->next->block_no);
+                }
+                break;
+            case BB_HEAD_BLOCK:
             case BB_CONTROL_BLOCK:
             case BB_BREAK_BLOCK: {
                 aoStrCatPrintf(builder->viz,
