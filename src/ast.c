@@ -28,6 +28,7 @@ Ast *placeholder_arg = &(Ast){ .kind = AST_PLACEHOLDER};
 
 void _astToString(aoStr *str, Ast *ast, int depth);
 char *_astToStringRec(Ast *ast, int depth);
+void astVectorRelease(PtrVec *ast_vector);
 
 Ast *astNew(void) {
     Ast *ast; 
@@ -119,8 +120,8 @@ static void astFreeLiteral(Ast *ast) {
     free(ast);
 }
 
-static int label_sequence = 0;
 aoStr *astMakeLabel(void) {
+    static int label_sequence = 0;
     aoStr *s = aoStrNew();
     aoStrCatPrintf(s, ".L%d", label_sequence++);
     return s;
@@ -303,26 +304,100 @@ static void astFreeIf(Ast *ast) {
     free(ast);
 }
 
-Ast *astCase(aoStr *case_label, long case_begin, long case_end) {
+/* Sort the cases from low to high */
+static void astJumpTableSort(Ast **cases, int high, int low) {
+    if (low < high) {
+        Ast *pivot = cases[high];
+        int idx = low;
+        for (int i = low; i < high; ++i) {
+            Ast *cur = cases[i];
+            if (cur->case_begin <= pivot->case_begin) {
+                cases[i] = cases[idx];
+                cases[idx] = cur;
+                idx++;
+            }
+        }
+        cases[high] = cases[idx];
+        cases[idx] = pivot;
+        astJumpTableSort(cases,high,idx+1);
+        astJumpTableSort(cases,idx-1,low);
+    }
+}
+
+/* For cases that are stacked remove their individual labels, merging them 
+ * with their neighbours */
+static void astCasesCompress(Ast **cases, int size) {
+    aoStr *label = NULL;
+    for (int i = 0; i < size; ++i) {
+        Ast *_case = cases[i];
+        label = _case->case_label;
+        while (listEmpty(_case->case_asts)) {
+            i++;
+            if (i == size) break;
+            _case = cases[i];
+            aoStrRelease(_case->case_label);
+            _case->case_label = label;
+        }
+        _case->case_label = label;
+    }
+}
+
+Ast *astSwitch(Ast *cond, PtrVec *cases, Ast *case_default,
+        aoStr *case_end_label, int switch_bounds_checked)
+{
+    Ast *ast = astNew();
+    Ast **jump_table_order = malloc(sizeof(Ast **) * cases->size);
+
+    /* Sorting the cases in a separate array allows us to generate assembly
+     * code that matches the ordering of how the code was written and 
+     * preserve the Ast */
+    memcpy(jump_table_order,(Ast **)cases->entries,cases->size * sizeof(Ast*));
+    astCasesCompress(jump_table_order,cases->size);
+    astJumpTableSort(jump_table_order,cases->size-1,0);
+
+    ast->kind = AST_SWITCH;
+    ast->switch_cond = cond;
+    ast->cases = cases;
+    ast->case_default = case_default;
+    ast->case_end_label = case_end_label;
+    ast->jump_table_order = jump_table_order;
+    ast->switch_bounds_checked = switch_bounds_checked;
+    return ast;
+}
+static void astFreeSwitch(Ast *ast) {
+    aoStrRelease(ast->case_end_label);
+    astRelease(ast->case_default);
+    astVectorRelease(ast->cases);
+    free(ast);
+}
+
+Ast *astCase(aoStr *case_label, long case_begin, long case_end, List *case_asts) {
     Ast *ast = astNew();
     ast->type = ast_int_type;
     ast->kind = AST_CASE;
     ast->case_begin = case_begin;
     ast->case_end = case_end;
     ast->case_label = case_label;
+    ast->case_asts = case_asts;
     return ast;
 }
 static void astFreeCase(Ast *ast) {
     aoStrRelease(ast->case_label);
+    astReleaseList(ast->case_asts);
     free(ast);
 }
 
-Ast *astDest(char *name, int len) {
+Ast *astDefault(aoStr *case_label, List *case_asts) {
     Ast *ast = astNew();
-    ast->kind = AST_LABEL;
-    ast->sval= aoStrDupRaw(name,len);
-    ast->slabel = NULL;
+    ast->kind = AST_DEFAULT;
+    ast->case_label = case_label;
+    ast->case_asts  = case_asts;
     return ast;
+}
+static void astFreeDefault(Ast *ast) {
+    aoStrRelease(ast->case_label);
+    astReleaseList(ast->case_asts);
+    free(ast);
 }
 
 Ast *astJump(char *name, int len) {
@@ -335,7 +410,6 @@ static void astFreeJump(Ast *ast) {
     aoStrRelease(ast->jump_label);
     free(ast);
 }
-
 
 Ast *astFor(Ast *init, Ast *cond, Ast *step, Ast *body, aoStr *for_begin,
         aoStr *for_middle, aoStr *for_end)
@@ -1514,10 +1588,50 @@ void _astToString(aoStr *str, Ast *ast, int depth) {
 
         case AST_CASE: {
             if (ast->case_begin == ast->case_end) {
-                aoStrCatPrintf(str, "<case> %d:\n", ast->case_begin);
+                aoStrCatPrintf(str, "<case> %d %s:\n", ast->case_begin,
+                        ast->case_label->data);
             } else {
-                aoStrCatPrintf(str, "<case> %d...%d:\n",
-                        ast->case_begin, ast->case_end);
+                aoStrCatPrintf(str, "<case> %d...%d %s:\n",
+                        ast->case_begin,
+                        ast->case_end,
+                        ast->case_label->data);
+            }
+            if (!listEmpty(ast->case_asts)) {
+                listForEach(ast->case_asts) {
+                    Ast *case_ast = (Ast *)it->value;
+                    _astToString(str,case_ast,depth+1);
+                }
+            }
+            break;
+        }
+
+        case AST_SWITCH: {
+            if (ast->switch_bounds_checked) {
+                aoStrCatPrintf(str, "<switch>\n");
+            } else {
+                aoStrCatPrintf(str, "<no_bounds_switch>\n");
+            }
+
+            _astToString(str,ast->switch_cond,depth+1);
+            for (int i = 0; i < ast->cases->size; ++i) {
+                _astToString(str,(Ast *)ast->cases->entries[i],depth+1);
+            }
+
+            if (ast->case_default) {
+                _astToString(str,ast->case_default,depth+1);
+            }
+
+            aoStrCatRepeat(str, "  ", depth+1);
+            aoStrCatPrintf(str, "<end_label>: %s\n", ast->case_end_label->data);
+            break;
+        }
+
+        case AST_DEFAULT: {
+            aoStrCatPrintf(str, "<default> %s\n", ast->case_label->data);
+            if (!listEmpty(ast->case_asts)) {
+                listForEach(ast->case_asts) {
+                    _astToString(str,(Ast *)it->value,depth+1);
+                }
             }
             break;
         }
@@ -1591,8 +1705,11 @@ char *astKindToString(int kind) {
     case AST_VAR_ARGS:   return "AST_VAR_ARGS";
     case AST_CAST:       return "AST_CAST";
     case AST_JUMP:       return "AST_JUMP";
-    case AST_CASE:       return "AST_CASE";
     case AST_ASM_FUNC_BIND: return "AST_ASM_FUNC_BIND";
+
+    case AST_SWITCH:        return "AST_SWITCH";
+    case AST_CASE:          return "AST_CASE";
+    case AST_DEFAULT:       return "AST_DEFAULT";
 
 
     case TK_AND_AND:         return "&&";
@@ -1904,6 +2021,13 @@ void astReleaseList(List *ast_list) {
     listRelease(ast_list,(void(*))astRelease);
 }
 
+void astVectorRelease(PtrVec *ast_vector) {
+    for (int i = 0; i < ast_vector->size; ++i) {
+        astRelease((Ast *)ast_vector->entries[i]);
+    }
+    ptrVecRelease(ast_vector);
+}
+
 /* Free an Ast */
 void astRelease(Ast *ast) {
     if (!ast) {
@@ -1949,7 +2073,11 @@ void astRelease(Ast *ast) {
         case AST_VAR_ARGS: astFreeVarArgs(ast); break;
         case AST_ASM_FUNCDEF: astFreeAsmFunctionDef(ast); break;
         case AST_CAST: astFreeCast(ast); break;
-        case AST_CASE: astFreeCase(ast); break;
+        case AST_SWITCH:  astFreeSwitch(ast); break;
+        /* these two are somewhat academic as we should not be getting here */
+        case AST_CASE:    astFreeCase(ast); break;
+        case AST_DEFAULT: astFreeDefault(ast); break;
+
         case TK_AND_AND:        
         case TK_OR_OR:  
         case TK_EQU_EQU:    

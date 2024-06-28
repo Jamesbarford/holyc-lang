@@ -414,7 +414,7 @@ void lexemePrint(lexeme *le) {
     if (le) {
         char *str = lexemeToString(le);
         printf("%s\n", str);
-        free(str);
+      //  free(str);
     }
 }
 

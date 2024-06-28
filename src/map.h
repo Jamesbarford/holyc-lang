@@ -69,6 +69,7 @@ typedef struct PtrVec {
     int capacity;
     void **entries;
 } PtrVec;
+#define vecEmpty(vec) (vec)->size == 0
 
 PtrVec *ptrVecNew(void);
 void ptrVecPush(PtrVec *vec, void *value);

@@ -596,8 +596,8 @@ static void cfgHandleBreak(CFGBuilder *builder, Ast *ast) {
 static void cfgHandleCompound(CFGBuilder *builder, Ast *ast) {
     if (listEmpty(ast->stms)) return;
     listForEach(ast->stms) {
-        Ast *ast = cast(Ast *,it->value);
-        cfgHandleAstNode(builder,ast);
+        Ast *ast_node = cast(Ast *,it->value);
+        cfgHandleAstNode(builder,ast_node);
     }
 }
 
@@ -606,13 +606,16 @@ static void cfgHandleContinue(CFGBuilder *builder, Ast *ast) {
     loggerPanic("'CONTINUE' unimplemented\n");
 }
 
-static void cfgHandleCase(CFGBuilder *builder, Ast *ast) {
-    cfgHandleLabel(builder,ast);
-    //loggerPanic("'CASE' unimplemented\n");
-}
-
 static void cfgHandleJump(CFGBuilder *builder, Ast *ast) {
     cfgHandleGoto(builder,ast);
+}
+
+static void cfgHandleCase(CFGBuilder *builder, Ast *ast) {
+    loggerPanic("'CASE' unimplemented\n");
+}
+
+static void cfgHandleSwitch(CFGBuilder *builder, Ast *ast) {
+    loggerPanic("Switch unimplemented\n");
 }
 
 static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
@@ -632,8 +635,7 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
         case AST_FOR:           cfgHandleForLoop(builder,ast);     break;
         case AST_GOTO:          cfgHandleGoto(builder,ast);        break;
         case AST_IF:            {
-                                    loggerWarning("here\n");
-                                    astPrint(ast);
+            astPrint(ast);
             cgfHandleBranchBlock(builder,ast);
             break;
         }
@@ -643,7 +645,7 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
 
         case AST_CASE:         cfgHandleCase(builder,ast);        break;
         case AST_JUMP:         cfgHandleJump(builder,ast);        break;
- //           astPrint(ast);
+        case AST_SWITCH:       cfgHandleSwitch(builder,ast);      break;
 
         case AST_ADDR:
         case AST_FUNC:

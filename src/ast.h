@@ -3,6 +3,7 @@
 
 #include "aostr.h"
 #include "dict.h"
+#include "map.h"
 #include "list.h"
 
 /* Relates to the 'kind' property on the AstType struct */
@@ -56,6 +57,8 @@
 #define AST_EXTERN_FUNC    289
 #define AST_DO_WHILE       290
 #define AST_PLACEHOLDER    291
+#define AST_SWITCH         292
+#define AST_DEFAULT        293
 
 /* @Cleanup
  * Urgently get rid of this, we do not need `n` ways of setting a label on 
@@ -230,11 +233,27 @@ typedef struct Ast {
             Ast *argv;
         };
 
-        /* For a switch */
+        /* For a case */
         struct {
-            aoStr *case_label;
             long case_begin;
             long case_end;
+            aoStr *case_label;
+            /* Scopes ast nodes to the case label... Think this makes sense;
+             * in my head it does. As then all the top level case nodes 
+             * have the begining and end ranges... making creating a jump tabel
+             * feasible... or degrade into a series of 'ifs' if the range is 
+             * sparse */
+            List *case_asts;
+        };
+
+        /* For a switch */
+        struct {
+            int switch_bounds_checked;
+            Ast *switch_cond;
+            Ast *case_default;
+            Ast **jump_table_order;
+            PtrVec *cases;
+            aoStr *case_end_label;
         };
 
         struct {
@@ -291,7 +310,11 @@ Ast *astDoWhile(Ast *whilecond, Ast *whilebody, aoStr *while_begin,
         aoStr *while_end);
 Ast *astContinue(aoStr *continue_label);
 Ast *astBreak(aoStr *break_label);
-Ast *astCase(aoStr *case_label, long case_begin, long case_end);
+Ast *astCase(aoStr *case_label, long case_begin, long case_end, List *case_asts);
+/* Do it with lists, then do it with a vector */
+Ast *astSwitch(Ast *cond, PtrVec *cases, Ast *case_default,
+        aoStr *case_end_label, int switch_bounds_checked);
+Ast *astDefault(aoStr *case_label,List *case_asts);
 
 /* Functions */
 Ast *astFunctionCall(AstType *type, char *fname, int len, List *argv,
@@ -317,7 +340,6 @@ Ast *astAsmFunctionDef(aoStr *asm_fname, aoStr *asm_stmt);
 Ast *astGoto(aoStr *label);
 Ast *astLabel(aoStr *label);
 Ast *astJump(char *jumpname, int len);
-Ast *astDest(char *label, int len);
 
 /* Pointers */
 AstType *astMakePointerType(AstType *type);

@@ -56,12 +56,44 @@ Bool UnNamedCase()
   return num == 5;
 }
 
+Bool TestOutOfRange()
+{
+  I64 num = 2000;
+  I64 is_set = 0;
+
+  switch (num) {
+    case 10: is_set = -1; break;
+    case 20: is_set = -1; break;
+    case 30: is_set = -1; break;
+    default: is_set = 1; break;
+  }
+
+  return is_set == 1;
+}
+
+Bool TestNoBoundsSwitch()
+{
+  I64 num = 0;
+  for (I64 i = 0; i < 5; ++i) {
+    switch [i] {
+      case:   num++; break;
+      case 1: num++; break;
+      case 2: num++; break;
+      case 4: num++; break;
+      default: break;
+    }
+  }
+
+  return num == 4;
+}
+
 I32 Main(I32 argc, U8 **argv)
 {
   "Test - Switch statement: ";
-  I64 correct = 0, tests = 5, count = 0;
+  I64 correct = 0, tests = 7, count = 0;
+  I64 i = 0;
 
-  for (I64 i = 0; i < 10; ++i) {
+  for (; i < 10; ++i) {
     switch (i) {
       case 1:  count++; break;
       case 2:  count++; break;
@@ -97,7 +129,9 @@ I32 Main(I32 argc, U8 **argv)
 
   if (TestBreakInLoop())      correct++;
   if (TestBreakInLoopCrazy()) correct++;
-  if (UnNamedCase()) correct++;
+  if (UnNamedCase())          correct++;
+  if (TestNoBoundsSwitch())   correct++;
+  if (TestOutOfRange())       correct++;
 
   PrintResult(correct,tests);
   return 0;

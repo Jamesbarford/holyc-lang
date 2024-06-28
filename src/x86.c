@@ -1419,6 +1419,94 @@ void asmArrayInit(Cctrl *cc, aoStr *buf, Ast *ast, AstType *type, int offset) {
     }
 }
 
+void asmHandleSwitch(Cctrl *cc, aoStr *buf, Ast *ast) {
+    /* create jump table */
+    PtrVec *cases = ast->cases;
+    Ast **jump_table = ast->jump_table_order;
+    int jump_table_size = cases->size;
+    Ast *case_ast_min = jump_table[0];
+    Ast *case_ast_max = jump_table[jump_table_size - 1];
+
+    int case_min = case_ast_min->case_begin;
+    int case_max = case_ast_max->case_end;
+    int case_normalised_end = case_max - case_min;
+
+    /* we need to work off the assumption that RAX is containing the evaluated 
+     * expression from cond */
+    asmExpression(cc,buf,ast->switch_cond);
+
+    aoStr *end_label;
+    aoStr *jump_table_start = astMakeLabel();
+
+    if (ast->case_default) end_label = ast->case_default->case_label;
+    else                   end_label = ast->case_end_label;
+
+    /* Normalise RAX */
+    aoStrCatPrintf(buf,
+            "# Switch \n\t"
+            "sub   $%d, %%rax\n\t",case_min);
+
+    /* Preample for jump table */
+    if (ast->switch_bounds_checked) {
+        aoStrCatPrintf(buf,
+                "# bounds check \n\t"
+                "cmp   $%d, %%rax\n\t"
+                "ja    %s\n\t",
+                case_normalised_end,
+                end_label->data);
+    }
+    aoStrCatPrintf(
+            buf,
+            "leaq  %s(%%rip), %%rdx\n\t"
+            "movl  (%%rdx,%%rax,4), %%eax\n\t"
+            "add   %%rdx, %%rax\n\t"
+            "jmp   *%%rax\n"
+            "\n\t.p2align 2\n"
+            "%s:\n\t"
+            "# Jump Table\n\t",
+            jump_table_start->data, jump_table_start->data);
+
+    int cur_case = 0;
+    for (int i = 0; i <= case_normalised_end; ++i) {
+        Ast *_case = jump_table[cur_case];
+        int case_begin_normalised     = _case->case_begin - case_min;
+        int case_normalised_range_end = _case->case_end - case_min;
+        int diff                      = case_normalised_range_end - case_begin_normalised;
+
+        /* pad out the table */
+        for (; i < case_begin_normalised; ++i) {
+            aoStrCatPrintf(buf, ".long %s-%s\n\t",
+                    end_label->data,
+                    jump_table_start->data);
+        }
+
+        for (int j = case_begin_normalised; j <= case_normalised_range_end; ++j) {
+            aoStrCatPrintf(buf, ".long %s-%s\n\t",
+                    _case->case_label->data,
+                    jump_table_start->data);
+        }
+
+        i += diff;
+        cur_case++;
+    }
+    aoStrCatPrintf(buf,".long %s-%s\n\t",
+            end_label->data,
+            jump_table_start->data);
+
+
+    for (int i = 0; i < cases->size; ++i) {
+        Ast *_case = cases->entries[i];
+        asmExpression(cc,buf,_case);
+    }
+
+    if (ast->case_default) {
+        asmExpression(cc,buf,ast->case_default);
+    }
+
+    asmRemovePreviousTab(buf);
+    aoStrCatPrintf(buf, "%s:\n\t", ast->case_end_label->data);
+}
+
 void asmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
     aoStr *label_begin, *label_end;
 
@@ -1737,11 +1825,28 @@ void asmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
         asmLoadClassRef(cc,buf,ast->cls,ast->type,0);
         break;
 
-    case AST_CASE:
+    case AST_DEFAULT:
         asmRemovePreviousTab(buf);
-        aoStrCatPrintf(buf, "%s:\n\t", ast->case_label->data);
+        aoStrCatPrintf(buf, "%s: #default_label \n\t", ast->case_label->data);
+        listForEach(ast->case_asts) {
+            asmExpression(cc,buf,(Ast *)it->value);
+        }
         break;
 
+    case AST_CASE:
+        asmRemovePreviousTab(buf);
+
+        if (listEmpty(ast->case_asts) || ast->case_asts == NULL) return;
+        aoStrCatPrintf(buf, "%s: #case_label \n\t", ast->case_label->data);
+
+        listForEach(ast->case_asts) {
+            asmExpression(cc,buf,(Ast *)it->value);
+        }
+        break;
+
+    case AST_SWITCH:
+        asmHandleSwitch(cc,buf,ast);
+        break;
 
     case TK_PRE_PLUS_PLUS: {
         if (ast->type->kind == AST_TYPE_FLOAT) {
