@@ -2290,7 +2290,9 @@ void asmInitaliser(Cctrl *cc, aoStr *buf) {
     listForEach(cc->initalisers) {
         asmExpression(cc,buf,it->value);
     }
-    aoStrCatPrintf(buf, "leave\n\tret\n");
+    aoStrCatPrintf(buf, "pop   %%rbp\n\tret\n\t");
+    aoStrCatPrintf(buf,
+		   ".section .note.GNU-stack,\"\",@progbits\n");
 }
 
 /* Create assembly */
