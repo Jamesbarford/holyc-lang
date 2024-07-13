@@ -121,8 +121,8 @@ int compileToAst(Cctrl *cc, char *entrypath, int lexer_flags) {
     dictRelease(seen_files);
     cctrlInitTokenIter(cc,tokens);
     parseToAst(cc);
-    CFG *cfg = cfgConstruct(cc);
-    cfgToFile(cfg,"./loop.dot");
+//    CFG *cfg = cfgConstruct(cc);
+//    cfgToFile(cfg,"./loop.dot");
 
     lexReleaseAllFiles(&l);
     aoStrRelease(builtin_path);

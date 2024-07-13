@@ -1,8 +1,6 @@
 #ifndef CFG_H__
 #define CFG_H__
 
-#include "ast.h"
-#include "ast.h"
 #include "aostr.h"
 #include "cctrl.h"
 #include "map.h"
@@ -18,6 +16,8 @@ enum bbType {
     BB_BREAK_BLOCK   = 6,
     BB_DO_WHILE_COND = 7,
     BB_GOTO          = 8,
+    BB_SWITCH        = 9,
+    BB_CASE          = 10,
 };
 
 #define CFG_MAX_PREV    (32)

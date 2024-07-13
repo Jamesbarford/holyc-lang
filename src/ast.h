@@ -240,7 +240,7 @@ typedef struct Ast {
             aoStr *case_label;
             /* Scopes ast nodes to the case label... Think this makes sense;
              * in my head it does. As then all the top level case nodes 
-             * have the begining and end ranges... making creating a jump tabel
+             * have the begining and end ranges... making creating a jump table
              * feasible... or degrade into a series of 'ifs' if the range is 
              * sparse */
             List *case_asts;

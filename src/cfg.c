@@ -27,6 +27,8 @@ char *bbTypeToString(int type) {
         case BB_BREAK_BLOCK:        return "BB_BREAK_BLOCK";
         case BB_DO_WHILE_COND:      return "BB_DO_WHILE_COND";
         case BB_GOTO:               return "BB_GOTO";
+        case BB_SWITCH:             return "BB_SWITCH";
+        case BB_CASE:               return "BB_CASE";
         default:
             loggerPanic("Unknown type: %d\n", type);
     }
@@ -616,6 +618,30 @@ static void cfgHandleCase(CFGBuilder *builder, Ast *ast) {
 
 static void cfgHandleSwitch(CFGBuilder *builder, Ast *ast) {
     loggerPanic("Switch unimplemented\n");
+    BasicBlock *bb_switch = builder->bb;
+    BasicBlock *bb_default = NULL;
+    BasicBlock *bb_end = cfgBuilderAllocBasicBlock(builder,BB_CASE);
+
+    if (ast->case_default) {
+        bb_default = cfgBuilderAllocBasicBlock(builder,BB_CASE);
+        bb_default->flags = BB_FLAG_ELSE_BRANCH;
+    }
+    bb_switch->type = BB_SWITCH;
+
+    /* ??? - This has the potential to be a crazy loop */
+    for (int i = 0; i < ast->cases->size; ++i) {
+        Ast *_case = (Ast *)ast->cases->entries[i];
+
+        /* how to make this a cond */
+        if (_case->case_begin == _case->case_end) {
+
+        } else {
+
+        }
+
+    }
+
+    cfgHandleAstNode(builder,ast->switch_cond);
 }
 
 static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
@@ -635,7 +661,6 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
         case AST_FOR:           cfgHandleForLoop(builder,ast);     break;
         case AST_GOTO:          cfgHandleGoto(builder,ast);        break;
         case AST_IF:            {
-            astPrint(ast);
             cgfHandleBranchBlock(builder,ast);
             break;
         }
@@ -687,19 +712,26 @@ static void bbFixBranchBlock(BasicBlock *bb);
 
 static void bbFixLeafNode(BasicBlock *bb) {
     BasicBlock *prev = bb->prev;
-    assert(prev != NULL);
+    PtrVec *next_array = NULL;
 
-    PtrVec *next_array = bb->next ? bb->next->ast_array : NULL;
+    assert(prev != NULL);
 
     if (!bb->ast_array || bb->ast_array->size == 0) {
         bb->type = BB_GARBAGE;
         return;
     }
 
+    bbPrint(bb);
+    if (bb->next != NULL) {
+        next_array = bb->next->ast_array;
+    }
+
     if (next_array && next_array->size == 0) {
         bb->next->type = BB_GARBAGE;
-        bb->next = bb->next->next;
-        bbAddPrev(bb->next,bb);
+        if (bb->next->next) {
+            bb->next = bb->next->next;
+            bbAddPrev(bb->next,bb);
+        }
     } 
 
     /* Iterate back up the tree to find the join */
@@ -745,7 +777,10 @@ static void bbRelinkBranch(BasicBlock *branch, BasicBlock *bb) {
     if (bb->type == BB_GARBAGE) return;
 
     PtrVec *current_array = bb->ast_array;
-    PtrVec *next_array = bb->next ? bb->next->ast_array : NULL;
+    PtrVec *next_array = NULL;
+    if (bb->next != NULL) {
+        next_array = bb->next->ast_array;
+    }
     bbAddPrev(bb,branch);
 
     if (bb->type == BB_BRANCH_BLOCK) {
@@ -778,7 +813,9 @@ static void bbRelinkBranch(BasicBlock *branch, BasicBlock *bb) {
         }
     } else if (bb->type == BB_CONTROL_BLOCK) {
         if (next_array && next_array->size == 0) {
-            bb->next->type = BB_GARBAGE;
+            if (bb->next) {
+                bb->next->type = BB_GARBAGE;
+            }
             bbFixLeafNode(bb);
         } else if (current_array && current_array->size == 0) {
             if (next_array) {
