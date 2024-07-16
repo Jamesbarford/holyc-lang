@@ -61,7 +61,7 @@ static aoStr *bbAstArrayToString(PtrVec *ast_array, int ast_count) {
     aoStr *ast_str = aoStrAlloc(256);
     char *lvalue_str;
     for (int i = 0; i < ast_count; ++i) {
-        Ast *ast = (Ast*)ast_array->entries[i];
+        Ast *ast = vecGet(Ast *,ast_array,i);
         lvalue_str = astLValueToString(ast,LEXEME_ENCODE_PUNCT);
         aoStrCatPrintf(ast_str,"%s\\l\\\n",lvalue_str);
         if (i + 1 != ast_count) {
@@ -230,6 +230,69 @@ static void cfgReturnPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     aoStrRelease(internal);
 }
 
+static void cfgCasePrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
+    int ast_count = bb->ast_array->size;
+    PtrVec *ast_array = bb->ast_array;
+    aoStr *ast_str = aoStrAlloc(256);
+    char *lvalue_str;
+    Ast *_case = vecGet(Ast *,ast_array,0);
+
+    for (int i = 1; i < ast_count; ++i) {
+        Ast *ast = vecGet(Ast *,ast_array,i);
+        lvalue_str = astLValueToString(ast,LEXEME_ENCODE_PUNCT);
+        aoStrCatPrintf(ast_str,"%s\\l\\\n",lvalue_str);
+        if (i + 1 != ast_count) {
+            aoStrPutChar(ast_str,'|');
+        }
+        free(lvalue_str);
+    }
+
+    aoStrCatPrintf(builder->viz,
+            "    bb%d [shape=record,style=filled,fillcolor=lightgrey,label=\"{\\<bb %d\\>\n",
+            bb->block_no,
+            bb->block_no);
+
+    if (_case->case_begin == _case->case_end) {
+        aoStrCatPrintf(builder->viz,"|case \\<%ld\\>",_case->case_begin);
+    } else {
+        aoStrCatPrintf(builder->viz,"|case \\<%ld ... %ld\\>",_case->case_begin,_case->case_end);
+    }
+
+    aoStrCatPrintf(builder->viz,"|%s",ast_str->data);
+    aoStrRelease(ast_str);
+    if (bb->next) {
+        aoStrCatPrintf(builder->viz,
+                "|goto \\<%d bb\\>"
+                " \n}\"];\n\n",
+                bb->next->block_no);
+    }
+}
+
+static void cfgSwitchPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
+    aoStr *ast_str = aoStrAlloc(256);
+    char *lvalue_str;
+    
+    aoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size-1);
+    
+    Ast *ast = vecGet(Ast *,bb->ast_array,bb->ast_array->size - 1);
+    lvalue_str = astLValueToString(ast,LEXEME_ENCODE_PUNCT);
+    aoStrCatPrintf(ast_str,"test (%s)\\l\\\n",lvalue_str);
+    free(lvalue_str);
+
+
+
+
+    aoStrCatPrintf(builder->viz,
+            "    bb%d [shape=record,style=filled,fillcolor=darkorchid2,label=\"{\\<bb %d\\>|\n%s|%s",
+            bb->block_no,
+            bb->block_no,
+            internal->data,
+            ast_str->data);
+
+    aoStrCat(builder->viz,"\n}\"];\n\n");
+    aoStrRelease(ast_str);
+}
+
 /* Side-effect of mutating the loop counter on the builder */
 static void cfgLoopHeadPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     int cnt = ++builder->loop_cnt;
@@ -253,6 +316,8 @@ static void bbPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
         case BB_BREAK_BLOCK:   cfgBreakPrintf(builder,bb);        break;
         case BB_END_BLOCK:
         case BB_RETURN_BLOCK:  cfgReturnPrintf(builder,bb);  break;
+        case BB_CASE:          cfgCasePrintf(builder,bb);    break;
+        case BB_SWITCH:        cfgSwitchPrintf(builder,bb);  break;
         default:               cfgDefaultPrintf(builder,bb); break;
     }
 }
@@ -429,7 +494,18 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
                 }
             }
             break;
-        
+
+        case BB_SWITCH: {
+            PtrVec *blocks = bb->next_blocks;
+            bbPrintf(builder,bb);
+            for (int i = 0; i < blocks->size; ++i) {
+                BasicBlock *it = vecGet(BasicBlock *,blocks,i);
+                cfgCreatePictureUtil(builder,map,it,seen);
+            }
+            cfgCreatePictureUtil(builder,map,bb->next,seen);
+            break;
+        }
+
         case BB_GOTO:
             bbPrintf(builder,bb);
             if (bb->next->prev_cnt == 1 || bb->flags & BB_FLAG_UNCONDITIONAL_JUMP) {
@@ -442,6 +518,8 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
             }
             break;
 
+
+        case BB_CASE:
         case BB_CONTROL_BLOCK:
         case BB_HEAD_BLOCK:
             bbPrintf(builder,bb);
@@ -463,7 +541,8 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
             break;
 
         default:
-            loggerWarning("how? bb%d\n", bb->block_no);
+            loggerWarning("how? bb%d type = %s\n", bb->block_no,
+                    bbTypeToString(bb->type));
     }
 }
 
@@ -525,7 +604,9 @@ static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
                             cur->next->block_no);
                 }
                 break;
+
             case BB_HEAD_BLOCK:
+            case BB_CASE:
             case BB_CONTROL_BLOCK:
             case BB_BREAK_BLOCK: {
                 aoStrCatPrintf(builder->viz,
@@ -535,12 +616,23 @@ static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
                 break;
             }
 
+            case BB_SWITCH: {
+                for (int i = 0; i < cur->next_blocks->size; ++i) {
+                    BasicBlock *bb = vecGet(BasicBlock *,cur->next_blocks,i);
+                    aoStrCatPrintf(builder->viz,
+                            "    bb%d:s -> bb%d:n [style=\"solid,bold\",color=black,weight=100,constraint=true];\n",
+                            cur->block_no,
+                            bb->block_no);
+                }
+                break;
+            }
+
             /* These don't goto anything */
             case BB_END_BLOCK:
             case BB_RETURN_BLOCK: 
                 break;
             default:
-                loggerWarning("how?\n");
+                loggerWarning("Unhandled: %s\n", bbTypeToString(cur->type));
         }
     }
 }

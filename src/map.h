@@ -70,6 +70,7 @@ typedef struct PtrVec {
     void **entries;
 } PtrVec;
 #define vecEmpty(vec) (vec)->size == 0
+#define vecGet(type,vec,idx) ((type)((vec)->entries[idx]))
 
 PtrVec *ptrVecNew(void);
 void ptrVecPush(PtrVec *vec, void *value);

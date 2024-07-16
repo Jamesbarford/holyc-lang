@@ -52,10 +52,13 @@ typedef struct BasicBlock {
     int visited;
     struct BasicBlock *_if;
     struct BasicBlock *_else;
-    struct BasicBlock *next;
     struct BasicBlock *prev;
-    struct BasicBlock *prev_blocks[32];
  //    IntSet *prev_block_ids;
+    struct BasicBlock *prev_blocks[32];
+    /* this is to be able to handle a switch */
+    PtrVec *next_blocks;
+    /* this is for most other blocks */
+    struct BasicBlock *next;
     PtrVec *ast_array;
 } BasicBlock;
 

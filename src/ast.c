@@ -1960,6 +1960,10 @@ static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
                     lexemePunctToStringWithFlags(';',lexeme_flags));
             break;
 
+        case AST_BREAK:
+            aoStrCatPrintf(str, "break ");
+            break;
+
         case TK_PRE_PLUS_PLUS:
         case TK_PLUS_PLUS:   
         case TK_PRE_MINUS_MINUS:

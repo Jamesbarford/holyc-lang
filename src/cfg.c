@@ -612,36 +612,63 @@ static void cfgHandleJump(CFGBuilder *builder, Ast *ast) {
     cfgHandleGoto(builder,ast);
 }
 
-static void cfgHandleCase(CFGBuilder *builder, Ast *ast) {
-    loggerPanic("'CASE' unimplemented\n");
+static void cfgHandleCase(CFGBuilder *builder, BasicBlock *bb_end, Ast *ast) {
+    BasicBlock *bb_switch = builder->bb;
+    BasicBlock *bb_case = cfgBuilderAllocBasicBlock(builder,BB_CASE);
+    ptrVecPush(bb_switch->next_blocks,bb_case);
+
+    /* so we can access begining and end */
+    ptrVecPush(bb_case->ast_array,ast);
+    cfgBuilderSetBasicBlock(builder,bb_case);
+
+    if (!listEmpty(ast->case_asts)) {
+        listForEach(ast->case_asts) {
+            Ast *case_ast = (Ast *)it->value;
+            cfgHandleAstNode(builder,case_ast);
+        }
+    }
+    bb_case->next = bb_end;
+    bbAddPrev(bb_case,bb_switch);
+    bbAddPrev(bb_end,bb_case);
 }
 
+/* The first and last items of the next_blocks array are the switch condition 
+ * and the next block respectively. This is easier to manage and theoretically
+ * are different blocks but connected to the switch */
 static void cfgHandleSwitch(CFGBuilder *builder, Ast *ast) {
-    loggerPanic("Switch unimplemented\n");
     BasicBlock *bb_switch = builder->bb;
-    BasicBlock *bb_default = NULL;
-    BasicBlock *bb_end = cfgBuilderAllocBasicBlock(builder,BB_CASE);
+    // BasicBlock *bb_default = NULL;
+    BasicBlock *bb_end  = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
 
-    if (ast->case_default) {
-        bb_default = cfgBuilderAllocBasicBlock(builder,BB_CASE);
-        bb_default->flags = BB_FLAG_ELSE_BRANCH;
-    }
+    ptrVecPush(bb_switch->ast_array,ast->switch_cond);
+    //if (ast->case_default) {
+    //    bb_default = cfgBuilderAllocBasicBlock(builder,BB_CASE);
+    //    bb_default->flags = BB_FLAG_ELSE_BRANCH;
+    //}
     bb_switch->type = BB_SWITCH;
+    bb_switch->next_blocks = ptrVecNew();
+
+    if (!ast->switch_bounds_checked) {
+        bb_switch->flags |= BB_FLAG_UNCONDITIONAL_JUMP;
+    }
 
     /* ??? - This has the potential to be a crazy loop */
     for (int i = 0; i < ast->cases->size; ++i) {
+        cfgBuilderSetBasicBlock(builder,bb_switch);
         Ast *_case = (Ast *)ast->cases->entries[i];
-
-        /* how to make this a cond */
-        if (_case->case_begin == _case->case_end) {
-
-        } else {
-
-        }
-
+        cfgHandleCase(builder,bb_end,_case);
     }
 
-    cfgHandleAstNode(builder,ast->switch_cond);
+    /* wrong ?*/
+    if (ast->case_default != NULL) {
+        cfgBuilderSetBasicBlock(builder,bb_switch);
+        cfgHandleCase(builder,bb_end,ast->case_default);
+    }
+
+    // ptrVecPush(bb_switch->next_blocks,bb_end);
+    bb_switch->next = bb_end;
+    bb_end->prev = bb_switch;
+    cfgBuilderSetBasicBlock(builder,bb_end);
 }
 
 static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
@@ -660,15 +687,14 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
         case AST_DO_WHILE:      cfgHandleDoWhileLoop(builder,ast); break;
         case AST_FOR:           cfgHandleForLoop(builder,ast);     break;
         case AST_GOTO:          cfgHandleGoto(builder,ast);        break;
-        case AST_IF:            {
-            cgfHandleBranchBlock(builder,ast);
-            break;
-        }
+        case AST_IF:            cgfHandleBranchBlock(builder,ast); break;
         case AST_LABEL:         cfgHandleLabel(builder,ast);       break;
         case AST_RETURN:        cfgHandleReturn(builder,ast);      break;
         case AST_WHILE:         cfgHandleWhileLoop(builder,ast);   break;
 
-        case AST_CASE:         cfgHandleCase(builder,ast);        break;
+        case AST_CASE: {
+            loggerPanic("Case should be handled by switch function\n");
+        }
         case AST_JUMP:         cfgHandleJump(builder,ast);        break;
         case AST_SWITCH:       cfgHandleSwitch(builder,ast);      break;
 
@@ -1210,6 +1236,7 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
                     continue;
                 }
             case BB_HEAD_BLOCK:
+            case BB_CASE:
             case BB_GOTO:
                 vec = intVecNew();
                 hash = cfgHashBasicBlock(bb->next);
@@ -1223,6 +1250,18 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
                 hash = cfgHashBasicBlock(bb->_else);
                 intVecPush(vec,hash);
                 break;
+
+            /* Theoretically also want to do the cases as they could have 
+             * nested blocks. Can accept this as a limitation for now */
+            case BB_SWITCH: {
+                vec = intVecNew();
+                for (int i = 0; i < bb->next_blocks->size; ++i) {
+                    BasicBlock *bb_case = (BasicBlock *)bb->next_blocks->entries[i];
+                    hash = cfgHashBasicBlock(bb_case);
+                    intVecPush(vec,hash);
+                }
+                break;
+            }
 
             case BB_LOOP_BLOCK: {
                 BasicBlock *loop_head = bb->prev;
@@ -1286,6 +1325,5 @@ CFG *cfgConstruct(Cctrl *cc) {
     dictRelease(builder.resolved_labels);
     listRelease(builder.unresoved_gotos,NULL);
 
-    loggerDebug("completed the construction\n");
     return cfg;
 }
