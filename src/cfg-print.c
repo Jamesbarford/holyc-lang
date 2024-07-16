@@ -81,7 +81,6 @@ static void bbPrintInfo(BasicBlock *bb) {
             bbFlagsToString(bb->flags),
             prev);
     free(prev);
-
 }
 
 static void cfgBranchPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
@@ -450,10 +449,10 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
 
     if (intMapHas(seen,bb->block_no)) return;
     else intMapSet(seen,bb->block_no,NULL);
-
     if (bb->flags & BB_FLAG_LOOP_HEAD) {
         cfgLoopHeadPrintf(builder,bb);
     }
+    bbPrintInfo(bb);
 
     switch (bb->type) {
         /* I want to visit the if block first then the else */
@@ -496,11 +495,13 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
             break;
 
         case BB_SWITCH: {
-            PtrVec *blocks = bb->next_blocks;
             bbPrintf(builder,bb);
-            for (int i = 0; i < blocks->size; ++i) {
-                BasicBlock *it = vecGet(BasicBlock *,blocks,i);
+            for (int i = 0; i < bb->next_blocks->size; ++i) {
+                BasicBlock *it = vecGet(BasicBlock *,bb->next_blocks,i);
                 cfgCreatePictureUtil(builder,map,it,seen);
+                //if (it->next != bb->next) {
+                //    cfgCreatePictureUtil(builder,map,it->next,seen);
+                //}
             }
             cfgCreatePictureUtil(builder,map,bb->next,seen);
             break;
@@ -517,7 +518,6 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
                 }
             }
             break;
-
 
         case BB_CASE:
         case BB_CONTROL_BLOCK:
@@ -560,7 +560,7 @@ static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
     for (int i = 0; i < map->size; ++i) {
         long idx = index_entries[i];
         BasicBlock *cur = &cfg->head[idx-1];
-        bbPrintInfo(cur);
+        //bbPrintInfo(cur);
 
         switch (cur->type) {
             case BB_LOOP_BLOCK:

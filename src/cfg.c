@@ -627,7 +627,13 @@ static void cfgHandleCase(CFGBuilder *builder, BasicBlock *bb_end, Ast *ast) {
             cfgHandleAstNode(builder,case_ast);
         }
     }
-    bb_case->next = bb_end;
+
+    bbPrint(builder->bb);
+    //if (builder->bb == bb_case) {
+    //    bb_case->next = bb_end;
+    //} else {
+        builder->bb->next = bb_end;
+    //}
     bbAddPrev(bb_case,bb_switch);
     bbAddPrev(bb_end,bb_case);
 }
@@ -921,7 +927,7 @@ static void bbFixLoopBlock(BasicBlock *bb) {
 static void bbFix(BasicBlock *bb) {
     for (; bb; bb = bb->next) {
         /* Search up the tree to fix the node */
-        if (bb->type == BB_CONTROL_BLOCK) {
+        if (bb->type == BB_CONTROL_BLOCK || bb->type == BB_CASE) {
             if (!bb->next) {
                 bbFixLeafNode(bb);
             } else if (bb == bb->next) {
@@ -948,6 +954,11 @@ static void bbFix(BasicBlock *bb) {
                 bb->next->flags |= BB_FLAG_LOOP_END;
             }
             bb->prev->prev = bb;
+        } else if (bb->type == BB_SWITCH) {
+            for (int i = 0; i < bb->next_blocks->size; ++i) {
+                BasicBlock *it = vecGet(BasicBlock *,bb->next_blocks,i);
+                bbFix(it);
+            }
         }
 
         if (bb->flags & BB_FLAG_GOTO_LOOP) {
