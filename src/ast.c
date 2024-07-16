@@ -1984,6 +1984,8 @@ static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
             break;
         }
 
+        case AST_CASE: break;
+
         default: {
             str_op = lexemePunctToStringWithFlags(ast->kind,lexeme_flags);
             astBinaryArgToString(str,str_op,ast,lexeme_flags);
