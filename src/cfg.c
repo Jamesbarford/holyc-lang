@@ -758,6 +758,7 @@ static void bbFixLeafNode(BasicBlock *bb) {
         bb->type = BB_GARBAGE;
         return;
     }
+
     if (!bb->ast_array || bb->ast_array->size == 0) {
         bb->type = BB_GARBAGE;
         return;
@@ -936,7 +937,13 @@ static void bbFix(BasicBlock *bb) {
     for (; bb; bb = bb->next) {
         /* Search up the tree to fix the node */
         if (bb->type == BB_CONTROL_BLOCK || bb->type == BB_CASE) {
-            bbFixLeafNode(bb);
+            if (!bb->next) {
+                bbFixLeafNode(bb);
+            } else if (bb == bb->next) {
+                bb->type = BB_GARBAGE;
+            } else if (!bb->ast_array || bb->ast_array->size == 0) {
+                bb->type = BB_GARBAGE;
+            }
         }
 
         /* Iterate back up the tree to find the join */
