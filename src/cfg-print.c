@@ -299,6 +299,20 @@ static void cfgSwitchPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     aoStrRelease(ast_str);
 }
 
+static void cfgContinuePrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
+    aoStrCatPrintf(builder->viz,
+            "    bb%d [shape=record,style=filled,fillcolor=violet,label=\"{\\<bb %d\\>\n",
+            bb->block_no,
+            bb->block_no);
+
+    aoStrCatPrintf(builder->viz,
+            "|continue\\l\\\n"
+            //"|goto \\<%d bb\\>\\l\\"
+            "\n}\"];\n\n"
+            // bb->next->block_no
+            );
+}
+
 /* Side-effect of mutating the loop counter on the builder */
 static void cfgLoopHeadPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     int cnt = ++builder->loop_cnt;
@@ -324,6 +338,7 @@ static void bbPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
         case BB_RETURN_BLOCK:  cfgReturnPrintf(builder,bb);  break;
         case BB_CASE:          cfgCasePrintf(builder,bb);    break;
         case BB_SWITCH:        cfgSwitchPrintf(builder,bb);  break;
+        case BB_CONTINUE:      cfgContinuePrintf(builder,bb);  break;
         default:               cfgDefaultPrintf(builder,bb); break;
     }
 }
@@ -526,6 +541,7 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
             }
             break;
 
+        case BB_CONTINUE:
         case BB_CASE:
         case BB_CONTROL_BLOCK:
         case BB_HEAD_BLOCK:
@@ -563,12 +579,21 @@ static void cfgCreatePicture(CfgGraphVizBuilder *builder, CFG *cfg) {
 static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
     IntMap *map = cfg->graph;
     long *index_entries = map->indexes;
+    long max_bb_no = map->size + 10;
 
     for (int i = 0; i < map->size; ++i) {
         long idx = index_entries[i];
         BasicBlock *cur = &cfg->head[idx-1];
 
         switch (cur->type) {
+            case BB_CONTINUE:
+                loggerPanic("next = %d\n",cur->next->block_no);
+                aoStrCatPrintf(builder->viz,
+                        "    bb%d:s -> bb%d:n [style=\"dotted,bold\",color=blue,weight=10,constraint=false];\n",
+                        cur->block_no,
+                        cur->next->block_no);
+                break;
+
             case BB_LOOP_BLOCK:
                 aoStrCatPrintf(builder->viz,
                         "    bb%d:s -> bb%d:n [style=\"dotted,bold\",color=blue,weight=10,constraint=false];\n",
@@ -610,6 +635,7 @@ static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
                             cur->next->block_no);
                 }
                 break;
+
 
             case BB_HEAD_BLOCK:
             case BB_CASE:

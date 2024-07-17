@@ -18,6 +18,7 @@ enum bbType {
     BB_GOTO          = 8,
     BB_SWITCH        = 9,
     BB_CASE          = 10,
+    BB_CONTINUE      = 11,
 };
 
 #define CFG_MAX_PREV    (32)

@@ -29,6 +29,7 @@ char *bbTypeToString(int type) {
         case BB_GOTO:               return "BB_GOTO";
         case BB_SWITCH:             return "BB_SWITCH";
         case BB_CASE:               return "BB_CASE";
+        case BB_CONTINUE:           return "BB_CONTINUE";
         default:
             loggerPanic("Unknown type: %d\n", type);
     }
@@ -608,7 +609,9 @@ static void cfgHandleCompound(CFGBuilder *builder, Ast *ast) {
 
 static void cfgHandleContinue(CFGBuilder *builder, Ast *ast) {
     assert(builder->flags & CFG_BUILDER_FLAG_IN_LOOP);
-    loggerPanic("'CONTINUE' unimplemented\n");
+    builder->bb->type = BB_CONTINUE;
+    builder->bb->next = builder->bb_cur_loop;
+    bbAddPrev(builder->bb_cur_loop,builder->bb);
 }
 
 static void cfgHandleJump(CFGBuilder *builder, Ast *ast) {
@@ -850,6 +853,7 @@ static void bbRelinkBranch(BasicBlock *branch, BasicBlock *bb) {
                 bb->next->type = BB_GARBAGE;
             }
         } else {
+            bbPrint(bb);
             bb->next = NULL;
             bbAddPrev(bb,branch);
         }
@@ -936,6 +940,9 @@ static void bbFixLoopBlock(BasicBlock *bb) {
 static void bbFix(BasicBlock *bb) {
     for (; bb; bb = bb->next) {
         /* Search up the tree to fix the node */
+        if (bb->type == BB_CONTINUE) {
+            continue;
+        }
         if (bb->type == BB_CONTROL_BLOCK || bb->type == BB_CASE) {
             if (!bb->next) {
                 bbFixLeafNode(bb);
@@ -1257,6 +1264,7 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
                     continue;
                 }
             case BB_HEAD_BLOCK:
+            case BB_CONTINUE:
             case BB_CASE:
             case BB_GOTO:
                 vec = intVecNew();
