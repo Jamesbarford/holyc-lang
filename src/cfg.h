@@ -37,6 +37,7 @@ enum bbType {
                                            * out of a loop */
 #define BB_FLAG_GOTO_LOOP          (0x100) /* this is for when a goto forms a 
                                             * loop */
+#define BB_FLAG_CASE_OWNED         (0x200)
 
 typedef struct BasicBlock {
     /* @Confirm:

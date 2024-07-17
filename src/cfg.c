@@ -71,6 +71,9 @@ char *bbFlagsToString(unsigned int flags) {
     if (flags & BB_FLAG_GOTO_LOOP) {
         _concat_flag("BB_FLAG_GOTO_LOOP");
     }
+    if (flags & BB_FLAG_CASE_OWNED) {
+        _concat_flag("BB_FLAG_CASE_OWNED");
+    }
     aoStrPutChar(str,')');
 
 #undef _concat_flag
@@ -620,6 +623,7 @@ static void cfgHandleCase(CFGBuilder *builder, BasicBlock *bb_end, Ast *ast) {
     /* so we can access begining and end */
     ptrVecPush(bb_case->ast_array,ast);
     cfgBuilderSetBasicBlock(builder,bb_case);
+    bb_case->prev = bb_switch;
 
     if (!listEmpty(ast->case_asts)) {
         listForEach(ast->case_asts) {
@@ -628,12 +632,12 @@ static void cfgHandleCase(CFGBuilder *builder, BasicBlock *bb_end, Ast *ast) {
         }
     }
 
-    bbPrint(builder->bb);
-    //if (builder->bb == bb_case) {
-    //    bb_case->next = bb_end;
-    //} else {
-        builder->bb->next = bb_end;
-    //}
+    if (builder->bb != bb_case) {
+        builder->bb->flags |= BB_FLAG_CASE_OWNED;
+    }
+
+    builder->bb->next = bb_end;
+    bb_end->prev = builder->bb;
     bbAddPrev(bb_case,bb_switch);
     bbAddPrev(bb_end,bb_case);
 }
@@ -748,12 +752,17 @@ static void bbFixLeafNode(BasicBlock *bb) {
 
     assert(prev != NULL);
 
+    if (bb->flags & BB_FLAG_CASE_OWNED) return;
+
+    if (bb == bb->next) {
+        bb->type = BB_GARBAGE;
+        return;
+    }
     if (!bb->ast_array || bb->ast_array->size == 0) {
         bb->type = BB_GARBAGE;
         return;
     }
 
-    bbPrint(bb);
     if (bb->next != NULL) {
         next_array = bb->next->ast_array;
     }
@@ -850,6 +859,7 @@ static void bbRelinkBranch(BasicBlock *branch, BasicBlock *bb) {
             }
             bbFixLeafNode(bb);
         } else if (current_array && current_array->size == 0) {
+            if (bb->flags & BB_FLAG_CASE_OWNED) return;
             if (next_array) {
                 bb->type = BB_GARBAGE;
                 if (branch->_if == bb) {
@@ -868,8 +878,6 @@ static void bbRelinkBranch(BasicBlock *branch, BasicBlock *bb) {
         /* For some reason we keep getting branches with a next pointer */
         branch->next = NULL;
         bbAddPrev(bb,branch);
-    } else if (bb->type == BB_LOOP_BLOCK) {
-
     } else if (bb->type == BB_GARBAGE) {
         loggerWarning("we hit the trash\n");
     }
@@ -928,13 +936,7 @@ static void bbFix(BasicBlock *bb) {
     for (; bb; bb = bb->next) {
         /* Search up the tree to fix the node */
         if (bb->type == BB_CONTROL_BLOCK || bb->type == BB_CASE) {
-            if (!bb->next) {
-                bbFixLeafNode(bb);
-            } else if (bb == bb->next) {
-                bb->type = BB_GARBAGE;
-            } else if (!bb->ast_array || bb->ast_array->size == 0) {
-                bb->type = BB_GARBAGE;
-            }
+            bbFixLeafNode(bb);
         }
 
         /* Iterate back up the tree to find the join */
@@ -1242,7 +1244,8 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
 
             case BB_CONTROL_BLOCK:
                 /* This is a check for an orphaned node */
-                if (bb->ast_array->size == 0 || bb->next == NULL) {
+                if (!(bb->flags & BB_FLAG_CASE_OWNED) && 
+                        (bb->ast_array->size == 0 || bb->next == NULL)) {
                     bb->type = BB_GARBAGE;
                     continue;
                 }
