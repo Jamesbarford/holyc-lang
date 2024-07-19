@@ -143,7 +143,8 @@ static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder, int type) {
     bb->type = type;
     bb->flags = 0;
     bb->prev_cnt = 0;
-    bb->block_no = builder->bb_count++;
+    bb->block_no = builder->bb_block_no++;
+    builder->bb_count++;
     /* @Leak
      * This should probably be a memory pool as well */
     bb->ast_array = ptrVecNew();
@@ -161,13 +162,14 @@ void cfgBuilderRelease(CFGBuilder *builder, int free_builder) {
     }
 }
 
-static void cfgBuilderInit(CFGBuilder *builder, Cctrl *cc) {
+static void cfgBuilderInit(CFGBuilder *builder, Cctrl *cc, int block_no) {
     BasicBlock *bb_pool = cast(BasicBlock *, malloc(sizeof(BasicBlock)*64));
     for (int i = 0; i < 64; ++i) {
         BasicBlock *bb = &bb_pool[i];
         bb->type = -1;
     }
     builder->cc = cc;
+    builder->bb_block_no = block_no;
     builder->bb_count = 1;
     builder->bb_cap = 64;
     builder->bb_pool = bb_pool;
@@ -194,11 +196,6 @@ static CFG *cfgNew(aoStr *fname, BasicBlock *head_block) {
     cfg->head = head_block;
     cfg->ref_fname = fname;
     return cfg;
-}
-
-BasicBlock *cfgGet(CFG *cfg, int block_no) {
-    BasicBlock *bb_array = (BasicBlock*)cfg->_memory;
-    return &(bb_array[block_no]);
 }
 
 int bbPrevHas(BasicBlock *bb, int block_no) {
@@ -587,7 +584,6 @@ static void cfgHandleReturn(CFGBuilder *builder, Ast *ast) {
 static void cfgHandleLabel(CFGBuilder *builder, Ast *ast) {
     ptrVecPush(builder->bb->ast_array,ast);
     aoStr *label = astHackedGetLabel(ast);
-    loggerWarning("l: %s\n",label->data);
     dictSet(builder->resolved_labels,label->data,builder->bb);
     builder->bb->flags |= BB_FLAG_LABEL;
 }
@@ -610,7 +606,7 @@ static void cfgHandleCompound(CFGBuilder *builder, Ast *ast) {
 static void cfgHandleContinue(CFGBuilder *builder, Ast *ast) {
     assert(builder->flags & CFG_BUILDER_FLAG_IN_LOOP);
     builder->bb->type = BB_CONTINUE;
-    builder->bb->next = builder->bb_cur_loop;
+    builder->bb->prev = builder->bb_cur_loop;
     bbAddPrev(builder->bb_cur_loop,builder->bb);
 }
 
@@ -711,8 +707,11 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
         case AST_JUMP:         cfgHandleJump(builder,ast);        break;
         case AST_SWITCH:       cfgHandleSwitch(builder,ast);      break;
 
+        case AST_FUNC: {
+            break;
+        }
+
         case AST_ADDR:
-        case AST_FUNC:
         case AST_ASM_FUNCDEF:
         case AST_ASM_FUNC_BIND:
         case AST_ASM_STMT:
@@ -763,7 +762,15 @@ static void bbFixLeafNode(BasicBlock *bb) {
     }
 
     if (!bb->ast_array || bb->ast_array->size == 0) {
-        bb->type = BB_GARBAGE;
+        /* Handling cases where the node is legitimately the final node of 
+         * a function */
+        if (bb->flags & BB_FLAG_ELSE_BRANCH) {
+            bb->type = BB_END_BLOCK;
+        } else if (bb->prev && bb->prev->type == BB_HEAD_BLOCK) {
+            bb->type = BB_END_BLOCK;
+        } else {
+            bb->type = BB_GARBAGE;
+        }
         return;
     }
 
@@ -853,7 +860,6 @@ static void bbRelinkBranch(BasicBlock *branch, BasicBlock *bb) {
                 bb->next->type = BB_GARBAGE;
             }
         } else {
-            bbPrint(bb);
             bb->next = NULL;
             bbAddPrev(bb,branch);
         }
@@ -875,8 +881,10 @@ static void bbRelinkBranch(BasicBlock *branch, BasicBlock *bb) {
                     bbAddPrev(branch->_else,branch);
                 }
             } else {
-                if (branch->_if->next->ast_array->size == 0) {
-                    branch->_if->next = branch->next;
+                if (branch->_if->next) {
+                    if (branch->_if->next->ast_array->size == 0) {
+                        branch->_if->next = branch->next;
+                    }
                 }
             }
         }
@@ -892,8 +900,8 @@ static void bbFixBranchBlock(BasicBlock *bb) {
     BasicBlock *then = bb->_if, *els = bb->_else;
 
     bbRelinkBranch(bb,els);
-    bbFix(els);
     els->flags |= BB_FLAG_ELSE_BRANCH;
+    bbFix(els);
 
     bbRelinkBranch(bb,then);
     bbFix(then);
@@ -1059,6 +1067,14 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
         bbAddPrev(loop_back,loop_cond);
         bbAddPrev(loop_back,bb_dest);
         bbAddPrev(bb_dest,loop_back);
+    } else if (bb_goto->type == BB_LOOP_BLOCK) {
+        BasicBlock *bb_loop_head = bb_goto->prev;
+        bbAddPrev(bb_dest,bb_goto);
+        bb_goto->type = BB_CONTROL_BLOCK;
+        bb_goto->next = bb_dest;
+        bb_goto->flags &= ~(BB_FLAG_LOOP_END);
+        bb_loop_head->flags &= ~(BB_FLAG_LOOP_HEAD);
+        bb_loop_head->_else->flags &= ~(BB_FLAG_LOOP_END);
     } else {
         bbAddPrev(bb_dest,bb_goto);
 
@@ -1076,16 +1092,18 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
 
 /* Split out to make it simpler to reason with */
 static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
-    if (listEmpty(stmts)) return;
-    builder->ast_list = stmts;
-    listForEach(stmts) {
-        Ast *ast = cast(Ast *,it->value);
-        builder->ast_iter = it;
-        cfgHandleAstNode(builder,ast);
+    if (!listEmpty(stmts)) {
+        builder->ast_list = stmts;
+        listForEach(stmts) {
+            Ast *ast = cast(Ast *,it->value);
+            builder->ast_iter = it;
+            cfgHandleAstNode(builder,ast);
+        }
     }
 
     BasicBlock *bb = &builder->bb_pool[0];
     bbFix(bb);
+
     /* Reconcile any non linear jumps */
     listForEach(builder->unresoved_gotos) {
         BasicBlock *bb_goto = cast(BasicBlock *,it->value);
@@ -1264,7 +1282,6 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
                     continue;
                 }
             case BB_HEAD_BLOCK:
-            case BB_CONTINUE:
             case BB_CASE:
             case BB_GOTO:
                 vec = intVecNew();
@@ -1292,6 +1309,7 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
                 break;
             }
 
+            case BB_CONTINUE:
             case BB_LOOP_BLOCK: {
                 BasicBlock *loop_head = bb->prev;
                 if (bb->prev_cnt == 0 && loop_head->_if != bb && 
@@ -1322,37 +1340,44 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
     return map;
 }
 
-/* This will need to return a list of CFG's */
-CFG *cfgConstruct(Cctrl *cc) {
-    Ast *ast;
-    CFG *cfg;
+static CFG *cfgCreateForFunction(Cctrl *cc, Ast *ast_fn, int *_block_no) {
     CFGBuilder builder;
-    BasicBlock *bb;
+    cfgBuilderInit(&builder,cc,*_block_no);
 
-    cfgBuilderInit(&builder,cc);
+    BasicBlock *bb = cfgBuilderAllocBasicBlock(&builder,BB_HEAD_BLOCK);
+    BasicBlock *bb_next = cfgBuilderAllocBasicBlock(&builder,BB_CONTROL_BLOCK);
+    CFG *cfg = cfgNew(ast_fn->fname,bb);
+    bb->next = bb_next;
+    bb_next->prev = bb;
+    cfgBuilderSetCFG(&builder,cfg);
+    cfgBuilderSetBasicBlock(&builder,bb_next);
+    cfgConstructFunction(&builder,ast_fn->body->stms);
 
-    listForEach(cc->ast_list) {
-        ast = (Ast *)it->value;
-        if (ast->kind == AST_FUNC) {
-            bb = cfgBuilderAllocBasicBlock(&builder,BB_HEAD_BLOCK);
-            cfg = cfgNew(ast->fname,bb);
-            bb->next = cfgBuilderAllocBasicBlock(&builder,BB_CONTROL_BLOCK);
-            bb->next->prev = bb;
-            cfgBuilderSetCFG(&builder,cfg);
-            cfgBuilderSetBasicBlock(&builder,bb->next);
-
-            cfgConstructFunction(&builder,ast->body->stms);
-
-            cfg->bb_count = builder.bb_count;
-            cfg->_memory = builder.bb_pool;
-            cfg->graph = cfgBuildAdjacencyList(cfg);
-        }
+    /* This is a function with no body */
+    if (bb_next->type == BB_GARBAGE && bb_next->prev == bb) {
+        bb_next->type = BB_END_BLOCK;
     }
 
- //   cfgAdjacencyListPrint(cfg->graph);
- //   cfgGetStronglyConnectedComponents(cfg);
+    cfg->bb_count = builder.bb_count;
+    cfg->_memory = builder.bb_pool;
+    cfg->graph = cfgBuildAdjacencyList(cfg);
+    *_block_no = builder.bb_block_no+1;
+
     dictRelease(builder.resolved_labels);
     listRelease(builder.unresoved_gotos,NULL);
-
     return cfg;
+}
+
+/* This will need to return a list of CFG's */
+PtrVec *cfgConstruct(Cctrl *cc) {
+    PtrVec *cfgs = ptrVecNew();
+    int block_no = 0;
+    listForEach(cc->ast_list) {
+        Ast *ast = (Ast *)it->value;
+        if (ast->kind == AST_FUNC) {
+            CFG *cfg = cfgCreateForFunction(cc,ast,&block_no);
+            ptrVecPush(cfgs,cfg);
+        }
+    }
+    return cfgs;
 }

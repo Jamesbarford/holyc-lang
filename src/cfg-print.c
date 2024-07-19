@@ -16,6 +16,11 @@
 #include "lexer.h"
 #include "util.h"
 
+#define BB_FMT_BLUE_DOTTED ("    bb%d:s -> bb%d:n [style=\"dotted,bold\",color=blue,weight=10,constraint=false];\n")
+#define BB_FMT_RED_SOLID   ("    bb%d:s -> bb%d:n [style=\"solid,bold\",color=firebrick1,weight=10,constraint=true];\n")
+#define BB_FMT_GREEN_SOLID ("    bb%d:s -> bb%d:n [style=\"solid,bold\",color=forestgreen,weight=10,constraint=true];\n")
+#define BB_FMT_BLACK_SOLID ("    bb%d:s -> bb%d:n [style=\"solid,bold\",color=black,weight=100,constraint=true];\n")
+
 static char *depth_to_loop_color[] = {
     [1] = "grey88",
     [2] = "grey78",
@@ -46,11 +51,7 @@ typedef struct CfgGraphVizBuilder {
     BasicBlock *loop_stack[32];
 } CfgGraphVizBuilder;
 
-static aoStr *cfgGraphVizBuilderDestroyAndReturnVizString(CfgGraphVizBuilder *builder) {
-    return builder->viz;
-}
-
-static void cfgGraphVizBuilderInit(CfgGraphVizBuilder *builder, CFG *cfg) {
+static void cfgGraphVizBuilderInit(CfgGraphVizBuilder *builder) {
     builder->viz = aoStrAlloc(1<<10);
     builder->loop_cnt = 0;
     builder->break_idx = 0;
@@ -232,10 +233,14 @@ static void cfgReturnPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     aoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size);
 
     aoStrCatPrintf(builder->viz,
-            "    bb%d [shape=doublecircle,style=filled,fontcolor=white,fillcolor=black,label=\" \\<bb %d\\>\n %s \"];\n\n",
+            "    bb%d [shape=doublecircle,style=filled,fontcolor=white,fillcolor=black,label=\" \\<bb %d\\>\n",
             bb->block_no,
-            bb->block_no,
-            internal->data);
+            bb->block_no);
+    if (internal) {
+        aoStrCatPrintf(builder->viz,"%s \"];\n\n",internal->data);
+    } else {
+        aoStrCat(builder->viz, "return (void) \"];\n\n");
+    }
     aoStrRelease(internal);
 }
 
@@ -300,10 +305,15 @@ static void cfgSwitchPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
 }
 
 static void cfgContinuePrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
+    aoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size);
     aoStrCatPrintf(builder->viz,
             "    bb%d [shape=record,style=filled,fillcolor=violet,label=\"{\\<bb %d\\>\n",
             bb->block_no,
             bb->block_no);
+
+    if (internal) {
+        aoStrCatPrintf(builder->viz,"|%s",internal->data);
+    }
 
     aoStrCatPrintf(builder->viz,
             "|continue\\l\\\n"
@@ -480,6 +490,9 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
         /* I want to visit the if block first then the else */
         case BB_LOOP_BLOCK:
             cfgLoopPrintf(builder,bb);
+            if (bb->flags & BB_FLAG_UNCONDITIONAL_JUMP && bb->next) {
+                cfgCreatePictureUtil(builder,map,bb->next,seen);
+            }
             cfgCreatePictureUtil(builder,map,bb->prev,seen);
             break;
 
@@ -578,59 +591,62 @@ static void cfgCreatePicture(CfgGraphVizBuilder *builder, CFG *cfg) {
 
 static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
     IntMap *map = cfg->graph;
-    long *index_entries = map->indexes;
-    long max_bb_no = map->size + 10;
 
     for (int i = 0; i < map->size; ++i) {
-        long idx = index_entries[i];
-        BasicBlock *cur = &cfg->head[idx-1];
+        BasicBlock *cur = &cfg->head[i];
 
         switch (cur->type) {
             case BB_CONTINUE:
-                loggerPanic("next = %d\n",cur->next->block_no);
                 aoStrCatPrintf(builder->viz,
-                        "    bb%d:s -> bb%d:n [style=\"dotted,bold\",color=blue,weight=10,constraint=false];\n",
-                        cur->block_no,
-                        cur->next->block_no);
-                break;
-
-            case BB_LOOP_BLOCK:
-                aoStrCatPrintf(builder->viz,
-                        "    bb%d:s -> bb%d:n [style=\"dotted,bold\",color=blue,weight=10,constraint=false];\n",
+                        BB_FMT_BLUE_DOTTED,
                         cur->block_no,
                         cur->prev->block_no);
                 break;
 
+            case BB_LOOP_BLOCK: {
+                aoStrCatPrintf(builder->viz,
+                        BB_FMT_BLUE_DOTTED,
+                        cur->block_no,
+                        cur->prev->block_no);
+                if (cur->flags & BB_FLAG_UNCONDITIONAL_JUMP && cur->next) {
+                    aoStrCatPrintf(builder->viz,
+                            BB_FMT_BLACK_SOLID,
+                            cur->block_no,
+                            cur->next->block_no);
+                }
+                break;
+            }
+
             case BB_DO_WHILE_COND:
                     aoStrCatPrintf(builder->viz,
-                            "    bb%d:s -> bb%d:n [style=\"dotted,bold\",color=blue,weight=10,constraint=false];\n",
+                            BB_FMT_BLUE_DOTTED,
                             cur->block_no,
                             cur->prev->block_no);
                     aoStrCatPrintf(builder->viz,
-                            "    bb%d:s -> bb%d:n [style=\"solid,bold\",color=firebrick1,weight=10,constraint=true];\n",
+                            BB_FMT_RED_SOLID,
                             cur->block_no,
                             cur->next->block_no);
                 break;
 
             case BB_BRANCH_BLOCK:
                 aoStrCatPrintf(builder->viz,
-                        "    bb%d:s -> bb%d:n [style=\"solid,bold\",color=firebrick1,weight=10,constraint=true];\n",
+                        BB_FMT_RED_SOLID,
                         cur->block_no,
                         cur->_else->block_no);
                 aoStrCatPrintf(builder->viz,
-                        "    bb%d:s -> bb%d:n [style=\"solid,bold\",color=forestgreen,weight=10,constraint=true];\n",
+                        BB_FMT_GREEN_SOLID,
                         cur->block_no,
                         cur->_if->block_no);
                 break;
             case BB_GOTO:
                 if (cur->flags & (BB_FLAG_GOTO_LOOP)) {
                     aoStrCatPrintf(builder->viz,
-                            "    bb%d:s -> bb%d:n [style=\"dotted,bold\",color=blue,weight=10,constraint=false];\n",
+                            BB_FMT_BLUE_DOTTED,
                             cur->block_no,
                             cur->prev->block_no);
                 } else {
                     aoStrCatPrintf(builder->viz,
-                            "    bb%d:s -> bb%d:n [style=\"solid,bold\",color=black,weight=100,constraint=true];\n",
+                            BB_FMT_BLACK_SOLID,
                             cur->block_no,
                             cur->next->block_no);
                 }
@@ -641,8 +657,7 @@ static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
             case BB_CASE:
             case BB_CONTROL_BLOCK:
             case BB_BREAK_BLOCK: {
-                aoStrCatPrintf(builder->viz,
-                        "    bb%d:s -> bb%d:n [style=\"solid,bold\",color=black,weight=100,constraint=true];\n",
+                aoStrCatPrintf(builder->viz, BB_FMT_BLACK_SOLID,
                         cur->block_no,
                         cur->next->block_no);
                 break;
@@ -652,7 +667,7 @@ static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
                 for (int i = 0; i < cur->next_blocks->size; ++i) {
                     BasicBlock *bb = vecGet(BasicBlock *,cur->next_blocks,i);
                     aoStrCatPrintf(builder->viz,
-                            "    bb%d:s -> bb%d:n [style=\"solid,bold\",color=black,weight=100,constraint=true];\n",
+                            BB_FMT_BLACK_SOLID,
                             cur->block_no,
                             bb->block_no);
                 }
@@ -669,31 +684,25 @@ static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
     }
 }
 
-aoStr *cfgCreateGraphViz(CFG *cfg) {
-    CfgGraphVizBuilder builder;
-    cfgGraphVizBuilderInit(&builder,cfg);
-
-    aoStrCatPrintf(builder.viz,
-            "digraph \"%s\" {\n "
+static void cfgCreateGraphViz(CfgGraphVizBuilder *builder, CFG *cfg) {
+    aoStrCatPrintf(builder->viz,
             "overlap=false;\n"
             "subgraph \"cluster_%s\" {\n"
             "    style=\"dashed\";\n"
             "    color=\"black\";\n"
             "    label=\"%s()\";\n",
             cfg->ref_fname->data,
-            cfg->ref_fname->data,
             cfg->ref_fname->data);
 
-    cfgCreatePicture(&builder,cfg);
+    cfgCreatePicture(builder,cfg);
     /* Connects the nodes together in graphviz */
-    cfgGraphVizAddMappings(&builder,cfg);
+    cfgGraphVizAddMappings(builder,cfg);
 
-    aoStrCatPrintf(builder.viz,"}//ending function\n} // ending graph\n");
-    return cfgGraphVizBuilderDestroyAndReturnVizString(&builder);
+    aoStrCatPrintf(builder->viz,"}//ending function\n");
 }
 
-void cfgToFile(CFG *cfg, const char *filename) {
-    aoStr *cfg_string = cfgCreateGraphViz(cfg);
+void cfgBuilderWriteToFile(CfgGraphVizBuilder *builder, char *filename) {
+    aoStr *cfg_string = builder->viz;
     int fd = open(filename,O_CREAT|O_TRUNC|O_RDWR,0644);
     if (fd == -1) {
         loggerPanic("Failed to open file '%s': %s\n",
@@ -702,4 +711,25 @@ void cfgToFile(CFG *cfg, const char *filename) {
     write(fd,cfg_string->data,cfg_string->len);
     close(fd);
     aoStrRelease(cfg_string);
+}
+
+void cfgToFile(CFG *cfg, char *filename) {
+    CfgGraphVizBuilder builder;
+
+    cfgGraphVizBuilderInit(&builder);
+    cfgCreateGraphViz(&builder,cfg);
+    cfgBuilderWriteToFile(&builder,filename);
+}
+
+void cfgsToFile(PtrVec *cfgs, char *filename) {
+    CfgGraphVizBuilder builder;
+
+    cfgGraphVizBuilderInit(&builder);
+
+    aoStrCat(builder.viz,"digraph user_program {\n ");
+    for (int i = 0; i < cfgs->size; ++i) {
+        cfgCreateGraphViz(&builder,(CFG *)cfgs->entries[i]);
+    }
+    aoStrCatPrintf(builder.viz, "} // ending graph\n");
+    cfgBuilderWriteToFile(&builder,filename);
 }

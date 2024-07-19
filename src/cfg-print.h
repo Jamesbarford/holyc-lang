@@ -3,8 +3,9 @@
 
 #include "aostr.h"
 #include "cfg.h"
+#include "map.h"
 
-void cfgToFile(CFG *cfg, const char *filename);
-aoStr *cfgCreateGraphViz(CFG *cfg);
+void cfgToFile(CFG *cfg, char *filename);
+void cfgsToFile(PtrVec *cfgs, char *filename);
 
 #endif

@@ -8,6 +8,8 @@
 #include <unistd.h>
 
 #include "aostr.h"
+#include "cfg.h"
+#include "cfg-print.h"
 #include "config.h"
 #include "compile.h"
 #include "cctrl.h"
@@ -23,12 +25,15 @@ typedef struct hccOpts {
     int print_ast;
     int print_tokens;
     int print_help;
+    int cfg_create;
+    int cfg_create_png;
     int asm_debug_comments;
     int assemble_only;
     int emit_dylib;
     int emit_object;
     int run;
     char *infile;
+    char *infile_no_ext;
     char *asm_outfile;
     char *obj_outfile;
     char *lib_name;
@@ -99,7 +104,7 @@ int hccLibInit(hccLib *lib, hccOpts *opts, char *name) {
 void getASMFileName(hccOpts *opts, char *file_name) {
     int len = strlen(file_name);
     int i;
-    char *slashptr = NULL, *asm_outfile, *obj_outfile, *end; 
+    char *slashptr = NULL, *asm_outfile, *obj_outfile, *end, *infile_no_ext; 
 
     if ((file_name[0] != '.' && file_name[1] != '/') && 
          file_name[0] != '/' && file_name[0] != '~') {
@@ -132,9 +137,11 @@ void getASMFileName(hccOpts *opts, char *file_name) {
 
     asm_outfile = malloc(sizeof(char) * len+1);
     obj_outfile = malloc(sizeof(char) * len+1);
+    infile_no_ext = malloc(sizeof(char) * len);
 
-    memcpy(asm_outfile, slashptr, end-slashptr);
-    memcpy(obj_outfile, slashptr, end-slashptr);
+    memcpy(asm_outfile,   slashptr, end-slashptr);
+    memcpy(obj_outfile,   slashptr, end-slashptr);
+    memcpy(infile_no_ext, slashptr, end-slashptr);
 
     memcpy(asm_outfile+(end-slashptr), ".s", 2);
     memcpy(obj_outfile+(end-slashptr), ".o", 2);
@@ -146,6 +153,7 @@ void getASMFileName(hccOpts *opts, char *file_name) {
     obj_outfile[len] = '\0';
     opts->asm_outfile = asm_outfile;
     opts->obj_outfile = obj_outfile;
+    opts->infile_no_ext = infile_no_ext;
 }
 
 void execGcc(char *filename, aoStr *asmbuf, aoStr *cmd) {
@@ -245,6 +253,8 @@ void usage(void) {
             "hcc [..OPTIONS] <..file>\n\n"
             "OPTIONS:\n"
             "  -ast     Print the ast and exit\n"
+            "  -cfg     Create graphviz control flow graph\n"
+            "  -cfg-png Create graphviz control flow graph as a png\n"
             "  -tokens  Print the tokens and exit\n"
             "  -S       Emit assembly only\n"
             "  -obj     Emit an objectfile\n"
@@ -330,6 +340,10 @@ void parseCliOptions(hccOpts *opts, int argc, char **argv) {
             loggerPanic("--g not implemented\n");
         } else if (!strncmp(argv[i],"-S",2)) {
             opts->assemble_only = 1;
+        } else if (!strncmp(argv[i],"-cfg-png",8)) {
+            opts->cfg_create_png = 1;
+        } else if (!strncmp(argv[i],"-cfg",3)) {
+            opts->cfg_create = 1;
         } else if (!strncmp(argv[i],"-D",2)) {
             if (opts->defines_list == NULL) {
                 opts->defines_list = listNew();
@@ -376,8 +390,25 @@ int main(int argc, char **argv) {
     }
 
     compileToAst(cc,opts.infile,lexer_flags);
+
     if (opts.print_ast) {
         compilePrintAst(cc);
+        return 0;
+    }
+
+    if (opts.cfg_create || opts.cfg_create_png) {
+        PtrVec *cfgs = cfgConstruct(cc);
+        char *dot_outfile = mprintf("./%s.dot",opts.infile_no_ext);
+        cfgsToFile(cfgs,dot_outfile);
+        if (opts.cfg_create_png) {
+            char *dot_cmd = mprintf("dot -Tpng %s -o ./%s.png",
+                    dot_outfile,opts.infile_no_ext);
+            printf("Creating png: %s\n",dot_cmd);
+            system(dot_cmd);
+            free(dot_cmd);
+            unlink(dot_outfile);
+        }
+        free(dot_outfile);
         return 0;
     }
 

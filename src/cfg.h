@@ -82,6 +82,7 @@ typedef struct CFG {
 
 typedef struct CFGBuilder {
     int bb_count;
+    int bb_block_no;
     unsigned long flags;
     Cctrl *cc;
     CFG *cfg;
@@ -106,7 +107,7 @@ char *bbFlagsToString(unsigned int flags);
 char *bbPreviousBlockNumbersToString(BasicBlock *bb);
 int bbPrevHas(BasicBlock *bb, int block_no);
 BasicBlock *cfgGet(CFG *cfg, int block_no);
-CFG *cfgConstruct(Cctrl *cc);
+PtrVec *cfgConstruct(Cctrl *cc);
 void bbPrint(BasicBlock *bb);
 
 #endif

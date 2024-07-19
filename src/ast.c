@@ -1865,10 +1865,15 @@ static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
                 }
                 node = node->next;
             }
-            aoStr *escaped = aoStrEscapeString(internal);
-            aoStrCatPrintf(str, "%s(%s)",ast->fname->data,escaped->data);
+
+            if (internal->len > 0) {
+                aoStr *escaped = aoStrEscapeString(internal);
+                aoStrCatPrintf(str, "%s(%s)",ast->fname->data,escaped->data);
+                aoStrRelease(escaped);
+            } else {
+                aoStrCatPrintf(str, "%s()",ast->fname->data);
+            }
             aoStrRelease(internal);
-            aoStrRelease(escaped);
             break;
         }
 
