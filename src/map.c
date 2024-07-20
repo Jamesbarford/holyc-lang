@@ -59,6 +59,23 @@ static unsigned long intMapGetNextIdx(IntMap *map, long key, int *_is_free) {
     return idx;
 }
 
+void intMapClear(IntMap *map) {
+    long *indexes = map->indexes;
+    void (*free_value)(void *value) = map->_free_value;
+    for (int i = 0; i < map->size; ++i) {
+        long idx = indexes[i];
+        IntMapNode *n = map->entries[idx];
+        if (n) {
+            if (free_value)
+                free_value(n->value);
+            free(n);
+        }
+    }
+    map->size = 0;
+    memset(map->entries,0,map->capacity*sizeof(IntMapNode));
+    memset(map->indexes,0,map->size*sizeof(long));
+}
+
 void intMapRelease(IntMap *map) { // free the entire hashtable
     if (map) {
         void (*free_value)(void *value) = map->_free_value;
@@ -492,12 +509,12 @@ int strMapKeyIter(StrMap *map, long *_idx, char **_key) {
 }
 
 #define vectorNew(ret_type, entry_type)                               \
+    ret_type *vec;                                                    \
     do {                                                              \
-        ret_type *vec = (ret_type *)malloc(sizeof(ret_type));         \
+        vec = (ret_type *)malloc(sizeof(ret_type));                   \
         vec->size = 0;                                                \
         vec->capacity = 32;                                           \
         vec->entries = (entry_type *)malloc(sizeof(entry_type) * 32); \
-        return vec;                                                   \
     } while (0)
 
 #define vectorResize(vec, type)                           \
@@ -538,6 +555,11 @@ int strMapKeyIter(StrMap *map, long *_idx, char **_key) {
  * to a more happy prosperous codebase */
 IntVec *intVecNew(void) {
     vectorNew(IntVec,long);
+#ifdef DEBUG
+    assert(vec != NULL);
+    assert(vec->entries != NULL);
+#endif
+    return vec;
 }
 
 void intVecPush(IntVec *vec, long value) {
@@ -565,6 +587,11 @@ void intVecRelease(IntVec *vec) {
 
 PtrVec *ptrVecNew(void) {
     vectorNew(PtrVec,void*);
+#ifdef DEBUG
+    assert(vec != NULL);
+    assert(vec->entries != NULL);
+#endif
+    return vec;
 }
 
 void ptrVecPush(PtrVec *vec, void *value) {

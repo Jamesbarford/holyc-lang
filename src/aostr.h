@@ -37,6 +37,7 @@ void aoStrCat(aoStr *buf, const void *d);
 void aoStrCatRepeat(aoStr *buf, char *str, int times);
 void aoStrCatPrintf(aoStr *b, const char *fmt, ...);
 aoStr *aoStrEscapeString(aoStr *buf);
+aoStr *aoStrEncode(aoStr *buf);
 
 void aoStrArrayRelease(aoStr **arr, int count);
 aoStr **aoStrSplit(char *to_split, char delimiter, int *count);

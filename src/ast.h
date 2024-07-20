@@ -273,8 +273,9 @@ extern AstType *ast_u16_type;
 extern AstType *ast_i32_type;
 extern AstType *ast_u32_type;
 extern Ast *placeholder_arg;
+extern Ast *ast_loop_sentinal;
+extern Ast *ast_forever_sentinal;
 
-Ast *astNew(void);
 AstType *astTypeCopy(AstType *type);
 void astRelease(Ast *ast);
 void astReleaseList(List *ast_list);

@@ -20,6 +20,7 @@
 #define BB_FMT_RED_SOLID   ("    bb%d:s -> bb%d:n [style=\"solid,bold\",color=firebrick1,weight=10,constraint=true];\n")
 #define BB_FMT_GREEN_SOLID ("    bb%d:s -> bb%d:n [style=\"solid,bold\",color=forestgreen,weight=10,constraint=true];\n")
 #define BB_FMT_BLACK_SOLID ("    bb%d:s -> bb%d:n [style=\"solid,bold\",color=black,weight=100,constraint=true];\n")
+#define BB_FMT_BLACK_END_NODE ("    bb%d:s -> endbb%d:n [style=\"solid,bold\",color=black,weight=100,constraint=true];\n")
 
 static char *depth_to_loop_color[] = {
     [1] = "grey88",
@@ -64,7 +65,7 @@ static aoStr *bbAstArrayToString(PtrVec *ast_array, int ast_count) {
     char *lvalue_str;
     for (int i = 0; i < ast_count; ++i) {
         Ast *ast = vecGet(Ast *,ast_array,i);
-        lvalue_str = astLValueToString(ast,LEXEME_ENCODE_PUNCT);
+        lvalue_str = astLValueToString(ast,(LEXEME_ENCODE_PUNCT|LEXEME_GRAPH_VIZ_ENCODE_PUNCT));
         aoStrCatPrintf(ast_str,"%s\\l\\\n",lvalue_str);
         if (i + 1 != ast_count) {
             aoStrPutChar(ast_str,'|');
@@ -74,24 +75,13 @@ static aoStr *bbAstArrayToString(PtrVec *ast_array, int ast_count) {
     return ast_str;
 }
 
-static void bbPrintInfo(BasicBlock *bb) {
-    char *prev = (char *)bbPreviousBlockNumbersToString(bb);
-    printf("bb%2d type = %-*s flags = %-*s, prev=%s\n\n",bb->block_no,
-            18,
-            bbTypeToString(bb->type),
-            40,
-            bbFlagsToString(bb->flags),
-            prev);
-    free(prev);
-}
-
 static void cfgBranchPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     char *fillcolor;
     aoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size-1);
     Ast *cond = (Ast *)bb->ast_array->entries[bb->ast_array->size-1];
 
     assert(cond != NULL);
-    char *lvalue_str = astLValueToString(cond,LEXEME_ENCODE_PUNCT);
+    char *lvalue_str = astLValueToString(cond,(LEXEME_ENCODE_PUNCT|LEXEME_GRAPH_VIZ_ENCODE_PUNCT));
 
     if (bb->flags & BB_FLAG_LOOP_HEAD) {
         fillcolor = "lightpink";
@@ -131,7 +121,7 @@ static void cfgDoWhileCondPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
         fillcolor = "lightskyblue";
     }
 
-    char *lvalue_str = astLValueToString(cond,LEXEME_ENCODE_PUNCT);
+    char *lvalue_str = astLValueToString(cond,(LEXEME_ENCODE_PUNCT|LEXEME_GRAPH_VIZ_ENCODE_PUNCT));
 
     aoStrCatPrintf(builder->viz,
             "    bb%d [shape=record,style=filled,fillcolor=%s,label=\"{\\<bb %d\\>|\n",
@@ -165,14 +155,15 @@ static void cfgLoopPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
             bb->block_no);
 
     if (internal) {
-        aoStrCatPrintf(builder->viz,"%s\n",internal->data);
+        aoStrCatPrintf(builder->viz,"%s\n}\"];\n\n",internal->data);
+    } else {
+        aoStrCatPrintf(builder->viz,
+                //           "|goto \\<%d bb\\>\\l\\"
+                "}\"];\n\n"
+                //     bb->prev->block_no
+                );
     }
 
-    aoStrCatPrintf(builder->viz,
- //           "|goto \\<%d bb\\>\\l\\"
-            "\n}\"];\n\n"
-        //     bb->prev->block_no
-            );
 
     aoStrRelease(internal);
 }
@@ -233,14 +224,18 @@ static void cfgReturnPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     aoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size);
 
     aoStrCatPrintf(builder->viz,
-            "    bb%d [shape=doublecircle,style=filled,fontcolor=white,fillcolor=black,label=\" \\<bb %d\\>\n",
+            "    bb%d [shape=record,style=filled,fillcolor=lightgrey,label=\"{\\<bb %d\\>",
             bb->block_no,
             bb->block_no);
     if (internal) {
-        aoStrCatPrintf(builder->viz,"%s \"];\n\n",internal->data);
+        aoStrCatPrintf(builder->viz,"|%s \n}\"];\n\n",internal->data);
     } else {
-        aoStrCat(builder->viz, "return (void) \"];\n\n");
+        aoStrCat(builder->viz, "|return (void) \n}\"];\n\n");
     }
+    aoStrCatPrintf(builder->viz,
+    "    endbb%d [shape=doublecircle,style=filled,fontcolor=white,fillcolor=black,label=\"\\<end\\>\"];\n\n",
+    bb->block_no
+    );
     aoStrRelease(internal);
 }
 
@@ -253,7 +248,7 @@ static void cfgCasePrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
 
     for (int i = 1; i < ast_count; ++i) {
         Ast *ast = vecGet(Ast *,ast_array,i);
-        lvalue_str = astLValueToString(ast,LEXEME_ENCODE_PUNCT);
+        lvalue_str = astLValueToString(ast,(LEXEME_ENCODE_PUNCT|LEXEME_GRAPH_VIZ_ENCODE_PUNCT));
         aoStrCatPrintf(ast_str,"%s\\l\\\n",lvalue_str);
         if (i + 1 != ast_count) {
             aoStrPutChar(ast_str,'|');
@@ -289,7 +284,7 @@ static void cfgSwitchPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     aoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size-1);
     
     Ast *ast = vecGet(Ast *,bb->ast_array,bb->ast_array->size - 1);
-    lvalue_str = astLValueToString(ast,LEXEME_ENCODE_PUNCT);
+    lvalue_str = astLValueToString(ast,(LEXEME_ENCODE_PUNCT|LEXEME_GRAPH_VIZ_ENCODE_PUNCT));
     aoStrCatPrintf(ast_str,"test (%s)\\l\\\n",lvalue_str);
     free(lvalue_str);
 
@@ -425,6 +420,7 @@ int cfgGraphVizGetLoopGotoCount(BasicBlock *bb) {
 }
 
 int cfgGraphVizGetLoopBreakCount(CfgGraphVizBuilder *builder, BasicBlock *bb) {
+    if (builder->loop_idx-1 < 0) return 0;
     BasicBlock *head = builder->loop_stack[builder->loop_idx-1];
     if (builder->break_idx == 0) return 0;
     if (builder->break_blocks[builder->break_idx-1] == head) return 0;
@@ -478,13 +474,12 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
         }
     }
 
-
     if (intMapHas(seen,bb->block_no)) return;
     else intMapSet(seen,bb->block_no,NULL);
     if (bb->flags & BB_FLAG_LOOP_HEAD) {
         cfgLoopHeadPrintf(builder,bb);
     }
-    bbPrintInfo(bb);
+    //bbPrintNoAst(bb);
 
     switch (bb->type) {
         /* I want to visit the if block first then the else */
@@ -590,10 +585,13 @@ static void cfgCreatePicture(CfgGraphVizBuilder *builder, CFG *cfg) {
 }
 
 static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
-    IntMap *map = cfg->graph;
+    IntMap *map = cfg->no_to_block;
+    loggerDebug("Creating mappings for: %s, size: %lu\n",
+            cfg->ref_fname->data,map->size);
 
     for (int i = 0; i < map->size; ++i) {
-        BasicBlock *cur = &cfg->head[i];
+        BasicBlock *cur = (BasicBlock *)intMapGet(map,map->indexes[i]);
+        assert(cur != NULL);
 
         switch (cur->type) {
             case BB_CONTINUE:
@@ -638,6 +636,7 @@ static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
                         cur->block_no,
                         cur->_if->block_no);
                 break;
+
             case BB_GOTO:
                 if (cur->flags & (BB_FLAG_GOTO_LOOP)) {
                     aoStrCatPrintf(builder->viz,
@@ -652,10 +651,9 @@ static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
                 }
                 break;
 
-
+            case BB_CONTROL_BLOCK:
             case BB_HEAD_BLOCK:
             case BB_CASE:
-            case BB_CONTROL_BLOCK:
             case BB_BREAK_BLOCK: {
                 aoStrCatPrintf(builder->viz, BB_FMT_BLACK_SOLID,
                         cur->block_no,
@@ -674,16 +672,25 @@ static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
                 break;
             }
 
-            /* These don't goto anything */
+            /* Add a fake node so it is obvious that it is the end */
             case BB_END_BLOCK:
             case BB_RETURN_BLOCK: 
+                aoStrCatPrintf(builder->viz,
+                        BB_FMT_BLACK_END_NODE,
+                        cur->block_no,
+                        cur->block_no);
                 break;
+
             default:
-                loggerWarning("Unhandled: %s\n", bbTypeToString(cur->type));
+                loggerWarning("Unhandled! loopidx=%d: bb%d %s\n",
+                    i,cur->block_no,bbToString(cur));
         }
     }
+    loggerDebug("Created mapping for: %s\n", cfg->ref_fname->data);
 }
 
+
+void cfgBuilderWriteToFile(CfgGraphVizBuilder *builder, char *filename);
 static void cfgCreateGraphViz(CfgGraphVizBuilder *builder, CFG *cfg) {
     aoStrCatPrintf(builder->viz,
             "overlap=false;\n"

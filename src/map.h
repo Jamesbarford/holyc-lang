@@ -79,9 +79,11 @@ void ptrVecRelease(PtrVec *vec);
 
 int intMapSet(IntMap *map, long key, void *value);
 void *intMapGet(IntMap *map, long key);
+int intMapDelete(IntMap *map, long key);
 int intMapHas(IntMap *map, long key);
 IntMap *intMapNew(unsigned long capacity);
 void intMapSetfreeValue(IntMap *map, void (*_free_value)(void *value));
+void intMapClear(IntMap *map);
 void intMapRelease(IntMap *map);
 int intMapResize(IntMap *map);
 int intMapIter(IntMap *map, long *_idx, IntMapNode **_node);

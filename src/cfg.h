@@ -39,6 +39,7 @@ enum bbType {
 #define BB_FLAG_GOTO_LOOP          (0x100) /* this is for when a goto forms a 
                                             * loop */
 #define BB_FLAG_CASE_OWNED         (0x200)
+#define BB_FLAG_WHILE_LOOP         (0x400)
 
 typedef struct BasicBlock {
     /* @Confirm:
@@ -52,15 +53,17 @@ typedef struct BasicBlock {
     /* @Unused ? */
     int prev_cnt;
     int visited;
+    /* position in the CFG's array that this block lives */
+    int idx;
+
     struct BasicBlock *_if;
     struct BasicBlock *_else;
     struct BasicBlock *prev;
+    struct BasicBlock *next;
  //    IntSet *prev_block_ids;
     struct BasicBlock *prev_blocks[32];
     /* this is to be able to handle a switch */
-    PtrVec *next_blocks;
-    /* this is for most other blocks */
-    struct BasicBlock *next;
+    PtrVec *next_blocks; 
     PtrVec *ast_array;
 } BasicBlock;
 
@@ -75,6 +78,8 @@ typedef struct CFG {
     int bb_count;
     /* A more compact representation of the graph */
     IntMap *graph;
+    /* block_no => block hashtable */
+    IntMap *no_to_block;
     /* This a pointer to the memory pool which holds all of the basic blocks,
      * why am I not using head?*/
     void *_memory;
@@ -91,6 +96,7 @@ typedef struct CFGBuilder {
     BasicBlock *bb_pool;
     BasicBlock *bb_cur_loop;
     BasicBlock *bb_cur_else;
+    IntMap *leaf_cache;
 
     List *ast_list;
     List *ast_iter;
@@ -109,5 +115,7 @@ int bbPrevHas(BasicBlock *bb, int block_no);
 BasicBlock *cfgGet(CFG *cfg, int block_no);
 PtrVec *cfgConstruct(Cctrl *cc);
 void bbPrint(BasicBlock *bb);
+void bbPrintNoAst(BasicBlock *bb);
+char *bbToString(BasicBlock *bb);
 
 #endif

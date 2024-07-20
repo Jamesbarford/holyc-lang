@@ -24,7 +24,13 @@ AstType *ast_float_type = &(AstType){.kind = AST_TYPE_FLOAT, .size = 8, .ptr = N
 AstType *ast_void_type = &(AstType){.kind = AST_TYPE_VOID, .size = 0, .ptr = NULL,.issigned=0};
 AstType *ast_auto_type = &(AstType){.kind = AST_TYPE_VOID, .size = 0, .ptr = NULL,.issigned=0};
 
+Ast *ast_loop_sentinal = &(Ast){.kind = AST_GOTO, .type=NULL,
+    .slabel = &(aoStr){.data="loop_sentinal", .len=13, .capacity = 0}};
 Ast *placeholder_arg = &(Ast){ .kind = AST_PLACEHOLDER};
+
+Ast *ast_forever_sentinal = &(Ast){ .kind = AST_LITERAL,
+  .type = &(AstType){.kind = AST_TYPE_INT, .size = 8, .ptr = NULL,.issigned=1},
+  .i64 = 1 };
 
 void _astToString(aoStr *str, Ast *ast, int depth);
 char *_astToStringRec(Ast *ast, int depth);
@@ -1541,10 +1547,13 @@ void _astToString(aoStr *str, Ast *ast, int depth) {
                     }
                 }
             } else {
-                loggerWarning("printing whole class!\n");
-                _astToString(str,ast->cls,depth+1);
-                aoStrCatPrintf(str, "->");
-                aoStrCatPrintf(str, "%s", ast->field, ast->type->offset);
+                loggerWarning("printing whole class: %s!\n",
+                    astKindToString(ast->cls->kind));
+                aoStrCatRepeat(str, "  ", depth+1);
+                if (ast->cls->kind == AST_LVAR) {
+                    aoStrCatPrintf(str, "%s",ast->cls->lname->data);
+                }
+                aoStrCatPrintf(str, ".%s", ast->field, ast->type->offset);
             }
             astStringEndStmt(str);
             break;
@@ -1824,9 +1833,18 @@ static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
             break;
 
         case AST_STRING: {
-            aoStr *escaped = aoStrEscapeString(ast->sval);
-            aoStrCatPrintf(str, "\"%s\"", escaped->data);
-            aoStrRelease(escaped);
+            aoStr *str_formatted = aoStrNew();
+            aoStr *encoded = NULL;
+            char *quote = "\"";
+            if (lexeme_flags & LEXEME_GRAPH_VIZ_ENCODE_PUNCT) {
+                quote = "&#34;";
+                encoded = aoStrEncode(ast->sval);
+            } else {
+                encoded = aoStrEscapeString(ast->sval);
+            }
+            aoStrCatPrintf(str,"%s%s%s",quote,encoded->data,quote);
+            aoStrRelease(str_formatted);
+            aoStrRelease(encoded);
             break;
         }
         
@@ -1867,11 +1885,9 @@ static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
             }
 
             if (internal->len > 0) {
-                aoStr *escaped = aoStrEscapeString(internal);
-                aoStrCatPrintf(str, "%s(%s)",ast->fname->data,escaped->data);
-                aoStrRelease(escaped);
+                aoStrCatPrintf(str, "%s(%s);",ast->fname->data,internal->data);
             } else {
-                aoStrCatPrintf(str, "%s()",ast->fname->data);
+                aoStrCatPrintf(str, "%s();",ast->fname->data);
             }
             aoStrRelease(internal);
             break;
@@ -1917,16 +1933,23 @@ static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
                     ast_tmp = ast_tmp->cls->operand;
                 }
 
+                char *arrow = (lexeme_flags & LEXEME_GRAPH_VIZ_ENCODE_PUNCT) ? "-\\>" : "->"; 
+
                 if (ast_tmp->kind == AST_LVAR) {
-                    aoStrCatPrintf(str, "%s->",ast_tmp->lname->data);
+                    aoStrCatPrintf(str, "%s%s",ast_tmp->lname->data,arrow);
                 }
                 for (int i = 0; i < field_name_count; ++i) {
                     if (i + 1 == field_name_count) {
                         aoStrCatPrintf(str, "%s",field_names[i]);
                     } else {
-                        aoStrCatPrintf(str, "%s->",field_names[i]);
+                        aoStrCatPrintf(str, "%s%s",field_names[i],arrow);
                     }
                 }
+            } else if (ast->cls->kind == AST_LVAR) {
+                if (ast->cls->kind == AST_LVAR) {
+                    aoStrCatPrintf(str,"%s",ast->cls->lname->data);
+                }
+                aoStrCatPrintf(str, ".%s", ast->field, ast->type->offset);
             }
             break;
         }
@@ -1953,10 +1976,13 @@ static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
             _astLValueToString(str,ast->operand,lexeme_flags);
             break;
 
-        case AST_CAST:
-            aoStrCatPrintf(str, "cast ");
+        case AST_CAST: {
             _astLValueToString(str,ast->operand,lexeme_flags);
+            char *type = astTypeToString(ast->type);
+            aoStrCatPrintf(str, "(%s)", type);
+            free(type);
             break;
+        }
 
         case AST_RETURN:
             aoStrCatPrintf(str, "return ");
