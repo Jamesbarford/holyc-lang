@@ -26,6 +26,7 @@ enum bbType {
 /* These are builder flags */
 #define CFG_BUILDER_FLAG_IN_CONDITIONAL (0x1)
 #define CFG_BUILDER_FLAG_IN_LOOP        (0x2)
+#define CFG_BUILDER_FLAG_IN_SWITCH      (0x4)
 
 #define BB_FLAG_LOOP_HEAD          (0x1)
 #define BB_FLAG_LOOP_END           (0x2)
@@ -40,6 +41,8 @@ enum bbType {
                                             * loop */
 #define BB_FLAG_CASE_OWNED         (0x200)
 #define BB_FLAG_WHILE_LOOP         (0x400)
+#define BB_FLAG_CASE_BREAK         (0x800)
+#define BB_FLAG_SWITCH_END         (0x1000)
 
 typedef struct BasicBlock {
     /* @Confirm:

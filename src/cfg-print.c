@@ -50,6 +50,9 @@ typedef struct CfgGraphVizBuilder {
 
     int loop_idx;
     BasicBlock *loop_stack[32];
+
+    int return_idx;
+    BasicBlock *return_statements[32];
 } CfgGraphVizBuilder;
 
 static void cfgGraphVizBuilderInit(CfgGraphVizBuilder *builder) {
@@ -57,6 +60,7 @@ static void cfgGraphVizBuilderInit(CfgGraphVizBuilder *builder) {
     builder->loop_cnt = 0;
     builder->break_idx = 0;
     builder->loop_idx = 0;
+    builder->return_idx = 0;
 }
 
 static aoStr *bbAstArrayToString(PtrVec *ast_array, int ast_count) {
@@ -262,20 +266,19 @@ static void cfgCasePrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
             bb->block_no,
             bb->block_no);
 
-    if (_case->case_begin == _case->case_end) {
-        aoStrCatPrintf(builder->viz,"|case \\<%ld\\>",_case->case_begin);
-    } else {
-        aoStrCatPrintf(builder->viz,"|case \\<%ld ... %ld\\>",_case->case_begin,_case->case_end);
-    }
-
+    lvalue_str = astLValueToString(_case,(LEXEME_ENCODE_PUNCT|LEXEME_GRAPH_VIZ_ENCODE_PUNCT));
+    aoStrCatPrintf(builder->viz,"|%s",lvalue_str);
     aoStrCatPrintf(builder->viz,"|%s",ast_str->data);
-    aoStrRelease(ast_str);
+
     if (bb->next) {
         aoStrCatPrintf(builder->viz,
                 "|goto \\<%d bb\\>"
                 " \n}\"];\n\n",
                 bb->next->block_no);
     }
+
+    free(lvalue_str);
+    aoStrRelease(ast_str);
 }
 
 static void cfgSwitchPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
@@ -346,15 +349,15 @@ static void bbPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     switch (bb->type) {
         case BB_HEAD_BLOCK:    cfgHeadPrintf(builder,bb);    break;
         case BB_LOOP_BLOCK:    cfgLoopPrintf(builder,bb);    break;
-        case BB_DO_WHILE_COND: cfgDoWhileCondPrintf(builder,bb);  break;
-        case BB_BRANCH_BLOCK:  cfgBranchPrintf(builder,bb);       break;
-        case BB_BREAK_BLOCK:   cfgBreakPrintf(builder,bb);        break;
+        case BB_DO_WHILE_COND: cfgDoWhileCondPrintf(builder,bb); break;
+        case BB_BRANCH_BLOCK:  cfgBranchPrintf(builder,bb);      break;
+        case BB_BREAK_BLOCK:   cfgBreakPrintf(builder,bb);       break;
         case BB_END_BLOCK:
-        case BB_RETURN_BLOCK:  cfgReturnPrintf(builder,bb);  break;
-        case BB_CASE:          cfgCasePrintf(builder,bb);    break;
-        case BB_SWITCH:        cfgSwitchPrintf(builder,bb);  break;
-        case BB_CONTINUE:      cfgContinuePrintf(builder,bb);  break;
-        default:               cfgDefaultPrintf(builder,bb); break;
+        case BB_RETURN_BLOCK:  cfgReturnPrintf(builder,bb);   break;
+        case BB_CASE:          cfgCasePrintf(builder,bb);     break;
+        case BB_SWITCH:        cfgSwitchPrintf(builder,bb);   break;
+        case BB_CONTINUE:      cfgContinuePrintf(builder,bb); break;
+        default:               cfgDefaultPrintf(builder,bb);  break;
     }
 }
 
@@ -493,8 +496,10 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
 
     switch (bb->type) {
         /* I want to visit the if block first then the else */
+
+        case BB_CONTINUE:
         case BB_LOOP_BLOCK:
-            cfgLoopPrintf(builder,bb);
+            bbPrintf(builder,bb);
             if (bb->flags & BB_FLAG_UNCONDITIONAL_JUMP && bb->next) {
                 cfgCreatePictureUtil(builder,map,bb->next,seen);
             }
@@ -559,7 +564,6 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
             }
             break;
 
-        case BB_CONTINUE:
         case BB_CASE:
         case BB_CONTROL_BLOCK:
         case BB_HEAD_BLOCK:
@@ -577,8 +581,10 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
             break;
 
         case BB_END_BLOCK:
-        case BB_RETURN_BLOCK:
             cfgReturnPrintf(builder,bb);
+            break;
+        case BB_RETURN_BLOCK:
+            builder->return_statements[builder->return_idx++] = bb;
             break;
 
         default:
@@ -591,6 +597,11 @@ static void cfgCreatePicture(CfgGraphVizBuilder *builder, CFG *cfg) {
     IntMap *map = cfg->graph;
     IntMap *seen = intMapNew(32);
     cfgCreatePictureUtil(builder,map,cfg->head,seen);
+    /* Returns always exit the scope of where ever they are placed, so saving 
+     * them till the end makes sense */
+    for (int i = 0; i < builder->return_idx; ++i) {
+        cfgReturnPrintf(builder,builder->return_statements[i]);
+    }
     intMapRelease(seen);
 }
 
@@ -600,8 +611,18 @@ static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
             cfg->ref_fname->data,map->size);
 
     for (int i = 0; i < map->size; ++i) {
-        BasicBlock *cur = (BasicBlock *)intMapGet(map,map->indexes[i]);
-        assert(cur != NULL);
+        long idx = map->indexes[i];
+        IntMapNode *node = map->entries[idx];
+        if (!node) {
+            for (int j = 0; j < map->size; ++j) {
+                printf("%d ",map->indexes[j]);
+            }
+            printf("\n");
+            loggerPanic("Failed while creating mappings for: %s idx=%d, block_no=%d\n",
+                    cfg->ref_fname->data,i,map->indexes[i]);
+        }
+
+        BasicBlock *cur = (BasicBlock *)node->value;
 
         switch (cur->type) {
             case BB_CONTINUE:
