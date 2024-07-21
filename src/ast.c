@@ -1991,8 +1991,18 @@ static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
                     lexemePunctToStringWithFlags(';',lexeme_flags));
             break;
 
+        case AST_CASE: {
+            if (ast->case_begin == ast->case_end) {
+                aoStrCatPrintf(str,"case (%ld):",ast->case_begin);
+            } else {
+                aoStrCatPrintf(str,"case (%ld ... %ld\\):",
+                        ast->case_begin,ast->case_end);
+            }
+            break;
+        }
+
         case AST_BREAK:
-            aoStrCatPrintf(str, "break ");
+            aoStrCatPrintf(str, "break;");
             break;
 
         case TK_PRE_PLUS_PLUS:
@@ -2015,7 +2025,6 @@ static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
             break;
         }
 
-        case AST_CASE: break;
 
         default: {
             str_op = lexemePunctToStringWithFlags(ast->kind,lexeme_flags);
