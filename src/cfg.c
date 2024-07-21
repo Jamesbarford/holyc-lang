@@ -306,6 +306,19 @@ static void bbAddPrev(BasicBlock *bb, BasicBlock *prev) {
     }
 }
 
+static BasicBlock *cfgSelectOrCreateBlock(CFGBuilder *builder, int type) {
+    BasicBlock *bb_selected = NULL;
+    if (builder->bb->ast_array->size == 0) {
+        bb_selected = builder->bb;
+        bb_selected->type = type;
+    } else {
+        bb_selected = cfgBuilderAllocBasicBlock(builder,type);
+        bb_selected->prev = builder->bb;
+        builder->bb->next = bb_selected;
+    }
+    return bb_selected;
+}
+
 
 static void cgfHandleBranchBlock(CFGBuilder *builder, Ast *ast) {
     /**
@@ -335,15 +348,8 @@ static void cgfHandleBranchBlock(CFGBuilder *builder, Ast *ast) {
     int in_conditional = builder->flags & CFG_BUILDER_FLAG_IN_CONDITIONAL;
     BasicBlock *current_else = builder->bb_cur_else;
     
-    BasicBlock *bb = builder->bb;
-    if (bb->ast_array->size > 0) {
-        BasicBlock *new_bb = cfgBuilderAllocBasicBlock(builder,BB_BRANCH_BLOCK);
-        bb->next = new_bb;
-        new_bb->prev = bb;
-        bb = new_bb;
-    } else {
-        bb->type = BB_BRANCH_BLOCK;
-    }
+    BasicBlock *bb = cfgSelectOrCreateBlock(builder,BB_BRANCH_BLOCK);
+
     ptrVecPush(bb->ast_array,ast->cond);
     builder->flags |= CFG_BUILDER_FLAG_IN_CONDITIONAL;
 
@@ -352,7 +358,6 @@ static void cgfHandleBranchBlock(CFGBuilder *builder, Ast *ast) {
     BasicBlock *if_body = cfgBuilderAllocBasicBlock(builder,
                                                     BB_CONTROL_BLOCK);
     BasicBlock *new_block;
-
 
     if_body->prev   = bb;
     else_body->prev = bb;
@@ -379,14 +384,15 @@ static void cgfHandleBranchBlock(CFGBuilder *builder, Ast *ast) {
         } else {
             new_block = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
             bb->next = new_block;
-            new_block->prev = bb;
+            new_block->prev = else_body;
             cfgBuilderSetBasicBlock(builder,new_block);
         }
     } else {
         if (builder->bb != if_body) {
-            builder->bb->prev = bb;
+
             bb->next = builder->bb;
         }
+            builder->bb->prev = bb;
 
         int is_break = if_body->type != BB_BREAK_BLOCK;
         int is_return = if_body->next && if_body->next->type != BB_RETURN_BLOCK;
@@ -403,28 +409,36 @@ static void cgfHandleBranchBlock(CFGBuilder *builder, Ast *ast) {
     builder->bb_cur_else = current_else;
 }
 
+
 static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
     Ast *ast_init = ast->forinit;
     Ast *ast_cond = ast->forcond;
     Ast *ast_body = ast->forbody;
     Ast *ast_step = ast->forstep;
 
-    if (ast_cond == NULL) {
-        ast_cond = ast_forever_sentinal;
-    }
-
     builder->flags |= CFG_BUILDER_FLAG_IN_LOOP;
 
     BasicBlock *bb_prev_loop = builder->bb_cur_loop;
-    BasicBlock *bb_cond;
-    BasicBlock *bb = builder->bb;
-    if (bb->ast_array->size == 0) {
-        bb_cond = bb;
-        bb_cond->type = BB_BRANCH_BLOCK;
-    } else {
-        bb_cond = cfgBuilderAllocBasicBlock(builder,BB_BRANCH_BLOCK);
-        bb_cond->prev = bb;
-        builder->bb->next = bb_cond;
+
+    BasicBlock *bb_cond = NULL;
+    BasicBlock *bb_init = NULL;
+
+    if (ast_init) {
+        /* This is straight line code, there is no need to allocate or do 
+         * any basic block manipulation*/
+        if (builder->bb->type == BB_CONTROL_BLOCK) {
+            bb_init = builder->bb;
+        } else {
+            bb_init = cfgSelectOrCreateBlock(builder,BB_CONTROL_BLOCK);
+            builder->bb = bb_init;
+        }
+        ptrVecPush(bb_init->ast_array,ast_init);
+    }
+
+    if (ast_cond == NULL) {
+        ast_cond = ast_forever_sentinal;
+    } else { 
+        bb_cond = cfgSelectOrCreateBlock(builder,BB_BRANCH_BLOCK);
     }
 
     BasicBlock *bb_cond_else = cfgBuilderAllocBasicBlock(builder,
@@ -433,11 +447,8 @@ static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
      * builder->bb != bb_body */
     BasicBlock *bb_body = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
 
-    if (ast_init) ptrVecPush(bb->ast_array,ast_init);
-
     bb_cond->flags |= BB_FLAG_LOOP_HEAD;
 
-    bb->next = bb_cond;
     /* Jump into loop body if condition is met */
     bb_cond->_if = bb_body;
     /* Else move past loop body */
@@ -511,6 +522,7 @@ static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
     cfgBuilderSetBasicBlock(builder,bb_body);
     cfgHandleAstNode(builder,ast_body);
 
+    //bbPrint(builder->bb);
     if (bb_body->type != BB_BREAK_BLOCK && ast_step) {
         cfgHandleAstNode(builder,ast_step);
     }
@@ -521,7 +533,6 @@ static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
         builder->bb->prev = bb_cond;
         /* So we can access the loop block from the head of the condition */
         bb_cond->next = builder->bb;
-        // bb_cond->_else = builder->bb;
     }
 
     /* This is a loop which immediately hit a break; */
@@ -552,27 +563,15 @@ static void cfgHandleWhileLoop(CFGBuilder *builder, Ast *ast) {
     Ast *ast_cond = ast->whilecond;
     Ast *ast_body = ast->whilebody;
     
-    BasicBlock *bb_prev_loop = builder->bb_cur_loop;
-    BasicBlock *bb_cond;
     BasicBlock *bb = builder->bb;
-
-    if (bb->ast_array->size == 0) {
-        bb_cond = bb;
-        bb_cond->type = BB_BRANCH_BLOCK;
-    } else {
-        bb_cond = cfgBuilderAllocBasicBlock(builder,BB_BRANCH_BLOCK);
-        bb_cond->prev = bb;
-        builder->bb->next = bb_cond;
-    }
-
+    BasicBlock *bb_prev_loop = builder->bb_cur_loop;
+    BasicBlock *bb_cond = cfgSelectOrCreateBlock(builder,BB_BRANCH_BLOCK);
+    BasicBlock *bb_body = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
     BasicBlock *bb_cond_else = cfgBuilderAllocBasicBlock(builder,
                                                          BB_CONTROL_BLOCK);
-    BasicBlock *bb_body = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
 
     bb_cond->flags |= (BB_FLAG_LOOP_HEAD|BB_FLAG_WHILE_LOOP);
     bb->next = bb_cond;
-
-
 
     /* Jump into loop body if condition is met */
     bb_cond->_if = bb_body;
@@ -639,17 +638,7 @@ static void cfgHandleDoWhileLoop(CFGBuilder *builder, Ast *ast) {
     Ast *ast_body = ast->whilebody;
 
     BasicBlock *bb_prev_loop = builder->bb_cur_loop;
-    BasicBlock *bb = builder->bb;
-    BasicBlock *bb_do_while;
-
-    if (bb->ast_array->size == 0) {
-        bb_do_while = bb;
-        bb_do_while->type = BB_CONTROL_BLOCK;
-    } else {
-        bb_do_while = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
-        bb_do_while->prev = bb;
-        builder->bb->next = bb_do_while;
-    }
+    BasicBlock *bb_do_while = cfgSelectOrCreateBlock(builder,BB_CONTROL_BLOCK);
     BasicBlock *bb_cond_else = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
 
     builder->bb_cur_loop = bb_do_while;
@@ -707,17 +696,7 @@ static void cfgHandleGoto(CFGBuilder *builder, Ast *ast) {
 }
 
 static void cfgHandleReturn(CFGBuilder *builder, Ast *ast) {
-    BasicBlock *bb = builder->bb;
-    BasicBlock *bb_return;
-
-    if (bb->ast_array->size == 0) {
-        bb_return = bb;
-        bb_return->type = BB_RETURN_BLOCK;
-    } else {
-        bb_return = cfgBuilderAllocBasicBlock(builder,BB_RETURN_BLOCK);
-        bb->next = bb_return;
-        bb_return->prev = bb;
-    }
+    BasicBlock *bb_return = cfgSelectOrCreateBlock(builder,BB_RETURN_BLOCK);
     bb_return->next = NULL;
     ptrVecPush(bb_return->ast_array,ast);
     cfgBuilderSetBasicBlock(builder,bb_return);
@@ -787,16 +766,11 @@ static void cfgHandleCase(CFGBuilder *builder, BasicBlock *bb_end, Ast *ast) {
  * and the next block respectively. This is easier to manage and theoretically
  * are different blocks but connected to the switch */
 static void cfgHandleSwitch(CFGBuilder *builder, Ast *ast) {
-    BasicBlock *bb_switch = builder->bb;
-    // BasicBlock *bb_default = NULL;
-    BasicBlock *bb_end  = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
+    BasicBlock *bb_switch = cfgSelectOrCreateBlock(builder,BB_SWITCH);
+    BasicBlock *bb_end = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
 
     ptrVecPush(bb_switch->ast_array,ast->switch_cond);
-    //if (ast->case_default) {
-    //    bb_default = cfgBuilderAllocBasicBlock(builder,BB_CASE);
-    //    bb_default->flags = BB_FLAG_ELSE_BRANCH;
-    //}
-    bb_switch->type = BB_SWITCH;
+
     bb_switch->next_blocks = ptrVecNew();
 
     if (!ast->switch_bounds_checked) {
@@ -876,9 +850,9 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
             BasicBlock *pre = builder->bb;
             cfgHandleDoWhileLoop(builder,ast);
             BasicBlock *post = builder->bb;
-            BasicBlock *loop_head = pre->next;
-            /* this is the loop back */
-            loop_head->next = NULL;
+            if (pre->type != BB_BRANCH_BLOCK) {
+                pre = pre->next;
+            }
             BasicBlock *join = cfgMergeBranches(builder,pre,post);
             cfgBuilderSetBasicBlock(builder,join);
             break;
@@ -887,13 +861,12 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
         case AST_FOR: {
             BasicBlock *pre = builder->bb;
             cfgHandleForLoop(builder,ast);
-            BasicBlock *loop_head = pre->next;
             /* this is the loop back */
-            loop_head->next = NULL;
-
+            if (pre->type != BB_BRANCH_BLOCK) {
+                pre = pre->next;
+            }
             BasicBlock *post = builder->bb;
             BasicBlock *join = cfgMergeBranches(builder,pre,post);
-
             cfgBuilderSetBasicBlock(builder,join);
             break;
         }
@@ -902,9 +875,9 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
             BasicBlock *pre = builder->bb;
             cfgHandleWhileLoop(builder,ast);
             BasicBlock *post = builder->bb;
-            BasicBlock *loop_head = pre->next;
-            /* this is the loop back */
-            loop_head->next = NULL;
+            if (pre->type != BB_BRANCH_BLOCK) {
+                pre = pre->next;
+            }
             BasicBlock *join = cfgMergeBranches(builder,pre,post);
             cfgBuilderSetBasicBlock(builder,join);
             break;
@@ -914,20 +887,19 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
             BasicBlock *pre = builder->bb;
             cgfHandleBranchBlock(builder,ast);
             BasicBlock *post;
-            if (pre->next && pre->next->_else) {
-                post = pre->next->_else;
-            } else {
-                post = builder->bb;
+            if (pre->type != BB_BRANCH_BLOCK) {
+                pre = pre->next;
             }
+            post = builder->bb;
             BasicBlock *join = cfgMergeBranches(builder,pre,post);
             cfgBuilderSetBasicBlock(builder,join);
             break;
         }
-        case AST_GOTO:          cfgHandleGoto(builder,ast);        break;
-        case AST_LABEL:         cfgHandleLabel(builder,ast);       break;
-        case AST_RETURN:        cfgHandleReturn(builder,ast);      break;
-        case AST_JUMP:         cfgHandleJump(builder,ast);        break;
         case AST_SWITCH:       cfgHandleSwitch(builder,ast);      break;
+        case AST_GOTO:         cfgHandleGoto(builder,ast);        break;
+        case AST_LABEL:        cfgHandleLabel(builder,ast);       break;
+        case AST_RETURN:       cfgHandleReturn(builder,ast);      break;
+        case AST_JUMP:         cfgHandleJump(builder,ast);        break;
 
         case AST_CASE: {
             loggerPanic("Case should be handled by switch function\n");
@@ -1104,8 +1076,10 @@ void cfgAdjacencyListPrint(CFG *cfg) {
 
 /* Returns the parent */
 BasicBlock *bbRelinkControl(IntMap *map, BasicBlock *bb) {
-    BasicBlock *parent = bb->prev;
+    BasicBlock *parent = bb->prev_blocks[0];
     BasicBlock *child = bb->next;
+    loggerWarning("relink bb%d parent: %d child: %d\n",
+            bb->block_no,parent->block_no,child->block_no);
 
     if (child->type == BB_CONTROL_BLOCK && bb->type == BB_CONTROL_BLOCK) {
         if (bb->next == child && child->prev != bb) {
@@ -1126,14 +1100,14 @@ BasicBlock *bbRelinkControl(IntMap *map, BasicBlock *bb) {
         case BB_BRANCH_BLOCK: {
             if (parent->_if == bb) {
                 parent->_if = child;
- //               child->prev = parent->_if;
+                bbAddPrev(child,parent->_if);
             } else if (parent->_else == bb) {
                 parent->_else = child;
-                //child->prev = parent->_else;
             } else {
                 // loggerPanic("Could neither relink if or else branch");
                 return NULL;
             }
+            bbAddPrev(child,parent);
             break;
         }
         default:
@@ -1185,7 +1159,6 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
             case BB_RETURN_BLOCK:
             case BB_END_BLOCK: {
                 vec = ptrVecNew();
-                //ptrVecPush(vec,hash);
                 break;
             }
 
@@ -1361,6 +1334,7 @@ static CFG *cfgCreateForFunction(Cctrl *cc, Ast *ast_fn, IntMap *leaf_cache, int
     cfg->_memory = builder.bb_pool;
     cfg->graph = cfgBuildAdjacencyList(cfg);
     *_block_no = builder.bb_block_no+1;
+    cfgAdjacencyListPrint(cfg);
 
 //    dictRelease(builder.resolved_labels);
 //    listRelease(builder.unresoved_gotos,NULL);

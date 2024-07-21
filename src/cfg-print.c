@@ -169,7 +169,8 @@ static void cfgLoopPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
 }
 
 static void cfgBreakPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
-    aoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size);
+    aoStr *internal = 
+        bbAstArrayToString(bb->ast_array,bb->ast_array->size);
 
     aoStrCatPrintf(builder->viz,
             "    bb%d [shape=record,style=filled,fillcolor=violet,label=\"{\\<bb %d\\>\n",
@@ -288,15 +289,24 @@ static void cfgSwitchPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     aoStrCatPrintf(ast_str,"test (%s)\\l\\\n",lvalue_str);
     free(lvalue_str);
 
-    aoStrCatPrintf(builder->viz,
-            "    bb%d [shape=record,style=filled,fillcolor=darkorchid2,label=\"{\\<bb %d\\>|\n%s|%s",
-            bb->block_no,
-            bb->block_no,
-            internal->data,
-            ast_str->data);
+    if (internal) {
+        aoStrCatPrintf(builder->viz,
+                "    bb%d [shape=record,style=filled,fillcolor=darkorchid2,label=\"{\\<bb %d\\>|\n%s|%s",
+                bb->block_no,
+                bb->block_no,
+                internal->data,
+                ast_str->data);
+    } else {
+        aoStrCatPrintf(builder->viz,
+                "    bb%d [shape=record,style=filled,fillcolor=darkorchid2,label=\"{\\<bb %d\\>|\n%s",
+                bb->block_no,
+                bb->block_no,
+                ast_str->data);
+    }
 
     aoStrCat(builder->viz,"\n}\"];\n\n");
     aoStrRelease(ast_str);
+    aoStrRelease(internal);
 }
 
 static void cfgContinuePrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
@@ -668,6 +678,12 @@ static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
                             BB_FMT_BLACK_SOLID,
                             cur->block_no,
                             bb->block_no);
+                }
+                if (cur->next) {
+                    aoStrCatPrintf(builder->viz,
+                            BB_FMT_BLACK_SOLID,
+                            cur->block_no,
+                            cur->next->block_no);
                 }
                 break;
             }
