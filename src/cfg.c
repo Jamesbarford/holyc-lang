@@ -157,9 +157,6 @@ char *bbFlagsToString(unsigned int flags) {
     if (flags & BB_FLAG_CASE_BREAK) {
         _concat_flag("BB_FLAG_CASE_BREAK");
     }
-    if (flags & BB_FLAG_SWITCH_END) {
-        _concat_flag("BB_FLAG_SWITCH_END");
-    }
     aoStrPutChar(str,')');
 
 #undef _concat_flag
@@ -279,10 +276,6 @@ static void cfgBuilderInit(CFGBuilder *builder, Cctrl *cc, IntMap *leaf_cache, i
     builder->unresoved_gotos = listNew();
     builder->resolved_labels = dictNew(&default_table_type);
     dictSetFreeKey(builder->resolved_labels,NULL);
-}
-
-static void cfgBuilderSetCFG(CFGBuilder *builder, CFG *cfg) {
-    builder->cfg = cfg;
 }
 
 static void cfgBuilderSetBasicBlock(CFGBuilder *builder, BasicBlock *bb) {
@@ -766,10 +759,9 @@ static void cfgHandleCase(CFGBuilder *builder, BasicBlock *bb_end, Ast *ast) {
         builder->bb->flags |= BB_FLAG_CASE_OWNED;
     }
 
-    builder->bb->next = bb_end;
     bb_end->prev = builder->bb;
+    builder->bb->next = bb_end;
     bbAddPrev(bb_case,bb_switch);
-    bbAddPrev(bb_end,bb_case);
 }
 
 /* The first and last items of the next_blocks array are the switch condition 
@@ -778,7 +770,6 @@ static void cfgHandleCase(CFGBuilder *builder, BasicBlock *bb_end, Ast *ast) {
 static void cfgHandleSwitch(CFGBuilder *builder, Ast *ast) {
     BasicBlock *bb_switch = cfgSelectOrCreateBlock(builder,BB_SWITCH);
     BasicBlock *bb_end = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
-    bb_end->flags |= BB_FLAG_SWITCH_END;
     int sp = 0;
     int prev_in_switch = builder->flags & CFG_BUILDER_FLAG_IN_SWITCH;
     static BasicBlock *bb_stack[128];
@@ -828,6 +819,10 @@ static void cfgLinkLeaves(IntMap *map, BasicBlock *bb, BasicBlock *dest) {
         intMapSet(map,bb->block_no,NULL);
         switch (bb->type) {
             case BB_SWITCH:
+                for (int i = 0; i < bb->next_blocks->size; ++i) {
+                    cfgLinkLeaves(map,bb->next_blocks->entries[i],dest);
+                } 
+            case BB_CASE:
             case BB_CONTROL_BLOCK:
                 if      (bb == bb->next)   bb->next = dest;
                 else if (bb->next == NULL) bb->next = dest;
@@ -922,11 +917,7 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
             break;
         }
         case AST_SWITCH: {
-            // BasicBlock *pre = builder->bb;
             cfgHandleSwitch(builder,ast);
-            //BasicBlock *post = builder->bb;
-            //BasicBlock *join = cfgMergeBranches(builder,pre,post);
-            //cfgBuilderSetBasicBlock(builder,join);
             break;
         }    
         case AST_GOTO:         cfgHandleGoto(builder,ast);        break;
@@ -1130,53 +1121,6 @@ int cfgRelinkVector(IntMap *map, BasicBlock *parent, BasicBlock *child,
     return 0;
 }
 
-void bbRelinkSwitch(IntMap *map, IntMap *no_to_block, BasicBlock *bb) {
-    BasicBlock *prev = bb->prev;
-    BasicBlock *child = NULL;
-    assert(prev != NULL);
-
-    switch (prev->type) {
-        case BB_BRANCH_BLOCK: {
-            if (prev->_if->type == BB_CONTROL_BLOCK && 
-                    prev->_if->next->type == BB_SWITCH) {
-                // bbPrint(prev->_if->next);
-                child = prev->_else;
-
-                /* 
-                 * XXX:
-                 * This is horribly wrong. 
-                 *  Use strrocc.HC to show. I possibly think that this should 
-                 *  be solved further up the branch. Using create or allocate 
-                 *  block might be the answer
-                 * */
-                //for (int i = 0; i < bb->prev_cnt; ++i) {
-                //    BasicBlock *parent = bb->prev_blocks[i];
-                //    if (parent->_else != bb) {
-                //        bbPrint(parent);
-                //        continue;
-                //    }
-
-                //    bbAddPrev(child,parent);
-                //    parent->_else = child;
-                //    if (!intMapHas(map,parent->block_no)) {
-                //        PtrVec *v = ptrVecNew();
-                //        ptrVecPush(v,child);
-                //        intMapSet(map,parent->block_no,v);
-                //        loggerWarning("problem\n");
-                //    } else {
-                //        cfgRelinkVector(map,parent,child,bb);
-                //        intMapSet(no_to_block,bb->block_no,bb);
-                //    }
-                //}
-            }
-            break;
-        }
-        default: loggerPanic("Cannot handle bb%d of type %s\n",
-                         bb->block_no, bbTypeToString(bb->type));
-    }
-}
-
-
 /* Returns the parent */
 BasicBlock *bbRelinkControl(IntMap *map, BasicBlock *bb) {
     BasicBlock *parent = bb->prev_blocks[0];
@@ -1209,7 +1153,7 @@ BasicBlock *bbRelinkControl(IntMap *map, BasicBlock *bb) {
             } else if (parent->_else == bb) {
                 parent->_else = child;
             } else {
-                // loggerPanic("Could neither relink if or else branch");
+                loggerPanic("Could neither relink if or else branch");
                 return NULL;
             }
             bbAddPrev(child,parent);
@@ -1217,7 +1161,7 @@ BasicBlock *bbRelinkControl(IntMap *map, BasicBlock *bb) {
         }
         default:
             loggerPanic("Could not handle parent bb:%d of type = %s\n",
-                    parent->block_no, bbTypeToString(bb->type));
+                    parent->block_no, bbTypeToString(parent->type));
     }
     cfgRelinkVector(map,parent,child,bb);
     return child;
@@ -1269,20 +1213,10 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
                         } else {
                             if (bb->prev && bb->prev->type == BB_SWITCH) {
                                 bb->type = BB_END_BLOCK;
-                            } else if (bb->flags & BB_FLAG_SWITCH_END) {
-                                bbRelinkSwitch(map,cfg->no_to_block,bb);
-                                bb->type = BB_GARBAGE;
-                                if (bb->type == BB_GARBAGE) {
-                                    // loggerWarning("GARBAGE: bb%d\n",bb->block_no);
-                                    intMapDelete(map,bb->block_no);
-                                    intMapDelete(cfg->no_to_block,bb->block_no);
-                                    continue;
-                                }
-                                break;
                             } else {
                                 bb->type = BB_GARBAGE;
-                                loggerWarning("GARBAGE: bb%d\n",bb->block_no);
-                                bbPrint(bb);
+                        //         loggerWarning("GARBAGE: bb%d\n",bb->block_no);
+                        //       bbPrint(bb);
                                 continue;
                             }
                             break;
@@ -1402,17 +1336,12 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
         assert(bb_dest != NULL);
         cfgRelocateGoto(builder,bb_goto,bb_dest,goto_label);
     }
-
-    /* We still want these structures but don't want their contents for the 
-     * next functions. */
-//    dictClear(builder->resolved_labels);
-//    listClear(builder->unresoved_gotos,NULL);
 }
 
 
 static CFG *cfgCreateForFunction(Cctrl *cc, Ast *ast_fn, IntMap *leaf_cache, int *_block_no) {
     CFGBuilder builder;
-    *_block_no += 5;
+    *_block_no += 1;
 
     cfgBuilderInit(&builder,cc,leaf_cache,*_block_no);
 
@@ -1441,8 +1370,8 @@ static CFG *cfgCreateForFunction(Cctrl *cc, Ast *ast_fn, IntMap *leaf_cache, int
     cfg->graph = cfgBuildAdjacencyList(cfg);
     *_block_no = builder.bb_block_no+1;
 
-//    dictRelease(builder.resolved_labels);
-//    listRelease(builder.unresoved_gotos,NULL);
+    //dictRelease(builder.resolved_labels);
+    //listRelease(builder.unresoved_gotos,NULL);
     return cfg;
 }
 

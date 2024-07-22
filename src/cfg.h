@@ -42,7 +42,6 @@ enum bbType {
 #define BB_FLAG_CASE_OWNED         (0x200)
 #define BB_FLAG_WHILE_LOOP         (0x400)
 #define BB_FLAG_CASE_BREAK         (0x800)
-#define BB_FLAG_SWITCH_END         (0x1000)
 
 typedef struct BasicBlock {
     /* @Confirm:
