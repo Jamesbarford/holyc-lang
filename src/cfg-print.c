@@ -615,7 +615,7 @@ static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
         IntMapNode *node = map->entries[idx];
         if (!node) {
             for (int j = 0; j < map->size; ++j) {
-                printf("%d ",map->indexes[j]);
+                printf("%ld ",map->indexes[j]);
             }
             printf("\n");
             loggerPanic("Failed while creating mappings for: %s idx=%d, block_no=%d\n",
