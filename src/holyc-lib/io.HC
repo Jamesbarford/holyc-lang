@@ -1,45 +1,69 @@
 #include "./defs.HH"
 #include "./memory.HC"
 
-#define F_DUPFD         0  
-#define F_GETFD         1  
-#define F_SETFD         2  
-#define F_GETFL         3  
-#define F_SETFL         4  
-#define F_GETOWN        5  
-#define F_SETOWN        6  
-#define F_GETLK         7  
-#define F_SETLK         8  
-#define F_SETLKW        9  
+#define F_DUPFD 0  
+#define F_GETFD 1  
+#define F_SETFD 2  
+#define F_GETFL 3  
+#define F_SETFL 4  
 
-#define F_FLUSH_DATA    40
-#define F_CHKCLEAN      41 
-#define F_PREALLOCATE   42 
-#define F_SETSIZE       43 
-#define F_RDADVISE      44 
-#define F_RDAHEAD       45 
+#ifdef IS_LINUX
+  #define F_GETOWN 0x9
+  #define F_SETOWN 0x8
+  #define F_GETLK  0x5
+  #define F_SETLK  0x6
+  #define F_SETLKW 0x7
+#else
+  #define F_GETOWN 0x5
+  #define F_SETOWN 0x6
+  #define F_GETLK  0x7
+  #define F_SETLK  0x8
+  #define F_SETLKW 0x9
+#endif
 
-#define FD_CLOEXEC      1  
+#define F_FLUSH_DATA  40
+#define F_CHKCLEAN    41
+#define F_PREALLOCATE 42
+#define F_SETSIZE     43
+#define F_RDADVISE    44
+#define F_RDAHEAD     45
+
+#define FD_CLOEXEC 1
 
 /* record locking flags */
-#define F_RDLCK         1         
-#define F_UNLCK         2         
-#define F_WRLCK         3         
+#ifdef IS_LINUX
+  #define F_RDLCK 0
+  #define F_WRLCK 1
+  #define F_UNLCK 2
+#else
+  #define F_RDLCK 1
+  #define F_UNLCK 2
+  #define F_WRLCK 3
+#endif
 
-#define O_RDONLY        0x0000    
-#define O_WRONLY        0x0001    
-#define O_RDWR          0x0002    
-#define O_ACCMODE       0x0003    
-#define O_CREAT         0x00000200
-#define O_TRUNC         0x00000400
-#define O_EXCL          0x00000800
+#define O_RDONLY  0x0000
+#define O_WRONLY  0x0001
+#define O_RDWR    0x0002
+#define O_ACCMODE 0x0003
 
-#define O_NONBLOCK      0x00000004
-#define O_APPEND        0x00000008
+/* Just why? */
+#ifdef IS_LINUX
+  #define O_CREAT    0x040
+  #define O_TRUNC    0x200
+  #define O_EXCL     0x080
+  #define O_NONBLOCK 0x800
+  #define O_APPEND   0x400
+#else
+  #define O_CREAT    0x200
+  #define O_TRUNC    0x400
+  #define O_EXCL     0x800
+  #define O_NONBLOCK 0x004
+  #define O_APPEND   0x008
+#endif
 
-#define SEEK_SET        0
-#define SEEK_CUR        1
-#define SEEK_END        2
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
 
 /*XXX: Should create a script that converts a select amount of c-class to 
  * HC bindings so that they can be called and variance between operating systems
@@ -99,7 +123,7 @@ public U8 *FileRead(U8 *path, I64 *_size=NULL)
     *_size = len;
   }
 
-  s[len-1] = '\0';
+  s[len] = '\0';
   close(fd);
   return s;
 }
