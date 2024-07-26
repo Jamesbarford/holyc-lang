@@ -26,3 +26,6 @@
 #define U8_MAX  0xFF
 #define I8_MAX  0x7F
 #define I8_MIN  0xFFFFFF80
+
+I64 errno;
+extern "c" U8 *strerror(I64 errnum);
