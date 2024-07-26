@@ -561,45 +561,69 @@ public Bool Str2CDateStruct(U8 *strdate, U8 *format, CDateStruct *t);
 public Bool WildMatch(U8 *test_str, U8 *wild_str);
 public CDate StrToCDate(U8 *_str, U8 *fmt);
 
-#define F_DUPFD         0  /* Duplicate a file descriptor */
-#define F_GETFD         1  /* Retrieve file descriptor flags */
-#define F_SETFD         2  /* Assign flags to file descriptor */
-#define F_GETFL         3  /* Get file status flags */
-#define F_SETFL         4  /* Assign file status flags */
-#define F_GETOWN        5  /* Retrieve SIGIO/SIGURG process/group */
-#define F_SETOWN        6  /* Set SIGIO/SIGURG process/group */
-#define F_GETLK         7  /* Query record locking info */
-#define F_SETLK         8  /* Set record locking info without waiting */
-#define F_SETLKW        9  /* Set record locking info with waiting */
+#define F_DUPFD 0 /* Duplicate a file descriptor */
+#define F_GETFD 1 /* Retrieve file descriptor flags */
+#define F_SETFD 2 /* Assign flags to file descriptor */
+#define F_GETFL 3 /* Get file status flags */
+#define F_SETFL 4 /* Assign file status flags */
 
-#define F_FLUSH_DATA   40  /* Commit data to disk */
-#define F_CHKCLEAN     41  /* Verify file is not modified */
-#define F_PREALLOCATE  42  /* Allocate space for file in advance */
-#define F_SETSIZE      43  /* Adjust file size */
-#define F_RDADVISE     44  /* Suggest read behavior */
-#define F_RDAHEAD      45  /* Enable read ahead */
+#define F_FLUSH_DATA  40 /* Commit data to disk */
+#define F_CHKCLEAN    41 /* Verify file is not modified */
+#define F_PREALLOCATE 42 /* Allocate space for file in advance */
+#define F_SETSIZE     43 /* Adjust file size */
+#define F_RDADVISE    44 /* Suggest read behavior */
+#define F_RDAHEAD     45 /* Enable read ahead */
 
-#define FD_CLOEXEC      1  /* Close file descriptor on exec */
+#define FD_CLOEXEC 1  /* Close file descriptor on exec */
+
+#ifdef IS_LINUX
+  #define F_GETOWN 0x9 /* Retrieve SIGIO/SIGURG process/group */
+  #define F_SETOWN 0x8 /* Set SIGIO/SIGURG process/group */
+  #define F_GETLK  0x5 /* Query record locking info */
+  #define F_SETLK  0x6 /* Set record locking info without waiting */
+  #define F_SETLKW 0x7 /* Set record locking info with waiting */
+#else
+  #define F_GETOWN 0x5
+  #define F_SETOWN 0x6
+  #define F_GETLK  0x7
+  #define F_SETLK  0x8
+  #define F_SETLKW 0x9
+#endif
+
+/* record locking flags */
+#ifdef IS_LINUX
+  #define F_RDLCK 0 /* Establish a read lock */
+  #define F_WRLCK 1 /* Remove a lock */
+  #define F_UNLCK 2 /* Establish a write lock */
+#else
+  #define F_RDLCK 1
+  #define F_UNLCK 2
+  #define F_WRLCK 3
+#endif
+
+#define O_RDONLY  0x0000 /* Open exclusively for reading */
+#define O_WRONLY  0x0001 /* Open exclusively for writing */
+#define O_RDWR    0x0002 /* Open for reading and writing */
+#define O_ACCMODE 0x0003 /* Mask to extract access modes */
 
 /* Record locking flags */
-#define F_RDLCK         1  /* Establish a read lock */
-#define F_UNLCK         2  /* Remove a lock */
-#define F_WRLCK         3  /* Establish a write lock */
+#ifdef IS_LINUX
+  #define O_CREAT    0x040 /* Create file if it doesn't exist */
+  #define O_TRUNC    0x200 /* Truncate existing file to zero length */
+  #define O_EXCL     0x080 /* Error if file already exists */
+  #define O_NONBLOCK 0x800 /* Non-blocking mode */
+  #define O_APPEND   0x400 /* Append data to the end of the file */
+#else
+  #define O_CREAT    0x00000200
+  #define O_TRUNC    0x00000400
+  #define O_EXCL     0x00000800
+  #define O_NONBLOCK 0x00000004
+  #define O_APPEND   0x00000008
+#endif
 
-#define O_RDONLY    0x0000    /* Open exclusively for reading */
-#define O_WRONLY    0x0001    /* Open exclusively for writing */
-#define O_RDWR      0x0002    /* Open for reading and writing */
-#define O_ACCMODE   0x0003    /* Mask to extract access modes */
-#define O_CREAT     0x00000200 /* Create file if it doesn't exist */
-#define O_TRUNC     0x00000400 /* Truncate existing file to zero length */
-#define O_EXCL      0x00000800 /* Error if file already exists */
-
-#define O_NONBLOCK  0x00000004 /* Non-blocking mode */
-#define O_APPEND    0x00000008 /* Append data to the end of the file */
-
-#define SEEK_SET    0 /* Set offset to specified value */
-#define SEEK_CUR    1 /* Set offset to current position plus value */
-#define SEEK_END    2 /* Set offset to size of file plus value */
+#define SEEK_SET 0 /* Set offset to specified value */
+#define SEEK_CUR 1 /* Set offset to current position plus value */
+#define SEEK_END 2 /* Set offset to size of file plus value */
 
 /*
  * The iovec class represents a buffer in memory, with a base address and a length.
