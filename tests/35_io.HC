@@ -67,7 +67,6 @@ Bool TestAppendFile(U0)
   auto buffer = FileRead(TEST_FILE);
 
   auto len = StrLen(buffer);
-  "%d\n",len;
   if (len != 6*4) return __fail_and_cleanup;
   if (StrNCmp(buffer,TEST_DATA TEST_DATA TEST_DATA TEST_DATA,6*4) != 0) 
     return __fail_and_cleanup;
