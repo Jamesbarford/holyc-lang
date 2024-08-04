@@ -14,69 +14,7 @@
 #include "util.h"
 
 static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast);
-
-void cfgSCCUtil(BasicBlock *bb, int *disc, int *low, List *st, 
-        int *stack_member)
-{
-    static int time = 0;
-
-    disc[bb->block_no] = low[bb->block_no] = ++time;
-    listAppend(st,bb);
-    stack_member[bb->block_no] = 1;
-    BasicBlock *adjacent[4] = {bb->next, bb->prev, bb->_if, bb->_else};
-    if (bb->type != BB_LOOP_BLOCK && bb->type != BB_DO_WHILE_COND) {
-        adjacent[1] = NULL;
-    }
-
-    for (int i = 0; i < 4; ++i) {
-        BasicBlock *v = adjacent[i];
-        if (!v) continue;
-
-        if (disc[v->block_no] == -1) {
-            cfgSCCUtil(v,disc,low,st,stack_member);
-            low[bb->block_no] = min(low[bb->block_no],low[v->block_no]);
-        } else if (stack_member[v->block_no] == 1) {
-            low[bb->block_no] = min(low[bb->block_no],disc[v->block_no]);
-        } 
-    }
-
-    if (low[bb->block_no] == disc[bb->block_no]) {
-        BasicBlock *it;
-        while (listHead(st) != bb) {
-            it = listPop(st);
-            if (!it) break;
-            printf("%d ", it->block_no);
-            stack_member[it->block_no] = 0;
-        }
-        it = listPop(st);
-        if (it) {
-            printf("%d ", it->block_no);
-            stack_member[it->block_no] = 0;
-        }
-    }
-}
-
-void cfgGetStronglyConnectedComponents(CFG *cfg) {
-    int *disc = cast(int *,malloc(sizeof(int) * cfg->bb_count));
-    int *low = cast(int *,malloc(sizeof(int) * cfg->bb_count));
-    int *stack_member = cast(int *,malloc(sizeof(int) * cfg->bb_count));
-    List *st = listNew();
-
-    for (int i = 0; i < cfg->bb_count; ++i) {
-        disc[i] = low[i] = -1;
-        stack_member[i] = 0;
-    }
-
-    BasicBlock *bb_array = cast(BasicBlock *, cfg->_memory);
-
-    for (int i = 0; i < cfg->bb_count; ++i) {
-        BasicBlock *bb = &(bb_array[i]);
-        if (disc[i] == -1 && bb->type != BB_GARBAGE) {
-            cfgSCCUtil(bb,disc,low,st,stack_member);
-        }
-    }
-}
-
+static void cfgLinkLeaves(IntMap *map, BasicBlock *bb, BasicBlock *dest);
 
 char *bbTypeToString(int type) {
     switch (type) {
@@ -93,6 +31,7 @@ char *bbTypeToString(int type) {
         case BB_SWITCH:             return "BB_SWITCH";
         case BB_CASE:               return "BB_CASE";
         case BB_CONTINUE:           return "BB_CONTINUE";
+        case BB_DO_WHILE_HEAD:      return "BB_DO_WHILE_HEAD";
         default:
             loggerPanic("Unknown type: %d\n", type);
     }
@@ -199,6 +138,39 @@ char *bbToString(BasicBlock *bb) {
     return aoStrMove(str);
 }
 
+char *bbToJSON(BasicBlock *bb) {
+    aoStr *str = aoStrNew();
+    char *str_flags = bbFlagsToString(bb->flags);
+    char *str_type =  bbTypeToString(bb->type);
+    char *str_prev =  bbPreviousBlockNumbersToString(bb);
+    char *str_prev_ptr = NULL;
+
+    if (bb->prev) {
+        str_prev_ptr = mprintf("bb%d", bb->prev->block_no);
+    }
+
+    aoStrCat(str,"{\n");
+    aoStrCatPrintf(str,"    \"block_no\": \"bb%d\",\n",bb->block_no);
+    aoStrCatPrintf(str,"    \"type\": \"%s\",\n", str_type);
+    aoStrCatPrintf(str,"    \"flags\": \"%s\",\n", str_flags);
+    aoStrCatPrintf(str,"    \"prev_nodes\": [%s],\n", str_prev);
+    aoStrCatPrintf(str,"    \"prev_ptr\": \"%s\",\n", str_prev_ptr ? str_prev_ptr : "(null)");
+    if (bb->type == BB_BRANCH_BLOCK) {
+        if (bb->_if)   aoStrCatPrintf(str,"    \"if\": \"bb%d\",\n",bb->_if->block_no);
+        if (bb->_else) aoStrCatPrintf(str,"    \"else\": \"bb%d\"\n",bb->_else->block_no);
+    } else {
+        if (bb->next) aoStrCatPrintf(str,"    \"next\": \"bb%d\"\n",bb->next->block_no);
+    }
+    if (str_prev_ptr) {
+        free(str_prev_ptr);
+    }
+
+    free((char*)str_flags);
+    free((char*)str_prev);
+    aoStrCat(str,"}\n");
+    return aoStrMove(str);
+}
+
 void bbPrintNoAst(BasicBlock *bb) {
     char *bb_string = bbToString(bb);
     printf("%s\n",bb_string);
@@ -206,6 +178,7 @@ void bbPrintNoAst(BasicBlock *bb) {
 }
 
 void bbPrint(BasicBlock *bb) {
+    assert(bb != NULL);
     char *bb_str = bbToString(bb);
     aoStr *str = aoStrDupRaw((char*)bb_str, strlen(bb_str)); 
     aoStrPutChar(str,'\n');
@@ -255,7 +228,7 @@ void cfgBuilderRelease(CFGBuilder *builder, int free_builder) {
     }
 }
 
-#define CFG_BUILDER_MAX_MEMORY 128
+#define CFG_BUILDER_MAX_MEMORY 512
 static void cfgBuilderInit(CFGBuilder *builder, Cctrl *cc, IntMap *leaf_cache, int block_no) {
     BasicBlock *bb_pool = cast(BasicBlock *, malloc(sizeof(BasicBlock)*CFG_BUILDER_MAX_MEMORY));
     for (int i = 0; i < CFG_BUILDER_MAX_MEMORY; ++i) {
@@ -436,7 +409,7 @@ static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
 
     bb_cond = cfgSelectOrCreateBlock(builder,BB_BRANCH_BLOCK);
     if (ast_cond == NULL) {
-        ast_cond = ast_forever_sentinal;
+        ast_cond = astMakeForeverSentinal();
     }
 
     BasicBlock *bb_cond_else = cfgBuilderAllocBasicBlock(builder,
@@ -636,27 +609,42 @@ static void cfgHandleDoWhileLoop(CFGBuilder *builder, Ast *ast) {
     Ast *ast_body = ast->whilebody;
 
     BasicBlock *bb_prev_loop = builder->bb_cur_loop;
-    BasicBlock *bb_do_while = cfgSelectOrCreateBlock(builder,BB_CONTROL_BLOCK);
-    BasicBlock *bb_cond_else = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
+    BasicBlock *bb_do_body = cfgSelectOrCreateBlock(builder,BB_CONTROL_BLOCK);
 
-    builder->bb_cur_loop = bb_do_while;
+    /*
+     * do {
+     *    ...               <--+
+     *    if (x) {             |
+     *      "something\n";     |
+     *    }                    |
+     * } while (...); <--------+ is a branch
+     *
+     * */
+    bb_do_body->flags |= BB_FLAG_LOOP_HEAD;
+    builder->bb_cur_loop = bb_do_body;
     builder->flags |= CFG_BUILDER_FLAG_IN_LOOP;
 
-    cfgBuilderSetBasicBlock(builder,bb_do_while);
+    cfgBuilderSetBasicBlock(builder,bb_do_body);
     cfgHandleAstNode(builder,ast_body);
 
-    builder->bb->type = BB_DO_WHILE_COND;
-    builder->bb->prev = bb_do_while;
-    builder->bb->prev->flags |= BB_FLAG_LOOP_HEAD;
+    /* converge all orphans in the do while body to point to the node in the 
+     * while(...) */
+    BasicBlock *bb_do_cond = cfgSelectOrCreateBlock(builder,BB_DO_WHILE_COND);
+    IntMap *leaf_cache = builder->leaf_cache;
+    cfgLinkLeaves(leaf_cache,builder->bb,bb_do_cond);
+    intMapClear(leaf_cache);
 
-    builder->bb->next = bb_cond_else;
-    ptrVecPush(builder->bb->ast_array,ast_cond);
+    // bbAddPrev(bb_do_cond,builder->bb);
+    bb_do_cond->prev = bb_do_body;
+    bb_do_cond->flags |= BB_FLAG_LOOP_END;
+
+    ptrVecPush(bb_do_cond->ast_array,ast_cond);
 
     if (!bb_prev_loop) {
         builder->flags &= ~(CFG_BUILDER_FLAG_IN_LOOP);
     }
 
-    cfgBuilderSetBasicBlock(builder,bb_cond_else);
+    cfgBuilderSetBasicBlock(builder,bb_do_cond);
     builder->bb_cur_loop = bb_prev_loop;
 }
 
@@ -868,14 +856,7 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
         case AST_COMPOUND_STMT: cfgHandleCompound(builder,ast);    break;
         case AST_CONTINUE:      cfgHandleContinue(builder,ast);    break;
         case AST_DO_WHILE: {
-            BasicBlock *pre = builder->bb;
             cfgHandleDoWhileLoop(builder,ast);
-            BasicBlock *post = builder->bb;
-            if (pre->type != BB_BRANCH_BLOCK) {
-                pre = pre->next;
-            }
-            BasicBlock *join = cfgMergeBranches(builder,pre,post);
-            cfgBuilderSetBasicBlock(builder,join);
             break;
         }
 
@@ -1061,9 +1042,9 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
 }
 
 static void cfgAdjacencyPrintBlock(BasicBlock *bb, int is_parent) {
-    char *bb_string = bbToString(bb);
+    char *bb_string = bbToJSON(bb);
     if (is_parent) printf("%s\n",bb_string);
-    else           printf("     %s\n",bb_string);
+    else           printf("child %s\n",bb_string);
 }
 
 BasicBlock *cfgVecFindBlock(PtrVec *vec, int block_no, int *_idx) {
@@ -1098,6 +1079,39 @@ void cfgAdjacencyListPrint(CFG *cfg) {
     }
 }
 
+aoStr *cdfAdjacencyListToJSON(CFG *cfg) {
+    IntMap *map = cfg->graph;
+    IntMap *no_to_block = cfg->no_to_block;
+    long *index_entries = map->indexes;
+    aoStr *json = aoStrNew();
+    
+    aoStrCatPrintf(json, "{\n");
+
+    for (int i = 0; i < map->size; ++i) {
+        long idx = index_entries[i];
+        BasicBlock *parent = (BasicBlock *)intMapGet(no_to_block,idx);
+        PtrVec *vec = (PtrVec *)intMapGet(map,idx);
+        aoStrCatPrintf(json, "    %d: [", parent->block_no);
+
+        for (int j = 0; j < vec->size; ++j) {
+            BasicBlock *bb = vecGet(BasicBlock *,vec,j);
+            aoStrCatPrintf(json,"%d",bb->block_no);
+            if (j + 1 != vec->size) {
+                aoStrCat(json,", ");
+            }
+        }
+
+        aoStrCat(json,"]");
+        if (i + 1 != vec->size) {
+            aoStrCat(json,",");
+        }
+        aoStrPutChar(json,'\n');
+    }
+    aoStrPutChar(json,'}');
+    return json;
+}
+
+
 int cfgRelinkVector(IntMap *map, BasicBlock *parent, BasicBlock *child,
         BasicBlock *bb)
 {
@@ -1126,17 +1140,20 @@ BasicBlock *bbRelinkControl(IntMap *map, BasicBlock *bb) {
     BasicBlock *parent = bb->prev_blocks[0];
     BasicBlock *child = bb->next;
 
+    bbPrint(bb);
     if (child->type == BB_CONTROL_BLOCK && bb->type == BB_CONTROL_BLOCK) {
         if (child->flags & BB_FLAG_CASE_OWNED) {
             if (child->ast_array->size == 0 && child->next && child->next->ast_array->size > 0) {
                 child = child->next;
             }
         }
-    } else if (bb->next == child && child->prev != bb) {
-        bb->next = child->next;
-        bb->prev = child->prev;
-        return NULL;
     }
+    
+    //else if (bb->next == child && child->prev != bb && child->type != BB_DO_WHILE_COND) {
+    //    bb->next = child->next;
+    //    bb->prev = child->prev;
+    //    return NULL;
+    //}
 
     switch (parent->type) {
         case BB_CONTROL_BLOCK: {
@@ -1152,6 +1169,11 @@ BasicBlock *bbRelinkControl(IntMap *map, BasicBlock *bb) {
                 bbAddPrev(child,parent->_if);
             } else if (parent->_else == bb) {
                 parent->_else = child;
+                if (bb == child) {
+                    bb->type = BB_END_BLOCK;
+                    bb->next = NULL;
+                    return bb;
+                }
             } else {
                 loggerPanic("Could neither relink if or else branch");
                 return NULL;
@@ -1202,9 +1224,10 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
                         bb->type = BB_END_BLOCK;
                     } else {
                         if (bb->next) {
+                            loggerWarning("GARBAGE: bb%d\n",bb->block_no);
                             bbRelinkControl(map,bb);
                             if (bb->type == BB_GARBAGE) {
-                                // loggerWarning("GARBAGE: bb%d\n",bb->block_no);
+                                loggerWarning("stil GARBAGE: bb%d\n",bb->block_no);
                                 intMapDelete(map,bb->block_no);
                                 intMapDelete(cfg->no_to_block,bb->block_no);
                                 continue;
@@ -1215,8 +1238,6 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
                                 bb->type = BB_END_BLOCK;
                             } else {
                                 bb->type = BB_GARBAGE;
-                        //         loggerWarning("GARBAGE: bb%d\n",bb->block_no);
-                        //       bbPrint(bb);
                                 continue;
                             }
                             break;
@@ -1282,16 +1303,13 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
                 break;
             }
 
-            case BB_DO_WHILE_COND:
+            case BB_DO_WHILE_COND: {
+                BasicBlock *loop_head = bb->prev;
+                /* I have no idea how this works */
                 vec = ptrVecNew();
-                ptrVecPush(vec,bb->prev);
-                bbAddPrev(bb->prev,bb);
-                if (bb->next) {
-                    bbAddPrev(bb->next,bb);
-                    ptrVecPush(vec,bb->next);
-                }
+                bbAddPrev(loop_head,bb);
                 break;
-
+            }
             default:
                 loggerPanic("Unhandled type: %s\n", bbTypeToString(bb->type));
         }
@@ -1299,6 +1317,126 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
         intMapSet(map,bb->block_no,vec);
     }
     return map;
+}
+
+static void cfgStronk(CFG *cfg, int _at, int *_id, int *_qp, int *_scc_count,
+        int ids[100], int low[100], int sccs[100], int visited[100], int queue[128]) {
+    int tmp_stack[128];
+    int qp = *_qp;
+    int sp = 0;
+    int id = *_id;
+    IntMap *graph = cfg->graph;
+
+    tmp_stack[sp++] = _at;
+    while (sp) {
+        int at = tmp_stack[sp-1];
+        if (ids[at] == -1) {
+            ids[at] = id;
+            low[at] = id;
+            id++;
+            queue[qp++] = at;
+            visited[at] = 1;
+        }
+
+        int is_done = 1;
+        /*XXX: this is wrong */
+        PtrVec *vec = (PtrVec *)intMapGet(graph,at);
+        for (int i = 0; i < vec->size; ++i) {
+            BasicBlock *bb = (BasicBlock *)vec->entries[i];
+            int to = bb->block_no;
+            if (ids[to] == -1) {
+                tmp_stack[sp++] = to;
+                is_done = 0;
+            } else if (visited[to]) {
+                low[at] = min(low[at],low[to]);
+            }
+        }
+
+        if (is_done) {
+            sp--;
+            if (ids[at] == low[at]) {
+                while (1) {
+                    int node = queue[qp-1];
+                    qp--;
+                    visited[node] = 0;
+                    sccs[node] = *_scc_count;
+                    if (node == at) break;
+                }
+                *_scc_count = *_scc_count+1;
+            }
+            if (sp != 0) {
+                low[sp-1] = min(low[sp-1],low[at]);
+            }
+        }
+    }
+
+    *_id = id;
+    *_qp = qp;
+    printf("qp = %d\n",qp);
+}
+
+static void cfgStronglyConnectedComponents(CFG *cfg) {
+    int vert[100];
+    int ids[100];
+    int low[100];
+    int sccs[100];
+    int visited[100];
+    int queue[100];
+    int qp = 0;
+    int scc_count = 0;
+
+    int vidx = 0;
+    int id = 0;
+    IntMap *graph = cfg->no_to_block;
+
+    for (int i = 0; i < graph->size; ++i) {
+        long idx = graph->indexes[i];
+        BasicBlock *bb = (BasicBlock *)intMapGet(graph,idx);
+        vert[vidx++] = bb->block_no;
+        ids[i] = -1;
+        visited[i] = 0;
+    }
+    memset(ids,-1,sizeof(int)*100);
+    memset(visited,0,sizeof(int)*100);
+    memset(low,-1,sizeof(int)*100);
+    memset(queue,-1,sizeof(int)*100);
+
+    for (int i = 0; i < graph->size; ++i) {
+        if (ids[i] == -1) {
+            int block_no = vert[i];
+            cfgStronk(cfg,block_no,&id,&qp,&scc_count,ids,low,sccs,visited,queue);
+        }
+    }
+
+    IntMap *components = intMapNew(32);
+    for (int i = 0; i < graph->size; ++i) {
+        long idx = graph->indexes[i];
+        BasicBlock *bb = (BasicBlock *)intMapGet(graph,idx);
+        if (sccs[bb->block_no] != -1) {
+            int key = sccs[bb->block_no];
+            if (!intMapHas(components,key)) {
+                intMapSet(components,key,intVecNew());
+            }
+            IntVec *vec = intMapGet(components,key);
+            intVecPush(vec,bb->block_no);
+        }
+    }
+
+    for (int i = 0; i < components->size; ++i) {
+        long idx = components->indexes[i];
+        IntVec *vec = intMapGet(components,idx);
+        if (!vec) continue;
+        printf("nodes: [");
+        for (int j = 0; j < vec->size; j++) {
+            int node = vec->entries[j];
+            if (j + 1 == vec->size) {
+                printf("%d", node);
+            } else {
+                printf("%d, ", node);
+            }
+        }
+        printf("] form a strongly connected component.\n");
+    }
 }
 
 /* Split out to make it simpler to reason with */
@@ -1357,7 +1495,7 @@ static CFG *cfgCreateForFunction(Cctrl *cc, Ast *ast_fn, IntMap *leaf_cache, int
     cfgConstructFunction(&builder,ast_fn->body->stms);
 
     /* This is a function with no body */
-    if (builder.bb == bb->next) {
+    if (builder.bb == bb->next && bb->next->type != BB_RETURN_BLOCK) {
         BasicBlock *bb_return = cfgBuilderAllocBasicBlock(&builder,BB_RETURN_BLOCK);
         bb->next->next = bb_return;
         bb_return->prev = bb->next;
@@ -1369,10 +1507,140 @@ static CFG *cfgCreateForFunction(Cctrl *cc, Ast *ast_fn, IntMap *leaf_cache, int
     cfg->_memory = builder.bb_pool;
     cfg->graph = cfgBuildAdjacencyList(cfg);
     *_block_no = builder.bb_block_no+1;
+    cfgAdjacencyListPrint(cfg);
+    //aoStr *json = cdfAdjacencyListToJSON(cfg);
+   // printf("%s\n",json->data);
+    //cfgStronglyConnectedComponents(cfg);
+//    exit(0);
 
     //dictRelease(builder.resolved_labels);
     //listRelease(builder.unresoved_gotos,NULL);
     return cfg;
+}
+
+static void _bbFindAllLoopNodes(BasicBlock *loop_head, BasicBlock *bb,
+        IntMap *nodes, int loop_cnt)
+{
+    int is_start_of_new_loop = bb != loop_head && bb->flags & BB_FLAG_LOOP_HEAD;
+
+    if (bb->flags & BB_FLAG_LOOP_END) {
+        if (bb->prev == loop_head) {
+            intMapSet(nodes,bb->block_no,bb);
+            loop_cnt--;
+            return;
+        }
+        if (loop_cnt > 1) {
+            intMapSet(nodes,bb->block_no,bb);
+        }
+    } else if (bb->type != BB_END_BLOCK && bb->type != BB_RETURN_BLOCK 
+            && bb->type != BB_HEAD_BLOCK) {
+        intMapSet(nodes,bb->block_no,bb);
+    }
+
+
+    if (is_start_of_new_loop) {
+        loop_cnt++;
+    }
+
+    if (bb->type == BB_BREAK_BLOCK) {
+        /* Add it and it is up to the caller to handle what a break means */
+        intMapSet(nodes,bb->block_no,bb);
+        return;
+    }
+
+    switch (bb->type) {
+        case BB_RETURN_BLOCK:
+        case BB_END_BLOCK:
+        case BB_HEAD_BLOCK:
+        case BB_LOOP_BLOCK:
+            break;
+
+        case BB_DO_WHILE_COND: /* Come back to */
+            _bbFindAllLoopNodes(loop_head,bb->next,nodes,loop_cnt);
+            break;
+
+        case BB_BRANCH_BLOCK:
+            assert(bb->_if != NULL);
+            assert(bb->_else != NULL);
+            _bbFindAllLoopNodes(loop_head,bb->_if,nodes,loop_cnt);
+            if (is_start_of_new_loop || !(bb->flags & BB_FLAG_LOOP_HEAD)) {
+                _bbFindAllLoopNodes(loop_head,bb->_else,nodes,loop_cnt);
+            }
+            break;
+
+        case BB_SWITCH: {
+            for (int i = 0; i < bb->next_blocks->size; ++i) {
+                BasicBlock *it = vecGet(BasicBlock *,bb->next_blocks,i);
+                _bbFindAllLoopNodes(loop_head,it,nodes,loop_cnt);
+            }
+            _bbFindAllLoopNodes(loop_head,bb->next,nodes,loop_cnt);
+            break;
+        }
+
+        case BB_BREAK_BLOCK: 
+            if (loop_cnt > 1) {
+                _bbFindAllLoopNodes(loop_head,bb->next,nodes,loop_cnt);
+            }
+            break;
+ 
+        case BB_GOTO:
+        case BB_CONTROL_BLOCK:
+            _bbFindAllLoopNodes(loop_head,bb->next,nodes,loop_cnt);
+            break;
+    }
+
+    if (bb->flags & BB_FLAG_LOOP_END) {
+        loop_cnt--;
+    }
+}
+
+IntMap *bbFindAllLoopNodes(BasicBlock *loop_head) {
+    int loop_cnt = 0;
+    IntMap *map = intMapNew(32);
+    intMapSet(map,loop_head->block_no,loop_head);
+    _bbFindAllLoopNodes(loop_head,loop_head,map,loop_cnt);
+    for (int i = 0; i < loop_head->prev_cnt; ++i) {
+        BasicBlock *prev = loop_head->prev_blocks[i];
+        if (prev->type == BB_LOOP_BLOCK && prev->prev == loop_head) {
+            printf(" we have prev: bb%d\n",prev->block_no);
+            break;
+        }
+    }
+    return map;
+}
+
+void cfgExplore(CFG *cfg, IntMap *seen, int block_no) {
+    if (intMapHas(seen,block_no)) return;
+    intMapSet(seen,block_no,NULL);
+    PtrVec *vec = (PtrVec *)intMapGet(cfg->graph,block_no);
+    printf("bb%d\n",block_no);
+    for (int i = 0; i < vec->size; ++i) {
+        BasicBlock *bb = vecGet(BasicBlock *,vec,i);
+        if (!intMapHas(seen,bb->block_no) && bb->flags & BB_FLAG_LOOP_HEAD) {
+            printf("loophead: bb%d\n",bb->block_no);
+            IntMap *loop_nodes = bbFindAllLoopNodes(bb);
+            for (int j = 0; j < loop_nodes->size; ++j) {
+                long idx = loop_nodes->indexes[j];
+                BasicBlock *loop_child = (BasicBlock *)intMapGet(loop_nodes,idx);
+                printf("  bb%d\n",loop_child->block_no);
+            }
+            intMapRelease(loop_nodes);
+        }
+        cfgExplore(cfg,seen,bb->block_no);
+    }
+}
+
+void cfgIter(CFG *cfg) {
+    IntMap *map = cfg->graph;
+    IntMap *no_to_block = cfg->no_to_block;
+    long *index_entries = map->indexes;
+    IntMap *seen = intMapNew(32);
+
+    for (int i = 0; i < map->size; ++i) {
+        long idx = index_entries[i];
+        BasicBlock *parent = (BasicBlock *)intMapGet(no_to_block,idx);
+        cfgExplore(cfg,seen,parent->block_no);
+    }
 }
 
 /* This will need to return a list of CFG's */

@@ -19,6 +19,7 @@ enum bbType {
     BB_SWITCH        = 9,
     BB_CASE          = 10,
     BB_CONTINUE      = 11,
+    BB_DO_WHILE_HEAD = 12,
 };
 
 #define CFG_MAX_PREV    (32)
@@ -28,6 +29,7 @@ enum bbType {
 #define CFG_BUILDER_FLAG_IN_LOOP        (0x2)
 #define CFG_BUILDER_FLAG_IN_SWITCH      (0x4)
 
+/* @FlagManagement - this is getting a bit ridiculous */
 #define BB_FLAG_LOOP_HEAD          (0x1)
 #define BB_FLAG_LOOP_END           (0x2)
 #define BB_FLAG_REDUNDANT_LOOP     (0x4)
@@ -119,5 +121,6 @@ PtrVec *cfgConstruct(Cctrl *cc);
 void bbPrint(BasicBlock *bb);
 void bbPrintNoAst(BasicBlock *bb);
 char *bbToString(BasicBlock *bb);
+char *bbToJSON(BasicBlock *bb);
 
 #endif
