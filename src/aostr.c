@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <ctype.h>
 #include <stdarg.h>
 #include <stddef.h>
@@ -36,8 +37,9 @@ char *aoStrMove(aoStr *buf) {
 }
 
 /* Grow the capacity of the string buffer by `additional` space */
-int aoStrExtendBuffer(aoStr *buf, unsigned int additional) {
+int aoStrExtendBuffer(aoStr *buf, size_t additional) {
     size_t new_capacity = (buf->capacity*2) + additional;
+    assert(new_capacity > buf->capacity);
     if (new_capacity <= buf->capacity) {
         return -1;
     }
@@ -67,7 +69,7 @@ void aoStrToLowerCase(aoStr *buf) {
 }
 
 void aoStrPutChar(aoStr *buf, char ch) {
-    aoStrExtendBufferIfNeeded(buf, 100);
+    aoStrExtendBufferIfNeeded(buf, 10);
     buf->data[buf->len] = ch;
     buf->data[buf->len + 1] = '\0';
     buf->len++;
@@ -368,11 +370,11 @@ error:
 /* Allocating printf */
 char *mprintf(const char *fmt, ...) {
     va_list ap, copy;
+    va_start(ap,fmt);
+
     int allocated = 256;
     int len = 0;
-    char *buffer = (char *)malloc(sizeof(char)*allocated);
-
-    va_start(ap,fmt);
+    char *buffer = (char *)malloc(sizeof(char)*allocated+1);
 
     while (1) {
         va_copy(copy,ap);
