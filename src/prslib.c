@@ -610,7 +610,7 @@ static Ast *parsePrimary(Cctrl *cc) {
         return astF64Type(tok->f64);
     case TK_CHAR_CONST:
         ast = astCharType(tok->i64);
-        ast->type = ast_uint_type;
+        //ast->type = ast_uint_type;
         return ast;
     case TK_STR: {
         aoStr *str = aoStrNew();
