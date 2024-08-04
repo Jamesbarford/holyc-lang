@@ -52,6 +52,15 @@ AstType *astTypeNew(void) {
     return type;
 }
 
+Ast *astMakeForeverSentinal(void) {
+    Ast *ast = astNew();
+    AstType *type = astTypeNew();
+    memcpy(ast,ast_forever_sentinal,sizeof(Ast));
+    ast->type = type;
+    memcpy(ast->type,ast_forever_sentinal->type,sizeof(AstType));
+    return ast;
+}
+
 AstType *astTypeCopy(AstType *type) {
     AstType *copy = astTypeNew();
     memcpy(copy,type,sizeof(AstType));
@@ -1810,20 +1819,17 @@ static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
         case AST_LITERAL:
             switch (ast->type->kind) {
             case AST_TYPE_VOID:  aoStrCatPrintf(str, "void"); break;
-            case AST_TYPE_INT:   aoStrCatPrintf(str, "%ld", ast->i64); break;
+            case AST_TYPE_INT:   {
+                aoStrCatPrintf(str, "%ld", ast->i64);
+                break;
+            }
             case AST_TYPE_CHAR:  {
-                char buf[9];
-                unsigned long ch = ast->i64;
-                buf[0] = ch & 0xFF;
-                buf[1] = ((unsigned long)ch) >> 8  & 0xFF;
-                buf[2] = ((unsigned long)ch) >> 16 & 0xFF;
-                buf[3] = ((unsigned long)ch) >> 24 & 0xFF;
-                buf[4] = ((unsigned long)ch) >> 32 & 0xFF;
-                buf[5] = ((unsigned long)ch) >> 40 & 0xFF;
-                buf[6] = ((unsigned long)ch) >> 48 & 0xFF;
-                buf[7] = ((unsigned long)ch) >> 56 & 0xFF;
-                buf[8] = '\0';
-                aoStrCatPrintf(str,"'%s'",buf);
+                char *single_quote = lexemePunctToStringWithFlags('\'',lexeme_flags);
+                aoStrCatPrintf(str,"%s",single_quote);
+                char *escaped = lexemePunctToStringWithFlags(ast->i64,lexeme_flags);
+                aoStrCatPrintf(str,"%s",escaped);
+                single_quote = lexemePunctToStringWithFlags('\'',lexeme_flags);
+                aoStrCatPrintf(str,"%s",single_quote);
                 break;
             }
             case AST_TYPE_FLOAT: aoStrCatPrintf(str, "%g", ast->f64); break;
@@ -1989,6 +1995,10 @@ static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
             _astLValueToString(str,ast->retval, lexeme_flags);
             aoStrCatPrintf(str,"%s",
                     lexemePunctToStringWithFlags(';',lexeme_flags));
+            break;
+
+        case AST_DEFAULT:
+            aoStrCatPrintf(str,"default:");
             break;
 
         case AST_CASE: {

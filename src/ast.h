@@ -365,6 +365,7 @@ Ast *astGlobalCmdArgs(void);
 
 aoStr *astNormaliseFunctionName(char *fname);
 int astIsAssignment(long op);
+Ast *astMakeForeverSentinal(void);
 
 /* For debugging */
 char *astTypeToString(AstType *type);
