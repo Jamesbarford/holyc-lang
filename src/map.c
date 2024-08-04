@@ -25,7 +25,7 @@ IntMap *intMapNew(unsigned long capacity) {
     map->threashold = (unsigned long)(HT_LOAD * capacity);
     map->_free_value = NULL;
     map->entries = (IntMapNode **)calloc(capacity, sizeof(IntMapNode *));
-    map->indexes = malloc(capacity*sizeof(long));
+    map->indexes = (long *)calloc(capacity, sizeof(long));
     return map;
 }
 
@@ -72,7 +72,7 @@ void intMapClear(IntMap *map) {
         }
     }
     map->size = 0;
-    memset(map->entries,0,map->capacity*sizeof(IntMapNode));
+    memset(map->entries,0,map->capacity*sizeof(IntMapNode *));
     memset(map->indexes,0,map->size*sizeof(long));
 }
 
@@ -277,11 +277,11 @@ StrMap *strMapNew(unsigned long capacity) {
     map->capacity = capacity;
     map->mask = capacity - 1;
     map->size = 0;
-    map->indexes = malloc(capacity*sizeof(long));
     map->threashold = (unsigned long)(HT_LOAD * map->capacity);
     map->_free_value = NULL;
     map->_free_key = NULL;
-    map->entries = calloc(map->capacity, sizeof(StrMapNode *));
+    map->entries = (StrMapNode **)calloc(map->capacity, sizeof(StrMapNode *));
+    map->indexes = (long *)calloc(capacity, sizeof(long));
     return map;
 }
 
