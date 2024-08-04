@@ -103,6 +103,7 @@ int hccLibInit(hccLib *lib, hccOpts *opts, char *name) {
 
 void getASMFileName(hccOpts *opts, char *file_name) {
     int len = strlen(file_name);
+    int no_ext_len = 0;
     int i;
     char *slashptr = NULL, *asm_outfile, *obj_outfile, *end, *infile_no_ext; 
 
@@ -138,19 +139,19 @@ void getASMFileName(hccOpts *opts, char *file_name) {
     asm_outfile = malloc(sizeof(char) * len+1);
     obj_outfile = malloc(sizeof(char) * len+1);
     infile_no_ext = malloc(sizeof(char) * len);
+    no_ext_len = end-slashptr;
 
-    memcpy(asm_outfile,   slashptr, end-slashptr);
-    memcpy(obj_outfile,   slashptr, end-slashptr);
-    memcpy(infile_no_ext, slashptr, end-slashptr);
+    memcpy(asm_outfile,   slashptr, no_ext_len);
+    memcpy(obj_outfile,   slashptr, no_ext_len);
+    memcpy(infile_no_ext, slashptr, no_ext_len);
 
-    memcpy(asm_outfile+(end-slashptr), ".s", 2);
-    memcpy(obj_outfile+(end-slashptr), ".o", 2);
+    memcpy(asm_outfile+(no_ext_len), ".s", 2);
+    memcpy(obj_outfile+(no_ext_len), ".o", 2);
 
-    asm_outfile[end-slashptr+2] = '\0';
-    asm_outfile[len] = '\0';
+    asm_outfile[no_ext_len+2] = '\0';
+    obj_outfile[no_ext_len+2] = '\0';
+    infile_no_ext[no_ext_len] = '\0';
 
-    obj_outfile[end-slashptr+2] = '\0';
-    obj_outfile[len] = '\0';
     opts->asm_outfile = asm_outfile;
     opts->obj_outfile = obj_outfile;
     opts->infile_no_ext = infile_no_ext;
