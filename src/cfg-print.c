@@ -493,8 +493,9 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
                 cfgCreatePictureUtil(builder,bb->next,seen);
             }
 
-            if (bb->flags & BB_FLAG_LOOP_END) {
+            if ((bb->flags & BB_FLAG_LOOP_END) && !bb->visited) {
                 aoStrCat(builder->viz,"}\n");
+                bb->visited++;
             }
 
             if (bb->flags & BB_FLAG_LOOP_END) {
@@ -521,8 +522,17 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
             cfgBranchPrintf(builder,bb);
             cfgCreatePictureUtil(builder,bb->_if,seen);
 
-            if (bb->_else->flags & BB_FLAG_LOOP_END) {
+            /* @Bug - should know how many loops a block ends */
+            int loop_ends = 0;
+            for (int i = 0; i < bb->_else->prev_cnt; ++i) {
+                if (bb->_else->prev_blocks[i]->flags & BB_FLAG_LOOP_HEAD) {
+                    loop_ends++;
+                }
+            }
+
+            if ((bb->_else->flags & BB_FLAG_LOOP_END) && bb->_else->visited != loop_ends) {
                 aoStrCat(builder->viz,"}\n");
+                bb->_else->visited++;
             }
 
             cfgCreatePictureUtil(builder,bb->_else,seen);

@@ -775,6 +775,7 @@ static void cfgHandleSwitch(CFGBuilder *builder, Ast *ast) {
         cfgBuilderSetBasicBlock(builder,bb_switch);
         Ast *_case = (Ast *)ast->cases->entries[i];
         cfgHandleCase(builder,bb_end,_case);
+
         if (builder->bb->ast_array->size == 1) {
             bb_stack[sp++] = builder->bb;
         } else if (sp) {
@@ -792,9 +793,14 @@ static void cfgHandleSwitch(CFGBuilder *builder, Ast *ast) {
         cfgHandleCase(builder,bb_end,ast->case_default);
     }
 
+    IntMap *leaf_cache = builder->leaf_cache;
+    cfgLinkLeaves(leaf_cache,bb_switch,bb_end);
+    intMapClear(leaf_cache);
+
     // ptrVecPush(bb_switch->next_blocks,bb_end);
     bb_switch->next = bb_end;
     bb_end->prev = bb_switch;
+
     cfgBuilderSetBasicBlock(builder,bb_end);
     if (!prev_in_switch) {
         builder->flags &= ~(CFG_BUILDER_FLAG_IN_SWITCH);
@@ -852,9 +858,9 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
      * 
      * A new basic block will start with an `if`, `for`, `while`, `goto` */
     switch (kind) {
-        case AST_BREAK:         cfgHandleBreak(builder,ast);       break;
-        case AST_COMPOUND_STMT: cfgHandleCompound(builder,ast);    break;
-        case AST_CONTINUE:      cfgHandleContinue(builder,ast);    break;
+        case AST_BREAK:         cfgHandleBreak(builder,ast);    break;
+        case AST_COMPOUND_STMT: cfgHandleCompound(builder,ast); break;
+        case AST_CONTINUE:      cfgHandleContinue(builder,ast); break;
         case AST_DO_WHILE: {
             cfgHandleDoWhileLoop(builder,ast);
             break;
@@ -897,14 +903,16 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
             cfgBuilderSetBasicBlock(builder,join);
             break;
         }
+
         case AST_SWITCH: {
             cfgHandleSwitch(builder,ast);
             break;
-        }    
-        case AST_GOTO:         cfgHandleGoto(builder,ast);        break;
-        case AST_LABEL:        cfgHandleLabel(builder,ast);       break;
-        case AST_RETURN:       cfgHandleReturn(builder,ast);      break;
-        case AST_JUMP:         cfgHandleJump(builder,ast);        break;
+        }
+
+        case AST_GOTO:         cfgHandleGoto(builder,ast);   break;
+        case AST_LABEL:        cfgHandleLabel(builder,ast);  break;
+        case AST_RETURN:       cfgHandleReturn(builder,ast); break;
+        case AST_JUMP:         cfgHandleGoto(builder,ast);   break;
 
         case AST_CASE: {
             loggerPanic("Case should be handled by switch function\n");
@@ -1125,6 +1133,9 @@ int cfgRelinkVector(IntMap *map, BasicBlock *parent, BasicBlock *child,
             return 0;
         }
         vec->entries[idx] = child;
+        /* @Bug - this is close but not quite working when creating strings.HC
+         * CFG*/
+        child->flags |= bb->flags;
         if (bb->ast_array->size == 0) {
             bb->type = BB_GARBAGE;
         }
@@ -1507,7 +1518,7 @@ static CFG *cfgCreateForFunction(Cctrl *cc, Ast *ast_fn, IntMap *leaf_cache, int
     cfg->_memory = builder.bb_pool;
     cfg->graph = cfgBuildAdjacencyList(cfg);
     *_block_no = builder.bb_block_no+1;
-    cfgAdjacencyListPrint(cfg);
+    //cfgAdjacencyListPrint(cfg);
     //aoStr *json = cdfAdjacencyListToJSON(cfg);
    // printf("%s\n",json->data);
     //cfgStronglyConnectedComponents(cfg);
