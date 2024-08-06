@@ -1908,7 +1908,7 @@ static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
         }
 
         case AST_ASM_FUNC_BIND: {
-            aoStrCatPrintf(str, "%s => %s",
+            aoStrCatPrintf(str, "%s =\\> %s",
                     ast->asmfname->data,
                     ast->fname->data);
             break;

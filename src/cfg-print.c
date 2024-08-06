@@ -432,7 +432,7 @@ static BasicBlock *cfgGetHandleDoWhileHead(CfgGraphVizBuilder *builder,
     if (bb->flags & BB_FLAG_LOOP_HEAD) {
         for (int i = 0; i < bb->prev_cnt; ++i) {
             BasicBlock *prev = bb->prev_blocks[i];
-            if (prev->flags & BB_DO_WHILE_COND && prev->prev == bb) {
+            if (prev->type == BB_DO_WHILE_COND && prev->prev == bb) {
                 while_cond = prev;
                 break;
             }
@@ -477,7 +477,7 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
             if (bb->flags & BB_FLAG_UNCONDITIONAL_JUMP && bb->next) {
                 cfgCreatePictureUtil(builder,bb->next,seen);
             }
-            cfgCreatePictureUtil(builder,bb->prev,seen);
+ //           cfgCreatePictureUtil(builder,bb->prev,seen);
             break;
 
         case BB_DO_WHILE_COND:
@@ -525,7 +525,8 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
             /* @Bug - should know how many loops a block ends */
             int loop_ends = 0;
             for (int i = 0; i < bb->_else->prev_cnt; ++i) {
-                if (bb->_else->prev_blocks[i]->flags & BB_FLAG_LOOP_HEAD) {
+                BasicBlock *prev = bb->_else->prev_blocks[i];
+                if (prev->flags & BB_FLAG_LOOP_HEAD) {
                     loop_ends++;
                 }
             }
@@ -557,7 +558,7 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
 
         case BB_GOTO:
             bbPrintf(builder,bb);
-            if (bb->next->prev_cnt == 1 || bb->flags & BB_FLAG_UNCONDITIONAL_JUMP) {
+            if (bb->next->prev_cnt > 1 || bb->flags & BB_FLAG_UNCONDITIONAL_JUMP) {
                 cfgCreatePictureUtil(builder,bb->next,seen);
             }
             if (bb->flags & BB_FLAG_LOOP_HEAD) {

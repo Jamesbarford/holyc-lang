@@ -685,7 +685,11 @@ static void cfgHandleReturn(CFGBuilder *builder, Ast *ast) {
     BasicBlock *bb_return = cfgSelectOrCreateBlock(builder,BB_RETURN_BLOCK);
     bb_return->next = NULL;
     ptrVecPush(bb_return->ast_array,ast);
-    cfgBuilderSetBasicBlock(builder,bb_return);
+    if (ast->retval) {
+        ptrVecPush(bb_return->ast_array,ast->retval);
+    }
+    BasicBlock *bb_after = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
+    cfgBuilderSetBasicBlock(builder,bb_after);
 }
 
 static void cfgHandleLabel(CFGBuilder *builder, Ast *ast) {
@@ -1134,7 +1138,7 @@ int cfgRelinkVector(IntMap *map, BasicBlock *parent, BasicBlock *child,
         }
         vec->entries[idx] = child;
         /* @Bug - this is close but not quite working when creating strings.HC
-         * CFG*/
+         * CFG */
         child->flags |= bb->flags;
         if (bb->ast_array->size == 0) {
             bb->type = BB_GARBAGE;
@@ -1151,7 +1155,6 @@ BasicBlock *bbRelinkControl(IntMap *map, BasicBlock *bb) {
     BasicBlock *parent = bb->prev_blocks[0];
     BasicBlock *child = bb->next;
 
-    bbPrint(bb);
     if (child->type == BB_CONTROL_BLOCK && bb->type == BB_CONTROL_BLOCK) {
         if (child->flags & BB_FLAG_CASE_OWNED) {
             if (child->ast_array->size == 0 && child->next && child->next->ast_array->size > 0) {
@@ -1230,6 +1233,13 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
             case BB_CONTROL_BLOCK:
                 /* This is a check for an orphaned node */
                 vec = ptrVecNew();
+                /* @Bug
+                 * This is where a return block is the next, potentially there 
+                 * is not next either */
+                if (!bb->prev) {
+                    bb->type = BB_GARBAGE;
+                    continue;
+                }
                 if (!(bb->flags & BB_FLAG_CASE_OWNED) && (bb->ast_array->size == 0 || bb->next == NULL)) {
                     if (bb->ast_array->size > 0) {
                         bb->type = BB_END_BLOCK;
@@ -1238,7 +1248,7 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
                             loggerWarning("GARBAGE: bb%d\n",bb->block_no);
                             bbRelinkControl(map,bb);
                             if (bb->type == BB_GARBAGE) {
-                                loggerWarning("stil GARBAGE: bb%d\n",bb->block_no);
+                                // loggerWarning("stil GARBAGE: bb%d\n",bb->block_no);
                                 intMapDelete(map,bb->block_no);
                                 intMapDelete(cfg->no_to_block,bb->block_no);
                                 continue;
