@@ -26,15 +26,15 @@
 
 
 static char *depth_to_loop_color[] = {
-    [1] = "grey88",
-    [2] = "grey78",
-    [3] = "grey68",
-    [4] = "grey58",
-    [5] = "grey48",
-    [6] = "grey38",
+    [0] = "grey88",
+    [1] = "grey78",
+    [2] = "grey68",
+    [3] = "grey58",
+    [4] = "grey48",
+    [5] = "grey38",
+    [6] = "grey28",
     [7] = "grey28",
-    [8] = "grey28",
-    [9] = "grey18",
+    [8] = "grey18",
 };
 
 static const char *cfgPrintGetLoopColor(int depth) {
@@ -46,7 +46,11 @@ static const char *cfgPrintGetLoopColor(int depth) {
 typedef struct CfgGraphVizBuilder {
     aoStr *viz;
     CFG *cfg;
+    /* Need a counter to graphviz does not merge loops */
     int loop_cnt;
+    /* To change the shade of grey based on how deep into a nested loop we 
+     * are */
+    int loop_nesting;
 
     /* This is if a loop does not have a break clause immediately in it */
     int break_idx;
@@ -64,6 +68,7 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
 
 static void cfgGraphVizBuilderInit(CfgGraphVizBuilder *builder) {
     builder->viz = aoStrAlloc(1<<10);
+    builder->loop_nesting = 0;
     builder->loop_cnt = 0;
     builder->break_idx = 0;
     builder->loop_idx = 0;
@@ -342,8 +347,9 @@ static void cfgContinuePrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
 
 /* Side-effect of mutating the loop counter on the builder */
 static void cfgLoopHeadPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
+    int color = builder->loop_nesting;
     int cnt = ++builder->loop_cnt;
-    const char *loop_color = cfgPrintGetLoopColor(cnt);
+    const char *loop_color = cfgPrintGetLoopColor(color);
     aoStrCatPrintf(builder->viz,
             "subgraph cluster1_%d {\nstyle=\"filled\";\n"
             "color=\"darkgreen\";\n"
@@ -370,49 +376,6 @@ static void bbPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     }
 }
 
-
-/* how many of the previous blocks were gotos? */
-int cfgGraphVizGetLoopGotoCount(BasicBlock *bb) {
-    int goto_cnt = 0;
-    for (int i = 0; i < bb->prev_cnt; ++i) {
-        if (bb->prev_blocks[i]->type == BB_GOTO) {
-            goto_cnt++;
-        }
-    }
-    return goto_cnt;
-}
-
-BasicBlock *cfgFindLoop(BasicBlock *bb) {
-    if (!(bb->flags & BB_FLAG_LOOP_HEAD)) return NULL;
-    for (int i = 0; i < bb->prev_cnt; ++i) {
-        BasicBlock *prev = bb->prev_blocks[i];
-        if (prev->flags & BB_FLAG_LOOP_END) {
-            return prev;
-        }
-    }
-    return NULL;
-}
-
-int cfgGraphVizGetLoopBreakCount(CfgGraphVizBuilder *builder, BasicBlock *bb) {
-    if (builder->loop_idx - 1 < 0) return 0;
-    BasicBlock *head = builder->loop_stack[builder->loop_idx-1];
-    if (builder->break_idx == 0) return 0;
-    if (builder->break_blocks[builder->break_idx-1] == head) return 0;
-
-    int i = 0;
-    for (int j = builder->break_idx-1; j >= 0; --j) {
-        BasicBlock *block = builder->break_blocks[j];
-        if (block->type != BB_BREAK_BLOCK) {
-            if (block == head) {
-                return i;
-            }
-            return 0;
-        }
-        i++;
-    }
-    return 0;
-}
-
 static void cfgPrintBreaks(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     while (builder->break_idx) {
         int idx = builder->break_idx-1;
@@ -425,6 +388,13 @@ static void cfgPrintBreaks(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     }
 }
 
+/**
+ * @Hack 
+ * We do this to ensure everything inside of the do while loop body gets 
+ * printed. Otherwise the next pointer of the condition will start exploring 
+ * nodes outside of the loop prematurely. 
+ *
+ * Adding it to the seen set means it will never get explored. */
 static BasicBlock *cfgGetHandleDoWhileHead(CfgGraphVizBuilder *builder, 
         IntMap *seen, BasicBlock *bb)
 {
@@ -448,8 +418,9 @@ static BasicBlock *cfgGetHandleDoWhileHead(CfgGraphVizBuilder *builder,
 char *cfgGraphVizError(CfgGraphVizBuilder *builder, BasicBlock *bb, int error_code) {
     switch (error_code) {
         case CFG_GRAPHVIZ_ERROR_INVALID_TYPE: {
+            char *type_string = bbTypeToString(bb->type);
             char *error = mprintf("%s() has an invalid type '%s' for bb%d\n",
-                    builder->cfg->ref_fname->data, bbTypeToString(bb->type), bb->block_no);
+                    builder->cfg->ref_fname->data, type_string, bb->block_no);
             return error;
         }
         default:
@@ -467,6 +438,7 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
     else intMapSet(seen,bb->block_no,NULL);
 
     if (bb->flags & BB_FLAG_LOOP_HEAD) {
+        builder->loop_nesting++;
         cfgLoopHeadPrintf(builder,bb);
     }
 
@@ -532,8 +504,9 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
             }
 
             if ((bb->_else->flags & BB_FLAG_LOOP_END) && bb->_else->visited != loop_ends) {
-                aoStrCat(builder->viz,"}\n");
+                builder->loop_nesting--;
                 bb->_else->visited++;
+                aoStrCat(builder->viz,"}\n");
             }
 
             cfgCreatePictureUtil(builder,bb->_else,seen);
@@ -600,6 +573,7 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
     if (while_cond) {
         cfgDoWhileCondPrintf(builder,while_cond);
         if (while_cond->flags & BB_FLAG_LOOP_END) {
+            builder->loop_nesting--;
             aoStrCat(builder->viz,"}\n");
         }
 
@@ -644,6 +618,9 @@ static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
         }
 
         BasicBlock *cur = (BasicBlock *)node->value;
+        if (cur->ast_array->size == 0) {
+            bbPrint(cur);
+        }
 
         switch (cur->type) {
             case BB_CONTINUE:

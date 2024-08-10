@@ -107,7 +107,7 @@ char *bbPreviousBlockNumbersToString(BasicBlock *bb) {
     aoStr *str = aoStrNew();
     aoStrCatPrintf(str,"prev_cnt = %d: ",bb->prev_cnt);
     for (int i = 0; i < bb->prev_cnt; ++i) {
-        aoStrCatPrintf(str,"%dbb",bb->prev_blocks[i]->block_no);
+        aoStrCatPrintf(str,"bb%d",bb->prev_blocks[i]->block_no);
         if (i + 1 != bb->prev_cnt) aoStrCatPrintf(str,", ");
     }
     return aoStrMove(str);
@@ -724,6 +724,11 @@ static void cfgHandleContinue(CFGBuilder *builder, Ast *ast) {
     BasicBlock *bb_continue = cfgSelectOrCreateBlock(builder,BB_CONTINUE);
     bb_continue->prev = builder->bb_cur_loop;
     bbAddPrev(builder->bb_cur_loop,builder->bb);
+    if (bb_continue != builder->bb) {
+        loggerWarning("On a different node. builder bb%d and continue bb%d\n",
+                builder->bb->block_no, bb_continue->block_no);
+        builder->bb->next = bb_continue;
+    }
 }
 
 static void cfgHandleJump(CFGBuilder *builder, Ast *ast) {
@@ -1091,12 +1096,27 @@ void cfgAdjacencyListPrint(CFG *cfg) {
     }
 }
 
+/* Print the Adjacency list graph representation */
+void cfgAdjacencyListPrintShallow(CFG *cfg) {
+    IntMap *map = cfg->graph;
+    IntMap *no_to_block = cfg->no_to_block;
+    long *index_entries = map->indexes;
+
+    for (int i = 0; i < map->size; ++i) {
+        long idx = index_entries[i];
+        BasicBlock *bb = (BasicBlock *)intMapGet(no_to_block,idx);
+        char *bb_string = bbToJSON(bb);
+        printf("%s\n====\n",bb_string);
+        free(bb_string);
+    }
+}
+
 aoStr *cdfAdjacencyListToJSON(CFG *cfg) {
     IntMap *map = cfg->graph;
     IntMap *no_to_block = cfg->no_to_block;
     long *index_entries = map->indexes;
     aoStr *json = aoStrNew();
-    
+
     aoStrCatPrintf(json, "{\n");
 
     for (int i = 0; i < map->size; ++i) {
@@ -1128,6 +1148,8 @@ int cfgRelinkVector(IntMap *map, BasicBlock *parent, BasicBlock *child,
         BasicBlock *bb)
 {
     PtrVec *vec = intMapGet(map,parent->block_no);
+    loggerWarning("Vector relinking. Parent bb%d, child bb%d, block: bb%d\n",
+            parent->block_no, child->block_no, bb->block_no);
     if (vec) {
         int idx = 0;
         (void)cfgVecFindBlock(vec,bb->block_no,&idx);
@@ -1237,6 +1259,17 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
                  * This is where a return block is the next, potentially there 
                  * is not next either */
                 if (!bb->prev) {
+                    bb->type = BB_GARBAGE;
+                    continue;
+                }
+
+                bbPrint(bb);
+                /* @Bug 
+                 * This happens with a case */
+                if (bb->prev_cnt == 0 && bb->ast_array->size == 0 && 
+                        (bb->flags & (BB_FLAG_CASE_BREAK|BB_FLAG_CASE_OWNED))) 
+                {
+                //    assert(bb->flags & (BB_FLAG_CASE_BREAK|BB_FLAG_CASE_OWNED));
                     bb->type = BB_GARBAGE;
                     continue;
                 }
@@ -1528,7 +1561,7 @@ static CFG *cfgCreateForFunction(Cctrl *cc, Ast *ast_fn, IntMap *leaf_cache, int
     cfg->_memory = builder.bb_pool;
     cfg->graph = cfgBuildAdjacencyList(cfg);
     *_block_no = builder.bb_block_no+1;
-    //cfgAdjacencyListPrint(cfg);
+    //cfgAdjacencyListPrintShallow(cfg);
     //aoStr *json = cdfAdjacencyListToJSON(cfg);
    // printf("%s\n",json->data);
     //cfgStronglyConnectedComponents(cfg);
