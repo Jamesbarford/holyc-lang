@@ -5,6 +5,7 @@
 #include "cctrl.h"
 #include "map.h"
 
+
 enum bbType {
     BB_GARBAGE       = -1,
     BB_END_BLOCK     = 0,
@@ -22,7 +23,8 @@ enum bbType {
     BB_DO_WHILE_HEAD = 12,
 };
 
-#define CFG_MAX_PREV    (32)
+#define CFG_MAX_PREV      (32)
+#define CFG_MAX_CONTINUES (32)
 
 /* These are builder flags */
 #define CFG_BUILDER_FLAG_IN_CONDITIONAL (0x1)
@@ -63,6 +65,9 @@ typedef struct BasicBlock {
     struct BasicBlock *_if;
     struct BasicBlock *_else;
     struct BasicBlock *prev;
+    /* For a control block points to the next node, for a branch that is a 
+     * loop head the next pointer is the BB_LOOP_BLOCK, so we can keep track of 
+     * it more easily */
     struct BasicBlock *next;
  //    IntSet *prev_block_ids;
     struct BasicBlock *prev_blocks[32];

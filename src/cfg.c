@@ -16,6 +16,9 @@
 static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast);
 static void cfgLinkLeaves(IntMap *map, BasicBlock *bb, BasicBlock *dest);
 
+#define cfgIsLoopControl(bb) \
+    (((bb)->type == BB_CONTINUE || (bb)->type == BB_BREAK_BLOCK))
+
 char *bbTypeToString(int type) {
     switch (type) {
         case BB_GARBAGE:            return "BB_GARBAGE";
@@ -280,7 +283,7 @@ static void bbAddPrev(BasicBlock *bb, BasicBlock *prev) {
 
 static BasicBlock *cfgSelectOrCreateBlock(CFGBuilder *builder, int type) {
     BasicBlock *bb_selected = NULL;
-    if (builder->bb->ast_array->size == 0) {
+    if (builder->bb->ast_array->size == 0 && !cfgIsLoopControl(builder->bb)) {
         bb_selected = builder->bb;
         bb_selected->type = type;
     } else {
@@ -349,7 +352,7 @@ static void cgfHandleBranchBlock(CFGBuilder *builder, Ast *ast) {
 
         /* This means the node has changed, and thus the next block needs 
          * to be this branch */
-        if (builder->bb != else_body) {
+        if (builder->bb->type != BB_CONTINUE && builder->bb != else_body) {
             builder->bb->prev = bb;
             /* Join */ 
             bb->next = builder->bb;
@@ -361,12 +364,13 @@ static void cgfHandleBranchBlock(CFGBuilder *builder, Ast *ast) {
         }
     } else {
         if (builder->bb != if_body) {
-
             bb->next = builder->bb;
         }
+        if (builder->bb->type != BB_CONTINUE) {
             builder->bb->prev = bb;
+        }
 
-        int is_break = if_body->type != BB_BREAK_BLOCK;
+        int is_break = if_body->type != BB_BREAK_BLOCK && if_body->type != BB_CONTINUE;
         int is_return = if_body->next && if_body->next->type != BB_RETURN_BLOCK;
 
         if (!is_break && !is_return) {
@@ -493,8 +497,8 @@ static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
     cfgBuilderSetBasicBlock(builder,bb_body);
     cfgHandleAstNode(builder,ast_body);
 
-    //bbPrint(builder->bb);
-    if (bb_body->type != BB_BREAK_BLOCK && ast_step) {
+    /* @Wrong, the step should exist on a continue */
+    if (!cfgIsLoopControl(bb_body) && ast_step) {
         cfgHandleAstNode(builder,ast_step);
     }
 
@@ -729,6 +733,7 @@ static void cfgHandleContinue(CFGBuilder *builder, Ast *ast) {
                 builder->bb->block_no, bb_continue->block_no);
         builder->bb->next = bb_continue;
     }
+    cfgBuilderSetBasicBlock(builder,bb_continue);
 }
 
 static void cfgHandleJump(CFGBuilder *builder, Ast *ast) {
@@ -829,7 +834,7 @@ static void cfgLinkLeaves(IntMap *map, BasicBlock *bb, BasicBlock *dest) {
             case BB_CONTROL_BLOCK:
                 if      (bb == bb->next)   bb->next = dest;
                 else if (bb->next == NULL) bb->next = dest;
-                else if (bb->next->ast_array->size == 0) bb->next = dest;
+                else if (bb->next->ast_array->size == 0 && !cfgIsLoopControl(bb->next)) bb->next = dest;
                 else cfgLinkLeaves(map,bb->next,dest);
                 break;
 
@@ -847,10 +852,12 @@ static BasicBlock *cfgMergeBranches(CFGBuilder *builder, BasicBlock *pre,
     IntMap *leaf_cache = builder->leaf_cache;
     BasicBlock *join = post;
 
-    if (post->ast_array->size > 0) {
+    if (post->ast_array->size > 0 && !cfgIsLoopControl(post)) {
         join = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
         join->prev = post;
+        // if (post->next && !cfgIsLoopControl(post->next)) { 
         post->next = join;
+        //}
     }
     cfgLinkLeaves(leaf_cache,pre,join);
     intMapClear(leaf_cache);
@@ -1263,7 +1270,6 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
                     continue;
                 }
 
-                bbPrint(bb);
                 /* @Bug 
                  * This happens with a case */
                 if (bb->prev_cnt == 0 && bb->ast_array->size == 0 && 
@@ -1292,6 +1298,7 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
                                 bb->type = BB_END_BLOCK;
                             } else {
                                 bb->type = BB_GARBAGE;
+                                loggerWarning("???\n");
                                 continue;
                             }
                             break;
@@ -1348,7 +1355,27 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
                 break;
             }
 
-            case BB_CONTINUE:
+            case BB_CONTINUE: {
+                Ast *step;
+                BasicBlock *loop_head = bb->prev;
+                BasicBlock *loop_block = loop_head->next;
+                BasicBlock *next = bb->next;
+                vec = ptrVecNew();
+                ptrVecPush(vec,loop_head);
+                bbAddPrev(loop_head,bb);
+                bb->prev = loop_head;
+
+                bbPrint(loop_block);
+                if (next) {
+                    bbPrint(bb);
+                    bbPrint(next);
+                }
+                if (next && !(bb->flags & (BB_FLAG_ELSE_BRANCH|BB_FLAG_IF_BRANCH)) && next->prev == bb) {
+                    printf("THER \n");
+                }
+                break;
+            }
+
             case BB_LOOP_BLOCK: {
                 BasicBlock *loop_head = bb->prev;
                 vec = ptrVecNew();

@@ -449,7 +449,8 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
             if (bb->flags & BB_FLAG_UNCONDITIONAL_JUMP && bb->next) {
                 cfgCreatePictureUtil(builder,bb->next,seen);
             }
- //           cfgCreatePictureUtil(builder,bb->prev,seen);
+            //if (bb->next)
+            //    cfgCreatePictureUtil(builder,bb->next,seen);
             break;
 
         case BB_DO_WHILE_COND:
@@ -619,7 +620,7 @@ static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
 
         BasicBlock *cur = (BasicBlock *)node->value;
         if (cur->ast_array->size == 0) {
-            bbPrint(cur);
+            //bbPrint(cur);
         }
 
         switch (cur->type) {
