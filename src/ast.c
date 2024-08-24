@@ -1003,6 +1003,11 @@ int astIsUnionPointer(AstType *type) {
            type->ptr->kind == AST_TYPE_UNION;
 }
 
+int astIsLabelMatch(Ast *ast, aoStr *goto_label) {
+    return ast->kind == AST_LABEL &&
+           aoStrCmp(goto_label, astHackedGetLabel(ast));
+}
+
 char *astTypeToString(AstType *type) {
     aoStr *str = aoStrNew();
 

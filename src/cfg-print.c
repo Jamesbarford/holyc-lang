@@ -400,13 +400,16 @@ static BasicBlock *cfgGetHandleDoWhileHead(CfgGraphVizBuilder *builder,
 {
     BasicBlock *while_cond = NULL;
     if (bb->flags & BB_FLAG_LOOP_HEAD) {
-        for (int i = 0; i < bb->prev_cnt; ++i) {
-            BasicBlock *prev = bb->prev_blocks[i];
+        IntMapIterator *it = intMapIteratorNew(bb->prev_blocks);
+        IntMapNode *entry;
+        while ((entry = intMapNext(it)) != NULL) {
+            BasicBlock *prev = (BasicBlock *)entry->value;
             if (prev->type == BB_DO_WHILE_COND && prev->prev == bb) {
                 while_cond = prev;
                 break;
             }
         }
+        intMapIteratorRelease(it);
 
         if (while_cond) {
             intMapSet(seen,while_cond->block_no,NULL);
@@ -484,7 +487,7 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
             }
             break;
 
-        case BB_BRANCH_BLOCK:
+        case BB_BRANCH_BLOCK: {
             if (bb->flags & BB_FLAG_LOOP_HEAD) {
                 builder->loop_stack[builder->loop_idx++] = bb;
                 /* Push the head onto the stack so that we can bookend the 
@@ -496,13 +499,16 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
             cfgCreatePictureUtil(builder,bb->_if,seen);
 
             /* @Bug - should know how many loops a block ends */
+            IntMapIterator *it = intMapIteratorNew(bb->_else->prev_blocks);
+            IntMapNode *entry;
             int loop_ends = 0;
-            for (int i = 0; i < bb->_else->prev_cnt; ++i) {
-                BasicBlock *prev = bb->_else->prev_blocks[i];
+            while ((entry = intMapNext(it)) != NULL) {
+                BasicBlock *prev = (BasicBlock *)entry->value;
                 if (prev->flags & BB_FLAG_LOOP_HEAD) {
                     loop_ends++;
                 }
             }
+            intMapIteratorRelease(it);
 
             if ((bb->_else->flags & BB_FLAG_LOOP_END) && bb->_else->visited != loop_ends) {
                 builder->loop_nesting--;
@@ -516,15 +522,13 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
                 cfgPrintBreaks(builder,bb);
             }
             break;
+        }
 
         case BB_SWITCH: {
             bbPrintf(builder,bb);
             for (int i = 0; i < bb->next_blocks->size; ++i) {
                 BasicBlock *it = vecGet(BasicBlock *,bb->next_blocks,i);
                 cfgCreatePictureUtil(builder,it,seen);
-                //if (it->next != bb->next) {
-                //    cfgCreatePictureUtil(builder,it->next,seen);
-                //}
             }
             cfgCreatePictureUtil(builder,bb->next,seen);
             break;
@@ -532,7 +536,7 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
 
         case BB_GOTO:
             bbPrintf(builder,bb);
-            if (bb->next->prev_cnt > 1 || bb->flags & BB_FLAG_UNCONDITIONAL_JUMP) {
+            if (bbPrevCnt(bb->next) >= 1 || bb->flags & BB_FLAG_UNCONDITIONAL_JUMP) {
                 cfgCreatePictureUtil(builder,bb->next,seen);
             }
             if (bb->flags & BB_FLAG_LOOP_HEAD) {
@@ -567,6 +571,7 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
                     CFG_GRAPHVIZ_ERROR_INVALID_TYPE);
             loggerWarning("%s\n",error);
             free(error);
+            break;
         }
     }
 
@@ -578,7 +583,9 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
             aoStrCat(builder->viz,"}\n");
         }
 
-        cfgCreatePictureUtil(builder,while_cond->next,seen);
+        if (while_cond->next) {
+            cfgCreatePictureUtil(builder,while_cond->next,seen);
+        }
 
         if (while_cond->flags & BB_FLAG_LOOP_END) {
             cfgPrintBreaks(builder,while_cond);
@@ -605,31 +612,23 @@ static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
     IntMap *map = cfg->no_to_block;
     loggerDebug("Creating mappings for: %s, size: %lu\n",
             cfg->ref_fname->data,map->size);
+    IntMapIterator *it = intMapIteratorNew(cfg->no_to_block);
+    IntMapNode *entry;
 
-    for (int i = 0; i < map->size; ++i) {
-        long idx = map->indexes[i];
-        IntMapNode *node = map->entries[idx];
-        if (!node) {
-            for (int j = 0; j < map->size; ++j) {
-                printf("%ld ",map->indexes[j]);
-            }
-            printf("\n");
-            loggerPanic("Failed while creating mappings for: %s idx=%d, block_no=%ld\n",
-                    cfg->ref_fname->data,i,map->indexes[i]);
-        }
-
-        BasicBlock *cur = (BasicBlock *)node->value;
+    while ((entry = intMapNext(it)) != NULL) {
+        BasicBlock *cur = (BasicBlock *)entry->value;
         if (cur->ast_array->size == 0) {
             //bbPrint(cur);
         }
 
         switch (cur->type) {
-            case BB_CONTINUE:
+            case BB_CONTINUE: {
                 aoStrCatPrintf(builder->viz,
                         BB_FMT_BLUE_DOTTED,
                         cur->block_no,
                         cur->prev->block_no);
                 break;
+            }
 
             case BB_LOOP_BLOCK: {
                 aoStrCatPrintf(builder->viz,
@@ -650,10 +649,12 @@ static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
                             BB_FMT_BLUE_DOTTED,
                             cur->block_no,
                             cur->prev->block_no);
-                    aoStrCatPrintf(builder->viz,
-                            BB_FMT_RED_SOLID,
-                            cur->block_no,
-                            cur->next->block_no);
+                    if (cur->next) {
+                        aoStrCatPrintf(builder->viz,
+                                BB_FMT_RED_SOLID,
+                                cur->block_no,
+                                cur->next->block_no);
+                    }
                 break;
 
             case BB_BRANCH_BLOCK:
@@ -718,11 +719,12 @@ static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
                 break;
 
             default:
-                loggerWarning("Unhandled! loopidx=%d: bb%d %s\n",
-                    i,cur->block_no,bbToString(cur));
+                loggerWarning("Unhandled! loopidx=%ld: bb%d %s\n",
+                    it->idx,cur->block_no,bbToString(cur));
         }
     }
     loggerDebug("Created mapping for: %s\n", cfg->ref_fname->data);
+    intMapIteratorRelease(it);
 }
 
 

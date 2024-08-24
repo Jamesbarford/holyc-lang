@@ -5,13 +5,117 @@
 #include <string.h>
 #include <assert.h>
 
+#include "aostr.h"
 #include "map.h"
 #include "util.h"
 
-#define HT_LOAD    0.60
-#define HT_DELETED LONG_MAX
-#define HT_PROBE_1 1
-#define HT_PROBE_3 3
+void setAllLongs(long *array, unsigned long len, long value) {
+    for (long i = 0; i < len; ++i) {
+        array[i] = value;
+    }
+}
+
+#define vectorNew(ret_type, entry_type)                               \
+    ret_type *vec;                                                    \
+    do {                                                              \
+        vec = (ret_type *)malloc(sizeof(ret_type));                   \
+        vec->size = 0;                                                \
+        vec->capacity = 32;                                           \
+        vec->entries = (entry_type *)malloc(sizeof(entry_type) * 32); \
+    } while (0)
+
+#define vectorResize(vec, type)                           \
+    do {                                                  \
+        int new_capacity = vec->capacity * 2;             \
+        type *new_entries = (type *)realloc(vec->entries, \
+                    sizeof(type)*new_capacity);           \
+        vec->entries = new_entries;                       \
+        vec->capacity = new_capacity;                     \
+    } while (0)
+
+#define vectorPush(vec, type, value)                      \
+    do {                                                  \
+        if (vec->size + 1 >= vec->capacity) {             \
+            vectorResize(vec,type);                       \
+        }                                                 \
+        vec->entries[vec->size++] = value;                \
+    } while (0)
+
+#define vectorBoundsCheck(vec_size, idx)                                   \
+    do {                                                                   \
+        if (idx < 0 || idx >= vec_size) {                                  \
+            loggerPanic("idx '%d' is out of range for vector of size %d\n",\
+                    idx,vec->size);                                        \
+        }                                                                  \
+    } while (0)
+
+#define vectorRelease(vec)                                                 \
+    do {                                                                   \
+        if (vec) {                                                         \
+            free(vec->entries);                                            \
+            free(vec);                                                     \
+        }                                                                  \
+    } while (0)
+    
+
+/* I feel combining all of these data structures into one file will lead 
+ * to a more happy prosperous codebase */
+IntVec *intVecNew(void) {
+    vectorNew(IntVec,long);
+#ifdef DEBUG
+    assert(vec != NULL);
+    assert(vec->entries != NULL);
+#endif
+    return vec;
+}
+
+void intVecPush(IntVec *vec, long value) {
+    vectorPush(vec,long,value);
+}
+
+int intVecGet(IntVec *vec, int idx) {
+#ifdef DEBUG
+    vectorBoundsCheck(vec->size,idx);
+#endif
+    /* No checking */
+    return vec->entries[idx];
+}
+
+void intVecClear(IntVec *vec) {
+    vec->size = 0;
+}
+
+void intVecRelease(IntVec *vec) {
+    if (vec) {
+        free(vec->entries);
+        free(vec);
+    }
+}
+
+PtrVec *ptrVecNew(void) {
+    vectorNew(PtrVec,void*);
+#ifdef DEBUG
+    assert(vec != NULL);
+    assert(vec->entries != NULL);
+#endif
+    return vec;
+}
+
+void ptrVecPush(PtrVec *vec, void *value) {
+    vectorPush(vec,void*,value);
+}
+
+void *ptrVecGet(PtrVec *vec, int idx) {
+#ifdef DEBUG
+    vectorBoundsCheck(vec->size,idx);
+#endif
+    /* No checking */
+    return vec->entries[idx];
+}
+
+void ptrVecRelease(PtrVec *vec) {
+    vectorRelease(vec);
+}
 
 static unsigned long intMapHashFunction(long key, unsigned long mask) {
     return key & mask;
@@ -25,7 +129,7 @@ IntMap *intMapNew(unsigned long capacity) {
     map->threashold = (unsigned long)(HT_LOAD * capacity);
     map->_free_value = NULL;
     map->entries = (IntMapNode **)calloc(capacity, sizeof(IntMapNode *));
-    map->indexes = (long *)calloc(capacity, sizeof(long));
+    map->indexes = intVecNew();
     return map;
 }
 
@@ -38,6 +142,49 @@ IntMapNode *intMapNodeNew(long key, void *value) {
     n->key = key;
     n->value = value;
     return n;
+}
+
+static unsigned long intMapGetIdx(IntMap *map, long key) {
+    unsigned long idx = intMapHashFunction(key, map->mask); 
+    unsigned long mask = map->mask;
+    unsigned long probe = 1;
+    IntMapNode **entries = map->entries;
+    IntMapNode *cur;
+
+    while ((cur = entries[idx])) {
+        if (cur->key == key) {
+            return idx;
+        }
+        idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
+        probe++;
+    }
+    return HT_DELETED;
+}
+
+IntMapIterator *intMapIteratorNew(IntMap *map) {
+    IntMapIterator *it = (IntMapIterator *)malloc(sizeof(IntMapIterator));
+    it->idx = 0;
+    it->map = map;
+    return it;
+}
+
+void intMapIteratorRelease(IntMapIterator *it) {
+    if (it) {
+        free(it);
+    }
+}
+
+IntMapNode *intMapNext(IntMapIterator *it) {
+    while (it->idx < it->map->indexes->size) {
+        long idx = intVecGet(it->map->indexes,it->idx);
+        IntMapNode *n = it->map->entries[idx];
+        if (n->key != HT_DELETED) {
+            it->idx++;
+            return n;
+        }
+        it->idx++;
+    }
+    return NULL;
 }
 
 /* Finds the next avalible slot */ 
@@ -60,10 +207,10 @@ static unsigned long intMapGetNextIdx(IntMap *map, long key, int *_is_free) {
 }
 
 void intMapClear(IntMap *map) {
-    long *indexes = map->indexes;
+    IntVec *indexes = map->indexes;
     void (*free_value)(void *value) = map->_free_value;
-    for (int i = 0; i < map->size; ++i) {
-        long idx = indexes[i];
+    for (int i = 0; i < indexes->size; ++i) {
+        long idx = vecGet(long,indexes,i);
         IntMapNode *n = map->entries[idx];
         if (n) {
             if (free_value)
@@ -73,7 +220,7 @@ void intMapClear(IntMap *map) {
     }
     map->size = 0;
     memset(map->entries,0,map->capacity*sizeof(IntMapNode *));
-    memset(map->indexes,0,map->size*sizeof(long));
+    intVecClear(map->indexes);
 }
 
 void intMapRelease(IntMap *map) { // free the entire hashtable
@@ -87,8 +234,8 @@ void intMapRelease(IntMap *map) { // free the entire hashtable
                 free(n);
             }
         }
+        intVecRelease(map->indexes);
         free(map->entries);
-        free(map->indexes);
         free(map);
     }
 }
@@ -97,16 +244,17 @@ int intMapResize(IntMap *map) {
     // Resize the hashtable, will return false if OMM
     unsigned long new_capacity, new_mask;
     IntMapNode **new_entries, **old_entries;
-    long *new_indexes, *old_indexes;
+    long *new_indexes;
+    long *old_index_entries = map->indexes->entries;
+    int indexes_capacity = (int)map->indexes->size;
     int is_free;
 
     old_entries = map->entries;
-    old_indexes = map->indexes;
 
     new_capacity = map->capacity << 1;
     new_mask = new_capacity - 1;
 
-    new_indexes = calloc(new_capacity, sizeof(long));
+    new_indexes = (long *)calloc(indexes_capacity, sizeof(long));
     /* OOM */
     if (new_indexes == NULL) {
         return 0;
@@ -128,8 +276,8 @@ int intMapResize(IntMap *map) {
      * the hashtable which 'dict.c' has to do on a resize thus this should in
      * theory be faster, but there are more array lookups however they should 
      * have good spatial locality */
-    for (long i = 0; i < map->size; ++i) {
-        long idx = old_indexes[i];
+    for (long i = 0; i < indexes_capacity; ++i) {
+        long idx = old_index_entries[i];
         IntMapNode *old = old_entries[idx];
         if (old->key != HT_DELETED) {
             long new_idx = intMapGetNextIdx(map,old->key,&is_free);
@@ -143,16 +291,18 @@ int intMapResize(IntMap *map) {
     }
 
     free(old_entries);
-    free(old_indexes);
+    free(map->indexes->entries);
+    map->indexes->size = new_size;
+    map->indexes->capacity = indexes_capacity;
+    map->indexes->entries = new_indexes;
+
+    map->entries = new_entries;
     map->size = new_size;
-    map->indexes = new_indexes;
     map->threashold = (unsigned long)(new_capacity * HT_LOAD);
     return 1;
 }
 
 int intMapSet(IntMap *map, long key, void *value) {
-    int is_free;
-
     if (map->size >= map->threashold) {
         if (!intMapResize(map)) {
             /* This means we have run out of memory */
@@ -160,10 +310,11 @@ int intMapSet(IntMap *map, long key, void *value) {
         }
     }
 
+    int is_free;
     unsigned long idx = intMapGetNextIdx(map, key, &is_free);
     if (is_free) {
         IntMapNode *n = intMapNodeNew(key, value);
-        map->indexes[map->size] = idx;
+        intVecPush(map->indexes,idx);
         map->entries[idx] = n;
         map->size++;
         return 1;
@@ -176,92 +327,90 @@ int intMapSet(IntMap *map, long key, void *value) {
 }
 
 int intMapDelete(IntMap *map, long key) {
-    unsigned long idx, mask, probe;
-    IntMapNode **entries = map->entries;
-    IntMapNode *cur;
-    mask = map->mask;
-    idx = intMapHashFunction(key, mask);
-    probe = 1;
-    while ((cur = entries[idx])) {
-        if (cur->key == key) {
-            cur->key = HT_DELETED;
-            map->indexes[idx] = HT_DELETED;
-            map->size--;
-            return 1;
-        }
-        idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-        probe++;
+    unsigned long idx = intMapGetIdx(map,key);
+    if (idx != HT_DELETED) {
+        IntMapNode *n = map->entries[idx];
+        if (map->_free_value)
+            map->_free_value(n->value);
+        n->key = HT_DELETED;
+        map->size--;
+        return 1;
     }
     return 0;
 }
 
 void *intMapGet(IntMap *map, long key) {
-    unsigned long idx, mask, probe;
-    IntMapNode **entries = map->entries;
-    IntMapNode *cur;
-
-    mask = map->mask;
-    probe = 1;
-    idx = intMapHashFunction(key, mask);
-    while ((cur = entries[idx])) {
-        if (cur->key == key) {
-            return cur->value;
-        }
-        idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-        probe++;
+    unsigned long idx = intMapGetIdx(map,key);
+    if (idx != HT_DELETED) {
+        return map->entries[idx]->value;
     }
     return NULL;
+}
+
+/* @UnSafe 
+ * What if the nth entry is deleted? */
+void *intMapGetAt(IntMap *map, long index) {
+    long idx = intVecGet(map->indexes,index);
+    return map->entries[idx]->value;
 }
 
 /* While seemingly an overkill this means that we can use the map as a set 
  * as we can now have the value as NULL */
 int intMapHas(IntMap *map, long key) {
-    unsigned long idx, mask, probe;
-    IntMapNode **entries = map->entries;
-    IntMapNode *cur;
-    mask = map->mask;
-    probe = 1;
-    idx = intMapHashFunction(key, mask);
-    while ((cur = entries[idx])) {
-        if (cur->key == key) {
-            return 1;
+    unsigned long idx = intMapGetIdx(map,key);
+    return idx != HT_DELETED;
+}
+
+char *intMapToString(IntMap *map, char *(*stringify_value)(void *)) {
+    aoStr *str = aoStrNew();
+    unsigned long map_size = map->size;
+
+    if (map_size == 0) {
+        aoStrCatLen(str,"{}",2);
+        return aoStrMove(str);
+    }
+
+    unsigned long i = 0;
+    IntMapIterator *it = intMapIteratorNew(map);
+    IntMapNode *entry;
+    aoStrPutChar(str,'{');
+    while ((entry = intMapNext(it)) != NULL) {
+        char *value_string = stringify_value(entry->value);
+        if ((i + 1) == map_size) {
+            aoStrCatPrintf(str,"[%ld] => %s}",entry->key,value_string);
+        } else {
+            aoStrCatPrintf(str,"[%ld] => %s, ",entry->key,value_string);
         }
-        idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-        probe++;
+        free(value_string);
+        i++;
     }
-    return 0;
+    intMapIteratorRelease(it);
+    return aoStrMove(str);
 }
 
-int intMapIter(IntMap *map, long *_idx, IntMapNode **_node) {
-    long idx = *_idx;
-    while (idx < map->size) {
-        unsigned long index = map->indexes[idx];
-        if (index != HT_DELETED) {
-            *_idx = idx + 1;
-            *_node = map->entries[index];
-            return 1;
+char *intMapKeysToString(IntMap *map) {
+    aoStr *str = aoStrNew();
+    unsigned long map_size = map->size;
+
+    if (map_size == 0) {
+        aoStrCatLen(str,"{}",2);
+        return aoStrMove(str);
+    }
+
+    unsigned long i = 0;
+    IntMapIterator *it = intMapIteratorNew(map);
+    IntMapNode *entry;
+    aoStrPutChar(str,'{');
+    while ((entry = intMapNext(it)) != NULL) {
+        if ((i + 1) == map_size) {
+            aoStrCatPrintf(str,"%ld}",entry->key);
+        } else {
+            aoStrCatPrintf(str,"%ld, ",entry->key);
         }
-        idx++;
+        i++;
     }
-    return 0;
-}
-
-int intMapValueIter(IntMap *map, long *_idx, void **_value) {
-    IntMapNode *node;
-    if (intMapIter(map, _idx, &node)) {
-        *_value = node->value;
-        return 1;
-    }
-    return 0;
-}
-
-int intMapKeyIter(IntMap *map, long *_idx, long *_key) {
-    IntMapNode *node;
-    if (intMapIter(map, _idx, &node)) {
-        *_key = node->key;
-        return 1;
-    }
-    return 0;
+    intMapIteratorRelease(it);
+    return aoStrMove(str);
 }
 
 unsigned long strMapHashFunction(char *key, long key_len, unsigned long mask) {
@@ -508,104 +657,187 @@ int strMapKeyIter(StrMap *map, long *_idx, char **_key) {
     return 0;
 }
 
-#define vectorNew(ret_type, entry_type)                               \
-    ret_type *vec;                                                    \
-    do {                                                              \
-        vec = (ret_type *)malloc(sizeof(ret_type));                   \
-        vec->size = 0;                                                \
-        vec->capacity = 32;                                           \
-        vec->entries = (entry_type *)malloc(sizeof(entry_type) * 32); \
-    } while (0)
-
-#define vectorResize(vec, type)                           \
-    do {                                                  \
-        int new_capacity = vec->capacity * 2;             \
-        type *new_entries = (type *)realloc(vec->entries, \
-                    sizeof(type)*new_capacity);           \
-        vec->entries = new_entries;                       \
-        vec->capacity = new_capacity;                     \
-    } while (0)
-
-#define vectorPush(vec, type, value)                      \
-    do {                                                  \
-        if (vec->size + 1 >= vec->capacity) {             \
-            vectorResize(vec,type);                       \
-        }                                                 \
-        vec->entries[vec->size++] = value;                \
-    } while (0)
-
-#define vectorBoundsCheck(vec_size, idx)                                   \
-    do {                                                                   \
-        if (idx < 0 || idx >= vec_size) {                                  \
-            loggerPanic("idx '%d' is out of range for vector of size %d\n",\
-                    idx,vec->size);                                        \
-        }                                                                  \
-    } while (0)
-
-#define vectorRelease(vec)                                                 \
-    do {                                                                   \
-        if (vec) {                                                         \
-            free(vec->entries);                                            \
-            free(vec);                                                     \
-        }                                                                  \
-    } while (0)
-    
-
-/* I feel combining all of these data structures into one file will lead 
- * to a more happy prosperous codebase */
-IntVec *intVecNew(void) {
-    vectorNew(IntVec,long);
-#ifdef DEBUG
-    assert(vec != NULL);
-    assert(vec->entries != NULL);
-#endif
-    return vec;
+IntSet *intSetNew(unsigned long capacity) {
+    IntSet *iset = (IntSet *)malloc(sizeof(IntSet));
+    iset->size = 0;
+    iset->capacity = capacity;
+    iset->mask = capacity-1;
+    iset->threashold = (unsigned long)(HT_LOAD * capacity);
+    iset->entries = (long *)malloc(sizeof(long)*capacity);
+    iset->indexes = intVecNew();
+    setAllLongs(iset->entries,capacity,HT_VACANT);
+    return iset;
 }
 
-void intVecPush(IntVec *vec, long value) {
-    vectorPush(vec,long,value);
+static unsigned long intSetGetNextIdx(long *entries, unsigned long mask,
+        long key, int *_is_free)
+{ 
+    unsigned long idx = key & mask;
+    unsigned long probe = 1;
+    long cur;
+
+    while ((cur = entries[idx]) != HT_VACANT) {
+        if (cur == key || cur == HT_DELETED) {
+            *_is_free = 0;
+            return idx;
+        }
+        idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
+        probe++;
+    }
+    *_is_free = 1;
+    return idx;
 }
 
-int intVecGet(IntVec *vec, int idx) {
-#ifdef DEBUG
-    vectorBoundsCheck(vec->size,idx);
-#endif
-    /* No checking */
-    return vec->entries[idx];
+static long intSetGetIdx(long *entries, unsigned long mask, long key) {
+    unsigned long idx = intMapHashFunction(key, mask);
+    unsigned long probe = 1;
+    long cur_key;
+
+    while ((cur_key = entries[idx]) != HT_VACANT) {
+        if (cur_key == key) {
+            return idx;
+        }
+        idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
+        probe++;
+    }
+    return HT_DELETED;
 }
 
-void intVecClear(IntVec *vec) {
-    vec->size = 0;
+/* @CutNPaste
+ * This is very similar to intMapResize
+ * */
+int intSetResize(IntSet *iset) {
+    // Resize the hashtable, will return false if OMM
+    unsigned long new_capacity = iset->capacity << 1;
+    unsigned long new_mask = new_capacity - 1;
+    long *old_entries = iset->entries;
+    IntVec *indexes = iset->indexes;
+
+    long *new_entries = (long *)malloc(new_capacity * sizeof(long));
+    /* OOM */
+    if (new_entries == NULL) {
+        return 0;
+    }
+
+    setAllLongs(new_entries,new_capacity,HT_VACANT);
+
+    iset->mask = new_mask;
+    iset->entries = new_entries;
+    iset->capacity = new_capacity;
+
+    long new_size = 0;
+    int is_free;
+    for (int i = 0; i < indexes->size; ++i) {
+        long idx = indexes->entries[i];
+        long old_key = old_entries[idx];
+        if (old_key != HT_DELETED) {
+            long new_idx = intSetGetNextIdx(new_entries,new_mask,old_key,&is_free);
+            new_entries[new_idx] = old_key;
+            /* keep track of the new size of this Set */
+            new_size++;
+        }
+    } 
+
+    free(old_entries);
+    iset->size = new_size;
+    iset->threashold = (unsigned long)(new_capacity * HT_LOAD);
+    return 1;
 }
 
-void intVecRelease(IntVec *vec) {
-    if (vec) {
-        free(vec->entries);
-        free(vec);
+int intSetAdd(IntSet *iset, long key) {
+    if (iset->size >= iset->threashold) {
+        if (!intSetResize(iset)) {
+            /* This means we have run out of memory */
+            return 0;
+        }
+    }
+
+    int is_free = 0;
+    unsigned long idx = intSetGetNextIdx(iset->entries,iset->mask,key,&is_free);
+    if (is_free) {
+        iset->entries[idx] = key;
+        intVecPush(iset->indexes,idx);
+        iset->size++;
+    }
+    return 1;
+}
+
+void intSetRemove(IntSet *iset, long key) {
+    long idx = intSetGetIdx(iset->entries,iset->mask,key);
+    if (idx != HT_DELETED) {
+        /* We do nothing with the indexes, this does mean if there are multiple 
+         * deletes the indexes vector would grow indefinitely */
+        iset->entries[idx] = HT_DELETED;
+        iset->size--;
     }
 }
 
-PtrVec *ptrVecNew(void) {
-    vectorNew(PtrVec,void*);
-#ifdef DEBUG
-    assert(vec != NULL);
-    assert(vec->entries != NULL);
-#endif
-    return vec;
+int intSetHas(IntSet *iset, long key) {
+    return intSetGetIdx(iset->entries,iset->mask,key) != HT_DELETED;
 }
 
-void ptrVecPush(PtrVec *vec, void *value) {
-    vectorPush(vec,void*,value);
+long intSetGetAt(IntSet *iset, long index) {
+    long idx = intVecGet(iset->indexes,index);
+    return iset->entries[idx];
 }
 
-void *ptrVecGet(PtrVec *vec, int idx) {
-#ifdef DEBUG
-    vectorBoundsCheck(vec->size,idx);
-#endif
-    /* No checking */
-    return vec->entries[idx];
+void intSetClear(IntSet *iset) {
+    setAllLongs(iset->entries,iset->capacity,HT_VACANT);
+    intVecClear(iset->indexes);
 }
 
-void ptrVecRelease(PtrVec *vec) {
-    vectorRelease(vec);
+void intSetRelease(IntSet *iset) {
+    if (iset) {
+        free(iset->entries);
+        free(iset);
+    }
+}
+
+IntSetIterator *intSetIteratorNew(IntSet *iset) {
+    IntSetIterator *it = (IntSetIterator *)malloc(sizeof(IntSetIterator));
+    it->idx = 0;
+    it->iset = iset;
+    return it;
+}
+
+long intSetNext(IntSetIterator *it) {
+    while (it->idx < it->iset->indexes->size) {
+        long idx = intVecGet(it->iset->indexes,it->idx);
+        long key = it->iset->entries[idx];
+        if (key != HT_DELETED && key != HT_VACANT) {
+            it->idx++;
+            return key;
+        }
+        it->idx++;
+    }
+    return HT_DELETED;
+}
+
+void intSetIteratorRelease(IntSetIterator *it) {
+    if (it) free(it);
+}
+
+char *intSetToString(IntSet *iset) {
+    aoStr *str = aoStrNew();
+    unsigned long set_size = iset->size;
+
+    if (set_size == 0) {
+        aoStrCatLen(str,"{}",2);
+        return aoStrMove(str);
+    }
+
+    unsigned long i = 0;
+    long key;
+    IntSetIterator *it = intSetIteratorNew(iset);
+    aoStrPutChar(str,'{');
+    while ((key = intSetNext(it)) != HT_DELETED) {
+        if ((i + 1) == set_size) {
+            aoStrCatPrintf(str,"%ld}",key);
+        } else {
+            aoStrCatPrintf(str,"%ld, ",key);
+        }
+        i++;
+    }
+    intSetIteratorRelease(it);
+    return aoStrMove(str);
 }

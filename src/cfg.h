@@ -20,7 +20,6 @@ enum bbType {
     BB_SWITCH        = 9,
     BB_CASE          = 10,
     BB_CONTINUE      = 11,
-    BB_DO_WHILE_HEAD = 12,
 };
 
 #define CFG_MAX_PREV      (32)
@@ -46,6 +45,10 @@ enum bbType {
 #define BB_FLAG_CASE_OWNED         (0x200)
 #define BB_FLAG_WHILE_LOOP         (0x400)
 #define BB_FLAG_CASE_BREAK         (0x800)
+#define BB_FLAG_FOR_LOOP           (0x1000)
+#define BB_FLAG_FOR_LOOP_HAS_STEP  (0x2000)
+#define BB_FLAG_HAD_NO_ELSE        (0x4000) /* Where an if branch had no written
+                                             * else branch */
 
 typedef struct BasicBlock {
     /* @Confirm:
@@ -56,8 +59,6 @@ typedef struct BasicBlock {
      * the loop head in BasicBlock land is a conditional jump */
     unsigned int flags;
     int block_no;
-    /* @Unused ? */
-    int prev_cnt;
     int visited;
     /* position in the CFG's array that this block lives */
     int idx;
@@ -69,12 +70,14 @@ typedef struct BasicBlock {
      * loop head the next pointer is the BB_LOOP_BLOCK, so we can keep track of 
      * it more easily */
     struct BasicBlock *next;
- //    IntSet *prev_block_ids;
-    struct BasicBlock *prev_blocks[32];
+    IntMap *prev_blocks;
     /* this is to be able to handle a switch */
     PtrVec *next_blocks; 
     PtrVec *ast_array;
 } BasicBlock;
+
+#define bbPrevCnt(bb) \
+  ((bb)->prev_blocks->size)
 
 /* Head of a CFG is a function */
 typedef struct CFG {
@@ -104,7 +107,6 @@ typedef struct CFGBuilder {
     BasicBlock *bb;
     BasicBlock *bb_pool;
     BasicBlock *bb_cur_loop;
-    BasicBlock *bb_cur_else;
     IntMap *leaf_cache;
 
     List *ast_list;
