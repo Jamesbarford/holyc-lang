@@ -711,11 +711,19 @@ int intSetResize(IntSet *iset) {
     unsigned long new_capacity = iset->capacity << 1;
     unsigned long new_mask = new_capacity - 1;
     long *old_entries = iset->entries;
-    IntVec *indexes = iset->indexes;
+    long *old_index_entries = iset->indexes->entries;
+    int indexes_capacity = (int)iset->indexes->size;
 
     long *new_entries = (long *)malloc(new_capacity * sizeof(long));
     /* OOM */
     if (new_entries == NULL) {
+        return 0;
+    }
+
+    long *new_indexes = (long *)calloc(indexes_capacity, sizeof(long));
+    /* OOM */
+    if (new_indexes == NULL) {
+        free(new_entries);
         return 0;
     }
 
@@ -727,18 +735,24 @@ int intSetResize(IntSet *iset) {
 
     long new_size = 0;
     int is_free;
-    for (int i = 0; i < indexes->size; ++i) {
-        long idx = indexes->entries[i];
+    for (int i = 0; i < indexes_capacity; ++i) {
+        long idx = old_index_entries[i];
         long old_key = old_entries[idx];
         if (old_key != HT_DELETED) {
             long new_idx = intSetGetNextIdx(new_entries,new_mask,old_key,&is_free);
             new_entries[new_idx] = old_key;
+            new_indexes[new_size] = new_idx;
             /* keep track of the new size of this Set */
             new_size++;
         }
     } 
 
     free(old_entries);
+    free(iset->indexes->entries);
+    iset->indexes->capacity = indexes_capacity;
+    iset->indexes->entries = new_indexes;
+    iset->indexes->size = new_size;
+
     iset->size = new_size;
     iset->threashold = (unsigned long)(new_capacity * HT_LOAD);
     return 1;

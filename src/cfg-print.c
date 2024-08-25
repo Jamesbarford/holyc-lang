@@ -64,7 +64,7 @@ typedef struct CfgGraphVizBuilder {
 } CfgGraphVizBuilder;
 
 static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
-        BasicBlock *bb, IntMap *seen);
+        BasicBlock *bb, IntSet *seen);
 
 static void cfgGraphVizBuilderInit(CfgGraphVizBuilder *builder) {
     builder->viz = aoStrAlloc(1<<10);
@@ -396,7 +396,7 @@ static void cfgPrintBreaks(CfgGraphVizBuilder *builder, BasicBlock *bb) {
  *
  * Adding it to the seen set means it will never get explored. */
 static BasicBlock *cfgGetHandleDoWhileHead(CfgGraphVizBuilder *builder, 
-        IntMap *seen, BasicBlock *bb)
+        IntSet *seen, BasicBlock *bb)
 {
     BasicBlock *while_cond = NULL;
     if (bb->flags & BB_FLAG_LOOP_HEAD) {
@@ -412,7 +412,7 @@ static BasicBlock *cfgGetHandleDoWhileHead(CfgGraphVizBuilder *builder,
         intMapIteratorRelease(it);
 
         if (while_cond) {
-            intMapSet(seen,while_cond->block_no,NULL);
+            intSetAdd(seen,while_cond->block_no);
         }
     }
     return while_cond;
@@ -433,12 +433,12 @@ char *cfgGraphVizError(CfgGraphVizBuilder *builder, BasicBlock *bb, int error_co
 }
 
 static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
-        BasicBlock *bb, IntMap *seen)
+        BasicBlock *bb, IntSet *seen)
 {
     BasicBlock *while_cond = cfgGetHandleDoWhileHead(builder,seen,bb);
 
-    if (intMapHas(seen,bb->block_no)) return;
-    else intMapSet(seen,bb->block_no,NULL);
+    if (intSetHas(seen,bb->block_no)) return;
+    else intSetAdd(seen,bb->block_no);
 
     if (bb->flags & BB_FLAG_LOOP_HEAD) {
         builder->loop_nesting++;
@@ -452,8 +452,6 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
             if (bb->flags & BB_FLAG_UNCONDITIONAL_JUMP && bb->next) {
                 cfgCreatePictureUtil(builder,bb->next,seen);
             }
-            //if (bb->next)
-            //    cfgCreatePictureUtil(builder,bb->next,seen);
             break;
 
         case BB_DO_WHILE_COND:
@@ -594,7 +592,7 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
 }
 
 static void cfgCreatePicture(CfgGraphVizBuilder *builder, CFG *cfg) {
-    IntMap *seen = intMapNew(32);
+    IntSet *seen = intSetNew(32);
     builder->return_idx = 0;
     builder->break_idx = 0;
     builder->loop_idx = 0;
@@ -605,7 +603,7 @@ static void cfgCreatePicture(CfgGraphVizBuilder *builder, CFG *cfg) {
     for (int i = 0; i < builder->return_idx; ++i) {
         cfgReturnPrintf(builder,builder->return_statements[i]);
     }
-    intMapRelease(seen);
+    intSetRelease(seen);
 }
 
 static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
@@ -617,9 +615,6 @@ static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
 
     while ((entry = intMapNext(it)) != NULL) {
         BasicBlock *cur = (BasicBlock *)entry->value;
-        if (cur->ast_array->size == 0) {
-            //bbPrint(cur);
-        }
 
         switch (cur->type) {
             case BB_CONTINUE: {
@@ -743,7 +738,7 @@ static void cfgCreateGraphViz(CfgGraphVizBuilder *builder, CFG *cfg) {
     /* Connects the nodes together in graphviz */
     cfgGraphVizAddMappings(builder,cfg);
 
-    aoStrCatPrintf(builder->viz,"}//ending function\n");
+    aoStrCatPrintf(builder->viz,"}//ending function\n\n");
 }
 
 void cfgBuilderWriteToFile(CfgGraphVizBuilder *builder, char *filename) {

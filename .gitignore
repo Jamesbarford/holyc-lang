@@ -21,3 +21,4 @@ scratch
 *.dot
 test-runner
 .idea
+.gdb_history

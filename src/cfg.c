@@ -198,6 +198,14 @@ void bbPrint(BasicBlock *bb) {
     aoStrRelease(str);
 }
 
+int bbIsType(BasicBlock *bb, enum bbType type) {
+    return bb->type == type;
+}
+
+int bbAstCount(BasicBlock *bb) {
+    return bb->ast_array->size;
+}
+
 static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder, int type) {
     /* @Bug, @HashTable
      * This can and will create a new pointer sometimes and thus all references
@@ -264,6 +272,7 @@ static CFG *cfgNew(aoStr *fname, BasicBlock *head_block) {
     cfg->head = head_block;
     cfg->ref_fname = fname;
     cfg->no_to_block = intMapNew(32);
+    cfg->graph = intMapNew(32);
     return cfg;
 }
 
@@ -817,18 +826,6 @@ static void cfgHandleSwitch(CFGBuilder *builder, Ast *ast) {
     bb_switch->next = bb_end;
     bb_end->prev = bb_switch;
 
-    if (bb_switch->flags & (BB_FLAG_IF_BRANCH|BB_FLAG_ELSE_BRANCH)) {
-        BasicBlock *cond = bb_switch->prev;
-        if (cond->flags & BB_FLAG_HAD_NO_ELSE) {
-            bb_end->next = cond->_else;
-        } else {
-            bb_end->next = cond->next;
-        }
-    }
-
-    bbPrint(bb_end);
-    bbPrint(bb_switch);
-
     cfgBuilderSetBasicBlock(builder,bb_end);
     if (!prev_in_switch) {
         builder->flags &= ~(CFG_BUILDER_FLAG_IN_SWITCH);
@@ -843,8 +840,12 @@ static void cfgLinkLeaves(IntMap *map, BasicBlock *bb, BasicBlock *dest) {
             case BB_SWITCH:
                 for (int i = 0; i < bb->next_blocks->size; ++i) {
                     cfgLinkLeaves(map,bb->next_blocks->entries[i],dest);
-                } 
-                break;
+                }
+                
+                // bb->next = dest;
+                // break;
+
+            case BB_DO_WHILE_COND:
             case BB_CASE:
             case BB_CONTROL_BLOCK:
                 if      (bb == bb->next)   bb->next = dest;
@@ -854,8 +855,8 @@ static void cfgLinkLeaves(IntMap *map, BasicBlock *bb, BasicBlock *dest) {
                 break;
 
             case BB_BRANCH_BLOCK:
-                cfgLinkLeaves(map,bb->_if, dest);
-                cfgLinkLeaves(map,bb->_else, dest);
+                cfgLinkLeaves(map,bb->_if,dest);
+                cfgLinkLeaves(map,bb->_else,dest);
                 break;
         }
     }
@@ -866,13 +867,10 @@ static BasicBlock *cfgMergeBranches(CFGBuilder *builder, BasicBlock *pre,
 { 
     IntMap *leaf_cache = builder->leaf_cache;
     BasicBlock *join = post;
-
     if (post->ast_array->size > 0 && !cfgIsLoopControl(post)) {
         join = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
         join->prev = post;
-        // if (post->next && !cfgIsLoopControl(post->next)) { 
         post->next = join;
-        //}
     }
     cfgLinkLeaves(leaf_cache,pre,join);
     intMapClear(leaf_cache);
@@ -1232,12 +1230,6 @@ BasicBlock *bbRelinkControl(IntMap *map, BasicBlock *bb) {
             }
         }
     }
-    
-    //else if (bb->next == child && child->prev != bb && child->type != BB_DO_WHILE_COND) {
-    //    bb->next = child->next;
-    //    bb->prev = child->prev;
-    //    return NULL;
-    //}
 
     switch (parent->type) {
         case BB_CONTROL_BLOCK: {
@@ -1273,9 +1265,58 @@ BasicBlock *bbRelinkControl(IntMap *map, BasicBlock *bb) {
     return child;
 }
 
-static void cfgRelinkSwitch(CFG *cfg, BasicBlock *bb_switch, BasicBlock *dead_node,
-        BasicBlock *dest)
-{
+/* Remove the basic block from:
+ * - The block number to block hashtable 
+ * - All sets with the node as a previous
+ */
+void cfgDeleteBasicBlock(CFG *cfg, BasicBlock *bb_del) {
+    IntMapIterator *it = intMapIteratorNew(cfg->graph);
+    IntMapNode *entry;
+    bb_del->type = BB_GARBAGE;
+    while ((entry = intMapNext(it)) != NULL) {
+        if (entry->key == bb_del->block_no) continue;
+        IntSet *bb_connections = (IntSet *)entry->value;
+        BasicBlock *bb = (BasicBlock *)intMapGet(cfg->no_to_block,entry->key);
+        /* Remove node as a previous link */
+        intMapDelete(bb->prev_blocks,bb->block_no);
+        /* Remove this node as a connection */
+        intSetRemove(bb_connections,bb_del->block_no);
+    }
+    /* Remove node from both lookup tables */
+    intMapDelete(cfg->graph,bb_del->block_no);
+    intMapDelete(cfg->no_to_block,bb_del->block_no);
+}
+
+/* For when the next pointer of a switch is a dead end, the most likely 
+ * cause of this is that it is nested in a conditional branch and does not 
+ * point to the node beyond the branch. */
+static void cfgRelinkSwitch(CFG *cfg, BasicBlock *bb_switch) {
+    BasicBlock *dest = NULL;
+    BasicBlock *bb_end = bb_switch->next;
+
+    if (bb_switch->flags & (BB_FLAG_IF_BRANCH|BB_FLAG_ELSE_BRANCH)) {
+        BasicBlock *cond = bb_switch->prev;
+        bb_end->type = BB_GARBAGE;
+        if (cond->flags & BB_FLAG_HAD_NO_ELSE) {
+            dest = cond->_else;
+        } else {
+            dest = cond->next;
+        }
+        IntMap *cache = intMapNew(32);
+        PtrVec *blocks = bb_switch->next_blocks;
+        /* Recurse through the graph linking all leaf nodes to the destination 
+         * node, this is fairly expensive. */
+        for (int i = 0; i < blocks->size; ++i) {
+            BasicBlock *bb_case = vecGet(BasicBlock *,blocks,i);
+            cfgLinkLeaves(cache,bb_case,dest);
+        }
+        intMapRelease(cache);
+        bb_switch->next = dest;
+        cfgDeleteBasicBlock(cfg,bb_end);
+    } else {
+        /* legitimately the switch does not have anything after it */
+        bb_end->type = BB_END_BLOCK;
+    }
 }
 
 /**
@@ -1286,8 +1327,7 @@ static void cfgRelinkSwitch(CFG *cfg, BasicBlock *bb_switch, BasicBlock *dead_no
  * This also fixes orphaned nodes, so is acting like a final check before 
  * handing off to the next step.
  * */
-IntMap *cfgBuildAdjacencyList(CFG *cfg) {
-    IntMap *map = intMapNew(32);
+void cfgBuildAdjacencyList(CFG *cfg) {
     BasicBlock *bb_array = ((BasicBlock *)cfg->head);
     IntSet *iset;
 
@@ -1332,11 +1372,10 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
                     } else {
                         if (bb->next) {
                             loggerWarning("GARBAGE: bb%d\n",bb->block_no);
-                            bbRelinkControl(map,bb);
+                            bbRelinkControl(cfg->graph,bb);
                             if (bb->type == BB_GARBAGE) {
                                 // loggerWarning("stil GARBAGE: bb%d\n",bb->block_no);
-                                intMapDelete(map,bb->block_no);
-                                intMapDelete(cfg->no_to_block,bb->block_no);
+                                cfgDeleteBasicBlock(cfg,bb);
                                 continue;
                             }
                             break;
@@ -1391,28 +1430,18 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
             /* Theoretically also want to do the cases as they could have 
              * nested blocks. */
             case BB_SWITCH: {
-                //bbPrint(bb->next);
-                if (bbPrevCnt(bb->next) == 0) {
-                    BasicBlock *dead_node = bb->next;
-                    BasicBlock *dest = NULL;
-                    dead_node->type = BB_GARBAGE;
-
-                    if (bb->flags & (BB_FLAG_IF_BRANCH|BB_FLAG_ELSE_BRANCH)) {
-                        BasicBlock *cond = bb->prev;
-                        if (cond->flags & BB_FLAG_HAD_NO_ELSE) {
-                            dest = cond->_else;
-                        } else {
-                            dest = cond->next;
-                        }
-                    }
-                    assert(dest != NULL);
-                    cfgRelinkSwitch(cfg,bb,dead_node,dest);
-                }
                 iset = intSetNew(16);
                 for (int i = 0; i < bb->next_blocks->size; ++i) {
                     BasicBlock *bb_case = (BasicBlock *)bb->next_blocks->entries[i];
                     intSetAdd(iset,bb_case->block_no);
                     bbAddPrev(bb_case,bb);
+                }
+
+                if (bbIsType(bb->next,BB_CONTROL_BLOCK) && bbAstCount(bb->next) == 0) {
+                    cfgRelinkSwitch(cfg,bb);
+                } else {
+                    intSetAdd(iset,bb->next->block_no);
+                    bbAddPrev(bb->next,bb);
                 }
                 break;
             }
@@ -1425,10 +1454,8 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
                 bbAddPrev(loop_head,bb);
                 assert(bb->prev != NULL);
 
-                // bbPrint(loop_block);
                 if (next) {
                     bbRemovePrev(next,bb->block_no);
-                    // next->prev = NULL;
                     bb->next = NULL;
                 }
 
@@ -1451,6 +1478,10 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
                 BasicBlock *loop_head = bb->prev;
                 /* I have no idea how this works */
                 iset = intSetNew(16);
+                bbAddPrev(loop_head,bb);
+                if (bb->next) {
+                    bbAddPrev(bb->next,bb);
+                }
                 intSetAdd(iset,loop_head->block_no);
                 break;
             }
@@ -1458,9 +1489,8 @@ IntMap *cfgBuildAdjacencyList(CFG *cfg) {
                 loggerPanic("Unhandled type: %s\n", bbTypeToString(bb->type));
         }
         intMapSet(cfg->no_to_block,bb->block_no,bb);
-        intMapSet(map,bb->block_no,iset);
+        intMapSet(cfg->graph,bb->block_no,iset);
     }
-    return map;
 }
 
 /* Given a parent with no code paths to the node remove the node from all of 
@@ -1474,9 +1504,7 @@ void cfgRemoveNodeFromChild(BasicBlock *parent) {
             break;
 
         case BB_CONTROL_BLOCK: {
-            bbPrint(parent->next);
             bbRemovePrev(parent->next,parent->block_no);
-            bbPrint(parent->next);
             break;
         }
 
@@ -1538,6 +1566,7 @@ void cfgRemoveUnreachableNodes(CFG *cfg) {
             /* Node can be deleted and we need to nuke all paths from it, 
              * deleting nodes if their previous contained only this node */
             ids[id_cnt++] = bb->block_no;
+            loggerWarning("Unreachable: %s\n", bbToString(bb));
             cfgRemoveNodeFromChild(bb);
             bb->type = BB_GARBAGE;
         }
@@ -1617,15 +1646,9 @@ static CFG *cfgCreateForFunction(Cctrl *cc, Ast *ast_fn, IntMap *leaf_cache, int
 
     cfg->bb_count = builder.bb_count;
     cfg->_memory = builder.bb_pool;
-    cfg->graph = cfgBuildAdjacencyList(cfg);
     *_block_no = builder.bb_block_no+1;
-    //cfgRemoveUnreachableNodes(cfg);
-    //cfgAdjacencyListPrintShallow(cfg);
-    //cfgAdjacencyListPrint(cfg);
-    //aoStr *json = cdfAdjacencyListToJSON(cfg);
-   // printf("%s\n",json->data);
-    //cfgStronglyConnectedComponents(cfg);
-//    exit(0);
+    cfgBuildAdjacencyList(cfg);
+    cfgRemoveUnreachableNodes(cfg);
 
     //dictRelease(builder.resolved_labels);
     //listRelease(builder.unresoved_gotos,NULL);
