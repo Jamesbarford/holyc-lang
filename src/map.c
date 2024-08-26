@@ -73,6 +73,16 @@ void intVecPush(IntVec *vec, long value) {
     vectorPush(vec,long,value);
 }
 
+long intVecPop(IntVec *vec, int *ok) {
+    if (vec->size > 0) {
+        long item = vec->entries[--vec->size];
+        *ok = 1;
+        return item;
+    }
+    *ok = 0;
+    return -1;
+}
+
 int intVecGet(IntVec *vec, int idx) {
 #ifdef DEBUG
     vectorBoundsCheck(vec->size,idx);
@@ -90,6 +100,21 @@ void intVecRelease(IntVec *vec) {
         free(vec->entries);
         free(vec);
     }
+}
+
+/* Make the first instance of key the first element in the vector */
+void intVecMoveFirst(IntVec *vec, int key) {
+    int idx = -1;
+    for (int i = 0; i < vec->size; ++i) {
+        if (vec->entries[i] == key) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx == -1) return;
+    int tmp = vec->entries[0];
+    vec->entries[0] = vec->entries[idx];
+    vec->entries[idx] = tmp;
 }
 
 PtrVec *ptrVecNew(void) {
@@ -133,7 +158,7 @@ IntMap *intMapNew(unsigned long capacity) {
     return map;
 }
 
-void intMapSetfreeValue(IntMap *map, void (*_free_value)(void *value)) {
+void intMapSetFreeValue(IntMap *map, void (*_free_value)(void *value)) {
     map->_free_value = _free_value;
 }
 
@@ -302,7 +327,7 @@ int intMapResize(IntMap *map) {
     return 1;
 }
 
-int intMapSet(IntMap *map, long key, void *value) {
+int intMapAdd(IntMap *map, long key, void *value) {
     if (map->size >= map->threashold) {
         if (!intMapResize(map)) {
             /* This means we have run out of memory */
@@ -430,15 +455,15 @@ StrMap *strMapNew(unsigned long capacity) {
     map->_free_value = NULL;
     map->_free_key = NULL;
     map->entries = (StrMapNode **)calloc(map->capacity, sizeof(StrMapNode *));
-    map->indexes = (long *)calloc(capacity, sizeof(long));
+    map->indexes = intVecNew();
     return map;
 }
 
-void strMapSetfreeValue(StrMap *map, void (*_free_value)(void *value)) {
+void strMapSetFreeValue(StrMap *map, void (*_free_value)(void *value)) {
     map->_free_value = _free_value;
 }
 
-void strMapSetfreeKey(StrMap *map, void (*_free_key)(void *key)) {
+void strMapSetFreeKey(StrMap *map, void (*_free_key)(void *key)) {
     map->_free_key = _free_key;
 }
 
@@ -450,8 +475,25 @@ StrMapNode *strMapNodeNew(char *key, long key_len, void *value) {
     return n;
 }
 
+static long strMapGetIdx(StrMap *map, long key_len, char *key) {
+    unsigned long mask = map->mask;
+    unsigned long probe = 1;
+    unsigned long idx = strMapHashFunction(key, key_len, mask);
+    StrMapNode **entries = map->entries;
+    StrMapNode *cur;
+
+    while ((cur = entries[idx]) != NULL) {
+        if (cur->key_len == key_len && !strncmp(cur->key, key, key_len)) {
+            return idx;
+        }
+        idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
+        probe++;
+    }
+    return HT_DELETED;
+}
+
 static unsigned long strMapGetNextIdx(StrMap *map, char *key, long key_len,
-                 int *_is_free)
+        int *_is_free)
 { // Finds the next avalible slot
     unsigned long mask = map->mask;
     unsigned long idx = strMapHashFunction(key, key_len, mask);
@@ -473,6 +515,26 @@ static unsigned long strMapGetNextIdx(StrMap *map, char *key, long key_len,
     return idx;
 }
 
+void strMapClear(StrMap *map) {
+    IntVec *indexes = map->indexes;
+    void (*free_value)(void *value) = map->_free_value;
+    void (*free_key)(void *_key) = map->_free_key;
+    for (int i = 0; i < indexes->size; ++i) {
+        long idx = vecGet(long,indexes,i);
+        StrMapNode *n = map->entries[idx];
+        if (n) {
+            if (free_value)
+                free_value(n->value);
+            if (free_key)
+                free_key(n->key);
+            free(n);
+        }
+    }
+    map->size = 0;
+    memset(map->entries,0,map->capacity*sizeof(StrMapNode *));
+    intVecClear(map->indexes);
+}
+
 void strMapRelease(StrMap *map) { // free the entire hashtable
     if (map) {
         void (*free_value)(void *_val) = map->_free_value;
@@ -487,8 +549,8 @@ void strMapRelease(StrMap *map) { // free the entire hashtable
                 free(n);
             }
         }
+        intVecRelease(map->indexes);
         free(map->entries);
-        free(map->indexes);
         free(map);
     }
 }
@@ -496,17 +558,17 @@ void strMapRelease(StrMap *map) { // free the entire hashtable
 // Resize the hashtable, will return false if OMM
 int strMapResize(StrMap *map) {
     unsigned long new_capacity, new_mask;
-    long *new_indexes, *old_indexes;
+    long *new_indexes;
+    long *old_index_entries = map->indexes->entries;
+    int indexes_capacity = (int)map->indexes->size;
     StrMapNode **old_entries, **new_entries;
     int is_free;
 
-    old_entries = map->entries;
-    old_indexes = map->indexes;
-
     new_capacity = map->capacity << 1;
     new_mask = new_capacity - 1;
+    old_entries = map->entries;
 
-    new_indexes = calloc(new_capacity, sizeof(long));
+    new_indexes = (long *)calloc(new_capacity, sizeof(long));
     /* OOM */
     if (new_indexes == NULL) {
         return 0;
@@ -529,7 +591,7 @@ int strMapResize(StrMap *map) {
      * theory be faster, but there are more array lookups however they should 
      * have good spatial locality */
     for (long i = 0; i < map->size; ++i) {
-        long idx = old_indexes[i];
+        long idx = old_index_entries[i];
         StrMapNode *old = old_entries[idx];
         if (old->key != NULL) {
             long new_idx = strMapGetNextIdx(map,old->key,old->key_len,&is_free);
@@ -543,14 +605,17 @@ int strMapResize(StrMap *map) {
     }
 
     free(old_entries);
-    free(old_indexes);
+    free(map->indexes->entries);
+    map->indexes->size = new_size;
+    map->indexes->capacity = indexes_capacity;
+    map->indexes->entries = new_indexes;
+
     map->size = new_size;
-    map->indexes = new_indexes;
     map->threashold = (unsigned long)(new_capacity * HT_LOAD);
     return 1;
 }
 
-int strMapSet(StrMap *map, char *key, void *value) {
+int strMapAdd(StrMap *map, char *key, void *value) {
     int is_free;
 
     if (map->size >= map->threashold) {
@@ -565,8 +630,8 @@ int strMapSet(StrMap *map, char *key, void *value) {
 
     if (is_free) {
         StrMapNode *n = strMapNodeNew(key, key_len, value);
+        intVecPush(map->indexes,idx);
         map->entries[idx] = n;
-        map->indexes[map->size] = idx;
         map->size++;
         return 1;
     } else {
@@ -578,7 +643,7 @@ int strMapSet(StrMap *map, char *key, void *value) {
     }
 }
 
-int strMapDelete(StrMap *map, char *key) {
+int strMapRemove(StrMap *map, char *key) {
     unsigned long idx, mask, probe;
     long len = strlen(key);
     StrMapNode **entries = map->entries;
@@ -592,7 +657,6 @@ int strMapDelete(StrMap *map, char *key) {
             if (map->_free_key)   map->_free_key(cur->key);
             if (map->_free_value) map->_free_value(cur->value);
             cur->value = cur->key = NULL;
-            map->indexes[idx] = HT_DELETED;
             map->size--;
             return 1;
         }
@@ -602,58 +666,21 @@ int strMapDelete(StrMap *map, char *key) {
     return 0;
 }
 
-void *strMapGet(StrMap *map, char *key) {
-    unsigned long idx, mask, probe;
-    long len = strlen(key);
-    StrMapNode **entries = map->entries;
-    StrMapNode *cur;
-
-    mask = map->mask;
-    probe = 1;
-    idx = strMapHashFunction(key, len, mask);
-    while ((cur = entries[idx])) {
-        if (cur->key == NULL) {
-            return NULL;
-        }
-        if (cur->key_len == len && !strncmp(cur->key, key, len)) {
-            return cur->value;
-        }
-        idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-        probe++;
-    }
+void *strMapGetLen(StrMap *map, long key_len, char *key) {
+    unsigned long idx = strMapGetIdx(map,key_len,key);
+    if (idx != HT_DELETED) return map->entries[idx]->value;
     return NULL;
 }
 
-int strMapIter(StrMap *map, long *_idx, StrMapNode **_node) {
-    long idx = *_idx;
-    long *indexes = map->indexes;
-    while (idx < map->size) {
-        long index = indexes[idx];
-        if (index != HT_DELETED) {
-            *_idx = idx + 1;
-            *_node = map->entries[index];
-            return 1;
-        }
-        idx++;
-    }
-    return 0;
+void *strMapGet(StrMap *map, char *key) {
+    long key_len = strlen(key);
+    return strMapGetLen(map,key_len,key);
 }
 
-int strMapValueIter(StrMap *map, long *_idx, void **_value) {
-    StrMapNode *node;
-    if (strMapIter(map, _idx, &node)) {
-        *_value = node->value;
-        return 1;
-    }
-    return 0;
-}
-
-int strMapKeyIter(StrMap *map, long *_idx, char **_key) {
-    StrMapNode *node;
-    if (strMapIter(map, _idx, &node)) {
-        *_key = node->key;
-        return 1;
-    }
+int strMapHas(StrMap *map, char *key) {
+    long key_len = strlen(key);
+    unsigned long idx = strMapGetIdx(map,key_len,key);
+    if (idx != HT_DELETED) return 1;
     return 0;
 }
 

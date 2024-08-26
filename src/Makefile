@@ -1,6 +1,6 @@
 TARGET := hcc 
 CC     := gcc
-CFLAGS := -O0 -g -Wall -DDEBUG -fsanitize=address
+CFLAGS := -O0 -Wall -DDEBUG -g #-fsanitize=address
 OUT    := .
 
 LIB_SRC?=./holyc-lib
@@ -36,10 +36,11 @@ OBJS = $(OUT)/main.o \
 	   $(OUT)/cfg.o \
 	   $(OUT)/cfg-print.o \
 	   $(OUT)/compile.o \
+	   $(OUT)/memory.o \
 	   $(OUT)/lexer.o
 
 $(TARGET): $(OBJS)
-	$(CC) -o $(TARGET) $(OBJS) -lm 
+	$(CC) -o $(TARGET) $(OBJS) -lm #-fsanitize=address
 
 debug-$(TARGET):
 	$(CC) -o $(TARGET) $(OBJS) -lm -fsanitize=address
@@ -60,6 +61,7 @@ unit-test:
 
 $(OUT)/dict.o: dict.c dict.h aostr.h 
 $(OUT)/map.o: map.c map.h util.h
+$(OUT)/memory.o: memory.c memory.h map.h util.h
 $(OUT)/list.o: list.c list.h aostr.h 
 $(OUT)/main.o: main.c dict.h lexer.h list.h aostr.h 
 $(OUT)/lexer.o: lexer.c lexer.h dict.h list.h aostr.h 

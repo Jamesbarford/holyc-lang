@@ -27,6 +27,7 @@ typedef struct hccOpts {
     int print_help;
     int cfg_create;
     int cfg_create_png;
+    int cfg_create_svg;
     int asm_debug_comments;
     int assemble_only;
     int emit_dylib;
@@ -256,6 +257,7 @@ void usage(void) {
             "  -ast     Print the ast and exit\n"
             "  -cfg     Create graphviz control flow graph\n"
             "  -cfg-png Create graphviz control flow graph as a png\n"
+            "  -cfg-svg Create graphviz control flow graph as a svg\n"
             "  -tokens  Print the tokens and exit\n"
             "  -S       Emit assembly only\n"
             "  -obj     Emit an objectfile\n"
@@ -343,6 +345,8 @@ void parseCliOptions(hccOpts *opts, int argc, char **argv) {
             opts->assemble_only = 1;
         } else if (!strncmp(argv[i],"-cfg-png",8)) {
             opts->cfg_create_png = 1;
+        } else if (!strncmp(argv[i],"-cfg-svg",8)) {
+            opts->cfg_create_svg = 1;
         } else if (!strncmp(argv[i],"-cfg",3)) {
             opts->cfg_create = 1;
         } else if (!strncmp(argv[i],"-D",2)) {
@@ -397,14 +401,15 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    if (opts.cfg_create || opts.cfg_create_png) {
+    if (opts.cfg_create || opts.cfg_create_png || opts.cfg_create_svg) {
         PtrVec *cfgs = cfgConstruct(cc);
         char *dot_outfile = mprintf("./%s.dot",opts.infile_no_ext);
         cfgsToFile(cfgs,dot_outfile);
-        if (opts.cfg_create_png) {
-            char *dot_cmd = mprintf("dot -Tpng %s -o ./%s.png",
-                    dot_outfile,opts.infile_no_ext);
-            printf("Creating png: %s\n",dot_cmd);
+        if (opts.cfg_create_png || opts.cfg_create_svg) {
+            char *ext = opts.cfg_create_png ? "png" : "svg";
+            char *dot_cmd = mprintf("dot -T%s %s -o ./%s.%s",
+                    ext,dot_outfile,opts.infile_no_ext,ext);
+            printf("Creating %s: %s\n",ext,dot_cmd);
             system(dot_cmd);
             free(dot_cmd);
             unlink(dot_outfile);

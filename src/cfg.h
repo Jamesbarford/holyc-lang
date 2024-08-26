@@ -4,7 +4,7 @@
 #include "aostr.h"
 #include "cctrl.h"
 #include "map.h"
-
+#include "memory.h"
 
 enum bbType {
     BB_GARBAGE       = -1,
@@ -55,13 +55,10 @@ typedef struct BasicBlock {
      * Should we stick ssa on this struct? */
     int type;
     /* For denoting a loop head / end, not a big fan of having flags AND 
-     * a type field but I presently can't think of a better way for loops. As
-     * the loop head in BasicBlock land is a conditional jump */
+     * a type field but I presently can't think of a better way for loops. */
     unsigned int flags;
     int block_no;
     int visited;
-    /* position in the CFG's array that this block lives */
-    int idx;
 
     struct BasicBlock *_if;
     struct BasicBlock *_else;
@@ -72,7 +69,7 @@ typedef struct BasicBlock {
     struct BasicBlock *next;
     IntMap *prev_blocks;
     /* this is to be able to handle a switch */
-    PtrVec *next_blocks; 
+    PtrVec *next_blocks;
     PtrVec *ast_array;
 } BasicBlock;
 
@@ -83,18 +80,20 @@ typedef struct BasicBlock {
 typedef struct CFG {
     /* CFG Does not own the function name, the AST does */
     aoStr *ref_fname;
-    /* This head block is also a pointer to the begining of `bb_pool` in 
-     * the `CFGBuilder` so freeing this frees every `BasicBlock` */
+    /* This head block and start of the CFG */
     BasicBlock *head;
     /* How many basic blocks are in the graph */
     int bb_count;
-    /* A more compact representation of the graph */
+    /* A more compact representation of the graph, a block number to its 
+     * connected blocks (not including previous nodes)
+     * [block_no] => {block, block...}*/
     IntMap *graph;
-    /* block_no => block hashtable */
+    /* Block number to it's block struct
+     * [block_no] => block 
+     * hashtable */
     IntMap *no_to_block;
-    /* This a pointer to the memory pool which holds all of the basic blocks,
-     * why am I not using head?*/
-    void *_memory;
+    /* This a pointer to the memory pool which holds all of the basic blocks */
+    MemoryPool *_memory;
 } CFG;
 
 typedef struct CFGBuilder {
@@ -103,18 +102,16 @@ typedef struct CFGBuilder {
     unsigned long flags;
     Cctrl *cc;
     CFG *cfg;
+    MemoryPool *block_pool;
 
     BasicBlock *bb;
-    BasicBlock *bb_pool;
     BasicBlock *bb_cur_loop;
     IntMap *leaf_cache;
 
     List *ast_list;
     List *ast_iter;
-    int bb_pos;
-    int bb_cap;
-    List *unresoved_gotos;
-    Dict *resolved_labels;
+    List *unresolved_gotos;
+    StrMap *resolved_labels;
 } CFGBuilder;
 
 BasicBlock *bbNew(int type);
