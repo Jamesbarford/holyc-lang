@@ -112,8 +112,9 @@ I32 Main()
   return 1;
 }
 ```
-Compiled with: `hcc -cfg-png ./<file>.HC` produces the following control flow 
-graph.
+Compiled with: `hcc -cfg ./<file>.HC && dot -Tpng ./<file.dot> -o <file>.png`
+Produces the following control flow graph. Note that in order to use 
+`-cfg-png` or `-cfg-svg` it requires the use of [graphviz](https://graphviz.org/)
 <p align="center">
   <img 
     src="/assets/cfg-example.png?raw=true"
