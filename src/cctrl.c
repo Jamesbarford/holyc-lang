@@ -240,7 +240,7 @@ void cctrlTokenExpect(Cctrl *cc, long expected) {
     lexeme *tok = cctrlTokenGet(cc);
     if (!tokenPunctIs(tok, expected)) {
         if (!tok) {
-            lexemePrintList(cc->tkit->tokens->next);
+            //lexemePrintList(cc->tkit->tokens->next);
             loggerPanic("line %ld: Ran out of tokens\n",cc->lineno);
         } else {
             loggerPanic("line %d: Syntax error in on line expected '%c' got: %.*s\n",

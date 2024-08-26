@@ -22,7 +22,7 @@ aoStr *aoStrAlloc(size_t capacity);
 aoStr *aoStrNew(void);
 void aoStrRelease(aoStr *buf);
 
-int aoStrExtendBuffer(aoStr *buf, unsigned int additional);
+int aoStrExtendBuffer(aoStr *buf, size_t additional);
 void aoStrToLowerCase(aoStr *buf);
 void aoStrPutChar(aoStr *buf, char ch);
 void aoStrRepeatChar(aoStr *buf, char ch, int times);
@@ -37,8 +37,10 @@ void aoStrCat(aoStr *buf, const void *d);
 void aoStrCatRepeat(aoStr *buf, char *str, int times);
 void aoStrCatPrintf(aoStr *b, const char *fmt, ...);
 aoStr *aoStrEscapeString(aoStr *buf);
+aoStr *aoStrEncode(aoStr *buf);
 
 void aoStrArrayRelease(aoStr **arr, int count);
 aoStr **aoStrSplit(char *to_split, char delimiter, int *count);
+char *mprintf(const char *fmt, ...);
 
 #endif

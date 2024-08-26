@@ -5,6 +5,8 @@
 #include "aostr.h"
 #include "ast.h"
 #include "cctrl.h"
+#include "cfg-print.h"
+#include "cfg.h"
 #include "compile.h"
 #include "dict.h"
 #include "x86.h"
@@ -119,11 +121,14 @@ int compileToAst(Cctrl *cc, char *entrypath, int lexer_flags) {
     dictRelease(seen_files);
     cctrlInitTokenIter(cc,tokens);
     parseToAst(cc);
+
     lexReleaseAllFiles(&l);
     aoStrRelease(builtin_path);
-    // listRelease(code_list,free);
     listRelease(l.files,NULL);
-    lexemelistRelease(tokens);
+
+    /* @Leak - Jamesbarford 2024/07/19, when should this be freed if at all? */
+    // listRelease(code_list,free);
+    // lexemelistRelease(tokens);
     return 1;
 }
 

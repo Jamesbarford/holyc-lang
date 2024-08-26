@@ -62,7 +62,7 @@ typedef struct Cctrl {
     List *tmp_locals;
 
     /* For parsing a switch statement */
-    List *tmp_case_list;
+    PtrVec *tmp_case_list;
 
     /* function parameters */
     List *func_params;
@@ -72,7 +72,7 @@ typedef struct Cctrl {
     List *initaliser_locals;
 
     /* For parsing a switch */
-    aoStr *tmp_default_case;
+    Ast *tmp_default_case;
 
     /* When parsing & converting to assembly these keep a reference to the
      * current loop's labels */

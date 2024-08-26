@@ -234,7 +234,7 @@ List *parseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
             if (store) {
                 if (!dictSet(cc->localenv,var->declvar->lname->data,var)) {
                     loggerPanic("line: %ld variable %s already declared\n",
-                            cc->lineno,astLValueToString(var));
+                            cc->lineno,astLValueToString(var,0));
                 }
             }
             tok = cctrlTokenGet(cc);
@@ -242,7 +242,7 @@ List *parseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
             if (store) {
                 if (!dictSet(cc->localenv,var->lname->data,var)) {
                     loggerPanic("line: %ld variable %s already declared\n",
-                            cc->lineno,astLValueToString(var));
+                            cc->lineno,astLValueToString(var,0));
                 }
             }
        }
@@ -436,7 +436,7 @@ List *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
 
                     expected = astTypeToColorString(param->type);
                     got = astTypeToColorString(ast->type);
-                    ast_str = astLValueToString(ast);
+                    ast_str = astLValueToString(ast,0);
                     loggerWarning("line %ld: %s incompatiable function argument %s got %s %s\n",
                             cc->lineno,fstring,expected,got,ast_str);
                     free(fstring);
@@ -610,7 +610,7 @@ static Ast *parsePrimary(Cctrl *cc) {
         return astF64Type(tok->f64);
     case TK_CHAR_CONST:
         ast = astCharType(tok->i64);
-        ast->type = ast_uint_type;
+        //ast->type = ast_uint_type;
         return ast;
     case TK_STR: {
         aoStr *str = aoStrNew();

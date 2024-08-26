@@ -5,6 +5,7 @@
 #include <stdlib.h>
 
 #define static_size(x) (sizeof((x)) / sizeof((x[0])))
+#define cast(type, value) (((type)(value)))
 
 #define ESC_GREEN  "\033[0;32m"
 #define ESC_BLACK  "\033[0;30m"
@@ -16,6 +17,8 @@
 #define ESC_CYAN   "\033[0;36m"
 #define ESC_WHITE  "\033[0;37m"
 #define ESC_RESET  "\033[0m"
+
+#define min(x,y) (((x) < (y) ? (x) : (y)))
 
 #ifndef DEBUG
 #define loggerDebug(...)
@@ -56,5 +59,6 @@
     } while (0)
 
 #endif
+
 
 #endif // !UTIL_H

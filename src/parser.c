@@ -501,7 +501,7 @@ Ast *parseDecl(Cctrl *cc) {
     var = astLVar(type,varname->start,varname->len);
     if (!dictSet(cc->localenv,var->lname->data,var)) {
         loggerPanic("line: %ld variable %s already declared\n",
-                cc->lineno,astLValueToString(var));
+                cc->lineno,astLValueToString(var,0));
     }
     if (cc->tmp_locals) {
         listAppend(cc->tmp_locals, var);
@@ -694,7 +694,7 @@ Ast *parseReturnStatement(Cctrl *cc) {
 
         expected = astTypeToColorString(cc->tmp_rettype);
         got = astTypeToColorString(check);
-        ast_str = astLValueToString(retval);
+        ast_str = astLValueToString(retval,0);
         loggerWarning("line %ld: %s expected return type %s got %s %s\n",
                 lineno,fstring,expected,got,ast_str);
         free(fstring);
@@ -705,16 +705,6 @@ Ast *parseReturnStatement(Cctrl *cc) {
     return astReturn(retval,cc->tmp_rettype);
 }
 
-Ast *parseLabelBlock(Cctrl *cc, Ast *label) {
-    Ast *stmt = parseStatement(cc);
-    List *stmts = listNew();
-    listAppend(stmts,label);
-    if (stmt) {
-        listAppend(stmts,stmt);
-    }
-    return astCompountStatement(stmts);
-}
-
 Ast *parseCaseLabel(Cctrl *cc, lexeme *tok) {
     if (cc->tmp_case_list == NULL) {
         loggerPanic("line %d: unexpected 'case' found\n",tok->line);
@@ -722,14 +712,14 @@ Ast *parseCaseLabel(Cctrl *cc, lexeme *tok) {
     Ast *case_, *prev;
     lexeme *peek;
     aoStr *label;
-    int begining;
+    int begining,end;
 
     peek = cctrlTokenPeek(cc);
     if (tokenPunctIs(peek,':')) {
-        if (listEmpty(cc->tmp_case_list)) {
+        if (vecEmpty(cc->tmp_case_list)) {
             begining = 0;
         } else {
-            prev = cc->tmp_case_list->prev->value;
+            prev = cc->tmp_case_list->entries[cc->tmp_case_list->size - 1];
             begining = prev->case_end+1;
         }
     } else {
@@ -740,36 +730,42 @@ Ast *parseCaseLabel(Cctrl *cc, lexeme *tok) {
 
     if (tokenPunctIs(tok,TK_ELLIPSIS)) {
         cctrlTokenGet(cc);
-        int end = evalIntConstExpr(parseExpr(cc,16));
+        end = evalIntConstExpr(parseExpr(cc,16));
         cctrlTokenExpect(cc,':');
         if (begining > end) {
             loggerPanic("line %d: Condition is in the wrong order '%d' must be lower than '%d'\n",
                     tok->line,begining, end);
         }
-        case_ = astCase(label,begining,end);
-        assertUniqueSwitchCaseLabels(cc->tmp_case_list,case_);
-        listAppend(cc->tmp_case_list,case_);
     } else {
         cctrlTokenExpect(cc,':');
-        case_ = astCase(label,begining,begining);
-        assertUniqueSwitchCaseLabels(cc->tmp_case_list,case_);
-           listAppend(cc->tmp_case_list,case_);
+        end = begining;
     }
 
-    return parseLabelBlock(cc,case_);
-}
+    List *stmts = listNew();
+    peek = cctrlTokenPeek(cc);
+    case_ = astCase(label,begining,end,stmts);
 
-Ast *parseCreateSwitchJump(Ast *var, Ast *case_) {
-    Ast *cond,*x,*y;
-    if (case_->case_begin == case_->case_end) {
-        cond = astBinaryOp(TK_EQU_EQU, var, astI64Type(case_->case_begin));
-    } else {
-        x = astBinaryOp(TK_LESS_EQU,astI64Type(case_->case_begin),var);
-        y = astBinaryOp(TK_LESS_EQU,var,astI64Type(case_->case_end));
-        cond = astBinaryOp(TK_AND_AND,x,y);
-    }
-    return astIf(cond,
-            astJump(case_->case_label->data,case_->case_label->len), NULL);
+    assertUniqueSwitchCaseLabels(cc->tmp_case_list,case_);
+    ptrVecPush(cc->tmp_case_list,case_);
+
+    do {
+        Ast *stmt = parseStatement(cc);
+        if (stmt && stmt->kind != AST_CASE && stmt->kind != AST_DEFAULT) {
+            listAppend(stmts,stmt);
+        }
+        if (stmt->kind == AST_COMPOUND_STMT || stmt->kind == AST_CASE ||
+                stmt->kind == AST_DEFAULT || stmt->kind == AST_BREAK || stmt->kind == AST_RETURN
+                || stmt->kind == AST_GOTO) break;
+        peek = cctrlTokenPeek(cc);
+   
+        /* @Bug - Something is afoot, this ensures we don't go on forever
+         * parsing if there isn't a break and the case is a fall through...
+         * feels as though we could go on and just ommit the case. Which would
+         * avoid the call to `astCasesCompress()`? */
+        if (tokenPunctIs(peek,'}')) break;
+    } while (1);
+
+    return case_;
 }
 
 Ast *parseDefaultStatement(Cctrl *cc, lexeme *tok) {
@@ -777,31 +773,60 @@ Ast *parseDefaultStatement(Cctrl *cc, lexeme *tok) {
     if (cc->tmp_default_case) {
         loggerPanic("line %d: Duplicate default case\n",tok->line);
     }
-    Ast *dest;
-    cc->tmp_default_case = astMakeLabel();
-    dest = astDest(
-            cc->tmp_default_case->data,
-            cc->tmp_default_case->len);
-    return parseLabelBlock(cc,dest);
+    lexeme *peek;
+    List *stmts = listNew();
+    aoStr *default_label = astMakeLabel();
+    /* set here so this is non-null for the next call to parseStatement */
+    cc->tmp_default_case = astDefault(default_label,stmts);
+
+    do {
+        Ast *stmt = parseStatement(cc);
+        if (stmt && stmt->kind != AST_CASE) {
+            listAppend(stmts,stmt);
+        }
+        if (stmt->kind == AST_COMPOUND_STMT || stmt->kind == AST_CASE || stmt->kind == AST_BREAK || stmt->kind == AST_RETURN
+                || stmt->kind == AST_GOTO) break;
+        peek = cctrlTokenPeek(cc);
+        if (tokenPunctIs(peek,'}')) break;
+    } while (1);
+
+    return cc->tmp_default_case;
 }
 
 Ast *parseSwitchStatement(Cctrl *cc) {
-    Ast *body, *cond, *tmp;
-    List *switch_statement, *original_cases;
-    aoStr *end_label, *original_default_label, *tmp_name,*original_break;
+    Ast *cond, *tmp, *original_default_label;
+    lexeme *peek;
+    PtrVec *original_cases;
+    aoStr *end_label,*tmp_name,*original_break;
+    int switch_bounds_checked = 1;
+    char terminating_char = ')';
 
-    cctrlTokenExpect(cc,'(');
+    peek = cctrlTokenPeek(cc);
+
+    if (!tokenPunctIs(peek,'[') && !tokenPunctIs(peek, '(')) {
+        loggerPanic("line %ld: Switch '(' or '[' expected got: %s\n",
+                cc->lineno,
+                lexemeToString(peek));
+    }
+
+    /* Walk past and set the expected terminting character */
+    if (peek->i64 == '[') {
+        switch_bounds_checked = 0;
+        terminating_char = ']';
+    }
+
+    cctrlTokenGet(cc);
     cond = parseExpr(cc,16);
     if (!astIsIntType(cond->type)) {
         loggerPanic("line %ld: Switch can only have int's at this time\n", cc->lineno);
     }
-    cctrlTokenExpect(cc,')');
+    cctrlTokenExpect(cc,terminating_char);
 
     original_break = cc->tmp_loop_end;
     original_default_label = cc->tmp_default_case;
     original_cases = cc->tmp_case_list;
 
-    cc->tmp_case_list = listNew();
+    cc->tmp_case_list = ptrVecNew();
     cc->tmp_default_case = NULL;
 
     end_label = astMakeLabel();
@@ -809,39 +834,26 @@ Ast *parseSwitchStatement(Cctrl *cc) {
     /* this is the current label */
     cc->tmp_loop_end = end_label;
 
-    switch_statement = listNew();
     tmp_name = astMakeTmpName();
+
     tmp = astLVar(cond->type, tmp_name->data, tmp_name->len);
     listAppend(cc->tmp_locals,tmp);
-    listAppend(switch_statement, astBinaryOp('=', tmp, cond));
-    body = parseStatement(cc);
+
+    parseStatement(cc);
     aoStrRelease(tmp_name);
 
-    for (List *it = cc->tmp_case_list->next;
-            it != cc->tmp_case_list; it = it->next) {
-        listAppend(switch_statement,
-                parseCreateSwitchJump(tmp,
-                    it->value));
-    }
-
-    if (cc->tmp_default_case) {
-        listAppend(switch_statement,
-                astJump(cc->tmp_default_case->data,
-                    cc->tmp_default_case->len));
-    } else {
-        listAppend(switch_statement,
-                astJump(end_label->data,
-                    end_label->len));
-    }
-    if (body) {
-        listAppend(switch_statement,body);
-    }
-    listAppend(switch_statement, astDest(end_label->data,end_label->len));
+    Ast *switch_ast = astSwitch(
+        cond,
+        cc->tmp_case_list,
+        cc->tmp_default_case,
+        end_label,
+        switch_bounds_checked
+    );
 
     cc->tmp_loop_end = original_break;
     cc->tmp_case_list = original_cases;
     cc->tmp_default_case = original_default_label;
-    return astCompountStatement(switch_statement);
+    return switch_ast;
 }
 
 /* Concatinate the label of the goto with the name of the function 
@@ -920,7 +932,7 @@ Ast *parseStatement(Cctrl *cc) {
                                 "constant\n",
                                 cc->lineno,
                                 astTypeToColorString(gvar_ast->type),
-                                astLValueToString(ast));
+                                astLValueToString(ast,0));
                     }
                 } else {
                     cctrlTokenExpect(cc,';');
@@ -1029,7 +1041,7 @@ Ast *parseCompoundStatement(Cctrl *cc) {
                     var = astLVar(type,varname->start,varname->len);
                     if (!dictSet(cc->localenv,var->lname->data,var)) {
                         loggerPanic("line: %ld variable %s already declared\n",
-                                cc->lineno,astLValueToString(var));
+                                cc->lineno,astLValueToString(var,0));
                     }
                 } else {
                     cctrlTokenGet(cc);

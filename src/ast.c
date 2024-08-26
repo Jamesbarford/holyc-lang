@@ -24,10 +24,17 @@ AstType *ast_float_type = &(AstType){.kind = AST_TYPE_FLOAT, .size = 8, .ptr = N
 AstType *ast_void_type = &(AstType){.kind = AST_TYPE_VOID, .size = 0, .ptr = NULL,.issigned=0};
 AstType *ast_auto_type = &(AstType){.kind = AST_TYPE_VOID, .size = 0, .ptr = NULL,.issigned=0};
 
+Ast *ast_loop_sentinal = &(Ast){.kind = AST_GOTO, .type=NULL,
+    .slabel = &(aoStr){.data="loop_sentinal", .len=13, .capacity = 0}};
 Ast *placeholder_arg = &(Ast){ .kind = AST_PLACEHOLDER};
+
+Ast *ast_forever_sentinal = &(Ast){ .kind = AST_LITERAL,
+  .type = &(AstType){.kind = AST_TYPE_INT, .size = 8, .ptr = NULL,.issigned=1},
+  .i64 = 1 };
 
 void _astToString(aoStr *str, Ast *ast, int depth);
 char *_astToStringRec(Ast *ast, int depth);
+void astVectorRelease(PtrVec *ast_vector);
 
 Ast *astNew(void) {
     Ast *ast; 
@@ -43,6 +50,15 @@ AstType *astTypeNew(void) {
         loggerPanic("OOM when allocating AstType\n");
     }
     return type;
+}
+
+Ast *astMakeForeverSentinal(void) {
+    Ast *ast = astNew();
+    AstType *type = astTypeNew();
+    memcpy(ast,ast_forever_sentinal,sizeof(Ast));
+    ast->type = type;
+    memcpy(ast->type,ast_forever_sentinal->type,sizeof(AstType));
+    return ast;
 }
 
 AstType *astTypeCopy(AstType *type) {
@@ -119,8 +135,8 @@ static void astFreeLiteral(Ast *ast) {
     free(ast);
 }
 
-static int label_sequence = 0;
 aoStr *astMakeLabel(void) {
+    static int label_sequence = 0;
     aoStr *s = aoStrNew();
     aoStrCatPrintf(s, ".L%d", label_sequence++);
     return s;
@@ -303,26 +319,100 @@ static void astFreeIf(Ast *ast) {
     free(ast);
 }
 
-Ast *astCase(aoStr *case_label, long case_begin, long case_end) {
+/* Sort the cases from low to high */
+static void astJumpTableSort(Ast **cases, int high, int low) {
+    if (low < high) {
+        Ast *pivot = cases[high];
+        int idx = low;
+        for (int i = low; i < high; ++i) {
+            Ast *cur = cases[i];
+            if (cur->case_begin <= pivot->case_begin) {
+                cases[i] = cases[idx];
+                cases[idx] = cur;
+                idx++;
+            }
+        }
+        cases[high] = cases[idx];
+        cases[idx] = pivot;
+        astJumpTableSort(cases,high,idx+1);
+        astJumpTableSort(cases,idx-1,low);
+    }
+}
+
+/* For cases that are stacked remove their individual labels, merging them 
+ * with their neighbours */
+static void astCasesCompress(Ast **cases, int size) {
+    aoStr *label = NULL;
+    for (int i = 0; i < size; ++i) {
+        Ast *_case = cases[i];
+        label = _case->case_label;
+        while (listEmpty(_case->case_asts)) {
+            i++;
+            if (i == size) break;
+            _case = cases[i];
+            aoStrRelease(_case->case_label);
+            _case->case_label = label;
+        }
+        _case->case_label = label;
+    }
+}
+
+Ast *astSwitch(Ast *cond, PtrVec *cases, Ast *case_default,
+        aoStr *case_end_label, int switch_bounds_checked)
+{
+    Ast *ast = astNew();
+    Ast **jump_table_order = malloc(sizeof(Ast **) * cases->size);
+
+    /* Sorting the cases in a separate array allows us to generate assembly
+     * code that matches the ordering of how the code was written and 
+     * preserve the Ast */
+    memcpy(jump_table_order,(Ast **)cases->entries,cases->size * sizeof(Ast*));
+    astCasesCompress(jump_table_order,cases->size);
+    astJumpTableSort(jump_table_order,cases->size-1,0);
+
+    ast->kind = AST_SWITCH;
+    ast->switch_cond = cond;
+    ast->cases = cases;
+    ast->case_default = case_default;
+    ast->case_end_label = case_end_label;
+    ast->jump_table_order = jump_table_order;
+    ast->switch_bounds_checked = switch_bounds_checked;
+    return ast;
+}
+static void astFreeSwitch(Ast *ast) {
+    aoStrRelease(ast->case_end_label);
+    astRelease(ast->case_default);
+    astVectorRelease(ast->cases);
+    free(ast);
+}
+
+Ast *astCase(aoStr *case_label, long case_begin, long case_end, List *case_asts) {
     Ast *ast = astNew();
     ast->type = ast_int_type;
     ast->kind = AST_CASE;
     ast->case_begin = case_begin;
     ast->case_end = case_end;
     ast->case_label = case_label;
+    ast->case_asts = case_asts;
     return ast;
 }
 static void astFreeCase(Ast *ast) {
     aoStrRelease(ast->case_label);
+    astReleaseList(ast->case_asts);
     free(ast);
 }
 
-Ast *astDest(char *name, int len) {
+Ast *astDefault(aoStr *case_label, List *case_asts) {
     Ast *ast = astNew();
-    ast->kind = AST_LABEL;
-    ast->sval= aoStrDupRaw(name,len);
-    ast->slabel = NULL;
+    ast->kind = AST_DEFAULT;
+    ast->case_label = case_label;
+    ast->case_asts  = case_asts;
     return ast;
+}
+static void astFreeDefault(Ast *ast) {
+    aoStrRelease(ast->case_label);
+    astReleaseList(ast->case_asts);
+    free(ast);
 }
 
 Ast *astJump(char *name, int len) {
@@ -335,7 +425,6 @@ static void astFreeJump(Ast *ast) {
     aoStrRelease(ast->jump_label);
     free(ast);
 }
-
 
 Ast *astFor(Ast *init, Ast *cond, Ast *step, Ast *body, aoStr *for_begin,
         aoStr *for_middle, aoStr *for_end)
@@ -669,6 +758,29 @@ List *astParamTypes(List *params) {
     return ref;
 }
 
+int astIsAssignment(long op) {
+    switch (op) {
+        case '=':
+        case TK_SHL_EQU:
+        case TK_SHR_EQU:
+        case TK_OR_EQU:
+        case TK_AND_EQU:
+        case TK_ADD_EQU:
+        case TK_SUB_EQU:
+        case TK_MUL_EQU:
+        case TK_DIV_EQU:
+        case TK_MOD_EQU:
+        /* These can be treated as short hand expressions for */
+        case TK_PLUS_PLUS:
+        case TK_PRE_PLUS_PLUS:
+        case TK_MINUS_MINUS:
+        case TK_PRE_MINUS_MINUS:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
 void assertIsValidPointerOp(long op, long lineno) {
     switch (op) {
         case '-': case '+':
@@ -889,6 +1001,11 @@ int astIsClassPointer(AstType *type) {
 int astIsUnionPointer(AstType *type) {
     return type && type->kind == AST_TYPE_POINTER &&
            type->ptr->kind == AST_TYPE_UNION;
+}
+
+int astIsLabelMatch(Ast *ast, aoStr *goto_label) {
+    return ast->kind == AST_LABEL &&
+           aoStrCmp(goto_label, astHackedGetLabel(ast));
 }
 
 char *astTypeToString(AstType *type) {
@@ -1329,11 +1446,12 @@ void _astToString(aoStr *str, Ast *ast, int depth) {
             break;
 
         case AST_DO_WHILE:
-
-            aoStrCatPrintf(str, "do");
-            aoStrCatRepeat(str, "  ", depth+1);
+            aoStrCatRepeat(str, " ", depth);
+            aoStrCatPrintf(str, "<do_while>\n");
+            _astToString(str, ast->whilebody, depth+2);
             _astToString(str, ast->whilebody, depth+2);
 
+            aoStrCatRepeat(str, "  ", depth+1);
             aoStrCatPrintf(str, "<while_cond>\n"); 
             _astToString(str, ast->whilecond, depth+2);
             astStringEndStmt(str);
@@ -1443,10 +1561,13 @@ void _astToString(aoStr *str, Ast *ast, int depth) {
                     }
                 }
             } else {
-                loggerWarning("printing whole class!\n");
-                _astToString(str,ast->cls,depth+1);
-                aoStrCatPrintf(str, "->");
-                aoStrCatPrintf(str, "%s", ast->field, ast->type->offset);
+                loggerWarning("printing whole class: %s!\n",
+                    astKindToString(ast->cls->kind));
+                aoStrCatRepeat(str, "  ", depth+1);
+                if (ast->cls->kind == AST_LVAR) {
+                    aoStrCatPrintf(str, "%s",ast->cls->lname->data);
+                }
+                aoStrCatPrintf(str, ".%s", ast->field, ast->type->offset);
             }
             astStringEndStmt(str);
             break;
@@ -1480,7 +1601,7 @@ void _astToString(aoStr *str, Ast *ast, int depth) {
         case AST_CAST:
             aoStrCatPrintf(str, "<cast> %s %s -> %s\n",
                     astTypeToString(ast->operand->type),
-                    astLValueToString(ast->operand),
+                    astLValueToString(ast->operand,0),
                     astTypeToString(ast->type));
             break;
 
@@ -1490,10 +1611,50 @@ void _astToString(aoStr *str, Ast *ast, int depth) {
 
         case AST_CASE: {
             if (ast->case_begin == ast->case_end) {
-                aoStrCatPrintf(str, "<case> %d:\n", ast->case_begin);
+                aoStrCatPrintf(str, "<case> %d %s:\n", ast->case_begin,
+                        ast->case_label->data);
             } else {
-                aoStrCatPrintf(str, "<case> %d...%d:\n",
-                        ast->case_begin, ast->case_end);
+                aoStrCatPrintf(str, "<case> %d...%d %s:\n",
+                        ast->case_begin,
+                        ast->case_end,
+                        ast->case_label->data);
+            }
+            if (!listEmpty(ast->case_asts)) {
+                listForEach(ast->case_asts) {
+                    Ast *case_ast = (Ast *)it->value;
+                    _astToString(str,case_ast,depth+1);
+                }
+            }
+            break;
+        }
+
+        case AST_SWITCH: {
+            if (ast->switch_bounds_checked) {
+                aoStrCatPrintf(str, "<switch>\n");
+            } else {
+                aoStrCatPrintf(str, "<no_bounds_switch>\n");
+            }
+
+            _astToString(str,ast->switch_cond,depth+1);
+            for (int i = 0; i < ast->cases->size; ++i) {
+                _astToString(str,(Ast *)ast->cases->entries[i],depth+1);
+            }
+
+            if (ast->case_default) {
+                _astToString(str,ast->case_default,depth+1);
+            }
+
+            aoStrCatRepeat(str, "  ", depth+1);
+            aoStrCatPrintf(str, "<end_label>: %s\n", ast->case_end_label->data);
+            break;
+        }
+
+        case AST_DEFAULT: {
+            aoStrCatPrintf(str, "<default> %s\n", ast->case_label->data);
+            if (!listEmpty(ast->case_asts)) {
+                listForEach(ast->case_asts) {
+                    _astToString(str,(Ast *)it->value,depth+1);
+                }
             }
             break;
         }
@@ -1567,8 +1728,11 @@ char *astKindToString(int kind) {
     case AST_VAR_ARGS:   return "AST_VAR_ARGS";
     case AST_CAST:       return "AST_CAST";
     case AST_JUMP:       return "AST_JUMP";
-    case AST_CASE:       return "AST_CASE";
     case AST_ASM_FUNC_BIND: return "AST_ASM_FUNC_BIND";
+
+    case AST_SWITCH:        return "AST_SWITCH";
+    case AST_CASE:          return "AST_CASE";
+    case AST_DEFAULT:       return "AST_DEFAULT";
 
 
     case TK_AND_AND:         return "&&";
@@ -1635,21 +1799,23 @@ char *astToString(Ast *ast) {
     return _astToStringRec(ast,0);
 }
 
-static void _astLValueToString(aoStr *str, Ast *ast);
+/* This can only be used for lvalues */
+static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags);
 
-void astUnaryArgToString(aoStr *str, char *op, Ast *ast) {
+void astUnaryArgToString(aoStr *str, char *op, Ast *ast, unsigned long lexeme_flags) {
     aoStrCatPrintf(str, "%s", op);
-    _astLValueToString(str, ast->operand);
+    _astLValueToString(str, ast->operand,lexeme_flags);
 }
 
-void astBinaryArgToString(aoStr *str, char *op, Ast *ast) {
-    _astLValueToString(str, ast->left);
+void astBinaryArgToString(aoStr *str, char *op, Ast *ast, unsigned long lexeme_flags) {
+    _astLValueToString(str, ast->left,lexeme_flags);
     aoStrCatPrintf(str, " %s ", op);
-    _astLValueToString(str, ast->right);
+    _astLValueToString(str, ast->right,lexeme_flags);
 }
 
 /* This can only be used for lvalues */
-static void _astLValueToString(aoStr *str, Ast *ast) {
+static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags) {
+    char *str_op = NULL;
     if (ast == NULL) {
         aoStrCatLen(str, "(null)", 6);
         return;
@@ -1658,20 +1824,17 @@ static void _astLValueToString(aoStr *str, Ast *ast) {
         case AST_LITERAL:
             switch (ast->type->kind) {
             case AST_TYPE_VOID:  aoStrCatPrintf(str, "void"); break;
-            case AST_TYPE_INT:   aoStrCatPrintf(str, "%ld", ast->i64); break;
+            case AST_TYPE_INT:   {
+                aoStrCatPrintf(str, "%ld", ast->i64);
+                break;
+            }
             case AST_TYPE_CHAR:  {
-                char buf[9];
-                unsigned long ch = ast->i64;
-                buf[0] = ch & 0xFF;
-                buf[1] = ((unsigned long)ch) >> 8  & 0xFF;
-                buf[2] = ((unsigned long)ch) >> 16 & 0xFF;
-                buf[3] = ((unsigned long)ch) >> 24 & 0xFF;
-                buf[4] = ((unsigned long)ch) >> 32 & 0xFF;
-                buf[5] = ((unsigned long)ch) >> 40 & 0xFF;
-                buf[6] = ((unsigned long)ch) >> 48 & 0xFF;
-                buf[7] = ((unsigned long)ch) >> 56 & 0xFF;
-                buf[8] = '\0';
-                aoStrCatPrintf(str,"'%s'",buf);
+                char *single_quote = lexemePunctToStringWithFlags('\'',lexeme_flags);
+                aoStrCatPrintf(str,"%s",single_quote);
+                char *escaped = lexemePunctToStringWithFlags(ast->i64,lexeme_flags);
+                aoStrCatPrintf(str,"%s",escaped);
+                single_quote = lexemePunctToStringWithFlags('\'',lexeme_flags);
+                aoStrCatPrintf(str,"%s",single_quote);
                 break;
             }
             case AST_TYPE_FLOAT: aoStrCatPrintf(str, "%g", ast->f64); break;
@@ -1681,9 +1844,18 @@ static void _astLValueToString(aoStr *str, Ast *ast) {
             break;
 
         case AST_STRING: {
-            aoStr *escaped = aoStrEscapeString(ast->sval);
-            aoStrCatPrintf(str, "\"%s\"", escaped->data);
-            aoStrRelease(escaped);
+            aoStr *str_formatted = aoStrNew();
+            aoStr *encoded = NULL;
+            char *quote = "\"";
+            if (lexeme_flags & LEXEME_GRAPH_VIZ_ENCODE_PUNCT) {
+                quote = "&#34;";
+                encoded = aoStrEncode(ast->sval);
+            } else {
+                encoded = aoStrEscapeString(ast->sval);
+            }
+            aoStrCatPrintf(str,"%s%s%s",quote,encoded->data,quote);
+            aoStrRelease(str_formatted);
+            aoStrRelease(encoded);
             break;
         }
         
@@ -1693,24 +1865,42 @@ static void _astLValueToString(aoStr *str, Ast *ast) {
         
         case AST_DECL:
             if (ast->declvar->kind == AST_FUNPTR) {
-                aoStrCatPrintf(str,"%s", ast->declvar->fname->data);
+                aoStrCatPrintf(str,"%s = ",ast->declvar->fname->data);
             } else {
                 aoStrCatPrintf(str,"%s",ast->declvar->lname->data);
             }
             if (ast->declinit) {
-                aoStrCat(str, " = ");
-                _astLValueToString(str,ast->declinit);
+                aoStrCatPrintf(str, " %s ",
+                        lexemePunctToStringWithFlags('=',lexeme_flags));
+                _astLValueToString(str,ast->declinit,lexeme_flags);
+                aoStrPutChar(str, ';');
             }
             break;
 
         case AST_GVAR:
             aoStrCatPrintf(str, "%s", ast->gname->data);
             break;
-        
+
         case AST_FUNCALL:
         case AST_FUNPTR_CALL:
         case AST_ASM_FUNCALL: {
-            aoStrCatPrintf(str, "%s()",ast->fname->data);
+            List *node = ast->args->next;
+            aoStr *internal = aoStrAlloc(256);
+            while (node != ast->args) {
+                Ast *val = cast(Ast *, node->value);
+                _astLValueToString(internal,val,lexeme_flags);
+                if (node->next != ast->args) {
+                    aoStrCatPrintf(internal,",");
+                }
+                node = node->next;
+            }
+
+            if (internal->len > 0) {
+                aoStrCatPrintf(str, "%s(%s);",ast->fname->data,internal->data);
+            } else {
+                aoStrCatPrintf(str, "%s();",ast->fname->data);
+            }
+            aoStrRelease(internal);
             break;
         }
 
@@ -1723,7 +1913,7 @@ static void _astLValueToString(aoStr *str, Ast *ast) {
         }
 
         case AST_ASM_FUNC_BIND: {
-            aoStrCatPrintf(str, "%s => %s",
+            aoStrCatPrintf(str, "%s =\\> %s",
                     ast->asmfname->data,
                     ast->fname->data);
             break;
@@ -1754,52 +1944,118 @@ static void _astLValueToString(aoStr *str, Ast *ast) {
                     ast_tmp = ast_tmp->cls->operand;
                 }
 
+                char *arrow = (lexeme_flags & LEXEME_GRAPH_VIZ_ENCODE_PUNCT) ? "-\\>" : "->"; 
+
                 if (ast_tmp->kind == AST_LVAR) {
-                    aoStrCatPrintf(str, "%s->",ast_tmp->lname->data);
+                    aoStrCatPrintf(str, "%s%s",ast_tmp->lname->data,arrow);
                 }
                 for (int i = 0; i < field_name_count; ++i) {
                     if (i + 1 == field_name_count) {
                         aoStrCatPrintf(str, "%s",field_names[i]);
                     } else {
-                        aoStrCatPrintf(str, "%s->",field_names[i]);
+                        aoStrCatPrintf(str, "%s%s",field_names[i],arrow);
                     }
                 }
+            } else if (ast->cls->kind == AST_LVAR) {
+                if (ast->cls->kind == AST_LVAR) {
+                    aoStrCatPrintf(str,"%s",ast->cls->lname->data);
+                }
+                aoStrCatPrintf(str, ".%s", ast->field, ast->type->offset);
             }
+            break;
+        }
+
+        case AST_GOTO: {
+            aoStr *label = astHackedGetLabel(ast);
+            aoStrCatPrintf(str,"goto %s",label->data);
+            break;
+        }
+
+        case AST_LABEL: {
+            aoStr *label = astHackedGetLabel(ast);
+            aoStrCatPrintf(str,"%s:",label->data);
             break;
         }
 
         case AST_ADDR:
             aoStrCatPrintf(str, "&");
-            _astLValueToString(str,ast->operand);
+            _astLValueToString(str,ast->operand,lexeme_flags);
             break;
 
         case AST_DEREF:
             aoStrCatPrintf(str, "*");
-            _astLValueToString(str,ast->operand);
+            _astLValueToString(str,ast->operand,lexeme_flags);
             break;
 
-        case AST_CAST:
-            aoStrCatPrintf(str, "cast ");
-            _astLValueToString(str,ast->operand);
+        case AST_CAST: {
+            _astLValueToString(str,ast->operand,lexeme_flags);
+            char *type = astTypeToString(ast->type);
+            aoStrCatPrintf(str, "(%s)", type);
+            free(type);
+            break;
+        }
+
+        case AST_RETURN:
+            aoStrCatPrintf(str, "return ");
+            _astLValueToString(str,ast->retval, lexeme_flags);
+            aoStrCatPrintf(str,"%s",
+                    lexemePunctToStringWithFlags(';',lexeme_flags));
+            break;
+
+        case AST_DEFAULT:
+            aoStrCatPrintf(str,"default:");
+            break;
+
+        case AST_CASE: {
+            if (ast->case_begin == ast->case_end) {
+                aoStrCatPrintf(str,"case (%ld):",ast->case_begin);
+            } else {
+                aoStrCatPrintf(str,"case (%ld ... %ld\\):",
+                        ast->case_begin,ast->case_end);
+            }
+            break;
+        }
+
+        case AST_BREAK:
+            aoStrCatPrintf(str, "break;");
             break;
 
         case TK_PRE_PLUS_PLUS:
         case TK_PLUS_PLUS:   
         case TK_PRE_MINUS_MINUS:
         case TK_MINUS_MINUS:
-            astUnaryArgToString(str, lexemePunctToString(ast->kind),ast);
+        case '~':
+        case '!': {
+            str_op = lexemePunctToStringWithFlags(ast->kind,lexeme_flags);
+            astUnaryArgToString(str,str_op,ast,lexeme_flags);
             break;
+        }
+        case '-': {
+            str_op = lexemePunctToStringWithFlags(ast->kind,lexeme_flags);
+            if (ast->right == NULL) {
+                astUnaryArgToString(str,str_op,ast,lexeme_flags);
+            } else {
+                astBinaryArgToString(str,str_op,ast,lexeme_flags);
+            }
+            break;
+        }
+
 
         default: {
-            astBinaryArgToString(str,lexemePunctToString(ast->kind),ast);
+            str_op = lexemePunctToStringWithFlags(ast->kind,lexeme_flags);
+            astBinaryArgToString(str,str_op,ast,lexeme_flags);
+            if (ast->left == NULL) {
+                aoStrCatPrintf(str,"%s",
+                        lexemePunctToStringWithFlags(';',lexeme_flags));
+            }
             break;
         }
     }
 }
 
-char *astLValueToString(Ast *ast) {
+char *astLValueToString(Ast *ast, unsigned long lexeme_flags) {
     aoStr *str = aoStrNew();
-    _astLValueToString(str,ast);
+    _astLValueToString(str,ast,lexeme_flags);
     return aoStrMove(str);
 }
 
@@ -1824,6 +2080,13 @@ void astKindPrint(int kind) {
 
 void astReleaseList(List *ast_list) {
     listRelease(ast_list,(void(*))astRelease);
+}
+
+void astVectorRelease(PtrVec *ast_vector) {
+    for (int i = 0; i < ast_vector->size; ++i) {
+        astRelease((Ast *)ast_vector->entries[i]);
+    }
+    ptrVecRelease(ast_vector);
 }
 
 /* Free an Ast */
@@ -1871,7 +2134,11 @@ void astRelease(Ast *ast) {
         case AST_VAR_ARGS: astFreeVarArgs(ast); break;
         case AST_ASM_FUNCDEF: astFreeAsmFunctionDef(ast); break;
         case AST_CAST: astFreeCast(ast); break;
-        case AST_CASE: astFreeCase(ast); break;
+        case AST_SWITCH:  astFreeSwitch(ast); break;
+        /* these two are somewhat academic as we should not be getting here */
+        case AST_CASE:    astFreeCase(ast); break;
+        case AST_DEFAULT: astFreeDefault(ast); break;
+
         case TK_AND_AND:        
         case TK_OR_OR:  
         case TK_EQU_EQU:    

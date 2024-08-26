@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <ctype.h>
 #include <stdarg.h>
 #include <stddef.h>
@@ -6,6 +7,7 @@
 #include <string.h>
 
 #include "aostr.h"
+#include "lexer.h"
 
 aoStr *aoStrAlloc(size_t capacity) {
     aoStr *buf = malloc(sizeof(aoStr));
@@ -35,8 +37,9 @@ char *aoStrMove(aoStr *buf) {
 }
 
 /* Grow the capacity of the string buffer by `additional` space */
-int aoStrExtendBuffer(aoStr *buf, unsigned int additional) {
+int aoStrExtendBuffer(aoStr *buf, size_t additional) {
     size_t new_capacity = (buf->capacity*2) + additional;
+    assert(new_capacity > buf->capacity);
     if (new_capacity <= buf->capacity) {
         return -1;
     }
@@ -66,7 +69,7 @@ void aoStrToLowerCase(aoStr *buf) {
 }
 
 void aoStrPutChar(aoStr *buf, char ch) {
-    aoStrExtendBufferIfNeeded(buf, 100);
+    aoStrExtendBufferIfNeeded(buf, 10);
     buf->data[buf->len] = ch;
     buf->data[buf->len + 1] = '\0';
     buf->len++;
@@ -162,12 +165,113 @@ void aoStrCatPrintf(aoStr *b, const char *fmt, ...) {
     va_end(ap);
 }
 
+char *aoStrEncodeChar(long op) {
+    static char buf[4];
+    switch(op) {
+    case '\\':               return "\\";
+    case '\n':               return "\\n";
+    case '\t':               return "\\t";
+    case '\r':               return "\\r";
+    case '\"':               return "&#34;";
+    case '\'':               return "&#39;";
+    case ' ':                return "&#32;";
+    case '>':                return "&#62;";
+    case '<':                return "&#60;";
+    case '&':                return "&#38;";
+    case '|':                return "&#124;";
+    case ';':                return "&#59;";
+    case '@':                return "&#64;";
+    case '=':                return "&#61;";
+    case '(':                return "&#40;";
+    case ')':                return "&#41;";
+    case '~':                return "&#126;";
+    case '^':                return "&#94;";
+    case '_':                return "&#65;";
+    case '!':                return "&#33;";
+    case '{':                return "&#123;";
+    case '}':                return "&#125;";
+    case '[':                return "&#91;";
+    case ']':                return "&#93;";
+    case '`':                return "&#96;";
+    case '*':                return "&#42;";
+    case '+':                return "&#43;";
+    case '-':                return "&#45;";
+    case '/':                return "&#47;";
+    case '%':                return "&#37;";
+    case '$':                return "&#36;";
+    case '#':                return "&#35;";
+    case ',':                return "&#44;";
+    case '.':                return "&#46;";
+    case '?':                return "&#63;";
+    case ':':                return "&#48;";
+
+    case TK_EQU_EQU:         return "&#61;&#61;";
+    case TK_NOT_EQU:         return "&#33;&#61;";
+    case TK_LESS_EQU:        return "&#60;&#61;";
+    case TK_GREATER_EQU:     return "&#62;&#61;";      
+    case TK_AND_AND:         return "&#38;&#38;";
+    case TK_OR_OR:           return "&#124;&#124;";
+    case TK_SHL:             return "&#60;&#60;";
+    case TK_SHL_EQU:         return "&#60;&#60;&#61;";
+    case TK_SHR:             return "&#62;&#62;";
+    case TK_SHR_EQU:         return "&#62;&#62;&#61;";
+    case TK_MUL_EQU:         return "&#42;&#61;";
+    case TK_DIV_EQU:         return "&#47;&#61;";
+    case TK_OR_EQU:          return "&#124;&#61;";
+    case TK_XOR_EQU:         return "&#94;&#61;";
+    case TK_AND_EQU:         return "&#38;&#61;";
+    case TK_SUB_EQU:         return "&#45;&#61;";
+    case TK_ADD_EQU:         return "&#43;&#61;";
+    case TK_MOD_EQU:         return "&#37;&#61;";
+    case TK_ELLIPSIS:        return "&#48;&#48;&#48;";
+    case TK_ARROW:           return "&#45;&#62;";
+    case TK_PRE_PLUS_PLUS:   return "&#43;&#43;";
+    case TK_PLUS_PLUS:       return "&#43;&#43;";
+    case TK_PRE_MINUS_MINUS: return "&#45;&#45;";
+    case TK_MINUS_MINUS:     return "&#45;&#45;";
+    default: {
+        int len = snprintf(buf,sizeof(buf),"%c",(char)op);
+        buf[len] = '\0';
+        return buf;
+    }
+    }
+}
+
+aoStr *aoStrEncode(aoStr *buf) {
+    aoStr *outstr = aoStrAlloc(buf->capacity);
+    char *ptr = buf->data;
+    char *encoded;
+
+    if (buf == NULL) return outstr;
+    while (*ptr) {
+        if (*ptr == '\\') {
+            aoStrPutChar(outstr, '\\');
+            switch (*ptr) {
+                case '\'': aoStrPutChar(outstr,'\''); break;
+                case '\\': aoStrPutChar(outstr, '\\'); break;
+                case '\"': aoStrPutChar(outstr, '\"'); break;
+                case '\b': aoStrPutChar(outstr, 'b'); break;
+                case '\n': aoStrPutChar(outstr, 'n'); break;
+                case '\t': aoStrPutChar(outstr, 't'); break;
+                case '\v': aoStrPutChar(outstr, 'v'); break;
+                case '\f': aoStrPutChar(outstr, 'f'); break;
+                case '\r': aoStrPutChar(outstr, 'r'); break;
+            }
+        } else {
+            encoded = aoStrEncodeChar(*ptr);
+            aoStrCat(outstr,encoded);
+        }
+        ptr++;
+    }
+    return outstr;
+}
+
 aoStr *aoStrEscapeString(aoStr *buf) {
     aoStr *outstr = aoStrAlloc(buf->capacity);
     char *ptr = buf->data;
 
     if (buf == NULL) {
-        return NULL;
+        return outstr;
     }
 
     while (*ptr) {
@@ -261,4 +365,37 @@ aoStr **aoStrSplit(char *to_split, char delimiter, int *count) {
 error:
     aoStrArrayRelease(outArr, arrsize);
     return NULL;
+}
+
+/* Allocating printf */
+char *mprintf(const char *fmt, ...) {
+    va_list ap, copy;
+    va_start(ap,fmt);
+
+    int allocated = 256;
+    int len = 0;
+    char *buffer = (char *)malloc(sizeof(char)*allocated+1);
+
+    while (1) {
+        va_copy(copy,ap);
+        len = vsnprintf(buffer,allocated,fmt,copy);
+        va_end(copy);
+
+        if (len < 0) {
+            free(buffer);
+            return NULL;
+        }
+
+        if (len >= allocated) {
+            free(buffer);
+            allocated = len + 2;
+            buffer = (char *)malloc(sizeof(char)*allocated);
+            if (buffer == NULL) return NULL;
+            continue;
+        }
+        break;
+    }
+    buffer[len] = '\0';
+    va_end(ap);
+    return buffer;
 }

@@ -48,6 +48,7 @@ void dictDefaultInit(Dict *ht);
 Dict *dictNewWithParent(Dict *parent);
 Dict *dictNew(DictType *type);
 void dictRelease(Dict *d);
+void dictClear(Dict *d);
 DictNode *dictFind(Dict *d, void *key);
 void *dictGet(Dict *d, void *key);
 size_t dictGenericHashFunction(void *key);

@@ -220,15 +220,17 @@ void assertLValue(Ast *ast, long lineno) {
     }
 }
 
-void assertUniqueSwitchCaseLabels(List *case_list, Ast *case_) {
-    Ast *cur;
-    for (List *it = case_list->next; it != case_list; it = it->next) {
-        cur = it->value;
+void assertUniqueSwitchCaseLabels(PtrVec *case_vector, Ast *case_) {
+    for (int i = 0; i < case_vector->size; ++i) {
+        Ast *cur = case_vector->entries[i];
         if (case_->case_end < cur->case_begin ||
             cur->case_begin < case_->case_begin) {
             continue;
         }
         if (case_->case_begin == cur->case_end) {
+            for (int j = 0; j < case_vector->size; ++j) {
+                astPrint(case_vector->entries[i]);
+            }
             loggerPanic("Duplicate case value: %ld\n",case_->case_begin);
         }
         loggerPanic("Duplicate case value: %ld\n",case_->case_begin);

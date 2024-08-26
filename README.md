@@ -80,6 +80,9 @@ hcc [..OPTIONS] <..file>
 
 OPTIONS:
   -ast     Print the ast and exit
+  -cfg     Create graphviz control flow graph as a .dot file
+  -cfg-png Create graphviz control flow graph as a png
+  -cfg-svg Create graphviz control flow graph as a svg
   -tokens  Print the tokens and exit
   -S       Emit assembly only
   -obj     Emit an objectfile
@@ -91,6 +94,34 @@ OPTIONS:
   -D<var>  Set a compiler #define (does not accept a value)
   --help   Print this message
 ```
+
+## Control Flow Graph Example
+Example code:
+```hc
+I32 Main()
+{
+  auto i = 1;
+
+  for (I64 j = 0; j < 10; ++j) {
+    "%d",j;
+  }
+  while (i) {
+    printf("hello");
+  }
+
+  return 1;
+}
+```
+Compiled with: `hcc -cfg ./<file>.HC && dot -Tpng ./<file.dot> -o <file>.png`
+Produces the following control flow graph. Note that in order to use 
+`-cfg-png` or `-cfg-svg` it requires the use of [graphviz](https://graphviz.org/)
+<p align="center">
+  <img 
+    src="/assets/cfg-example.png?raw=true"
+    alt="alt text"
+    title="holyc logo"
+    width="400"/>
+</p>
 
 ## Differences
 - `auto` key word for type inference, an addition which makes it easier

@@ -80,10 +80,10 @@ static DictNode *dictNodeNew(void *key, void *value) {
     return n;
 }
 
-void dictRelease(Dict *d) {
+void dictClear(Dict *d) {
     if (d) {
         DictNode *next = NULL;
-        for (size_t i = 0; i < d->size; ++i) {
+        for (size_t i = 0; i < d->capacity && d->size > 0; ++i) {
             DictNode *n = d->body[i];
             while (n) {
                 next = n->next;
@@ -94,6 +94,13 @@ void dictRelease(Dict *d) {
                 n = next;
             }
         }
+    }
+}
+
+void dictRelease(Dict *d) {
+    if (d) {
+        dictClear(d);
+        free(d->body);
         free(d);
     }
 }

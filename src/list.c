@@ -66,6 +66,10 @@ void listInsertValueBefore(List *ll, void *value) {
     listInsertBefore(ll,prev);
 }
 
+void *listHead(List *ll) {
+    return ll->prev->value;
+}
+
 void *listPop(void *l) {
     List *ll = (List *)l;
     if (ll->next == ll) {
@@ -79,7 +83,7 @@ void *listPop(void *l) {
     return val;
 }
 
-void listRelease(List *ll, void (*freeValue)(void *)) {
+void listClear(List *ll, void (*freeValue)(void *)) {
     if (!ll) return;
     List *node = ll->next;
     List *next;
@@ -91,6 +95,12 @@ void listRelease(List *ll, void (*freeValue)(void *)) {
         free(node);
         node = next;
     }
+    ll->next = ll->prev = ll;
+}
+
+void listRelease(List *ll, void (*freeValue)(void *)) {
+    if (!ll) return;
+    listClear(ll,freeValue);
     free(ll);
 }
 
