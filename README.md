@@ -120,8 +120,7 @@ Produces the following control flow graph. Note that in order to use
     src="/assets/cfg-example.png?raw=true"
     alt="alt text"
     title="holyc logo"
-    width="200"
-    height="230"/>
+    width="400"/>
 </p>
 
 ## Differences
