@@ -402,10 +402,12 @@ static void cgfHandleBranchBlock(CFGBuilder *builder, Ast *ast) {
     bbSetIf(cond,if_body);
     bbSetElse(cond,else_body);
 
-    bbAstAdd(cond,ast->cond);
 
-    /* Start of a new basic block */
+    cfgBuilderSetBlock(builder,cond);
+    cfgHandleAstNode(builder,ast->cond);
+
     cfgBuilderSetBlock(builder,if_body);
+    /* Start of a new basic block */
     cfgHandleAstNode(builder,ast->then);
 
     if (ast->els) {
@@ -475,7 +477,8 @@ static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
             bb_init = cfgSelectOrCreateBlock(builder,BB_CONTROL_BLOCK);
             cfgBuilderSetBlock(builder,bb_init);
         }
-        bbAstAdd(bb_init,ast_init);
+        cfgHandleAstNode(builder,ast_init);
+        //bbAstAdd(bb_init,ast_init);
     }
 
     BasicBlock *bb_cond = cfgSelectOrCreateBlockWithFlags(builder,BB_BRANCH_BLOCK,
@@ -753,7 +756,7 @@ static void cfgHandleLabel(CFGBuilder *builder, Ast *ast) {
     BasicBlock *bb_label = cfgSelectOrCreateBlockWithFlags(builder,
             BB_CONTROL_BLOCK,BB_FLAG_LABEL);
     /* We want the label in the newly allocated block */
-    bbAstAdd(bb_label,ast);
+    cfgHandleAstNode(builder,ast);
     aoStr *label = astHackedGetLabel(ast);
     strMapAdd(builder->resolved_labels,label->data,bb_label);
     cfgBuilderSetBlock(builder,bb_label);
@@ -797,8 +800,8 @@ static void cfgHandleCase(CFGBuilder *builder, BasicBlock *bb_end, Ast *ast) {
 
     /* so we can access begining and end while in the basic block and always 
      * know it is the first node in the ast array  */
-    bbAstAdd(bb_case,ast);
     cfgBuilderSetBlock(builder,bb_case);
+    cfgHandleAstNode(builder,ast);
     bbSetPrevPtr(bb_case,bb_switch);
 
     if (!listEmpty(ast->case_asts)) {
@@ -828,7 +831,8 @@ static void cfgHandleSwitch(CFGBuilder *builder, Ast *ast) {
     int prev_in_switch = builder->flags & CFG_BUILDER_FLAG_IN_SWITCH;
     static BasicBlock *bb_stack[128];
 
-    bbAstAdd(bb_switch,ast->switch_cond);
+    cfgBuilderSetBlock(builder,bb_switch);
+    cfgHandleAstNode(builder,ast->switch_cond);
     bb_switch->next_blocks = ptrVecNew();
 
     if (!ast->switch_bounds_checked) {
@@ -913,6 +917,13 @@ static BasicBlock *cfgMergeBranches(CFGBuilder *builder, BasicBlock *pre,
     return join;
 }
 
+/**
+ * This function is crucial. It sets the type of block based on the AST. 
+ * @DataFlow Jamesbarford 2024/08/28
+ * TODO: This function should be the one responsible for converting the ast 
+ * into IR and adding what a block defines or modifies which will make liveness
+ * analysis easier along with dataflow.
+ * */
 static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
     assert(ast != NULL);
     int kind = ast->kind;
@@ -1010,10 +1021,13 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
         case AST_ASM_FUNCALL:
         case AST_FUNCALL:
         case AST_FUNPTR_CALL:
-        case AST_DECL:
         case AST_LVAR:
-
+            ptrVecPush(bb->ast_array,ast);
+            break;
+        /* Start of a variable being alive (possibly?) */
+        case AST_DECL:
         default:
+            /* Need to look at this for binary operators */
             ptrVecPush(bb->ast_array,ast);
             break;
     }
@@ -1809,35 +1823,18 @@ IntMap *bbFindAllLoopNodes(BasicBlock *loop_head) {
     return map;
 }
 
+/* DFS our way through the graph, as it is created in the correct order above 
+ * we get the nodes in the correct order here. */
 void cfgExplore(CFG *cfg, IntSet *seen, int block_no) {
     if (intSetHas(seen,block_no)) return;
     intSetAdd(seen,block_no);
     IntSet *iset = (IntSet *)intMapGet(cfg->graph,block_no);
     printf("bb%d\n",block_no);
-    
+
     IntSetIterator *it = intSetIteratorNew(iset);
     long next_block_no;
     while ((next_block_no = intSetNext(it)) != HT_DELETED) {
         BasicBlock *bb = (BasicBlock *)intMapGet(cfg->no_to_block,(int)next_block_no);
-        if (!intSetHas(seen,bb->block_no) && bb->flags & BB_FLAG_LOOP_HEAD) {
-            printf("loophead: bb%d\n",bb->block_no);
-            IntMap *loop_nodes = bbFindAllLoopNodes(bb);
-            IntMapIterator *it = intMapIteratorNew(loop_nodes);
-            IntMapNode *entry;
-            while ((entry = intMapNext(it)) != NULL) {
-                BasicBlock *loop_child = (BasicBlock *)entry->value;
-                if (intSetHas(seen,loop_child->block_no)) continue;
-                intSetAdd(seen,loop_child->block_no);
-                if (loop_child->flags & BB_FLAG_LOOP_HEAD) {
-                    printf("  loophead: bb%d\n",bb->block_no);
-                } else {
-                    printf("  bb%d\n",loop_child->block_no);
-                }
-                intSetAdd(seen,loop_child->block_no);
-            }
-            intMapIteratorRelease(it);
-            intMapRelease(loop_nodes);
-        }
         cfgExplore(cfg,seen,bb->block_no);
     }
     intSetIteratorRelease(it);
@@ -1852,6 +1849,7 @@ void cfgIter(CFG *cfg) {
         cfgExplore(cfg,seen,bb->block_no);
     }
     intMapIteratorRelease(it);
+    intSetRelease(seen);
 }
 
 /* This will need to return a list of CFG's */
@@ -1865,10 +1863,6 @@ PtrVec *cfgConstruct(Cctrl *cc) {
             CFG *cfg = cfgCreateForFunction(cc,ast,leaf_cache,&block_no);
             ptrVecPush(cfgs,cfg);
         }
-    }
-    for (int i = 0; i < cfgs->size; ++i) {
-        CFG *cfg = cfgs->entries[i];
-        cfgIter(cfg);
     }
     intMapRelease(leaf_cache);
     return cfgs;
