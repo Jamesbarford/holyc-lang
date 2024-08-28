@@ -1802,7 +1802,6 @@ IntMap *bbFindAllLoopNodes(BasicBlock *loop_head) {
     while ((entry = intMapNext(it)) != NULL) {
         BasicBlock *prev = (BasicBlock *)entry->value;
         if (bbIsType(prev, BB_LOOP_BLOCK) && prev->prev == loop_head) {
-            printf(" we have prev: bb%d\n",prev->block_no);
             break;
         }
     }
@@ -1827,7 +1826,14 @@ void cfgExplore(CFG *cfg, IntSet *seen, int block_no) {
             IntMapNode *entry;
             while ((entry = intMapNext(it)) != NULL) {
                 BasicBlock *loop_child = (BasicBlock *)entry->value;
-                printf("  bb%d\n",loop_child->block_no);
+                if (intSetHas(seen,loop_child->block_no)) continue;
+                intSetAdd(seen,loop_child->block_no);
+                if (loop_child->flags & BB_FLAG_LOOP_HEAD) {
+                    printf("  loophead: bb%d\n",bb->block_no);
+                } else {
+                    printf("  bb%d\n",loop_child->block_no);
+                }
+                intSetAdd(seen,loop_child->block_no);
             }
             intMapIteratorRelease(it);
             intMapRelease(loop_nodes);
@@ -1860,5 +1866,10 @@ PtrVec *cfgConstruct(Cctrl *cc) {
             ptrVecPush(cfgs,cfg);
         }
     }
+    for (int i = 0; i < cfgs->size; ++i) {
+        CFG *cfg = cfgs->entries[i];
+        cfgIter(cfg);
+    }
+    intMapRelease(leaf_cache);
     return cfgs;
 }
