@@ -238,13 +238,13 @@ void emitFile(aoStr *asmbuf, hccOpts *opts) {
             char run_cmd[64];
             snprintf(run_cmd,sizeof(run_cmd),"./%s",opts->output_filename);
             system(run_cmd);
-            unlink(opts->output_filename);
+            //unlink(opts->output_filename);
         }
     }
     if (strnlen(opts->clibs,10) > 1) {
         free(opts->clibs);
     }
-    remove(ASM_TMP_FILE);
+    //remove(ASM_TMP_FILE);
     aoStrRelease(cmd);
     aoStrRelease(asmbuf);
 }
@@ -293,13 +293,11 @@ void parseCliOptions(hccOpts *opts, int argc, char **argv) {
                 "-clibs=\'-lxml2 ....\'.";
             ptr = argv[i];
             ptr += 6;
-            loggerDebug("%s\n",ptr);
             if (*ptr != '=' && *(ptr + 1) != '\'') {
                 loggerPanic("%s got '%c'\n", error, *ptr);
             }
             aoStr *str = aoStrNew();
             ptr++;
-            loggerDebug("%s\n",ptr);
             while (*ptr != '\0' && *ptr != '\'') {
                 aoStrPutChar(str,*ptr);
                 ptr++;

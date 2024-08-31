@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <ctype.h>
+#include <errno.h>
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -398,4 +399,10 @@ char *mprintf(const char *fmt, ...) {
     buffer[len] = '\0';
     va_end(ap);
     return buffer;
+}
+
+aoStr *aoStrError(void) {
+    char *err = strerror(errno);
+    aoStr *str = aoStrDupRaw(err,strlen(err));
+    return str;
 }

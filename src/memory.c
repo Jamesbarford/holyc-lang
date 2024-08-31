@@ -1,5 +1,13 @@
+/**
+ * The implementation of the pool below is very simplistic. It can only allocate
+ * one type of object as you give it a fixed size when creating it.
+ *
+ * Free objects are handled by a unique integer id (that increments) being 
+ * pushed to a vector.
+ */
 #include <stdlib.h>
 
+#include "aostr.h"
 #include "map.h"
 #include "memory.h"
 #include "util.h"
@@ -7,7 +15,7 @@
 void *xmalloc(size_t size) {
     void *ptr = (void *)malloc(size);
     if (!ptr) {
-        loggerPanic("OOM\n");
+        loggerPanic("OOM: %s\n", aoStrError()->data);
     }
     return ptr;
 }
@@ -67,6 +75,7 @@ static long memPoolGetEntryIdx(MemoryPool *pool, long entry_no,
     return entry_no - (pool->slab_size * mem_pool_entries_idx);
 }
 
+/* Gets the pointer to the next block of memory */
 static void *memPoolGetMemory(MemoryPool *pool, long entry_no) {
     unsigned int entry_size = (pool->member_size + MEM_PREFIX);
     long mem_pool_entries_idx = memPoolGetEntryVecIdx(pool, entry_no);
@@ -75,7 +84,6 @@ static void *memPoolGetMemory(MemoryPool *pool, long entry_no) {
     void *entries = vecGet(void*,pool->mem_pool_entries,
             mem_pool_entries_idx);    
     long idx = entry_idx * entry_size;
-   // loggerDebug("entry_no = %ld, idx = %3ld, mem_pool_entries_idx = %ld\n",entry_no,idx, mem_pool_entries_idx);
     return (void *)(entries + idx + MEM_PREFIX);
 }
 
