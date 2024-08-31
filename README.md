@@ -67,9 +67,31 @@ Thus most `x86_64` architectures should be supported. Creating an `IR` with
 some optimisations and compiling to `ARM` is high on the TODO list.
 
 ## Building
-Run `make`, then run `make install` (`sudo make install` on linux) this will 
-install the compiler and holyc libraries for strings, hashtables, I/O, maths,
-networking, JSON parsing etc... see ./src/holyc-lib/
+There is a Makefile at the root of the repository that wraps CMake, it provides:
+- `make`, will build the compiler
+- `make install` install the compile
+- `make unit-test` run the unit tests
+
+However if you wish to use cmake directly, here's an example:
+
+**Create the Makefiles in ./build**
+```
+cmake -S ./src \
+  -B ./build \
+  -G 'Unix Makefiles' \
+  -DCMAKE_C_COMPILER=gcc \
+  -DCMAKE_BUILD_TYPE=Release
+```
+**Compile**
+```
+make -C ./build
+```
+**Install**
+```
+make -C ./build install
+```
+This will install the compiler and holyc libraries for strings, hashtables, 
+I/O, maths, networking, JSON parsing etc... see ./src/holyc-lib/.
  
 ## Using the compiler
 Once the compiler has been compiled the following options are available, they 

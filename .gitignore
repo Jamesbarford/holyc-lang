@@ -4,7 +4,6 @@
 *.dylib
 *.o
 *.db
-*.txt
 *.s
 a.out
 mcc
@@ -22,3 +21,4 @@ scratch
 test-runner
 .idea
 .gdb_history
+build
