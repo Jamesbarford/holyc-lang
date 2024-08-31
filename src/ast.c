@@ -61,6 +61,14 @@ Ast *astMakeForeverSentinal(void) {
     return ast;
 }
 
+/* If we don't clone these then they end up getting mutated by every function 
+ * that uses them */
+Ast *astMakeLoopSentinal(void) {
+    Ast *ast = astNew();
+    memcpy(ast,ast_loop_sentinal,sizeof(Ast));
+    return ast;
+}
+
 AstType *astTypeCopy(AstType *type) {
     AstType *copy = astTypeNew();
     memcpy(copy,type,sizeof(AstType));
@@ -1295,7 +1303,7 @@ void _astToString(aoStr *str, Ast *ast, int depth) {
                 aoStrCatPrintf(str, "<function_ptr_arg>\n");
                 tmp = node->value;
                 if (tmp->kind == AST_TYPE_FUNC) {
-                    loggerDebug("%s\n",
+                    loggerWarning("%s\n",
                             astTypeToString(((AstType *)tmp)->rettype));
                 }
                 _astToString(str,(Ast *)node->value,depth+1);

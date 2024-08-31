@@ -366,6 +366,7 @@ Ast *astGlobalCmdArgs(void);
 aoStr *astNormaliseFunctionName(char *fname);
 int astIsAssignment(long op);
 Ast *astMakeForeverSentinal(void);
+Ast *astMakeLoopSentinal(void);
 
 int astIsLabelMatch(Ast *ast, aoStr *goto_label);
 

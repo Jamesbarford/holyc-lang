@@ -7,7 +7,6 @@
 #include "ast.h"
 #include "cctrl.h"
 #include "cfg.h"
-#include "dict.h"
 #include "lexer.h"
 #include "list.h"
 #include "map.h"
@@ -303,7 +302,8 @@ void bbPrint(BasicBlock *bb) {
 }
 
 
-static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder, int type) {
+static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder, int type,
+        unsigned int flags) {
     BasicBlock *bb = memPoolAlloc(builder->block_pool);
 
     bb->type = type;
@@ -328,33 +328,21 @@ static CFG *cfgNew(aoStr *fname, BasicBlock *head_block) {
     return cfg;
 }
 
-static BasicBlock *cfgBuilderAllocBlockWithFlags(CFGBuilder *builder, 
-        int type, unsigned int flags)
-{
-    BasicBlock *bb = cfgBuilderAllocBasicBlock(builder,type);
-    bb->flags = flags;
-    return bb;
-}
-
 /* Sometimes the block that has been allocated and exists on the builder 
- * can be used other times we need to allocate a new block */
-static BasicBlock *cfgSelectOrCreateBlock(CFGBuilder *builder, int type) {
-    BasicBlock *bb_selected = NULL;
-    if (bbAstCount(builder->bb) == 0 && !bbIsLoopControl(builder->bb)) {
-        bb_selected = builder->bb;
-        bbSetType(bb_selected,type);
-    } else {
-        bb_selected = cfgBuilderAllocBasicBlock(builder,type);
-        bbSetPrevPtr(bb_selected,builder->bb);
-        bbSetNext(builder->bb,bb_selected);
-    }
-    return bb_selected;
-}
-
-static BasicBlock *cfgSelectOrCreateBlockWithFlags(CFGBuilder *builder,
-        int type, unsigned int flags)
+ * can be used i.e there are no asts in the array. 
+ * Other times we need to allocate a new block */
+static BasicBlock *cfgSelectOrCreateBlock(CFGBuilder *builder, int type,
+        unsigned int flags)
 {
-    BasicBlock *bb = cfgSelectOrCreateBlock(builder,type);
+    BasicBlock *bb = NULL;
+    if (bbAstCount(builder->bb) == 0 && !bbIsLoopControl(builder->bb)) {
+        bb = builder->bb;
+        bbSetType(bb,type);
+    } else {
+        bb = cfgBuilderAllocBasicBlock(builder,type,0);
+        bbSetPrevPtr(bb,builder->bb);
+        bbSetNext(builder->bb,bb);
+    }
     /* If the block is being recycled it could have flags that are needed on it 
      * so OR in the new flags as opposed to setting them */
     bb->flags |= flags;
@@ -389,9 +377,9 @@ static void cgfHandleBranchBlock(CFGBuilder *builder, Ast *ast) {
 
     builder->flags |= CFG_BUILDER_FLAG_IN_CONDITIONAL;
 
-    BasicBlock *cond = cfgSelectOrCreateBlock(builder,BB_BRANCH_BLOCK);
-    BasicBlock *else_body = cfgBuilderAllocBlockWithFlags(builder,BB_CONTROL_BLOCK,BB_FLAG_ELSE_BRANCH);
-    BasicBlock *if_body = cfgBuilderAllocBlockWithFlags(builder,BB_CONTROL_BLOCK,BB_FLAG_IF_BRANCH);
+    BasicBlock *cond = cfgSelectOrCreateBlock(builder,BB_BRANCH_BLOCK,0);
+    BasicBlock *else_body = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK,BB_FLAG_ELSE_BRANCH);
+    BasicBlock *if_body = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK,BB_FLAG_IF_BRANCH);
     BasicBlock *new_block;
 
     /* Ensure the new nodes point to the branch head */
@@ -423,7 +411,7 @@ static void cgfHandleBranchBlock(CFGBuilder *builder, Ast *ast) {
             /* Join */ 
             bbSetNext(cond,builder->bb);
         } else {
-            new_block = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
+            new_block = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK,0);
             bbSetNext(cond,new_block);
             bbSetPrevPtr(new_block,else_body);
             cfgBuilderSetBlock(builder,new_block);
@@ -474,14 +462,13 @@ static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
         if (bbIsType(builder->bb,BB_CONTROL_BLOCK)) {
             bb_init = builder->bb;
         } else {
-            bb_init = cfgSelectOrCreateBlock(builder,BB_CONTROL_BLOCK);
+            bb_init = cfgSelectOrCreateBlock(builder,BB_CONTROL_BLOCK,0);
             cfgBuilderSetBlock(builder,bb_init);
         }
         cfgHandleAstNode(builder,ast_init);
-        //bbAstAdd(bb_init,ast_init);
     }
 
-    BasicBlock *bb_cond = cfgSelectOrCreateBlockWithFlags(builder,BB_BRANCH_BLOCK,
+    BasicBlock *bb_cond = cfgSelectOrCreateBlock(builder,BB_BRANCH_BLOCK,
             BB_FLAG_LOOP_HEAD|BB_FLAG_FOR_LOOP);
     if (ast_step) bb_cond->flags |= BB_FLAG_FOR_LOOP_HAS_STEP;
 
@@ -490,10 +477,10 @@ static void cfgHandleForLoop(CFGBuilder *builder, Ast *ast) {
     }
 
     BasicBlock *bb_cond_else = cfgBuilderAllocBasicBlock(builder,
-                                                         BB_CONTROL_BLOCK);
+                                                         BB_CONTROL_BLOCK,0);
     /* Body may or may not be a Loop, we correct it in the if condition with
      * builder->bb != bb_body */
-    BasicBlock *bb_body = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
+    BasicBlock *bb_body = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK,0);
 
     /* Jump into loop body if condition is met */
     bbSetIf(bb_cond,bb_body);
@@ -607,11 +594,11 @@ static void cfgHandleWhileLoop(CFGBuilder *builder, Ast *ast) {
     builder->flags |= CFG_BUILDER_FLAG_IN_LOOP;
     BasicBlock *bb_prev_loop = builder->bb_cur_loop;
 
-    BasicBlock *bb_cond = cfgSelectOrCreateBlockWithFlags(builder,BB_BRANCH_BLOCK,
+    BasicBlock *bb_cond = cfgSelectOrCreateBlock(builder,BB_BRANCH_BLOCK,
             (BB_FLAG_LOOP_HEAD|BB_FLAG_WHILE_LOOP));
-    BasicBlock *bb_body = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
+    BasicBlock *bb_body = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK,0);
     BasicBlock *bb_cond_else = cfgBuilderAllocBasicBlock(builder,
-                                                         BB_CONTROL_BLOCK);
+                                                         BB_CONTROL_BLOCK,0);
 
     /* Jump into loop body if condition is met */
     bbSetIf(bb_cond,bb_body);
@@ -641,7 +628,7 @@ static void cfgHandleWhileLoop(CFGBuilder *builder, Ast *ast) {
     if (builder->bb != bb_body || !builder->bb->next) {
         bbSetType(builder->bb,BB_LOOP_BLOCK);
         if (bbAstCount(builder->bb) == 0) {
-            bbAstAdd(builder->bb,ast_loop_sentinal);
+            ptrVecPush(builder->bb->ast_array,astMakeLoopSentinal());
         }
         /* So we can access the loop block from the head of the condition */
         bbSetNext(bb_cond,builder->bb);
@@ -671,7 +658,7 @@ static void cfgHandleDoWhileLoop(CFGBuilder *builder, Ast *ast) {
     Ast *ast_body = ast->whilebody;
 
     BasicBlock *bb_prev_loop = builder->bb_cur_loop;
-    BasicBlock *bb_do_body = cfgSelectOrCreateBlockWithFlags(builder,
+    BasicBlock *bb_do_body = cfgSelectOrCreateBlock(builder,
             BB_CONTROL_BLOCK, BB_FLAG_LOOP_HEAD);
 
     /*
@@ -691,7 +678,8 @@ static void cfgHandleDoWhileLoop(CFGBuilder *builder, Ast *ast) {
 
     /* converge all orphans in the do while body to point to the node in the 
      * while(...) */
-    BasicBlock *bb_do_cond = cfgSelectOrCreateBlock(builder,BB_DO_WHILE_COND);
+    BasicBlock *bb_do_cond = cfgSelectOrCreateBlock(builder,
+            BB_DO_WHILE_COND,0);
     cfgLinkLeaves(builder->leaf_cache,builder->bb,bb_do_cond);
     cfgBuilderClearLeafCache(builder);
 
@@ -699,13 +687,13 @@ static void cfgHandleDoWhileLoop(CFGBuilder *builder, Ast *ast) {
     bbSetPrevPtr(bb_do_cond,bb_do_body);
     bbSetLoopEnd(bb_do_cond);
 
-    bbAstAdd(bb_do_cond,ast_cond);
+    cfgBuilderSetBlock(builder,bb_do_cond);
+    cfgHandleAstNode(builder,ast_cond);
 
     if (!bb_prev_loop) {
         builder->flags &= ~(CFG_BUILDER_FLAG_IN_LOOP);
     }
 
-    cfgBuilderSetBlock(builder,bb_do_cond);
     builder->bb_cur_loop = bb_prev_loop;
 }
 
@@ -734,8 +722,9 @@ static void cfgHandleGoto(CFGBuilder *builder, Ast *ast) {
         listAppend(builder->unresolved_gotos,builder->bb);
     }
 
-    bbAstAdd(builder->bb,ast);
-    
+    /* This should just push the ast to to ast_array */
+    ptrVecPush(builder->bb->ast_array,ast);
+
     /* If this is an unconditional jump */
     if (!(builder->flags & CFG_BUILDER_FLAG_IN_CONDITIONAL)) {
        builder->bb->flags |= BB_FLAG_UNCONDITIONAL_JUMP;
@@ -743,20 +732,21 @@ static void cfgHandleGoto(CFGBuilder *builder, Ast *ast) {
 }
 
 static void cfgHandleReturn(CFGBuilder *builder, Ast *ast) {
-    BasicBlock *bb_return = cfgSelectOrCreateBlock(builder,BB_RETURN_BLOCK);
-    BasicBlock *bb_after = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
+    BasicBlock *bb_return = cfgSelectOrCreateBlock(builder,BB_RETURN_BLOCK,0);
+    BasicBlock *bb_after = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK,0);
     bbSetNext(bb_return,NULL);
-    bbAstAdd(bb_return,ast);
+
+    ptrVecPush(bb_return->ast_array,ast);
     cfgBuilderSetBlock(builder,bb_after);
 }
 
 /* Splitting the label makes sense else we get into a situation where we have 
  * multiple goto labels in the same block and the code paths get muddled. */
 static void cfgHandleLabel(CFGBuilder *builder, Ast *ast) {
-    BasicBlock *bb_label = cfgSelectOrCreateBlockWithFlags(builder,
+    BasicBlock *bb_label = cfgSelectOrCreateBlock(builder,
             BB_CONTROL_BLOCK,BB_FLAG_LABEL);
     /* We want the label in the newly allocated block */
-    cfgHandleAstNode(builder,ast);
+    ptrVecPush(bb_label->ast_array,ast);
     aoStr *label = astHackedGetLabel(ast);
     strMapAdd(builder->resolved_labels,label->data,bb_label);
     cfgBuilderSetBlock(builder,bb_label);
@@ -782,7 +772,7 @@ static void cfgHandleCompound(CFGBuilder *builder, Ast *ast) {
 
 static void cfgHandleContinue(CFGBuilder *builder, Ast *ast) {
     assert(builder->flags & CFG_BUILDER_FLAG_IN_LOOP);
-    BasicBlock *bb_continue = cfgSelectOrCreateBlock(builder,BB_CONTINUE);
+    BasicBlock *bb_continue = cfgSelectOrCreateBlock(builder,BB_CONTINUE,0);
     bbSetPrevPtr(bb_continue,builder->bb_cur_loop);
     bbAddPrev(builder->bb_cur_loop,builder->bb);
     if (bb_continue != builder->bb) {
@@ -795,13 +785,13 @@ static void cfgHandleContinue(CFGBuilder *builder, Ast *ast) {
 
 static void cfgHandleCase(CFGBuilder *builder, BasicBlock *bb_end, Ast *ast) {
     BasicBlock *bb_switch = builder->bb;
-    BasicBlock *bb_case = cfgBuilderAllocBasicBlock(builder,BB_CASE);
+    BasicBlock *bb_case = cfgBuilderAllocBasicBlock(builder,BB_CASE,0);
     ptrVecPush(bb_switch->next_blocks,bb_case);
 
     /* so we can access begining and end while in the basic block and always 
      * know it is the first node in the ast array  */
     cfgBuilderSetBlock(builder,bb_case);
-    cfgHandleAstNode(builder,ast);
+    ptrVecPush(bb_case->ast_array,ast);
     bbSetPrevPtr(bb_case,bb_switch);
 
     if (!listEmpty(ast->case_asts)) {
@@ -824,8 +814,8 @@ static void cfgHandleCase(CFGBuilder *builder, BasicBlock *bb_end, Ast *ast) {
  * and the next block respectively. This is easier to manage and theoretically
  * are different blocks but connected to the switch */
 static void cfgHandleSwitch(CFGBuilder *builder, Ast *ast) {
-    BasicBlock *bb_switch = cfgSelectOrCreateBlock(builder,BB_SWITCH);
-    BasicBlock *bb_end = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
+    BasicBlock *bb_switch = cfgSelectOrCreateBlock(builder,BB_SWITCH,0);
+    BasicBlock *bb_end = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK,0);
 
     int sp = 0;
     int prev_in_switch = builder->flags & CFG_BUILDER_FLAG_IN_SWITCH;
@@ -908,7 +898,7 @@ static BasicBlock *cfgMergeBranches(CFGBuilder *builder, BasicBlock *pre,
     IntMap *leaf_cache = builder->leaf_cache;
     BasicBlock *join = post;
     if (bbAstCount(post) > 0 && !bbIsLoopControl(post)) {
-        join = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK);
+        join = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK,0);
         bbSetPrevPtr(join,post);
         bbSetNext(post,join);
     }
@@ -1080,7 +1070,7 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
 
         PtrVec *dest_ast_array = bb_dest->ast_array;
         BasicBlock *loop_cond = bb_dest->prev;
-        BasicBlock *loop_back = cfgBuilderAllocBasicBlock(builder,BB_LOOP_BLOCK);
+        BasicBlock *loop_back = cfgBuilderAllocBasicBlock(builder,BB_LOOP_BLOCK,0);
 
         Ast *asts_to_move[100];
         int ast_move_cnt = 0;
@@ -1482,6 +1472,7 @@ static IntSet *cfgCreateContinueAdjacencyList(CFG *cfg, BasicBlock *bb) {
 
     if (loop_head->flags & (BB_FLAG_FOR_LOOP|BB_FLAG_FOR_LOOP_HAS_STEP)) {
         BasicBlock *loop_block = loop_head->next;
+        /* this push to the bb->ast_array is ok*/
         ptrVecPush(bb->ast_array,vecTail(Ast *,loop_block->ast_array));
     }
     return iset;
@@ -1701,8 +1692,8 @@ static CFG *cfgCreateForFunction(Cctrl *cc, Ast *ast_fn, IntMap *leaf_cache, int
 
     loggerDebug("creating CFG for: %s\n", ast_fn->fname->data);
 
-    BasicBlock *bb = cfgBuilderAllocBasicBlock(&builder,BB_HEAD_BLOCK);
-    BasicBlock *bb_next = cfgBuilderAllocBasicBlock(&builder,BB_CONTROL_BLOCK);
+    BasicBlock *bb = cfgBuilderAllocBasicBlock(&builder,BB_HEAD_BLOCK,0);
+    BasicBlock *bb_next = cfgBuilderAllocBasicBlock(&builder,BB_CONTROL_BLOCK,0);
     CFG *cfg = cfgNew(ast_fn->fname,bb);
     bbSetNext(bb,bb_next);
     bbSetPrevPtr(bb_next,bb);
@@ -1712,7 +1703,8 @@ static CFG *cfgCreateForFunction(Cctrl *cc, Ast *ast_fn, IntMap *leaf_cache, int
 
     /* This is a function with no body */
     if (builder.bb == bb->next && !bbIsType(bb->next, BB_RETURN_BLOCK)) {
-        BasicBlock *bb_return = cfgBuilderAllocBasicBlock(&builder,BB_RETURN_BLOCK);
+        BasicBlock *bb_return = cfgBuilderAllocBasicBlock(&builder,
+                                                          BB_RETURN_BLOCK,0);
         bbSetNext(bb->next,bb_return);
         bbSetPrevPtr(bb_return,bb->next);
         bbSetNext(bb_return,NULL);
@@ -1852,13 +1844,14 @@ void cfgIter(CFG *cfg) {
     intSetRelease(seen);
 }
 
-/* This will need to return a list of CFG's */
+/* This returns a vector of CFG's */
 PtrVec *cfgConstruct(Cctrl *cc) {
     PtrVec *cfgs = ptrVecNew();
     int block_no = 0;
     IntMap *leaf_cache = intMapNew(32);
     listForEach(cc->ast_list) {
         Ast *ast = (Ast *)it->value;
+        /* XXX: What do we want to do with global variables? */
         if (ast->kind == AST_FUNC) {
             CFG *cfg = cfgCreateForFunction(cc,ast,leaf_cache,&block_no);
             ptrVecPush(cfgs,cfg);

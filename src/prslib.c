@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <limits.h>
 
 #include "aostr.h"
 #include "ast.h"
@@ -610,7 +611,9 @@ static Ast *parsePrimary(Cctrl *cc) {
         return astF64Type(tok->f64);
     case TK_CHAR_CONST:
         ast = astCharType(tok->i64);
-        //ast->type = ast_uint_type;
+        if (tok->i64 > UCHAR_MAX) {
+            ast->type = ast_uint_type;
+        }
         return ast;
     case TK_STR: {
         aoStr *str = aoStrNew();
