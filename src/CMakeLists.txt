@@ -77,6 +77,8 @@ add_custom_target(unit-test
     USES_TERMINAL
 )
 
+target_link_libraries(hcc m)
+
 # Install the executable
 install(TARGETS hcc DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
 

@@ -238,13 +238,13 @@ void emitFile(aoStr *asmbuf, hccOpts *opts) {
             char run_cmd[64];
             snprintf(run_cmd,sizeof(run_cmd),"./%s",opts->output_filename);
             system(run_cmd);
-            //unlink(opts->output_filename);
+            unlink(opts->output_filename);
         }
     }
     if (strnlen(opts->clibs,10) > 1) {
         free(opts->clibs);
     }
-    //remove(ASM_TMP_FILE);
+    remove(ASM_TMP_FILE);
     aoStrRelease(cmd);
     aoStrRelease(asmbuf);
 }
