@@ -177,7 +177,7 @@ Cctrl *cctrlNew(void) {
     }
     free(str_array);
 
-    for (int i = 0; i < static_size(built_in_types); ++i) {
+    for (int i = 0; i < (int)static_size(built_in_types); ++i) {
         type = malloc(sizeof(AstType));
         bilt = &built_in_types[i]; 
         type->size = bilt->size;

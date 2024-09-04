@@ -2087,7 +2087,7 @@ void astKindPrint(int kind) {
 }
 
 void astReleaseList(List *ast_list) {
-    listRelease(ast_list,(void(*))astRelease);
+    listRelease(ast_list,(void (*)(void *))astRelease);
 }
 
 void astVectorRelease(PtrVec *ast_vector) {

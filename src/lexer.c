@@ -162,7 +162,7 @@ void lexInit(lexer *l, char *source, int flags) {
     }
     /* XXX: create one symbol table for the whole application ;
      * hoist to 'compile.c'*/
-    for (int i = 0; i < static_size(lexer_types); ++i) {
+    for (int i = 0; i < (int)static_size(lexer_types); ++i) {
         LexerTypes *bilt = &lexer_types[i]; 
         dictSet(l->symbol_table, bilt->name, bilt);
     }
@@ -597,17 +597,11 @@ static int countNumberLen(lexer *l, char *ptr, int *isfloat, int *ishex,
 int lexIdentifier(lexer *l, char ch) {
     int i = 0;
     while (1) {
-        switch (ch) {
-        case 'a' ... 'z':
-        case 'A' ... 'Z':
-        case '0' ... '9':
-        case '$':
-        case '_':
-            i++;
-            break;
-        default:
-            goto finish;
-        }
+        char ch_lower = tolower(ch);
+        if      (ch_lower >= 'a' && ch_lower <= 'z') i++;
+        else if (ch_lower >= '0' && ch_lower <= '9') i++;
+        else if (ch_lower == '$' || ch_lower == '_') i++;
+        else goto finish;
         ch = lexNextChar(l);
     }
 
@@ -1610,7 +1604,7 @@ static void lexReleaseLexFile(lexFile *lex_file) {
 
 void lexReleaseAllFiles(lexer *l) {
     listRelease(l->all_source,
-            ((void (*))&lexReleaseLexFile));
+            ((void (*)(void *))&lexReleaseLexFile));
 }
 
 void lexemePrintList(List *tokens) {

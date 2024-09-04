@@ -307,7 +307,7 @@ static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder, int type,
     BasicBlock *bb = memPoolAlloc(builder->block_pool);
 
     bb->type = type;
-    bb->flags = 0;
+    bb->flags = flags;
     bb->block_no = builder->bb_block_no++;
     builder->bb_count++;
     bb->prev_blocks = intMapNew(32);
@@ -753,6 +753,7 @@ static void cfgHandleLabel(CFGBuilder *builder, Ast *ast) {
 }
 
 static void cfgHandleBreak(CFGBuilder *builder, Ast *ast) {
+    (void)ast;
     if (builder->flags & CFG_BUILDER_FLAG_IN_LOOP && 
             !(builder->flags & CFG_BUILDER_FLAG_IN_SWITCH)) {
         bbSetType(builder->bb,BB_BREAK_BLOCK);
@@ -771,6 +772,7 @@ static void cfgHandleCompound(CFGBuilder *builder, Ast *ast) {
 }
 
 static void cfgHandleContinue(CFGBuilder *builder, Ast *ast) {
+    (void)ast;
     assert(builder->flags & CFG_BUILDER_FLAG_IN_LOOP);
     BasicBlock *bb_continue = cfgSelectOrCreateBlock(builder,BB_CONTINUE,0);
     bbSetPrevPtr(bb_continue,builder->bb_cur_loop);
@@ -1024,31 +1026,31 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
 }
 
 /* Remove nodes from the ast array that are before the label */
-static void cfgRemoveNodesBeforeLabel(BasicBlock *bb_dest, aoStr *goto_label) {
-    int collect = 0;
-    int new_size = 0;
-    Ast *ast = bb_dest->ast_array->entries[0];
-    /* If the first node in this block is the goto label we do not need 
-     * to do anything */
-    if (astIsLabelMatch(ast,goto_label)) return;
-
-    for (int i = 1; i < bb_dest->ast_array->size; ++i) {
-        ast = vecGet(Ast *,bb_dest->ast_array,i);
-        if (collect) {
-            bb_dest->ast_array->entries[new_size++] = ast;
-        } else {
-            if (astIsLabelMatch(ast,goto_label)) {
-                /* Start adding nodes now that we have seen the label */
-                collect = 1;
-                bb_dest->ast_array->entries[new_size++] = ast;
-            }
-        }
-    }
-    /* The entries pointer array will have nodes from the previous array and 
-     * possibly doubles, however we won't reach them as we truncate the vectors 
-     * size */
-    bb_dest->ast_array->size = new_size;
-}
+//static void cfgRemoveNodesBeforeLabel(BasicBlock *bb_dest, aoStr *goto_label) {
+//    int collect = 0;
+//    int new_size = 0;
+//    Ast *ast = bb_dest->ast_array->entries[0];
+//    /* If the first node in this block is the goto label we do not need 
+//     * to do anything */
+//    if (astIsLabelMatch(ast,goto_label)) return;
+//
+//    for (int i = 1; i < bb_dest->ast_array->size; ++i) {
+//        ast = vecGet(Ast *,bb_dest->ast_array,i);
+//        if (collect) {
+//            bb_dest->ast_array->entries[new_size++] = ast;
+//        } else {
+//            if (astIsLabelMatch(ast,goto_label)) {
+//                /* Start adding nodes now that we have seen the label */
+//                collect = 1;
+//                bb_dest->ast_array->entries[new_size++] = ast;
+//            }
+//        }
+//    }
+//    /* The entries pointer array will have nodes from the previous array and 
+//     * possibly doubles, however we won't reach them as we truncate the vectors 
+//     * size */
+//    bb_dest->ast_array->size = new_size;
+//}
 
 /* a lot of the code in this function is absolutely ridiculous, as 
  * what you can do with goto is absolutely ridiculous */
@@ -1216,14 +1218,14 @@ aoStr *cdfAdjacencyListToJSON(CFG *cfg) {
         while ((block_no = intSetNext(set_iter)) != HT_DELETED) {
             BasicBlock *bb = (BasicBlock *)intMapGet(cfg->no_to_block,block_no);
             aoStrCatPrintf(json,"%d",bb->block_no);
-            if (set_iter->idx + 1 != iset->size) {
+            if (set_iter->idx + 1 != (long)iset->size) {
                 aoStrCat(json,", ");
             }
         }
         intSetIteratorRelease(set_iter);
         aoStrCat(json,"]");
 
-        if (it->idx + 1 != it->map->size) {
+        if (it->idx + 1 != (long)it->map->size) {
             aoStrCat(json,",");
         }
         aoStrPutChar(json,'\n');
@@ -1435,7 +1437,7 @@ static IntSet *cfgCreateControlAdjacencyList(CFG *cfg, BasicBlock *bb) {
     }
 }
 
-static IntSet *cfgCreateGotoAdjacencyList(CFG *cfg, BasicBlock *bb) {
+static IntSet *cfgCreateGotoAdjacencyList(BasicBlock *bb) {
     IntSet *iset = intSetNew(8);
     if (bb->flags & BB_FLAG_GOTO_LOOP) {
         intSetAdd(iset,bb->prev->block_no);
@@ -1447,7 +1449,7 @@ static IntSet *cfgCreateGotoAdjacencyList(CFG *cfg, BasicBlock *bb) {
     return iset;
 }
 
-static IntSet *cfgCreateBranchAdjacencyList(CFG *cfg, BasicBlock *bb) {
+static IntSet *cfgCreateBranchAdjacencyList(BasicBlock *bb) {
     IntSet *iset = intSetNew(8);
     intSetAdd(iset,bb->_if->block_no);
     intSetAdd(iset,bb->_else->block_no);
@@ -1456,7 +1458,7 @@ static IntSet *cfgCreateBranchAdjacencyList(CFG *cfg, BasicBlock *bb) {
     return iset;
 }
 
-static IntSet *cfgCreateContinueAdjacencyList(CFG *cfg, BasicBlock *bb) {
+static IntSet *cfgCreateContinueAdjacencyList(BasicBlock *bb) {
     IntSet *iset = intSetNew(8);
     BasicBlock *loop_head = bb->prev;
 
@@ -1478,7 +1480,7 @@ static IntSet *cfgCreateContinueAdjacencyList(CFG *cfg, BasicBlock *bb) {
     return iset;
 }
 
-static IntSet *cfgCreateLoopAdjacencyList(CFG *cfg, BasicBlock *bb) {
+static IntSet *cfgCreateLoopAdjacencyList(BasicBlock *bb) {
     IntSet *iset = intSetNew(8);
     BasicBlock *loop_head = bb->prev;
     intSetAdd(iset,loop_head->block_no);
@@ -1486,7 +1488,7 @@ static IntSet *cfgCreateLoopAdjacencyList(CFG *cfg, BasicBlock *bb) {
     return iset;
 }
 
-static IntSet *cfgCreateDoWhileAdjacencyList(CFG *cfg, BasicBlock *bb) {
+static IntSet *cfgCreateDoWhileAdjacencyList(BasicBlock *bb) {
     IntSet *iset = intSetNew(16);
     BasicBlock *loop_head = bb->prev;
     bbAddPrev(loop_head,bb);
@@ -1532,22 +1534,22 @@ void cfgBuildAdjacencyList(CFG *cfg) {
                 if (!iset) continue;
                 break;
             case BB_GOTO:
-                iset = cfgCreateGotoAdjacencyList(cfg,bb); 
+                iset = cfgCreateGotoAdjacencyList(bb); 
                 break;
             case BB_BRANCH_BLOCK:
-                iset = cfgCreateBranchAdjacencyList(cfg,bb);
+                iset = cfgCreateBranchAdjacencyList(bb);
                 break;
             case BB_SWITCH:
                 iset = cfgCreateSwitchAdjacencyList(cfg,bb);
                 break;
             case BB_CONTINUE:
-                iset = cfgCreateContinueAdjacencyList(cfg,bb);
+                iset = cfgCreateContinueAdjacencyList(bb);
                 break;
             case BB_LOOP_BLOCK:
-                iset = cfgCreateLoopAdjacencyList(cfg,bb);
+                iset = cfgCreateLoopAdjacencyList(bb);
                 break;
             case BB_DO_WHILE_COND:
-                iset = cfgCreateDoWhileAdjacencyList(cfg,bb);
+                iset = cfgCreateDoWhileAdjacencyList(bb);
                 break;
 
             default:

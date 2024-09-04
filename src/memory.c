@@ -38,7 +38,7 @@ static void *memPoolEntriesNew(MemoryPool *pool) {
         long idx = i + pool->idx_start;
         void *entry = (void *)((char *)entries + i * entry_size);
         *((long*)entry) = idx;
-        if (pool->init_memory) pool->init_memory(entry+MEM_PREFIX);
+        if (pool->init_memory) pool->init_memory((char *)entry+MEM_PREFIX);
         intVecPush(pool->free_indexes,idx);
     }
     return entries;
@@ -84,7 +84,7 @@ static void *memPoolGetMemory(MemoryPool *pool, long entry_no) {
     void *entries = vecGet(void*,pool->mem_pool_entries,
             mem_pool_entries_idx);    
     long idx = entry_idx * entry_size;
-    return (void *)(entries + idx + MEM_PREFIX);
+    return (void *)((char *)entries + idx + MEM_PREFIX);
 }
 
 static void memPoolResize(MemoryPool *pool) {
@@ -111,7 +111,7 @@ void *memPoolAlloc(MemoryPool *pool) {
 
 void memPoolFree(MemoryPool *pool, void *ptr) {
     if (ptr) {
-        long idx = *((long *)(ptr - MEM_PREFIX));
+        long idx = *((long *)((char *)ptr - MEM_PREFIX));
         intVecPush(pool->free_indexes,idx);
     }
 }

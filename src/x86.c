@@ -267,7 +267,7 @@ void asmGSave(aoStr *buf, char *name, AstType *type, int offset) {
 void asmPlaceString(aoStr *buf, aoStr *str, int offset) {
     int i = 0;
     /* Place string on the stack character by character */
-    for (; i < str->len; ++i) {
+    for (; i < (int)str->len; ++i) {
         aoStrCatPrintf(buf,"movb   $%d, %d(%%rbp)\n\t",
                 (int)str->data[i], 
                 -(offset - i));
@@ -939,6 +939,7 @@ int asmShouldReverseMaths(Ast *RHS) {
 }
 
 void asmBinOpFunctionAssign(Cctrl *cc, aoStr *buf, Ast *fnptr, Ast *fn) {
+    (void)cc;
     char *normalised;
     switch (fn->kind) {
         case AST_FUNC:
@@ -2171,6 +2172,7 @@ void asmGetRegisterCounts(List *params, int *ireg, int *freg) {
 }
 
 int asmSaveRegisters(Cctrl *cc, aoStr *buf) {
+    (void)cc;
     static const int save_size = 176;
     aoStrCatPrintf(buf,
             "subq    $%d, %%rsp\n\t"
@@ -2193,6 +2195,7 @@ int asmSaveRegisters(Cctrl *cc, aoStr *buf) {
 }
 
 int asmFunctionInit(Cctrl *cc, aoStr *buf, Ast *func) {
+    (void)cc;
     int offset = 0;
     int ireg = 0, freg = 0, locals = 0, arg = 2;
     Ast *ast_tmp = NULL;

@@ -10,7 +10,7 @@
 #include "util.h"
 
 void setAllLongs(long *array, unsigned long len, long value) {
-    for (long i = 0; i < len; ++i) {
+    for (unsigned long i = 0; i < len; ++i) {
         array[i] = value;
     }
 }
@@ -251,7 +251,7 @@ void intMapClear(IntMap *map) {
 void intMapRelease(IntMap *map) { // free the entire hashtable
     if (map) {
         void (*free_value)(void *value) = map->_free_value;
-        for (long i = 0; i < map->capacity; ++i) {
+        for (unsigned long i = 0; i < map->capacity; ++i) {
             IntMapNode *n = map->entries[i];
             if (n) {
                 if (free_value)
@@ -539,7 +539,7 @@ void strMapRelease(StrMap *map) { // free the entire hashtable
     if (map) {
         void (*free_value)(void *_val) = map->_free_value;
         void (*free_key)(void *_key) = map->_free_key;
-        for (long i = 0; i < map->capacity; ++i) {
+        for (unsigned long i = 0; i < map->capacity; ++i) {
             StrMapNode *n = map->entries[i];
             if (n) {
                 if (free_value)
@@ -590,7 +590,7 @@ int strMapResize(StrMap *map) {
      * the hashtable which 'dict.c' has to do on a resize thus this should in
      * theory be faster, but there are more array lookups however they should 
      * have good spatial locality */
-    for (long i = 0; i < map->size; ++i) {
+    for (unsigned long i = 0; i < map->size; ++i) {
         long idx = old_index_entries[i];
         StrMapNode *old = old_entries[idx];
         if (old->key != NULL) {

@@ -80,7 +80,7 @@ List *compileToTokens(Cctrl *cc, char *entrypath, int lexer_flags) {
     tokens = listNew();
     builtin_path = aoStrDupRaw("/usr/local/include/tos.HH",25); //aoStrNew();
 
-    lexInit(&l,NULL,CCF_PRE_PROC);
+    lexInit(&l,NULL,lexer_flags);
     l.seen_files = seen_files;
     l.lineno = 1;
     lexSetBuiltinRoot(&l,"/usr/local/include/");
@@ -106,7 +106,7 @@ int compileToAst(Cctrl *cc, char *entrypath, int lexer_flags) {
     tokens = listNew();
     builtin_path = aoStrDupRaw("/usr/local/include/tos.HH",25); //aoStrNew();
 
-    lexInit(&l,NULL,CCF_PRE_PROC);
+    lexInit(&l,NULL,lexer_flags);
     l.seen_files = seen_files;
     l.lineno = 1;
     lexSetBuiltinRoot(&l,"/usr/local/include/");

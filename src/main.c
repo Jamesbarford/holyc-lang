@@ -158,11 +158,6 @@ void getASMFileName(hccOpts *opts, char *file_name) {
     opts->infile_no_ext = infile_no_ext;
 }
 
-void execGcc(char *filename, aoStr *asmbuf, aoStr *cmd) {
-    printf("%s\n", cmd->data);
-    system(cmd->data);
-}
-
 int writeAsmToTmp(aoStr *asmbuf) {
     int fd;
     ssize_t written = 0;

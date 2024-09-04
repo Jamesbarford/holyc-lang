@@ -110,7 +110,7 @@ void parseFlattenAnnonymous(AstType *anon, Dict *fields_dict,
         int offset, int make_copy)
 {
     AstType *base, *type;
-    for (int i = 0; i < anon->fields->capacity; ++i) {
+    for (int i = 0; i < (int)anon->fields->capacity; ++i) {
         for (DictNode *dn = anon->fields->body[i]; dn; dn = dn->next) {
             base = (AstType *)dn->val;
             if (make_copy) {
@@ -227,8 +227,8 @@ unsigned int CalcUnionSize(List *fields) {
     AstType *type;
     listForEach(fields) {
         type = it->value;
-        if (max < type->size) {
-            max = type->size;
+        if (max < (unsigned int)type->size) {
+            max = (unsigned int)type->size;
         }
     }
     return max;
