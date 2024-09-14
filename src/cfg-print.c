@@ -713,7 +713,9 @@ void cfgBuilderWriteToFile(CfgGraphVizBuilder *builder, char *filename) {
         loggerPanic("Failed to open file '%s': %s\n",
                 filename,strerror(errno));
     }
-    assert(write(fd,cfg_string->data,cfg_string->len) == cfg_string->len);
+
+    int written = write(fd, cfg_string->data, cfg_string->len);
+    assert(written == cfg_string->len);
     fsync(fd);
     close(fd);
     aoStrRelease(cfg_string);

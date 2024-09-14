@@ -687,6 +687,11 @@ static void cfgHandleDoWhileLoop(CFGBuilder *builder, Ast *ast) {
     bbSetPrevPtr(bb_do_cond,bb_do_body);
     bbSetLoopEnd(bb_do_cond);
 
+
+    BasicBlock *bb_do_while_next = cfgBuilderAllocBasicBlock(builder,
+            BB_CONTROL_BLOCK, 0);
+    bb_do_cond->next = bb_do_while_next;
+
     cfgBuilderSetBlock(builder,bb_do_cond);
     cfgHandleAstNode(builder,ast_cond);
 
@@ -694,6 +699,9 @@ static void cfgHandleDoWhileLoop(CFGBuilder *builder, Ast *ast) {
         builder->flags &= ~(CFG_BUILDER_FLAG_IN_LOOP);
     }
 
+    bbAddPrev(bb_do_while_next, bb_do_cond);
+    bbSetPrevPtr(bb_do_while_next, bb_do_cond);
+    cfgBuilderSetBlock(builder, bb_do_while_next);
     builder->bb_cur_loop = bb_prev_loop;
 }
 
