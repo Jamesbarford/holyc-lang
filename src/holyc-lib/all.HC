@@ -14,4 +14,6 @@
 #include "./fzf.HC"
 #include "./json.HC"
 #include "./net.HC"
-#include "./sqllite.HC"
+#ifdef __HCC_LINK_SQLITE3__ 
+  #include "./sqllite.HC"
+#endif

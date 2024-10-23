@@ -21,6 +21,14 @@
 #define LIB_PATH "/usr/local/lib"
 #define LIB_BUFSIZ 256
 
+#define CLIBS_BASE "-lpthread -ltos -lc -lm"
+
+#ifdef HCC_LINK_SQLITE3
+#define CLIBS CLIBS_BASE" -lsqlite3"
+#else
+#define CLIBS CLIBS_BASE
+#endif
+
 typedef struct hccOpts {
     int print_ast;
     int print_tokens;
@@ -58,7 +66,7 @@ typedef struct hccLib {
 } hccLib;
 
 char *getVersion(void) {
-    return "0.0.1";
+    return "0.0.2";
 }
 
 int hccLibInit(hccLib *lib, hccOpts *opts, char *name) { 
@@ -71,7 +79,7 @@ int hccLibInit(hccLib *lib, hccOpts *opts, char *name) {
     snprintf(lib->dylib_name,LIB_BUFSIZ,"%s.dylib",name);
     snprintf(lib->dylib_version_name,LIB_BUFSIZ,"%s.0.0.1.dylib",name);
     aoStrCatPrintf(
-            dylibcmd, "cc -dynamiclib -Wl,-install_name,%s/%s -o %s -lpthread -lsqlite3 -lc -lm",
+            dylibcmd, "cc -dynamiclib -Wl,-install_name,%s/%s -o %s "CLIBS,
             LIB_PATH, name, lib->dylib_version_name,lib->dylib_name);
     aoStrCatPrintf(installcmd,
             "cp -pPR ./%s /usr/local/lib/lib%s && "
@@ -85,7 +93,7 @@ int hccLibInit(hccLib *lib, hccOpts *opts, char *name) {
     snprintf(lib->dylib_name,LIB_BUFSIZ,"%s.so",name);
     snprintf(lib->dylib_version_name,LIB_BUFSIZ,"%s.so.0.0.1",name);
     aoStrCatPrintf(
-            dylibcmd, "gcc -fPIC -shared -Wl,-soname,%s/%s -o %s -lpthread -lsqlite3 -lc -lm",
+            dylibcmd, "gcc -fPIC -shared -Wl,-soname,%s/%s -o %s "CLIBS,
             LIB_PATH,name,lib->dylib_name,lib->dylib_name);
     aoStrCatPrintf(installcmd,
             "cp -pPR ./%s /usr/local/lib/lib%s",
@@ -200,7 +208,7 @@ void emitFile(aoStr *asmbuf, hccOpts *opts) {
     hccLib lib;
     if (opts->emit_object) {
         writeAsmToTmp(asmbuf);
-        aoStrCatPrintf(cmd, "gcc -c %s -lpthread -ltos -lsqlite3 -lc -lm %s -o ./%s",
+        aoStrCatPrintf(cmd, "gcc -c %s "CLIBS" %s -o ./%s",
                 ASM_TMP_FILE,opts->clibs,opts->obj_outfile);
         system(cmd->data);
     } else if (opts->asm_outfile && opts->assemble_only) {
@@ -227,10 +235,10 @@ void emitFile(aoStr *asmbuf, hccOpts *opts) {
     } else {
         writeAsmToTmp(asmbuf);
         if (opts->clibs) {
-            aoStrCatPrintf(cmd, "gcc -L/usr/local/lib %s -lpthread -ltos -lsqlite3 %s -lc -lm -o %s", 
+            aoStrCatPrintf(cmd, "gcc -L/usr/local/lib %s %s "CLIBS" -o %s", 
                     ASM_TMP_FILE,opts->clibs,opts->output_filename);
         } else {
-            aoStrCatPrintf(cmd, "gcc -L/usr/local/lib %s -lpthread -ltos -lsqlite3 -lc -lm -o %s", 
+            aoStrCatPrintf(cmd, "gcc -L/usr/local/lib %s "CLIBS" -o %s", 
                     ASM_TMP_FILE, opts->output_filename);
         }
         system(cmd->data);
@@ -251,7 +259,7 @@ void emitFile(aoStr *asmbuf, hccOpts *opts) {
 
 void usage(void) {
     fprintf(stderr,
-            "HolyC Compiler 2024. UNSTABLE\n"
+            "HolyC Compiler 2024. %s UNSTABLE\n"
             "hcc [..OPTIONS] <..file>\n\n"
             "OPTIONS:\n"
             "  -ast     Print the ast and exit\n"
@@ -267,7 +275,8 @@ void usage(void) {
             "  -run     Immediately run the file (not JIT)\n"
             "  -g       Not implemented\n"
             "  -D<var>  Set a compiler #define (does not accept a value)\n"
-            "  --help   Print this message\n");
+            "  --help   Print this message\n",
+            getVersion());
     exit(1);
 }
 

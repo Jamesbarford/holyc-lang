@@ -92,6 +92,9 @@ make -C ./build install
 ```
 This will install the compiler and holyc libraries for strings, hashtables, 
 I/O, maths, networking, JSON parsing etc... see ./src/holyc-lib/.
+
+If you would like to include `sqlite3` then please add `-DHCC_LINK_SQLITE3=1`
+to either the Makefile or when configuring cmake.
  
 ## Using the compiler
 Once the compiler has been compiled the following options are available, they 

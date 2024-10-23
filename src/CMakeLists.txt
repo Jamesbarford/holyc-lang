@@ -20,6 +20,10 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address")
 endif()
 
+if (HCC_LINK_SQLITE3)
+    add_compile_definitions(HCC_LINK_SQLITE3)
+endif()
+
 # Optionally, add more flags or options depending on the build type
 # For example, optimization flags for Release builds:
 set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O2")
@@ -86,4 +90,8 @@ install(TARGETS hcc DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
 install(FILES ${CMAKE_SOURCE_DIR}/holyc-lib/tos.HH DESTINATION ${CMAKE_INSTALL_PREFIX}/include)
 
 # Custom installation step to run `hcc` during install
+#if (DEFINED HCC_LINK_SQLITE3)
+#    install(CODE "execute_process(COMMAND hcc -DHCC_LINK_SQLITE3 -lib tos ${CMAKE_SOURCE_DIR}/holyc-lib/all.HC WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/holyc-lib)")
+#else()
 install(CODE "execute_process(COMMAND hcc -lib tos ${CMAKE_SOURCE_DIR}/holyc-lib/all.HC WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/holyc-lib)")
+    #endif()

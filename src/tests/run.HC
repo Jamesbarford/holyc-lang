@@ -81,7 +81,15 @@ U0 QSortStrings(U8 **arr, I64 high, I64 low=0)
 
 Bool ShouldExclude(U8 *filename, I64 namelen)
 {
-  U8 *exclude[] = {"run.HC", "testhelper.HC", "tests.sh", "Makefile", "a.out",
+  U8 *exclude[] = {
+    "run.HC",
+    "testhelper.HC",
+    "tests.sh",
+    "Makefile",
+    "a.out",
+#ifndef __HCC_LINK_SQLITE3__
+    "32_sql.HC",
+#endif
     "test-runner"};
   auto len = sizeof(exclude)/sizeof(exclude[0]);
   for (auto i = 0; i < len; ++i) {

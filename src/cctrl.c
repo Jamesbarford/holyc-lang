@@ -117,6 +117,11 @@ static void cctrlAddBuiltinMacros(Cctrl *cc) {
     le->tk_type = TK_STR;
     dictSet(cc->macro_defs,"__TIMESTAMP__",le);
 
+#ifdef HCC_LINK_SQLITE3
+    le = lexemeSentinal();
+    dictSet(cc->macro_defs,"__HCC_LINK_SQLITE3__",le);
+#endif
+
     len = snprintf(version,bufsize,"v0.0.2-alpha");
     version[len] = '\0';
     le = lexemeNew(version,len);
