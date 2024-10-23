@@ -105,9 +105,6 @@ I/O, maths, networking, JSON parsing etc... see ./src/holyc-lib/.
 If you would like to include `sqlite3` then please add `-DHCC_LINK_SQLITE3=1`
 to either the Makefile or when configuring cmake.
 
-## Supported operating systems
-
- 
 ## Using the compiler
 Once the compiler has been compiled the following options are available, they 
 can be displayed by running `hcc --help`
