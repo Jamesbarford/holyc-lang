@@ -67,6 +67,15 @@ Thus most `x86_64` architectures should be supported. Creating an `IR` with
 some optimisations and compiling to `ARM` is high on the TODO list.
 
 ## Building
+### Operating Systems:
+*MacOS & Linux:*
+You should be able to follow the steps below to build and install the compiler.
+
+*Windows:*
+Please install [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) and 
+then follow the steps below:
+
+### Build Steps
 There is a Makefile at the root of the repository that wraps CMake, it provides:
 - `make`, will build the compiler
 - `make install` install the compile
@@ -95,7 +104,7 @@ I/O, maths, networking, JSON parsing etc... see ./src/holyc-lib/.
 
 If you would like to include `sqlite3` then please add `-DHCC_LINK_SQLITE3=1`
 to either the Makefile or when configuring cmake.
- 
+
 ## Using the compiler
 Once the compiler has been compiled the following options are available, they 
 can be displayed by running `hcc --help`
