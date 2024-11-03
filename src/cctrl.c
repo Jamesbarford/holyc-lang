@@ -62,7 +62,7 @@ static void cctrlAddBuiltinMacros(Cctrl *cc) {
     struct timeval tm;
     long milliseconds,len;
     time_t seconds;
-    char *date,*time,*time_stamp,*version;
+    char *date,*time,*time_stamp;
     long bufsize = sizeof(char)*128;
 
     le = lexemeSentinal();
@@ -91,7 +91,6 @@ static void cctrlAddBuiltinMacros(Cctrl *cc) {
     time = malloc(bufsize);
     date = malloc(bufsize);
     time_stamp = malloc(bufsize);
-    version = malloc(bufsize);
 
     len = snprintf(time,bufsize,"%02d:%02d:%02d",
             ptm->tm_hour,ptm->tm_min,ptm->tm_sec);
@@ -122,9 +121,7 @@ static void cctrlAddBuiltinMacros(Cctrl *cc) {
     dictSet(cc->macro_defs,"__HCC_LINK_SQLITE3__",le);
 #endif
 
-    len = snprintf(version,bufsize,"v0.0.2-alpha");
-    version[len] = '\0';
-    le = lexemeNew(version,len);
+    le = lexemeNew((char *)cctrlGetVersion(),len);
     le->tk_type = TK_STR;
     dictSet(cc->macro_defs,"__HCC_VERSION__",le);
 }

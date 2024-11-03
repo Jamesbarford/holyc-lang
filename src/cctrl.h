@@ -6,6 +6,12 @@
 #include "dict.h"
 #include "lexer.h"
 
+#define HCC_VERSION "beta-v0.0.4"
+
+static const char *cctrlGetVersion(void) {
+    return HCC_VERSION;
+}
+
 typedef struct TokenIter {
     /* All of the tokens */
     List *tokens;
