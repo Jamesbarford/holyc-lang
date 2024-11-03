@@ -65,10 +65,6 @@ typedef struct hccLib {
     char *install_cmd;
 } hccLib;
 
-char *getVersion(void) {
-    return "0.0.2";
-}
-
 int hccLibInit(hccLib *lib, hccOpts *opts, char *name) { 
     aoStr *dylibcmd = aoStrNew();
     aoStr *stylibcmd = aoStrNew();
@@ -276,7 +272,7 @@ void usage(void) {
             "  -g       Not implemented\n"
             "  -D<var>  Set a compiler #define (does not accept a value)\n"
             "  --help   Print this message\n",
-            getVersion());
+            cctrlGetVersion());
     exit(1);
 }
 
