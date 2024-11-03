@@ -21,7 +21,7 @@
 #define LIB_PATH "/usr/local/lib"
 #define LIB_BUFSIZ 256
 
-#define CLIBS_BASE "-lpthread -ltos -lc -lm"
+#define CLIBS_BASE "-ltos -lpthread  -lc -lm"
 
 #ifdef HCC_LINK_SQLITE3
 #define CLIBS CLIBS_BASE" -lsqlite3"
