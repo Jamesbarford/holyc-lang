@@ -334,7 +334,6 @@ char *lexemeToString(lexeme *tok) {
         case TK_PUNCT: {
             tmp = lexemePunctToString(tok->i64);
             aoStrCatPrintf(str,"TK_PUNCT      %s", tmp);
-            free(tmp);
             return aoStrMove(str);
         }
         case TK_I64:
