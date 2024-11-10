@@ -319,13 +319,12 @@ public U8 *IntMapToString(IntMap *map, U8 *(*stringify_value)(U0 *))
   auto buffer = StrPrint(NULL,"{");
   for (I64 i = 0; IntMapIter(map,&i,&entry);) {
     auto str_val = stringify_value(entry->value);
-    if ((i + 1) == map_size) {
+    if (i == map_size) {
       buffer = CatPrint(buffer, "[%ld] => %s}",entry->key,str_val);
     } else {
       buffer = CatPrint(buffer, "[%ld] => %s, ",entry->key,str_val);
     }
     Free(str_val);
-    i++;
   }
   return buffer;
 }
@@ -340,10 +339,10 @@ public U8 *IntMapKeysToString(IntMap *map)
   IntMapNode *entry = NULL;
   auto buffer = StrPrint(NULL,"{");
   for (I64 i = 0; IntMapIter(map,&i,&entry);) {
-    if ((i + 1) == map_size) {
-      buffer = CatPrint(buffer, "[%ld]}",entry->key);
+    if (i == map_size) {
+      buffer = CatPrint(buffer, "%ld}",entry->key);
     } else {
-      buffer = CatPrint(buffer, "[%ld], ",entry->key);
+      buffer = CatPrint(buffer, "%ld, ",entry->key);
     }
   }
   return buffer;
