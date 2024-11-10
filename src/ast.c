@@ -1169,7 +1169,7 @@ static char *astParamsToString(List *params) {
 
 static char *astFunctionToStringInternal(Ast *func, AstType *type) {
     aoStr *str = aoStrNew();
-    char *tmp,*strparams;
+    char *tmp,*strparams = NULL;
 
     tmp = astTypeToColorString(type);
     aoStrCatPrintf(str,"%s %s",tmp,func->fname->data);
@@ -1183,11 +1183,16 @@ static char *astFunctionToStringInternal(Ast *func, AstType *type) {
             break;
 
         case AST_FUNC:
+        case AST_FUN_PROTO:
             strparams = astParamsToString(func->params);
             break;
     }
 
-    aoStrCatPrintf(str,"(%s)",strparams);
+    if (strparams) {
+        aoStrCatPrintf(str,"(%s)",strparams);
+    } else {
+        aoStrCatPrintf(str,"(U0)");
+    }
     return aoStrMove(str);
 }
 
