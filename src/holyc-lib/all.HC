@@ -5,6 +5,7 @@
 #include "./date.HC"
 #include "./io.HC"
 #include "./strings.HC"
+#include "./vector.HC"
 #include "./list.HC"
 #include "./threads.HC"
 #include "./csv.HC"
