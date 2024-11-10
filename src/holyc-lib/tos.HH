@@ -133,6 +133,49 @@ public CDate Now();
 #define HT_PROBE_1 1
 #define HT_PROBE_3 3
 
+public class IntVec
+{
+  I64 size;
+  I64 *entries;
+};
+
+public class PtrVec
+{
+  I64 size;
+  U0 **entries;
+};
+
+public class FloatVec 
+{
+  I64 size;
+  F64 *entries;
+};
+
+public FloatVec *FloatVecNew(U0);
+public U64 FloatVecCapacity(IntVec *vec);
+public U0 FloatVecPush(FloatVec *vec, F64 value);
+public F64 FloatVecPop(FloatVec *vec, Bool *_ok);
+public F64 FloatVecGet(FloatVec *vec, I64 idx);
+public U0 FloatVecClear(FloatVec *vec);
+public U0 FloatVecRelease(FloatVec *vec);
+
+public IntVec *IntVecNew(U0);
+public U64 IntVecCapacity(IntVec *vec);
+public U0 IntVecPush(IntVec *vec, I64 value);
+public I64 IntVecPop(IntVec *vec, Bool *_ok);
+public I64 IntVecGet(IntVec *vec, I64 idx);
+public I64 IntVecClear(IntVec *vec);
+public I64 IntVecRelease(IntVec *vec);
+
+public PtrVec *PtrVecNew(U0);
+public U64 PtrVecCapacity(IntVec *vec);
+public U0 PtrVecPush(PtrVec *vec, U0 *value);
+public U0 *PtrVecPop(PtrVec *vec, Bool *_ok);
+public U0 *PtrVecGet(PtrVec *vec, I64 idx);
+public I64 PtrVecClear(PtrVec *vec);
+public I64 PtrVecRelease(PtrVec *vec);
+
+
 public class IntMapNode
 {
   I64 key;
@@ -152,7 +195,7 @@ public class IntMap
   U64 capacity; /* How much capacity we have in the entries array */
   U64 mask;     /* Used for hashing, as the capacity is always a power of 2
                  * we can use fast modulo of `<int> & capacity-1`. */
-  I64 *indexes; /* Where all of the values are in the entries array, in 
+  IntVec *indexes; /* Where all of the values are in the entries array, in 
                  * insertion order. Means we can iterate over the HashTable 
                  * quickly at the cost of memory */
   U64 threashold; /* rebuild threashold */
@@ -167,7 +210,7 @@ public class StrMap
   U64 capacity; /* How much capacity we have in the entries array */
   U64 mask;     /* Used for hashing, as the capacity is always a power of 2
                  * we can use fast modulo of `<int> & capacity-1`. */
-  I64 *indexes; /* Where all of the values are in the entries array, in 
+  IntVec *indexes; /* Where all of the values are in the entries array, in 
                  * insertion order. Means we can iterate over the HashTable 
                  * quickly at the cost of memory */
   U64 threashold; /* rebuild threashold */
@@ -176,10 +219,12 @@ public class StrMap
   StrMapNode **entries; /* All of the entries, XXX: could this be IntMapNode *entries? */
 };
 
-public Bool StrMapSet(StrMap *map, U8 *key, U0 *value);
-public Bool StrMapHas(StrMap *map, U8 *key);
-public U0 *StrMapGet(StrMap *map, U8 *key);
 public StrMap *StrMapNew(U64 capacity = 1 << 8);
+public Bool StrMapSet(StrMap *map, U8 *key, U0 *value);
+public Bool StrMapHasLen(StrMap *map, U8 *key, I64 key_len);
+public Bool StrMapHas(StrMap *map, U8 *key);
+public U0 *StrMapGetLen(StrMap *map, U8 *key, I64 key_len);
+public U0 *StrMapGet(StrMap *map, U8 *key);
 public U0 StrMapSetFreeValue(StrMap *map, U0 (*_free_value)(U0 *value));
 public U0 StrMapSetFreeKey(StrMap *map, U0 (*_free_key)(U0 *key));
 public U0 StrMapRelease(StrMap *map);
@@ -187,6 +232,9 @@ public Bool StrMapResize(StrMap *map, U64 size);
 public Bool StrMapIter(StrMap *map, I64 *_idx, StrMapNode **_node);
 public Bool StrMapValueIter(StrMap *map, I64 *_idx, U0 **_value);
 public Bool StrMapKeyIter(StrMap *map, I64 *_idx, U8 **_key);
+public U8 *StrMapToString(StrMap *map, U8 *(*stringify_value)(U0 *));
+public U8 *StrMapKeysToString(StrMap *map);
+
 
 public Bool IntMapSet(IntMap *map, I64 key, U0 *value);
 public Bool IntMapHas(IntMap *map, I64 key);
@@ -198,6 +246,8 @@ public Bool IntMapResize(IntMap *map, U64 size);
 public Bool IntMapIter(IntMap *map, I64 *_idx, IntMapNode **_node);
 public Bool IntMapValueIter(IntMap *map, I64 *_idx, U0 **_value);
 public Bool IntMapKeyIter(IntMap *map, I64 *_idx, I64 *_key);
+public U8 *IntMapToString(IntMap *map, U8 *(*stringify_value)(U0 *));
+public U8 *IntMapKeysToString(IntMap *map);
 
 /* THREADS ==========*/
 #ifdef IS_MACOS
@@ -545,7 +595,7 @@ public I64 I64ToStr(U8 *buf, I64 num, Bool *_is_neg = NULL, I64 _len = 5000);
 public U64 U64ToStr(U8 *dst, U64 num, I64 len = 5000);
 public U8 *StrMergeJoin(I64 argc, U64 *argv);
 public U8 *StrMerge(...);
-public U8 *StrPrint(U8 *dst, U8 *fmt, ...);
+public U8 *StrPrint(U8 *dst=NULL, U8 *fmt, ...);
 public U8 *StrPrintJoin(U8 *_dst, U8 *fmt, I64 argc, I64 *argv);
 public U8 *MPrintDate(CDate cdt);
 public U8 *MPrintTime(CDate cdt);

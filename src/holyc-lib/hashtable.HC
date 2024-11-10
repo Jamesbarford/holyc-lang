@@ -2,6 +2,7 @@
 #include "./memory.HC"
 #include "./system.HC"
 #include "./strings.HC"
+#include "./vector.HC"
 
 #define HT_LOAD 0.60
 #define HT_DELETED 0x7fffffffffffffff
@@ -27,9 +28,9 @@ public class IntMap
   U64 capacity; /* How much capacity we have in the entries array */
   U64 mask;     /* Used for hashing, as the capacity is always a power of 2
                  * we can use fast modulo of `<int> & capacity-1`. */
-  I64 *indexes; /* Where all of the values are in the entries array, in 
-                 * insertion order. Means we can iterate over the HashTable 
-                 * quickly at the cost of memory */
+  IntVec *indexes; /* Where all of the values are in the entries array, in 
+                    * insertion order. Means we can iterate over the HashTable 
+                    * quickly at the cost of memory */
   U64 threashold; /* rebuild threashold */
   U0 (*_free_value)(U0 *value); /* User defined callback for freeing values */
   IntMapNode **entries; /* All of the entries, XXX: could this be IntMapNode *entries? */
@@ -41,7 +42,7 @@ public class StrMap
   U64 capacity; /* How much capacity we have in the entries array */
   U64 mask;     /* Used for hashing, as the capacity is always a power of 2
                  * we can use fast modulo of `<int> & capacity-1`. */
-  I64 *indexes; /* Where all of the values are in the entries array, in 
+  IntVec *indexes; /* Where all of the values are in the entries array, in 
                  * insertion order. Means we can iterate over the HashTable 
                  * quickly at the cost of memory */
   U64 threashold; /* rebuild threashold */
@@ -81,7 +82,7 @@ IntMap *IntMapNew(U64 capacity)
   map->capacity = RoundUpToNextPowerOf2(capacity);
   map->mask = capacity-1;
   map->size = 0;
-  map->indexes = CAlloc(sizeof(I64) * capacity);
+  map->indexes = IntVecNew();
   map->threashold = (HT_LOAD * capacity)(U64);
   map->_free_value = NULL;
   map->entries = CAlloc(capacity * sizeof(IntMapNode *));
@@ -101,13 +102,30 @@ IntMapNode *IntMapNodeNew(I64 key, U0 *value)
   return n;
 }
 
+static U64 IntMapGetIdx(IntMap *map, I64 key)
+{
+  U64 idx = IntMapHashFunction(key, map->mask); 
+  U64 mask = map->mask;
+  U64 probe = 1;
+  IntMapNode **entries = map->entries;
+  IntMapNode *cur;
+
+  while ((cur = entries[idx])) {
+    if (cur->key == key) {
+      return idx;
+    }
+    idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
+    probe++;
+  }
+  return HT_DELETED;
+}
+
 static U64 IntMapGetNextIdx(IntMap *map, I64 key, Bool *_is_free)
 {// Finds the next avalible slot and marks it in the bit vector as set
   U64 mask = map->mask;
   U64 idx = key & mask;
   U64 probe = 1;
   IntMapNode *cur;
-  *_is_free = FALSE;
 
   while ((cur = map->entries[idx]) != NULL) {
     if (cur->key == key || cur->key == HT_DELETED) {
@@ -124,36 +142,41 @@ static U64 IntMapGetNextIdx(IntMap *map, I64 key, Bool *_is_free)
 U0 IntMapRelease(IntMap *map)
 {// free the entire hashtable
   if (map) {
+    auto indexes = map->indexes;
     U0 (*free_value)(U0 *value) = map->_free_value;
     for (auto i = 0; i < map->capacity; ++i) {
       auto n = map->entries[i];
       if (n) {
-        if (free_value) free_value(n->value);
+        if (free_value) {
+          free_value(n->value);
+        }
         Free(n);
       }
     }
+    IntVecRelease(indexes);
     Free(map->entries);
-    Free(map->indexes);
     Free(map);
   }
 }
 
 public Bool IntMapResize(IntMap *map, U64 size)
 {// Resize the hashtable, will return false if OMM
-  U64 new_capacity,old_capacity,new_mask,old_mask;
+  U64 new_capacity,new_mask,old_mask;
   IntMapNode **new_entries, **old_entries;
   Bool is_free = 0;
   I64 *new_indexes, *old_indexes, new_size;
+  auto indexes_capacity = IntVecCapacity(map->indexes);
+  auto indexes_size = map->indexes->size;
 
   old_entries = map->entries;
   old_mask = map->mask;
-  old_indexes = map->indexes;
+  old_indexes = map->indexes->entries;
 
   new_capacity = map->capacity << 1;
   new_mask = new_capacity - 1;
 
   /* OOM */
-  if ((new_indexes = CAlloc(new_capacity * sizeof(I64))) == NULL) {
+  if ((new_indexes = CAlloc(indexes_capacity * sizeof(I64))) == NULL) {
     return FALSE;
   }
 
@@ -165,12 +188,11 @@ public Bool IntMapResize(IntMap *map, U64 size)
 
   map->mask = new_mask;
   map->entries = new_entries;
-  map->indexes = new_indexes;
   map->capacity = new_capacity;
   new_size = 0;
 
-  for (auto i = 0; i < map->size; ++i) {
-    auto idx = old_indexes[i];
+  for (U64 i = 0; i < indexes_size; ++i) {
+    I64 idx = old_indexes[i];
     auto old = old_entries[idx];
     if (old->key != HT_DELETED) {
       auto new_idx = IntMapGetNextIdx(map,old->key,&is_free);
@@ -184,7 +206,11 @@ public Bool IntMapResize(IntMap *map, U64 size)
 
   Free(old_entries);
   Free(old_indexes);
+  map->indexes->size = new_size;
+  map->indexes->entries = new_indexes;
+
   map->threashold = (new_capacity * HT_LOAD)(U64);
+  map->entries = new_entries;
   map->size = new_size;
   return TRUE;
 }
@@ -203,7 +229,7 @@ auto IntMapSet(IntMap *map, I64 key, U0 *value)
   U64 idx = IntMapGetNextIdx(map,key,&is_free);
   if (is_free) {
     auto n = IntMapNodeNew(key,value); 
-    map->indexes[map->size] = idx;
+    IntVecPush(map->indexes,idx);
     map->entries[idx] = n;
     map->size++;
     return TRUE;
@@ -217,56 +243,30 @@ auto IntMapSet(IntMap *map, I64 key, U0 *value)
 
 public Bool IntMapDelete(IntMap *map, I64 key)
 {
-  U64 idx,mask,probe;
-  IntMapNode **entries = map->entries;
-  IntMapNode *cur;
-  mask = map->mask;
-  idx = IntMapHashFunction(key,mask);
-  probe = 1;
-  while ((cur = entries[idx])) {
-    if (cur->key == key) {
-      cur->key = HT_DELETED;
-      map->indexes[idx] = HT_DELETED;
-      map->size--;
-      return TRUE;
+  auto idx = IntMapGetIdx(map,key);
+  if (idx != HT_DELETED) {
+    auto n = map->entries[idx];
+    if (map->_free_value) {
+      map->_free_value(n->value);
     }
-    idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-    probe++;
+    n->key = HT_DELETED;
+    map->size--;
+    return TRUE;
   }
   return FALSE;
 }
 
 public Bool IntMapHas(IntMap *map, I64 key)
 {
-  U64 idx, mask, probe;
-  IntMapNode **entries = map->entries;
-  IntMapNode *cur;
-  mask = map->mask;
-  probe = 1;
-  idx = IntMapHashFunction(key,mask);
-  while ((cur = entries[idx])) {
-    if (cur->key == key) return TRUE;
-    idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-    probe++;
-  }
-  return FALSE;
+  auto idx = IntMapGetIdx(map,key);
+  return idx != HT_DELETED;
 }
 
 public U0 *IntMapGet(IntMap *map, I64 key)
 {
-  U64 idx, mask, probe;
-  IntMapNode **entries = map->entries;
-  IntMapNode *cur;
-
-  mask = map->mask;
-  probe = 1;
-  idx = IntMapHashFunction(key,mask);
-  while ((cur = entries[idx])) {
-    if (cur->key == key) {
-      return cur->value;
-    }
-    idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-    probe++;
+  auto idx = IntMapGetIdx(map,key);
+  if (idx != HT_DELETED) {
+    return map->entries[idx]->value;
   }
   return NULL;
 }
@@ -274,8 +274,10 @@ public U0 *IntMapGet(IntMap *map, I64 key)
 public Bool IntMapIter(IntMap *map, I64 *_idx, IntMapNode **_node)
 {
   I64 idx = *_idx;
-  while (idx < map->size) {
-    I64 index = map->indexes[idx];
+  auto indexes = map->indexes->entries;
+
+  while (idx < map->indexes->size) {
+    I64 index = indexes[idx];
     if (index != HT_DELETED) {
       *_idx = idx + 1;
       *_node = map->entries[index];
@@ -306,6 +308,48 @@ public Bool IntMapKeyIter(IntMap *map, I64 *_idx, I64 *_key)
   return FALSE;
 }
 
+public U8 *IntMapToString(IntMap *map, U8 *(*stringify_value)(U0 *))
+{
+  auto map_size = map->size;
+  if (map_size == 0) {
+    return StrPrint(NULL,"{}");
+  }
+
+  IntMapNode *entry = NULL;
+  auto buffer = StrPrint(NULL,"{");
+  for (I64 i = 0; IntMapIter(map,&i,&entry);) {
+    auto str_val = stringify_value(entry->value);
+    if ((i + 1) == map_size) {
+      buffer = CatPrint(buffer, "[%ld] => %s}",entry->key,str_val);
+    } else {
+      buffer = CatPrint(buffer, "[%ld] => %s, ",entry->key,str_val);
+    }
+    Free(str_val);
+    i++;
+  }
+  return buffer;
+}
+
+public U8 *IntMapKeysToString(IntMap *map)
+{
+  auto map_size = map->size;
+  if (map_size == 0) {
+    return StrPrint(NULL,"{}");
+  }
+
+  IntMapNode *entry = NULL;
+  auto buffer = StrPrint(NULL,"{");
+  for (I64 i = 0; IntMapIter(map,&i,&entry);) {
+    if ((i + 1) == map_size) {
+      buffer = CatPrint(buffer, "[%ld]}",entry->key);
+    } else {
+      buffer = CatPrint(buffer, "[%ld], ",entry->key);
+    }
+  }
+  return buffer;
+}
+
+
 public Bool StrMapSet(StrMap *map, I64 key, U0 *value);
 public StrMap *StrMapNew(U64 capacity=1<<8);
 public U0 StrMapSetFreeValue(StrMap *map, U0 (*_free_value)(U0 *value));
@@ -319,7 +363,7 @@ StrMap *StrMapNew(U64 capacity)
   map->capacity = RoundUpToNextPowerOf2(capacity);
   map->mask = capacity-1;
   map->size = 0;
-  map->indexes = CAlloc(capacity * sizeof(I64));
+  map->indexes = IntVecNew();
   map->threashold = (HT_LOAD * capacity)(U64);
   map->_free_value = NULL;
   map->_free_key = NULL;
@@ -368,6 +412,24 @@ static U64 StrMapGetNextIdx(StrMap *map, U8 *key, I64 key_len, Bool *_is_free)
   return idx;
 }
 
+static I64 StrMapGetIdx(StrMap *map, U8 *key, I64 key_len)
+{
+  auto mask = map->mask;
+  auto probe = 1;
+  auto idx = StrHash(key) & mask;
+  StrMapNode **entries = map->entries;
+  StrMapNode *cur;
+
+  while ((cur = entries[idx]) != NULL) {
+    if (cur->key_len == key_len && !StrNCmp(cur->key, key, key_len)) {
+      return idx;
+    }
+    idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
+    probe++;
+  }
+  return HT_DELETED;
+}
+
 U0 StrMapRelease(StrMap *map)
 {// free the entire hashtable
   if (map) {
@@ -389,20 +451,22 @@ U0 StrMapRelease(StrMap *map)
 
 public Bool StrMapResize(StrMap *map, U64 size)
 {// Resize the hashtable, will return false if OMM
-  U64 new_capacity,old_capacity,new_mask,old_mask;
+  U64 new_capacity,new_mask,old_mask;
   StrMapNode **new_entries, **old_entries;
   I64 *new_indexes, *old_indexes;
-  Bool is_free;
+  Bool is_free = FALSE;
+  auto indexes_capacity = IntVecCapacity(map->indexes);
+  auto indexes_size = map->indexes->size;
 
   old_entries = map->entries;
   old_mask = map->mask;
-  old_capacity = map->capacity;
-  old_indexes = map->indexes;
+  old_indexes = map->indexes->entries;
+
   new_capacity = map->capacity << 1;
   new_mask = new_capacity - 1;
 
   /* OOM */
-  if ((new_indexes = CAlloc(sizeof(I64) * new_capacity)) == NULL) {
+  if ((new_indexes = CAlloc(indexes_capacity * sizeof(I64))) == NULL) {
     return FALSE;
   }
 
@@ -415,11 +479,10 @@ public Bool StrMapResize(StrMap *map, U64 size)
   map->mask = new_mask;
   map->entries = new_entries;
   map->capacity = new_capacity;
-  map->indexes = new_indexes;
-  I64 new_size = 0;
-  I64 old_size = map->size;
 
-  for (I64 i = 0; i < old_size; ++i) {
+  I64 new_size = 0;
+
+  for (I64 i = 0; i < indexes_size; ++i) {
     I64 idx = old_indexes[i];
     auto old = old_entries[idx];
     if (old->key != NULL) {
@@ -434,7 +497,11 @@ public Bool StrMapResize(StrMap *map, U64 size)
 
   Free(old_entries);
   Free(old_indexes);
+  map->indexes->size = new_size;
+  map->indexes->entries = new_indexes;
+
   map->size = new_size;
+  map->entries = new_entries;
   map->threashold = (map->capacity * HT_LOAD)(U64);
   return TRUE;
 }
@@ -452,11 +519,11 @@ Bool StrMapSet(StrMap *map, U8 *key, U0 *value)
   }
 
   I64 key_len = StrLen(key);
-
   U64 idx = StrMapGetNextIdx(map,key,key_len,&is_free);
+
   if (is_free) {
     auto n = StrMapNodeNew(key,key_len,value); 
-    map->indexes[map->size] = idx;
+    IntVecPush(map->indexes, idx);
     map->entries[idx] = n;
     map->size++;
     return TRUE;
@@ -486,7 +553,7 @@ public Bool StrMapDelete(StrMap *map, U8 *key)
       if (free_value) free_value(cur->value);
       cur->value = cur->key = NULL;
       cur->key_len = 0;
-      map->indexes[idx] = HT_DELETED;
+      map->indexes->entries[idx] = HT_DELETED;
       map->size--;
       return TRUE;
     }
@@ -496,57 +563,44 @@ public Bool StrMapDelete(StrMap *map, U8 *key)
   return TRUE;
 }
 
-public U0 *StrMapGet(StrMap *map, U8 *key)
+public U0 *StrMapGetLen(StrMap *map, U8 *key, I64 key_len)
 {
-  U64 idx, mask, probe;
-  I64 len = StrLen(key);
-  StrMapNode **entries = map->entries;
-  StrMapNode *cur;
-
-  mask = map->mask;
-  probe = 1;
-  idx = StrHash(key) & mask;
-  while ((cur = entries[idx])) {
-    if (cur->key == NULL) {
-      return NULL;
-    }
-    if (cur->key_len == len && !StrNCmp(cur->key,key,len)) {
-      return cur->value;
-    }
-    idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-    probe++;
+  auto idx = StrMapGetIdx(map,key,key_len);
+  if (idx != HT_DELETED) {
+    return map->entries[idx]->value;
   }
   return NULL;
 }
 
-public Bool StrMapHas(StrMap *map, U8 *key)
+public U0 *StrMapGet(StrMap *map, U8 *key)
 {
-  I64 len = StrLen(key);
-  U64 mask = map->mask;
-  U64 probe = 1;
-  U64 idx = StrHash(key) & mask;
-  StrMapNode **entries = map->entries;
-  StrMapNode *cur = NULL;
+  I64 key_len = StrLen(key);
+  return StrMapGetLen(map,key,key_len);
+}
 
-  while ((cur = map->entries[idx])) {
-    if (cur->key == NULL) {
-      return FALSE;
-    }
-    if (cur->key_len == len && !StrNCmp(cur->key,key,len)) {
-      return TRUE;
-    }
-    idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-    probe++;
+public Bool StrMapHasLen(StrMap *map, U8 *key, I64 key_len)
+{
+  I64 idx = StrMapGetIdx(map,key,key_len);
+  if (idx != HT_DELETED) {
+    return TRUE;
   }
   return FALSE;
 }
 
+public Bool StrMapHas(StrMap *map, U8 *key)
+{
+  I64 key_len = StrLen(key);
+  return StrMapHasLen(map,key,key_len);
+}
 
 public Bool StrMapIter(StrMap *map, I64 *_idx, StrMapNode **_node)
 {
   I64 idx = *_idx;
-  while (idx < map->size) {
-    I64 index = map->indexes[idx];
+  auto indexes = map->indexes->entries;
+  auto size = map->indexes->size;
+
+  while (idx < size) {
+    I64 index = indexes[idx];
     if (index != HT_DELETED) {
       *_idx = idx + 1;
       *_node = map->entries[index];
@@ -577,6 +631,48 @@ public Bool StrMapKeyIter(StrMap *map, I64 *_idx, U8 **_key)
   return FALSE;
 }
 
+public U8 *StrMapToString(StrMap *map, U8 *(*stringify_value)(U0 *))
+{
+  auto map_size = map->size;
+
+  if (map_size == 0) {
+    return StrPrint(NULL,"{}");
+  }
+
+  StrMapNode *entry = NULL;
+  auto buffer = StrPrint(NULL,"{");
+  for (I64 i = 0; StrMapIter(map,&i,&entry);) {
+    auto str_val = stringify_value(entry->value);
+    if (i == map_size) {
+      buffer = CatPrint(buffer, "[%s] => %s}",entry->key,str_val);
+    } else {
+      buffer = CatPrint(buffer, "[%s] => %s, ",entry->key,str_val);
+    }
+    Free(str_val);
+  }
+  return buffer;
+
+}
+
+public U8 *StrMapKeysToString(StrMap *map)
+{
+  auto map_size = map->size;
+  if (map_size == 0) {
+    return StrPrint(NULL,"{}");
+  }
+
+  StrMapNode *entry = NULL;
+  auto buffer = StrPrint(NULL,"{");
+  for (I64 i = 0; StrMapIter(map,&i,&entry);) {
+    if (i == map_size) {
+      buffer = CatPrint(buffer, "%s}",entry->key);
+    } else {
+      buffer = CatPrint(buffer, "%s, ",entry->key);
+    }
+  }
+  return buffer;
+}
+
 #ifdef HOLYC_HT_TEST
 U0 IntMapTests(U0)
 {
@@ -597,6 +693,7 @@ U0 IntMapTests(U0)
   for (I64 i = 0; i < len; i++) {
     IntMapSet(map,i,strs[i]);
   }
+
 
   for (I64 i = 0; i < len; i++) {
     U8 *value = IntMapGet(map,i);
