@@ -160,6 +160,8 @@ Produces the following control flow graph. Note that in order to use
 ## Differences
 - `auto` key word for type inference, an addition which makes it easier
   to write code.
+- Range based for loops can be used with static arrays and structs with 
+  an `entries` field with an accompanying `size` field: `for (auto it : <var>)`
 - `cast<type>` can be used for casting as well as post-fix type casting.
 - `break` and `continue` allowed in loops.
 - You can call any libc code by declaring the prototype with 
