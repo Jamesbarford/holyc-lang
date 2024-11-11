@@ -551,6 +551,198 @@ Ast *parseOptExpr(Cctrl *cc) {
     return ast;
 }
 
+Ast *parseDesugarArrayLoop(Cctrl *cc, Ast *iteratee, Ast *static_array) {
+    /* Create a temporay variable as the counter */
+    Ast *counter_var = astLVar(ast_int_type,"___tmp___",9);
+    Ast *counter = astDecl(counter_var,astI64Type(0));
+
+    /* How much memory it takes up / size of one element */
+    Ast *array_len = astI64Type(static_array->type->size/static_array->type->ptr->size);
+
+    if (iteratee->type->kind == AST_TYPE_AUTO) {
+        AstType *deref_type = static_array->type->ptr;
+        iteratee->type = deref_type;
+    }
+
+    dictSet(cc->localenv,"___tmp___",counter_var);
+    dictSet(cc->localenv,iteratee->lname->data,iteratee);
+
+    if (cc->tmp_locals) {
+        listAppend(cc->tmp_locals,counter_var);
+        listAppend(cc->tmp_locals,iteratee);
+    }
+
+    Ast *cond = astBinaryOp('<', counter_var, array_len);
+
+    Ast *iterator = astDecl(iteratee,
+            astUnaryOperator(static_array->type->ptr,
+                AST_DEREF,
+                astBinaryOp('+', static_array, counter_var))
+            );
+    Ast *step = astUnaryOperator(ast_int_type,TK_PLUS_PLUS,counter_var);
+
+    cctrlTokenExpect(cc,')');
+    Ast *forbody = parseStatement(cc);
+    listPrepend(forbody->stms,iterator);
+    return astFor(counter,cond,step,forbody,NULL,NULL,NULL);
+}
+
+void parseAssertContainerHasFields(Cctrl *cc, AstType *size_field, 
+                                   AstType *entries_field)
+{
+    if (!size_field) {
+        loggerPanic("line: %ld - Range for loop must be on a struct with both a 'size' and 'entries' property\n", cc->lineno);
+    }
+
+    if (!entries_field) {
+        loggerPanic("line: %ld - Range for loop must be on a struct with both a 'size' and 'entries' property\n", cc->lineno);
+    }
+
+    if (entries_field->kind != AST_TYPE_POINTER && entries_field->kind != AST_TYPE_ARRAY) {
+        loggerPanic("line: %ld - entries field must be a pointer or array got '%s'\n", cc->lineno, astKindToString(entries_field->kind));
+    }
+
+    if (entries_field->ptr->kind == AST_TYPE_VOID) {
+        loggerPanic("line: %ld - cannot dereferenee void pointer\n", cc->lineno);
+    }
+}
+
+Ast *parseCreateForRange(Cctrl *cc, Ast *iteratee, Ast *container,
+                         Ast *size_ref, Ast *entries_ref)
+{
+    Ast *counter_var = astLVar(ast_int_type,"___tmp___",9);
+    Ast *counter = astDecl(counter_var,astI64Type(0));
+
+    dictSet(cc->localenv,"___tmp___",counter_var);
+    dictSet(cc->localenv,iteratee->lname->data,iteratee);
+    if (cc->tmp_locals) {
+        listAppend(cc->tmp_locals,counter_var);
+        listAppend(cc->tmp_locals,iteratee);
+    }
+
+    Ast *cond = astBinaryOp('<', counter_var, size_ref);
+    Ast *iterator = astDecl(iteratee,
+            astUnaryOperator(entries_ref->type->ptr,
+                AST_DEREF,
+                astBinaryOp('+', entries_ref, counter_var))
+            );
+    Ast *step = astUnaryOperator(ast_int_type,TK_PLUS_PLUS,counter_var);
+    cctrlTokenExpect(cc,')');
+    Ast *forbody = parseStatement(cc);
+    listPrepend(forbody->stms,iterator);
+    return astFor(counter,cond,step,forbody,NULL,NULL,NULL);
+}
+
+Ast *parseRangeLoop(Cctrl *cc, AstType *type, Ast *iteratee) {
+    cctrlTokenGet(cc);
+    Ast *container = parseExpr(cc,16);
+
+    if (container->kind == AST_LVAR) {
+        if (container->type->kind == AST_TYPE_POINTER) {
+            if (container->type->ptr->kind != AST_TYPE_CLASS) {
+                loggerPanic("line %ld: pointer '%s' has no fields; range requires 'I64 size' and '<type> *entries'\n",
+                        cc->lineno, astLValueToString(container, 0));
+            }
+
+            AstType *size_field = dictGet(container->type->ptr->fields, "size");
+            AstType *entries_field = dictGet(container->type->ptr->fields, "entries");
+
+            parseAssertContainerHasFields(cc,size_field,entries_field);
+
+            Ast *deref = astUnaryOperator(container->type->ptr,AST_DEREF,container);
+            Ast *size_ref = astClassRef(size_field,deref,"size");
+            Ast *entries_ref = astClassRef(entries_field,deref,"entries");
+
+            if (iteratee->type->kind == AST_TYPE_AUTO) {
+                AstType *deref_type = entries_field->ptr;
+                iteratee->type = deref_type;
+            }
+
+            return parseCreateForRange(cc, iteratee, container, size_ref, entries_ref);
+        } else if (container->type->kind == AST_TYPE_ARRAY) {
+            return parseDesugarArrayLoop(cc,iteratee,container);
+        } else {
+            loggerPanic("line %ld: can only range over arrays and pointers\n", cc->lineno);
+        }
+    } else if (container->kind == AST_CLASS_REF) {
+        Dict *fields = NULL;
+        if (container->type->kind == AST_TYPE_POINTER) {
+            fields = container->type->ptr->fields;
+        } else if (container->type->kind == AST_TYPE_ARRAY) {
+            return parseDesugarArrayLoop(cc,iteratee,container);
+        } else {
+            fields = container->type->fields;
+        }
+
+        AstType *size_field = dictGet(fields, "size");
+        AstType *entries_field = dictGet(fields, "entries");
+
+        parseAssertContainerHasFields(cc,size_field,entries_field);
+
+        Ast *deref = astUnaryOperator(container->type->ptr,AST_DEREF,container);
+        Ast *size_ref = astClassRef(size_field,deref,"size");
+        Ast *entries_ref = astClassRef(entries_field,deref,"entries");
+
+        if (iteratee->type->kind == AST_TYPE_AUTO) {
+            AstType *deref_type = entries_ref->type;
+            iteratee->type = deref_type;
+        }
+
+        return parseCreateForRange(cc, iteratee, container, size_ref, entries_ref);
+    }
+    loggerPanic("Can only handle lvars and class references at this time got: %s\n", astKindToString(container->kind));
+}
+
+/* Either parse the initialiser or a range loop. Range loop is experimental */
+Ast *parseForLoopInitialiser(Cctrl *cc) {
+    lexeme *tok = cctrlTokenGet(cc);
+    if (tokenPunctIs(tok,';')) {
+        return NULL;
+    }
+    cctrlTokenRewind(cc);
+    
+    tok = cctrlTokenPeek(cc);
+    if (!tok) {
+        return NULL;
+    }
+
+    if (cctrlIsKeyword(cc,tok->start,tok->len)) {
+        AstType *type = parseDeclSpec(cc);
+        tok = cctrlTokenGet(cc);
+        if (tok->tk_type != TK_IDENT) {
+            loggerPanic("line: %ld expected Identifier got: %s\n",
+                    cc->lineno, lexemeToString(tok)); 
+        }
+
+        /* We have a for loop variable */
+        Ast *init_var = astLVar(type,tok->start,tok->len);
+
+        /* can be : for an auto loop or ';' for a normal loop */
+        tok = cctrlTokenPeek(cc); 
+        if (!dictSet(cc->localenv,init_var->lname->data,init_var)) {
+            loggerPanic("line: %ld variable %s already declared\n",
+                    cc->lineno,astLValueToString(init_var,0));
+        }
+        
+        /* For this to work the type must have:
+         * 1) a pointer called entries 
+         * 2) a size value that must be an integer */
+        if (tokenPunctIs(tok,':')) {
+            return parseRangeLoop(cc,type,init_var);
+        } else if (tokenPunctIs(tok, '=')) {
+            if (cc->tmp_locals) {
+                listAppend(cc->tmp_locals, init_var);
+            }
+            Ast *ast = parseVariableInitialiser(cc,init_var,PUNCT_TERM_SEMI|PUNCT_TERM_COMMA);
+            if (type->kind == AST_TYPE_AUTO) {
+                parseAssignAuto(cc,ast);
+            }
+            return ast;
+        }
+    }
+    return parseStatement(cc);
+}
+
 Ast *parseForStatement(Cctrl *cc) {
     Ast *forinit, *forcond, *forstep, *forbody;
     aoStr *for_begin, *for_end, *for_middle,
@@ -568,7 +760,19 @@ Ast *parseForStatement(Cctrl *cc) {
     cc->tmp_loop_end = for_end;
 
     cc->localenv = dictNewWithParent(cc->localenv);
-    forinit = parseOptDeclOrStmt(cc);
+    forinit = parseForLoopInitialiser(cc);
+    //parseOptDeclOrStmt(cc);
+
+    if (forinit && forinit->kind == AST_FOR) {
+        forinit->for_begin = for_begin;
+        forinit->for_middle = for_middle;
+        forinit->for_end = for_end;
+        cc->localenv = cc->localenv->parent;
+        cc->tmp_loop_begin = prev_begin;
+        cc->tmp_loop_end = prev_end;
+        return forinit;
+    }
+
     forcond = parseOptExpr(cc);
     if (tokenPunctIs(cctrlTokenPeek(cc), ')')) {
         forstep = NULL;
