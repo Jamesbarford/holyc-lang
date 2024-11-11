@@ -594,6 +594,11 @@ void parseAssertContainerHasFields(Cctrl *cc, AstType *size_field,
         loggerPanic("line: %ld - Range for loop must be on a struct with both a 'size' and 'entries' property\n", cc->lineno);
     }
 
+    if (!astIsIntType(size_field)) {
+        loggerPanic("line %ld - Range for loop struct's size field must be an int got: %s\n",
+                cc->lineno,astTypeToColorString(size_field));
+    }
+
     if (!entries_field) {
         loggerPanic("line: %ld - Range for loop must be on a struct with both a 'size' and 'entries' property\n", cc->lineno);
     }
