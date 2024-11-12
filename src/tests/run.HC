@@ -1,45 +1,3 @@
-class StringArray
-{
-  I64 len;
-  I64 cap;
-  U8 **entries;
-};
-
-StringArray *StringArrayNew()
-{
-  StringArray *arr = MAlloc(sizeof(StringArray));
-  arr->entries = MAlloc(sizeof(U8 *) * 32);
-  arr->cap = 32;
-  arr->len = 0;
-  return arr;
-}
-
-U0 StringArrayRelease(StringArray *arr)
-{
-  for (auto i = 0; i < arr->len; ++i) {
-    Free(arr->entries[i]);
-  }
-  Free(arr->entries);
-  Free(arr);
-}
-
-U0 StringArrayPush(StringArray *arr, U8 *str)
-{
-  if (arr->len + 1 >= arr->cap) {
-    auto new_cap = arr->cap * 2 * sizeof(U8 *);
-    auto e = arr->entries;
-    auto new_entries = ReAlloc(e,new_cap);
-    if (new_entries == NULL) {
-      "Failed to reallocate array\n";
-      Exit;
-    }
-    arr->cap = new_cap;
-    arr->entries = new_entries;
-  }
-  arr->entries[arr->len] = str;
-  arr->len++;
-}
-
 I64 CmpFileNames(U8 *str1, U8 *str2)
 {
   if ('0'<=*str1<='9' && '0'<=*str2<='9') {
@@ -91,9 +49,9 @@ Bool ShouldExclude(U8 *filename, I64 namelen)
     "32_sql.HC",
 #endif
     "test-runner"};
-  auto len = sizeof(exclude)/sizeof(exclude[0]);
-  for (auto i = 0; i < len; ++i) {
-    if (!StrNCmp(exclude[i],filename,namelen)) return TRUE;
+
+  for (U8 *name : exclude) {
+    if (!StrNCmp(name,filename,namelen)) return TRUE;
   }
   return FALSE;
 }
@@ -118,7 +76,7 @@ U0 RunTest(U8 *filename)
 I32 Main(I32 argc, U8 **argv)
 {
   auto dir = opendir(".");
-  auto arr = StringArrayNew;
+  auto vec = PtrVecNew();
   Dirent *ent;
 
   if (argc != 1) {
@@ -141,17 +99,18 @@ I32 Main(I32 argc, U8 **argv)
       }
       FzFPositionRelease(res);
       auto str = StrNew(ent->name);
-      StringArrayPush(arr,str);
+      PtrVecPush(vec,str);
     }
   }
 
-  QSortStrings(arr->entries,arr->len-1);
+  QSortStrings(vec->entries(U8 **),vec->size-1);
 
-  for (auto i = 0; i < arr->len; ++i) {
-    RunTest(arr->entries[i]);
+  for (U8 *entry : vec) {
+    RunTest(entry);
+    Free(entry);
   }
 
   closedir(dir);
-  StringArrayRelease(arr);
+  PtrVecRelease(vec);
   return 0;
 }
