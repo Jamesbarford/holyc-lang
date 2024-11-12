@@ -114,6 +114,10 @@ void aoStrCatLen(aoStr *buf, const void *d, size_t len) {
     buf->data[buf->len] = '\0';
 }
 
+void aoStrCatAoStr(aoStr *buf, aoStr *s2) {
+    aoStrCatLen(buf, s2->data, s2->len);
+}
+
 void aoStrCat(aoStr *buf, const void *d) {
     size_t len = strlen(d);
     aoStrCatLen(buf, d, len);

@@ -90,12 +90,14 @@ static void astFreeUnaryOperator(Ast *ast) {
 Ast *astBinaryOp(long operation, Ast *left, Ast *right) {
     Ast *ast = astNew();
     ast->type = astGetResultType(operation,left->type,right->type);  
+
     if (ast->type == NULL) {
         loggerPanic("Incompatiable operands: %s: "ESC_GREEN"%s %s"ESC_RESET"\n",
                 astKindToString(operation),
                 astToString(left),
                 astToString(right));
     }
+
     ast->kind = operation;
     if (operation != '=' &&
             astConvertArray(left->type)->kind != AST_TYPE_POINTER &&
@@ -892,11 +894,12 @@ error:
     return NULL;
 }
 
-AstType *astTypeCheck(AstType *expected, Ast *ast) {
+AstType *astTypeCheck(AstType *expected, Ast *ast, long op) {
     if (expected != NULL && ast == NULL) return NULL;
 
     AstType *original_actual = ast->type;
     AstType *actual;
+
     if (original_actual == NULL) {
         original_actual = ast_void_type;
         actual = original_actual;
@@ -922,9 +925,20 @@ check_type:
             ret = e;
             goto out;
         } else {
+            if (op != '=') {
+                ret = e;
+            } else if (ast->right != NULL) {
+                if (ast->right->kind == AST_LITERAL && ast->right->i64 == 0) {
+                    ret = e;
+                }
+            }
             goto out;
         }
     } else if (e->kind == AST_TYPE_POINTER && a->kind != AST_TYPE_POINTER) {
+        if (a->kind == AST_TYPE_VOID && actual->kind == AST_TYPE_POINTER) {
+            ret = e;
+            goto out;
+        }
         goto out;
     } else if (a->kind == AST_TYPE_POINTER && e->kind != AST_TYPE_POINTER) {
         /* this is a generic pointer */
@@ -942,6 +956,9 @@ check_type:
         ret = e;
         goto out;
     } else if (astIsFloatType(e) && astIsFloatType(a)) {
+        ret = e;
+        goto out;
+    } else if (astIsFloatType(e) && astIsIntType(a)) {
         ret = e;
         goto out;
     } else if (e->kind == a->kind) {
@@ -1016,13 +1033,13 @@ int astIsLabelMatch(Ast *ast, aoStr *goto_label) {
            aoStrCmp(goto_label, astHackedGetLabel(ast));
 }
 
-char *astTypeToString(AstType *type) {
+static aoStr *astTypeToAoStrInternal(AstType *type) {
     aoStr *str = aoStrNew();
 
     switch (type->kind) {
     case AST_TYPE_VOID:
         aoStrCatPrintf(str, "U0");
-        return aoStrMove(str);
+        return str;
     
     case AST_TYPE_INT:
         switch (type->size) {
@@ -1049,25 +1066,27 @@ char *astTypeToString(AstType *type) {
             default: loggerPanic("Unknown integer size: %d\n", type->size);
 
         }
-        return aoStrMove(str);
+        return str;
     
     case AST_TYPE_CHAR:
         if (type->issigned) aoStrCatPrintf(str, "I8");
         else                aoStrCatPrintf(str, "U8");
-        return aoStrMove(str);
+        return str;
 
     case AST_TYPE_FLOAT:
-        aoStrCatPrintf(str, "F64");
-        return aoStrMove(str);
+        aoStrCatLen(str,str_lit("F64"));
+        return str;
 
     case AST_TYPE_POINTER: {
-        aoStrCatPrintf(str, "%s*", astTypeToString(type->ptr));
-        return aoStrMove(str);
+        aoStr *ptr_type = astTypeToAoStrInternal(type->ptr);
+        aoStrCatPrintf(str, "%s*", ptr_type->data);
+        aoStrRelease(ptr_type);
+        return str;
     }
 
     case AST_TYPE_ARRAY: {
-        aoStrCatPrintf(str, "array %s[%d]", astTypeToString(type->ptr), type->size);
-        return aoStrMove(str);
+        aoStrCatPrintf(str, "%s[%d]", astTypeToString(type->ptr), type->size);
+        return str;
     }
 
     case AST_TYPE_UNION:
@@ -1081,39 +1100,102 @@ char *astTypeToString(AstType *type) {
         }
 
         aoStrCatPrintf(str, "%s",clsname);
-        return aoStrMove(str);
+        return str;
     }
 
     case AST_TYPE_FUNC: {
-        aoStrCatPrintf(str, "<fn> %s", astTypeToString(type->rettype));
-        return aoStrMove(str);
+        aoStr *return_type = astTypeToAoStrInternal(type->rettype);
+        aoStrCatPrintf(str, "<fn> %s", return_type->data);
+        aoStrRelease(return_type);
+        return str;
     }
 
     case AST_TYPE_AUTO:
-        aoStrCatPrintf(str, "auto");
-        return aoStrMove(str);
+        aoStrCatPrintf(str,str_lit("auto"));
+        return str;
 
     default:
         loggerPanic("Unknown type: %d\n", type->kind);
     }
 }
 
-char *astTypeToColorString(AstType *type) {
-    char *str = astTypeToString(type);
+aoStr *astTypeToAoStr(AstType *type) {
+    aoStr *str_type = astTypeToAoStrInternal(type);
+    if (str_type->data[str_type->len - 1] == '*') {
+        /* move the stars to the end of the string
+         * 
+         * 'SomeType**' -> 'SomeType **'
+         *  1) 'SomeType** '
+         *  2) 'SomeType** '
+         *              ^--- move cursor here
+         * */
+        ssize_t idx = str_type->len - 1;
+        ssize_t end = idx + 1;
+        /* Move the stars to the end */
+        aoStrPutChar(str_type, ' ');
+        while (str_type->data[idx] == '*') {
+            str_type->data[end--] = '*';
+            str_type->data[idx] = ' ';
+            idx--;
+        }
+    }
+    return str_type;
+}
+
+char *astTypeToString(AstType *type) {
+    aoStr *str_type = astTypeToAoStr(type);
+    return aoStrMove(str_type);
+}
+
+aoStr *astTypeToColorAoStr(AstType *type) {
+    aoStr *str = astTypeToAoStr(type);
     if (!isatty(STDOUT_FILENO)) {
         return str;
     }
+
     aoStr *buf = aoStrNew();
-    aoStrCatPrintf(buf,"\033[0;32m%s\033[0m",str);
-    free(str);
-    return aoStrMove(buf);
+    int star_count = 0;
+    if (str->data[str->len-1] == '*') {
+        ssize_t idx = str->len - 1;
+        while (str->data[idx] == '*') {
+            idx--;
+            star_count++;
+        }
+        str->len = idx;
+        str->data[str->len] = '\0';
+    }
+
+    aoStrCatPrintf(buf,"\033[0;34m%s\033[0m",str->data);
+    if (star_count) {
+        aoStrPutChar(buf, ' ');
+        while (star_count > 0) {
+            aoStrPutChar(buf, '*');
+            star_count--;
+        }
+    }
+    aoStrRelease(str);
+    return buf;
+}
+
+char *astTypeToColorString(AstType *type) {
+    aoStr *color_type = astTypeToColorAoStr(type);
+    return aoStrMove(color_type);
 }
 
 char *astFunctionNameToString(AstType *rettype, char *fname, int len) {
     aoStr *str = aoStrNew();
-    char *tmp = astTypeToColorString(rettype);
-    aoStrCatPrintf(str,"%s %.*s()",tmp,len,fname);
-    free(tmp);
+    aoStr *tmp = astTypeToColorAoStr(rettype);
+
+    /* Add type definition */
+    aoStrCatLen(str,tmp->data,tmp->len);
+    if (tmp->data[tmp->len - 1] != '*') {
+        aoStrPutChar(str,' ');
+    }
+
+    /* Add the actual function name */
+    aoStrCatLen(str,fname,len);
+
+    aoStrRelease(tmp);
     return aoStrMove(str);
 }
 
@@ -1169,11 +1251,15 @@ static char *astParamsToString(List *params) {
 
 static char *astFunctionToStringInternal(Ast *func, AstType *type) {
     aoStr *str = aoStrNew();
-    char *tmp,*strparams = NULL;
+    char *strparams = NULL;
 
-    tmp = astTypeToColorString(type);
-    aoStrCatPrintf(str,"%s %s",tmp,func->fname->data);
-    free(tmp);
+    aoStr *tmp = astTypeToColorAoStr(type);
+    if (tmp->data[tmp->len - 1] == '*') {
+        aoStrCatPrintf(str,"%s%s",tmp->data,func->fname->data);
+    } else {
+        aoStrCatPrintf(str,"%s %s",tmp->data,func->fname->data);
+    }
+    aoStrRelease(tmp);
 
     switch (func->kind) {
         case AST_FUNCALL:
@@ -1213,11 +1299,18 @@ void _astToString(aoStr *str, Ast *ast, int depth) {
     char *tmp;
 
     switch(ast->kind) {
-        case AST_LITERAL:
+        case AST_LITERAL: {
             aoStrCatPrintf(str,"<ast_literal> ");
             switch (ast->type->kind) {
             case AST_TYPE_VOID:  aoStrCatPrintf(str, "<U0>"); break;
-            case AST_TYPE_INT:   aoStrCatPrintf(str, "<I64> %ld", ast->i64); break;
+            case AST_TYPE_INT: {
+                if (!isatty(STDOUT_FILENO)) {
+                    aoStrCatPrintf(str, "<integer> %ld", ast->i64);
+                } else {
+                    aoStrCatPrintf(str, "<integer> \033[0;35m%ld\033[0m", ast->i64);
+                }
+                break;
+            }    
             case AST_TYPE_CHAR:  {
                 char buf[9];
                 unsigned long ch = ast->i64;
@@ -1230,49 +1323,86 @@ void _astToString(aoStr *str, Ast *ast, int depth) {
                 buf[6] = ((unsigned long)ch) >> 48 & 0xFF;
                 buf[7] = ((unsigned long)ch) >> 56 & 0xFF;
                 buf[8] = '\0';
-                aoStrCatPrintf(str, "<CONST_CHAR> '%s'", buf);
+                if (!isatty(STDOUT_FILENO)) {
+                    aoStrCatPrintf(str, "<const_char> '%s'", buf);
+                } else {
+                    aoStrCatPrintf(str, "\033[0;35m%s\033[0m", buf);
+                }
                 break;
             }
-            case AST_TYPE_FLOAT: aoStrCatPrintf(str, "<F64> %g", ast->f64); break;
+            case AST_TYPE_FLOAT: {
+                if (!isatty(STDOUT_FILENO)) {
+                    aoStrCatPrintf(str, "<float> %g", ast->f64);
+                } else {
+                    aoStrCatPrintf(str, "\033[0;35m%g\033[0m", ast->f64);
+                }
+                break;
+            }
             default:
                 loggerPanic("Unhandled type: %d\n", ast->type->kind);
             }
             break;
 
-        case AST_STRING:
+        case AST_STRING: {
             escaped = aoStrEscapeString(ast->sval);
-            aoStrCatPrintf(str, "<string> \"%s\"", escaped->data);
+            if (!isatty(STDOUT_FILENO)) {
+                aoStrCatPrintf(str, "<string> \"%s\"", escaped->data);
+            } else {
+                aoStrCatPrintf(str, "<string> \033[0;35m\"%s\"\033[0m", escaped->data);
+            }
             aoStrRelease(escaped);
             break;
-    
-    case AST_LVAR:
-        tmp = astTypeToString(ast->type);
-        aoStrCatPrintf(str, "<lvar> %s %s\n", tmp,
-                ast->lname->data);
-        free(tmp);
-        break;
-    
-    case AST_DECL:
-        tmp = astTypeToString(ast->declvar->type);
-        if (ast->declvar->kind == AST_FUNPTR) {
-            aoStrCatPrintf(str,"<decl> %s %s\n", tmp, ast->declvar->fname->data);
-        } else if (ast->declvar->kind == AST_LVAR) {
-            aoStrCatPrintf(str,"<decl> %s %s\n", tmp, ast->declvar->lname->data);
-        } else if (ast->declvar->kind == AST_GVAR) {
-            if (ast->declvar->is_static) {
-                aoStrCatPrintf(str,"<decl> static %s %s\n", tmp, ast->declvar->gname->data);
-            } else {
-                aoStrCatPrintf(str,"<decl> %s %s\n", tmp, ast->declvar->gname->data);
-            }
-        } else {
-            loggerPanic("Unhandled declaration: %s\n", tmp);
         }
-        free(tmp);
+    }
+    case AST_LVAR: {
+        aoStr *type_str = astTypeToColorAoStr(ast->type);
+
+        aoStrCatLen(str, str_lit("<lvar> "));
+        
+        aoStrCatAoStr(str, type_str);
+        if (type_str->data[type_str->len - 1] != '*') {
+            aoStrPutChar(str, ' ');
+        }
+
+        aoStrCatAoStr(str,ast->lname);
+
+        aoStrRelease(type_str);
+        break;
+    }    
+    
+    case AST_DECL: {
+        aoStr *type_color = astTypeToColorAoStr(ast->declvar->type);
+
+        /* type declaration sorted */
+        aoStrCatLen(str, str_lit("<decl> "));
+
+        if (ast->declvar->kind == AST_GVAR && ast->declvar->is_static) {
+            aoStrCatLen(str, str_lit("static "));
+        }
+
+        aoStrCatAoStr(str, type_color);
+        if (type_color->data[type_color->len-1] != '*') {
+            aoStrPutChar(str, ' ');
+        }
+
+        if (ast->declvar->kind == AST_FUNPTR) {
+            aoStrCatAoStr(str, ast->declvar->fname);
+        } else if (ast->declvar->kind == AST_LVAR) {
+            aoStrCatAoStr(str, ast->declvar->lname);
+        } else if (ast->declvar->kind == AST_GVAR) {
+            aoStrCatAoStr(str, ast->declvar->gname);
+        } else {
+            loggerPanic("Unhandled declaration: %s\n", type_color->data);
+        }
+
+        aoStrRelease(type_color);
+        aoStrPutChar(str, '\n');
         if (ast->declinit) {
             _astToString(str,ast->declinit,depth+1);
             astStringEndStmt(str);
         }
         break;
+    }
 
     case AST_GVAR:
         aoStrCatPrintf(str, "<gvar> %s", ast->gname->data);
@@ -1542,9 +1672,12 @@ void _astToString(aoStr *str, Ast *ast, int depth) {
                 aoStrCatRepeat(str, "  ", depth+1);
 
                 if (!astIsClassPointer(field_type)) {
-                    tmp = astTypeToColorString(field_type);
-                    aoStrCatPrintf(str, "%s ", tmp);
-                    free(tmp);
+                    aoStr *color_type = astTypeToColorAoStr(field_type);
+                    aoStrCatLen(str, color_type->data, color_type->len);
+                    if (color_type->data[color_type->len - 1] != '*') {
+                        aoStrPutChar(str, ' ');
+                    } 
+                    aoStrRelease(color_type);
                 } else {
                     tmp = astTypeToColorString(field_type);
                     aoStrCatPrintf(str, "<class> %s ",tmp);
@@ -2066,9 +2199,14 @@ static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
     }
 }
 
-char *astLValueToString(Ast *ast, unsigned long lexeme_flags) {
+aoStr *astLValueToAoStr(Ast *ast, unsigned long lexeme_flags) {
     aoStr *str = aoStrNew();
     _astLValueToString(str,ast,lexeme_flags);
+    return str;
+}
+
+char *astLValueToString(Ast *ast, unsigned long lexeme_flags) {
+    aoStr *str = astLValueToAoStr(ast,lexeme_flags);
     return aoStrMove(str);
 }
 
