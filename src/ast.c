@@ -894,7 +894,7 @@ error:
     return NULL;
 }
 
-AstType *astTypeCheck(AstType *expected, Ast *ast) {
+AstType *astTypeCheck(AstType *expected, Ast *ast, long op) {
     if (expected != NULL && ast == NULL) return NULL;
 
     AstType *original_actual = ast->type;
@@ -925,9 +925,20 @@ check_type:
             ret = e;
             goto out;
         } else {
+            if (op != '=') {
+                ret = e;
+            } else if (ast->right != NULL) {
+                if (ast->right->kind == AST_LITERAL && ast->right->i64 == 0) {
+                    ret = e;
+                }
+            }
             goto out;
         }
     } else if (e->kind == AST_TYPE_POINTER && a->kind != AST_TYPE_POINTER) {
+        if (a->kind == AST_TYPE_VOID && actual->kind == AST_TYPE_POINTER) {
+            ret = e;
+            goto out;
+        }
         goto out;
     } else if (a->kind == AST_TYPE_POINTER && e->kind != AST_TYPE_POINTER) {
         /* this is a generic pointer */
@@ -945,6 +956,9 @@ check_type:
         ret = e;
         goto out;
     } else if (astIsFloatType(e) && astIsFloatType(a)) {
+        ret = e;
+        goto out;
+    } else if (astIsFloatType(e) && astIsIntType(a)) {
         ret = e;
         goto out;
     } else if (e->kind == a->kind) {
@@ -2185,9 +2199,14 @@ static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
     }
 }
 
-char *astLValueToString(Ast *ast, unsigned long lexeme_flags) {
+aoStr *astLValueToAoStr(Ast *ast, unsigned long lexeme_flags) {
     aoStr *str = aoStrNew();
     _astLValueToString(str,ast,lexeme_flags);
+    return str;
+}
+
+char *astLValueToString(Ast *ast, unsigned long lexeme_flags) {
+    aoStr *str = astLValueToAoStr(ast,lexeme_flags);
     return aoStrMove(str);
 }
 

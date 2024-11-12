@@ -1,3 +1,4 @@
+#include <string.h>
 #include "ast.h"
 #include "lexer.h"
 #include "prsutil.h"
@@ -237,19 +238,71 @@ void assertUniqueSwitchCaseLabels(PtrVec *case_vector, Ast *case_) {
     }
 }
 
-void typeCheckWarn(Cctrl *cc, AstType *expected, AstType *actual) {
-    char *expected_color = astTypeToColorString(expected);
-    char *actual_color = astTypeToColorString(actual);
-    loggerWarning("line %ld: Incompatible types type '%s' is not assignable to type '%s'\n",
-            cc->lineno, actual_color, expected_color);
-    free(expected_color);
-    free(actual_color);
+
+void repeatRedSquiggles(aoStr *str, int count) {
+    aoStrCatLen(str, str_lit(ESC_BOLD_RED));
+    aoStrCatRepeat(str, "~", count);
+    aoStrCatLen(str, str_lit(ESC_RESET));
+}
+
+void typeCheckWarn(Cctrl *cc, long op, Ast *expected, Ast *actual) {
+    aoStr *expected_type_color = astTypeToColorAoStr(expected->type);
+    aoStr *expected_type = astTypeToAoStr(expected->type);
+    aoStr *actual_type = astTypeToAoStr(actual->type);
+    aoStr *expected_variable = astLValueToAoStr(expected,0);
+    aoStr *actual_variable = astLValueToAoStr(actual,0);
+
+    char *operation = lexemePunctToString(op);
+    if (operation[0] != '=') {
+        operation[1] = '=';
+    }
+    
+    aoStr *str = aoStrNew();
+    aoStrCatPrintf(str, "%4ld |    %s", cc->lineno, expected_type_color->data);
+
+    int ends_with_star = expected_type->data[expected_type->len - 1] == '*';
+    if (!ends_with_star) {
+        aoStrPutChar(str, ' ');
+    }
+
+    aoStrCatAoStr(str, expected_variable);
+    aoStrCatPrintf(str, " %s ", operation);
+
+    aoStrCatLen(str, str_lit(ESC_BOLD_RED));
+    aoStrCatAoStr(str, actual_variable);
+    aoStrCatLen(str, str_lit(ESC_RESET));
+
+    aoStrCat(str, ";\n");
+    aoStrCatLen(str, str_lit("     |    "));
+    for (int i = 0; i < expected_type->len; ++i) {
+        aoStrPutChar(str, ' ');
+    }
+    if (!ends_with_star) {
+        aoStrPutChar(str, ' ');
+    }
+
+    aoStrCatLen(str, str_lit(ESC_GREEN));
+    aoStrPutChar(str, '^');
+    aoStrCatLen(str, str_lit(ESC_RESET));
+    aoStrCatRepeat(str, " ", expected_variable->len+1+strlen(operation));
+
+    repeatRedSquiggles(str,actual_variable->len);
+
+    loggerWarning("line %ld: Incompatible types '%s' is not assignable to type '%s'\n%s\n",
+            cc->lineno, actual_type->data, expected_type->data,str->data);
+
+    aoStrRelease(expected_variable);
+    aoStrRelease(actual_variable);
+    aoStrRelease(actual_type);
+    aoStrRelease(expected_type);
+    aoStrRelease(expected_type_color);
+    aoStrRelease(str);
 }
 
 void typeCheckReturnTypeWarn(Cctrl *cc, long lineno, Ast *maybe_func, 
                              AstType *check, Ast *retval)
 {
-    char *fstring, *expected, *ast_str;
+    char *fstring = NULL;
     if (maybe_func) {
         fstring = astFunctionToString(maybe_func);
     } else {
@@ -257,15 +310,33 @@ void typeCheckReturnTypeWarn(Cctrl *cc, long lineno, Ast *maybe_func,
                 cc->tmp_fname->data,cc->tmp_fname->len);
     }
 
-    expected = astTypeToColorString(cc->tmp_rettype);
+    char *expected = astTypeToColorString(cc->tmp_rettype);
     aoStr *got = astTypeToColorAoStr(check);
-    ast_str = astLValueToString(retval,0);
+    aoStr *ast_str = astLValueToAoStr(retval,0);
 
-    loggerWarning("line %ld: %s unexpected return value '%s' of type '%s' expected '%s'\n",
-            lineno,fstring,ast_str,got->data,expected);
+    aoStr *str = aoStrNew();
+
+    aoStrCatPrintf(str, "     | %s { \n", fstring);
+    aoStrCatLen(str, str_lit("     |    ... \n"));
+    aoStrCatPrintf(str, "%4ld |    return ", cc->lineno);
+    
+    aoStrCatLen(str, str_lit(ESC_BOLD_RED));
+    aoStrCatAoStr(str, ast_str);
+    aoStrCatLen(str, str_lit(ESC_RESET));
+
+    aoStrCatLen(str, str_lit(";\n"));
+    aoStrCatLen(str, str_lit("     | }  "));
+
+    aoStrCatRepeat(str, " ", 7);
+    repeatRedSquiggles(str,ast_str->len);
+
+
+    loggerWarning("line %ld: %s unexpected return value '%s' of type '%s' expected '%s'\n%s\n",
+            lineno,fstring,ast_str->data,got->data,expected,str->data);
     
     free(fstring);
     free(expected);
-    free(ast_str);
+    aoStrRelease(ast_str);
     aoStrRelease(got);
+    aoStrRelease(str);
 }

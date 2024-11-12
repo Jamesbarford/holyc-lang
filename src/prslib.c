@@ -49,6 +49,7 @@ AstType *parseReturnAuto(Cctrl *cc, Ast *retval) {
         case AST_TYPE_FLOAT:
         case AST_TYPE_POINTER:
         case AST_TYPE_VOID:
+        case AST_LITERAL:
         case '+':
         case '-':
         case '*':
@@ -426,7 +427,7 @@ List *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
         } else {
             /* Does a distinctly adequate job of type checking function parameters */
             if (param && param->kind != AST_DEFAULT_PARAM) {
-                if ((check = astTypeCheck(param->type,ast)) == NULL) {
+                if ((check = astTypeCheck(param->type,ast,'=')) == NULL) {
                     Ast *func = findFunctionDecl(cc,fname,len);
                     char *fstring, *expected, *got, *ast_str;
                     if (func) {
@@ -842,17 +843,17 @@ Ast *parseExpr(Cctrl *cc, int prec) {
         }
 
         if (compound_assign) {
-            AstType *ok = astTypeCheck(LHS->type,RHS);
+            AstType *ok = astTypeCheck(LHS->type,RHS,compound_assign);
             if (!ok) {
-                typeCheckWarn(cc,LHS->type,RHS->type);
+                typeCheckWarn(cc,compound_assign,LHS,RHS);
             }
             LHS = astBinaryOp('=', LHS, 
                     astBinaryOp(compound_assign, LHS, RHS));
         } else {
             if (tok->i64 == '=') {
-                AstType *ok = astTypeCheck(LHS->type,RHS);
+                AstType *ok = astTypeCheck(LHS->type,RHS,'=');
                 if (!ok) {
-                    typeCheckWarn(cc,LHS->type,RHS->type);
+                    typeCheckWarn(cc,'=',LHS,RHS);
                 }
             }
             LHS = astBinaryOp(tok->i64,LHS,RHS);

@@ -471,6 +471,14 @@ Ast *parseVariableAssignment(Cctrl *cc, Ast *var, long terminator_flags) {
     if (var->kind == AST_GVAR && var->type->kind == AST_TYPE_INT) {
         init = astI64Type(evalIntConstExpr(init));
     }
+
+    if (var->type->kind == AST_TYPE_AUTO) {
+        var->type = init->type;
+    }
+    AstType *ok = astTypeCheck(var->type,init,'=');
+    if (!ok) {
+        typeCheckWarn(cc,'=',var,init);
+    }
     return astDecl(var,init);
 }
 
@@ -892,7 +900,7 @@ Ast *parseReturnStatement(Cctrl *cc) {
         return astReturn(retval,cc->tmp_rettype);
     }
 
-    AstType *ok = astTypeCheck(cc->tmp_rettype,retval);
+    AstType *ok = astTypeCheck(cc->tmp_rettype,retval,'\0');
     if (!ok) {
         Ast *func = dictGet(cc->global_env,cc->tmp_fname->data);
         typeCheckReturnTypeWarn(cc,lineno,func,check,retval);
