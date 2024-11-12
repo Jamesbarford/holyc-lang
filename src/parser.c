@@ -17,6 +17,8 @@
 
 #define MAX_ALIGN         16
 
+#define RANGE_LOOP_IDX "___tmp___"
+
 /* PARSER Prototypes */
 Ast *parseStatement(Cctrl *cc);
 Ast *parseIfStatement(Cctrl *cc);
@@ -553,7 +555,7 @@ Ast *parseOptExpr(Cctrl *cc) {
 
 Ast *parseDesugarArrayLoop(Cctrl *cc, Ast *iteratee, Ast *static_array) {
     /* Create a temporay variable as the counter */
-    Ast *counter_var = astLVar(ast_int_type,"___tmp___",9);
+    Ast *counter_var = astLVar(ast_int_type, str_lit(RANGE_LOOP_IDX));
     Ast *counter = astDecl(counter_var,astI64Type(0));
 
     /* How much memory it takes up / size of one element */
@@ -564,7 +566,7 @@ Ast *parseDesugarArrayLoop(Cctrl *cc, Ast *iteratee, Ast *static_array) {
         iteratee->type = deref_type;
     }
 
-    dictSet(cc->localenv,"___tmp___",counter_var);
+    dictSet(cc->localenv,RANGE_LOOP_IDX,counter_var);
     dictSet(cc->localenv,iteratee->lname->data,iteratee);
 
     if (cc->tmp_locals) {
@@ -615,10 +617,10 @@ void parseAssertContainerHasFields(Cctrl *cc, AstType *size_field,
 Ast *parseCreateForRange(Cctrl *cc, Ast *iteratee, Ast *container,
                          Ast *size_ref, Ast *entries_ref)
 {
-    Ast *counter_var = astLVar(ast_int_type,"___tmp___",9);
+    Ast *counter_var = astLVar(ast_int_type,str_lit(RANGE_LOOP_IDX));
     Ast *counter = astDecl(counter_var,astI64Type(0));
 
-    dictSet(cc->localenv,"___tmp___",counter_var);
+    dictSet(cc->localenv,RANGE_LOOP_IDX,counter_var);
     dictSet(cc->localenv,iteratee->lname->data,iteratee);
     if (cc->tmp_locals) {
         listAppend(cc->tmp_locals,counter_var);

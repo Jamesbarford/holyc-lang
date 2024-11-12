@@ -6,6 +6,7 @@
 
 #define static_size(x) (sizeof((x)) / sizeof((x[0])))
 #define cast(type, value) (((type)(value)))
+#define str_lit(s) s,sizeof(s)-1
 
 #define ESC_GREEN  "\033[0;32m"
 #define ESC_BLACK  "\033[0;30m"
