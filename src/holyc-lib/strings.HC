@@ -528,7 +528,7 @@ public U0 StrReverse(U8 *buf, I64 length)
 { // Reverse a string inplace
   I64 start = 0, end = length - 1;
   while (start < end) {
-    U8 *temp = buf[start];
+    U8 temp = buf[start];
     buf[start] = buf[end];
     buf[end] = temp;
     start++;
@@ -769,7 +769,7 @@ U8 *StrPrintJoin(U8 *_dst, U8 *fmt,I64 argc,I64 *argv)
           F64 n;
           U64 m;
           I64 k = 0, idx = 0;
-          farg = argv[sp++]; // XXX: this should require a cast?
+          farg = argv[sp++](F64); // XXX: this should require a cast?
           if (farg < 0) {
             flags |= PRTF_NEG;
             farg=-farg;
@@ -788,7 +788,7 @@ U8 *StrPrintJoin(U8 *_dst, U8 *fmt,I64 argc,I64 *argv)
           } else {
             n = 0;
           }
-          m = round(farg);
+          m = round(farg)(U64);
           if (dec_len) {
             buf[k++]='.';
           }
