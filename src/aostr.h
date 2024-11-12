@@ -33,6 +33,7 @@ aoStr *aoStrDup(aoStr *buf);
 char *aoStrMove(aoStr *buf);
 
 void aoStrCatLen(aoStr *buf, const void *d, size_t len);
+void aoStrCatAoStr(aoStr *buf, aoStr *s2);
 void aoStrCat(aoStr *buf, const void *d);
 void aoStrCatRepeat(aoStr *buf, char *str, int times);
 void aoStrCatPrintf(aoStr *b, const char *fmt, ...);

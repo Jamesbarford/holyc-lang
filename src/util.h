@@ -33,7 +33,7 @@
 
 #define loggerWarning(...)                             \
     do {                                               \
-        fprintf(stderr, "\033[0;35mWARNING: \033[0m"); \
+        fprintf(stderr, "\033[0;33mWARNING: \033[0m"); \
         fprintf(stderr, __VA_ARGS__);                  \
     } while (0)
 

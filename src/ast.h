@@ -371,8 +371,10 @@ Ast *astMakeLoopSentinal(void);
 int astIsLabelMatch(Ast *ast, aoStr *goto_label);
 
 /* For debugging */
+aoStr *astTypeToAoStr(AstType *type);
 char *astTypeToString(AstType *type);
 char *astTypeToColorString(AstType *type);
+aoStr *astTypeToColorAoStr(AstType *type);
 char *astKindToString(int kind);
 char *astFunctionToString(Ast *func);
 char *astFunctionNameToString(AstType *rettype, char *fname, int len);

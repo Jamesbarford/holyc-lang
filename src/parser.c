@@ -697,7 +697,8 @@ Ast *parseRangeLoop(Cctrl *cc, AstType *type, Ast *iteratee) {
 
         return parseCreateForRange(cc, iteratee, container, size_ref, entries_ref);
     }
-    loggerPanic("Can only handle lvars and class references at this time got: %s\n", astKindToString(container->kind));
+    loggerPanic("Can only handle lvars, arrays and class references at this time got: %s %s\n",
+                astKindToString(container->kind), astToString(container));
 }
 
 /* Either parse the initialiser or a range loop. Range loop is experimental */
@@ -891,27 +892,10 @@ Ast *parseReturnStatement(Cctrl *cc) {
         return astReturn(retval,cc->tmp_rettype);
     }
 
-    AstType *t = astTypeCheck(cc->tmp_rettype,retval);
-    if (!t) {
+    AstType *ok = astTypeCheck(cc->tmp_rettype,retval);
+    if (!ok) {
         Ast *func = dictGet(cc->global_env,cc->tmp_fname->data);
-        char *fstring, *expected, *got, *ast_str;
-
-        if (func) {
-            fstring = astFunctionToString(func);
-        } else {
-            fstring = astFunctionNameToString(cc->tmp_rettype,
-                    cc->tmp_fname->data,cc->tmp_fname->len);
-        }
-
-        expected = astTypeToColorString(cc->tmp_rettype);
-        got = astTypeToColorString(check);
-        ast_str = astLValueToString(retval,0);
-        loggerWarning("line %ld: %s expected return type %s got %s %s\n",
-                lineno,fstring,expected,got,ast_str);
-        free(fstring);
-        free(expected);
-        free(got);
-        free(ast_str);
+        typeCheckReturnTypeWarn(cc,lineno,func,check,retval);
     }
     return astReturn(retval,cc->tmp_rettype);
 }

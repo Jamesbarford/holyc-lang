@@ -236,3 +236,36 @@ void assertUniqueSwitchCaseLabels(PtrVec *case_vector, Ast *case_) {
         loggerPanic("Duplicate case value: %ld\n",case_->case_begin);
     }
 }
+
+void typeCheckWarn(Cctrl *cc, AstType *expected, AstType *actual) {
+    char *expected_color = astTypeToColorString(expected);
+    char *actual_color = astTypeToColorString(actual);
+    loggerWarning("line %ld: Incompatible types type '%s' is not assignable to type '%s'\n",
+            cc->lineno, actual_color, expected_color);
+    free(expected_color);
+    free(actual_color);
+}
+
+void typeCheckReturnTypeWarn(Cctrl *cc, long lineno, Ast *maybe_func, 
+                             AstType *check, Ast *retval)
+{
+    char *fstring, *expected, *ast_str;
+    if (maybe_func) {
+        fstring = astFunctionToString(maybe_func);
+    } else {
+        fstring = astFunctionNameToString(cc->tmp_rettype,
+                cc->tmp_fname->data,cc->tmp_fname->len);
+    }
+
+    expected = astTypeToColorString(cc->tmp_rettype);
+    aoStr *got = astTypeToColorAoStr(check);
+    ast_str = astLValueToString(retval,0);
+
+    loggerWarning("line %ld: %s unexpected return value '%s' of type '%s' expected '%s'\n",
+            lineno,fstring,ast_str,got->data,expected);
+    
+    free(fstring);
+    free(expected);
+    free(ast_str);
+    aoStrRelease(got);
+}

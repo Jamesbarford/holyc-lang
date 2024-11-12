@@ -842,9 +842,19 @@ Ast *parseExpr(Cctrl *cc, int prec) {
         }
 
         if (compound_assign) {
+            AstType *ok = astTypeCheck(LHS->type,RHS);
+            if (!ok) {
+                typeCheckWarn(cc,LHS->type,RHS->type);
+            }
             LHS = astBinaryOp('=', LHS, 
                     astBinaryOp(compound_assign, LHS, RHS));
         } else {
+            if (tok->i64 == '=') {
+                AstType *ok = astTypeCheck(LHS->type,RHS);
+                if (!ok) {
+                    typeCheckWarn(cc,LHS->type,RHS->type);
+                }
+            }
             LHS = astBinaryOp(tok->i64,LHS,RHS);
         }
     }
