@@ -151,7 +151,7 @@ public class FloatVec
   F64 *entries;
 };
 
-public FloatVec *FloatVecNew(U0);
+public FloatVec *FloatVecNew(I64 size = 32);
 public U64 FloatVecCapacity(IntVec *vec);
 public U0 FloatVecPush(FloatVec *vec, F64 value);
 public F64 FloatVecPop(FloatVec *vec, Bool *_ok);
@@ -159,7 +159,7 @@ public F64 FloatVecGet(FloatVec *vec, I64 idx);
 public U0 FloatVecClear(FloatVec *vec);
 public U0 FloatVecRelease(FloatVec *vec);
 
-public IntVec *IntVecNew(U0);
+public IntVec *IntVecNew(I64 size = 32);
 public U64 IntVecCapacity(IntVec *vec);
 public U0 IntVecPush(IntVec *vec, I64 value);
 public I64 IntVecPop(IntVec *vec, Bool *_ok);
@@ -167,7 +167,7 @@ public I64 IntVecGet(IntVec *vec, I64 idx);
 public I64 IntVecClear(IntVec *vec);
 public I64 IntVecRelease(IntVec *vec);
 
-public PtrVec *PtrVecNew(U0);
+public PtrVec *PtrVecNew(I64 size = 32);
 public U64 PtrVecCapacity(IntVec *vec);
 public U0 PtrVecPush(PtrVec *vec, U0 *value);
 public U0 *PtrVecPop(PtrVec *vec, Bool *_ok);
@@ -219,7 +219,7 @@ public class StrMap
   StrMapNode **entries; /* All of the entries, XXX: could this be IntMapNode *entries? */
 };
 
-public StrMap *StrMapNew(U64 capacity = 1 << 8);
+public StrMap *StrMapNew(U64 capacity = 32);
 public Bool StrMapSet(StrMap *map, U8 *key, U0 *value);
 public Bool StrMapHasLen(StrMap *map, U8 *key, I64 key_len);
 public Bool StrMapHas(StrMap *map, U8 *key);
@@ -239,7 +239,7 @@ public U8 *StrMapKeysToString(StrMap *map);
 public Bool IntMapSet(IntMap *map, I64 key, U0 *value);
 public Bool IntMapHas(IntMap *map, I64 key);
 public U0 *IntMapGet(IntMap *map, I64 key);
-public IntMap *IntMapNew(U64 capacity = 1 << 8);
+public IntMap *IntMapNew(U64 capacity = 32);
 public U0 IntMapSetFreeValue(IntMap *map, U0 (*_free_value)(U0 *value));
 public U0 IntMapRelease(IntMap *map);
 public Bool IntMapResize(IntMap *map, U64 size);

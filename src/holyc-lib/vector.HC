@@ -18,11 +18,11 @@ class FloatVec
   F64 *entries;
 };
 
-FloatVec *FloatVecNew(U0)
+FloatVec *FloatVecNew(I64 size = 32)
 {
   FloatVec *vec = MAlloc(sizeof(FloatVec));
   vec->size = 0;
-  vec->entries = MAlloc(sizeof(F64) * 32);
+  vec->entries = MAlloc(sizeof(F64) * size);
   return vec;
 }
 
@@ -79,11 +79,11 @@ U0 FloatVecRelease(FloatVec *vec)
 
 
 
-IntVec *IntVecNew(U0)
+IntVec *IntVecNew(I64 size = 32)
 {
   IntVec *vec = MAlloc(sizeof(IntVec));
   vec->size = 0;
-  vec->entries = MAlloc(sizeof(I64) * 32);
+  vec->entries = MAlloc(sizeof(I64) * size);
   return vec;
 }
 
@@ -138,7 +138,7 @@ I64 IntVecRelease(IntVec *vec)
   }
 }
 
-PtrVec *PtrVecNew(U0)
+PtrVec *PtrVecNew(I64 size = 32)
 {
   PtrVec *vec = MAlloc(sizeof(PtrVec));
   vec->size = 0;
