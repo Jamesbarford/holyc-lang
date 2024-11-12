@@ -929,6 +929,8 @@ public Bool JsonIsInt(Json *j);
 public Bool JsonIsFloat(Json *j);
 public Json *JsonSelect(Json *j, U8 *fmt, ...);
 
+#ifdef __HCC_LINK_SQLITE3__ 
+
 #define SQLITE_OK           0   /* Successful result */
 /* beginning-of-error-codes */
 #define SQLITE_ERROR        1   /* Generic error */
@@ -1089,6 +1091,8 @@ public Bool SqlQuery(SqlCtx *ctx, U8 *sql, SqlParam *params=NULL,
 public I32 SqlIter(SqlRow *row);
 public I64 SqlIterPrepared(SqlRow *row);
 public U0 SqlRowRelease(SqlRow *row);
+
+#endif /* End of SQLite */
 
 /* Socket options level */
 #define SOL_SOCKET      0xffff          /* Socket-level options */
