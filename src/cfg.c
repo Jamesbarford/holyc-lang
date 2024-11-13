@@ -717,8 +717,8 @@ static void cfgHandleGoto(CFGBuilder *builder, Ast *ast) {
 
     /* Try straight out the gate to resolve the goto otherwise save it for 
      * later */
-    if ((dest = strMapGetLen(builder->resolved_labels,label->len,
-            label->data)) != NULL)
+    if ((dest = strMapGetLen(builder->resolved_labels,label->data,
+            label->len)) != NULL)
     {
         /* This forms a loop but over a potentially large number of graph nodes 
          * making it difficult to classify as a _conventional_ loop. 
@@ -1683,8 +1683,8 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
 
         assert(ast->kind == AST_GOTO || ast->kind == AST_JUMP);
 
-        bb_dest = strMapGetLen(builder->resolved_labels,dest_label->len,
-                dest_label->data);
+        bb_dest = strMapGetLen(builder->resolved_labels,dest_label->data,
+                dest_label->len);
 
         assert(bb_dest != NULL);
         cfgRelocateGoto(builder,bb_goto,bb_dest,goto_label);

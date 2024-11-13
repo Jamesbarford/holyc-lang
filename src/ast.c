@@ -6,9 +6,9 @@
 #include "aostr.h"
 #include "ast.h"
 #include "config.h"
-#include "dict.h"
 #include "list.h"
 #include "lexer.h"
+#include "map.h"
 #include "util.h"
 
 AstType *ast_u8_type = &(AstType){.kind = AST_TYPE_CHAR, .size = 1, .ptr = NULL,.issigned=0};
@@ -615,7 +615,7 @@ static void astFreeClassRef(Ast *ast) {
     free(ast);
 }
 
-AstType *astClassType(Dict *fields, aoStr *clsname, int size, int is_intrinsic) {
+AstType *astClassType(StrMap *fields, aoStr *clsname, int size, int is_intrinsic) {
     AstType *ref = astTypeNew();
     ref->kind = AST_TYPE_CLASS;
     ref->fields = fields;
@@ -1664,7 +1664,7 @@ void _astToString(aoStr *str, Ast *ast, int depth) {
             char *field_names[30];
             int field_name_count = 0;
             aoStrCatPrintf(str, "<class_ref>\n");
-            AstType *field_type = dictGet(ast->cls->type->fields, ast->field);
+            AstType *field_type = strMapGet(ast->cls->type->fields, ast->field);
 
             /* We only really want to print at the data type we are looking 
              * at, not the whole class */
@@ -2073,7 +2073,7 @@ static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
             Ast *ast_tmp;
             char *field_names[30];
             int field_name_count = 0;
-            AstType *field_type = dictGet(ast->cls->type->fields, ast->field);
+            AstType *field_type = strMapGet(ast->cls->type->fields, ast->field);
 
             /* We only really want to print at the data type we are looking 
              * at, not the whole class */

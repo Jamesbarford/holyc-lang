@@ -9,9 +9,9 @@
 #include "ast.h"
 #include "cctrl.h"
 #include "config.h"
-#include "dict.h"
 #include "lexer.h"
 #include "list.h"
+#include "map.h"
 #include "prsutil.h"
 #include "util.h"
 
@@ -1197,7 +1197,7 @@ void asmPrepFuncCallArgs(Cctrl *cc, aoStr *buf, Ast *funcall) {
     Ast *tmp, *fun, *arg;
 
     flags = 0;
-    fun = dictGetLen(cc->global_env,funcall->fname->data,funcall->fname->len);
+    fun = strMapGetLen(cc->global_env,funcall->fname->data,funcall->fname->len);
     funarg = funparam = params = NULL;
 
     /* This should exist on the AST */
@@ -2037,13 +2037,13 @@ void asmDataInternal(aoStr *buf, Ast *data) {
     }
 }
 
-void asmGlobalVar(Dict *seen_globals, aoStr *buf, Ast* ast) {
+void asmGlobalVar(StrMap *seen_globals, aoStr *buf, Ast* ast) {
     Ast *declvar = ast->declvar;
     Ast *declinit = ast->declinit;
     aoStr *varname = declvar->gname;
     char *label = asmGetGlabel(declvar);
 
-    if (dictGetLen(seen_globals,varname->data,varname->len)) {
+    if (strMapGetLen(seen_globals,varname->data,varname->len)) {
         return;
     }
 
@@ -2051,7 +2051,7 @@ void asmGlobalVar(Dict *seen_globals, aoStr *buf, Ast* ast) {
         buf->len--;
     }
 
-    dictSet(seen_globals,varname->data,ast);
+    strMapAdd(seen_globals,varname->data,ast);
 
     if (declinit &&
         (declinit->kind == AST_ARRAY_INIT || 
@@ -2401,7 +2401,7 @@ void asmInitaliser(Cctrl *cc, aoStr *buf) {
 /* Create assembly */
 aoStr *asmGenerate(Cctrl *cc) {
     Ast *ast;
-    Dict *seen_globals = dictNew(&default_table_type);
+    StrMap *seen_globals = strMapNew(32);
     aoStr *asmbuf = aoStrAlloc(1<<10);
  
     if (!listEmpty(cc->initalisers)) {

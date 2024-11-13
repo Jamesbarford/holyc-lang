@@ -2,7 +2,7 @@
 #define LEXER_H
 
 #include "aostr.h"
-#include "dict.h"
+#include "map.h"
 #include "list.h"
 
 #define LEX_MAX_IDENT_LEN  128
@@ -154,8 +154,8 @@ typedef struct lexer {
     char *builtin_root;
     List *files;
     List *all_source;/* This saves all of the files we see so we can free them later */
-    Dict *seen_files;
-    Dict *symbol_table;
+    StrMap *seen_files;
+    StrMap *symbol_table;
     lexFile *cur_file;
 } lexer;
 
@@ -166,8 +166,8 @@ void lexSetBuiltinRoot(lexer *l, char *root);
 void lexInit(lexer *l, char *source, int flag);
 void lexPushFile(lexer *l, aoStr *filename);
 int lex(lexer *l, lexeme *le);
-List *lexToLexemes(Dict *macro_defs, lexer *l);
-List *lexUntil(Dict *macro_defs, lexer *l, char to);
+List *lexToLexemes(StrMap *macro_defs, lexer *l);
+List *lexUntil(StrMap *macro_defs, lexer *l, char to);
 void lexemePrint(lexeme *le);
 char *lexemeTypeToString(int tk_type);
 char *lexemePunctToString(long op);

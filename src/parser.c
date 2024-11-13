@@ -6,7 +6,6 @@
 #include "aostr.h"
 #include "ast.h"
 #include "cctrl.h"
-#include "dict.h"
 #include "lexer.h"
 #include "list.h"
 #include "parser.h"
@@ -108,22 +107,24 @@ Ast *parseDeclArrayInitInt(Cctrl *cc, AstType *type) {
     return astArrayInit(initlist);
 }
 
-void parseFlattenAnnonymous(AstType *anon, Dict *fields_dict,
+void parseFlattenAnnonymous(AstType *anon, StrMap *fields_dict,
         int offset, int make_copy)
 {
-    AstType *base, *type;
-    for (int i = 0; i < anon->fields->capacity; ++i) {
-        for (DictNode *dn = anon->fields->body[i]; dn; dn = dn->next) {
-            base = (AstType *)dn->val;
-            if (make_copy) {
-                type = astTypeCopy(base);
-            } else {
-                type = base;
-            }
-            type->offset += offset;
-            dictSet(fields_dict,dn->key,type);
+    StrMapIterator *it = strMapIteratorNew(anon->fields);
+    StrMapNode *n = NULL;
+    while ((n = strMapNext(it)) != NULL) {
+        AstType *base = (AstType *)n->value;
+        AstType *type = NULL;
+        if (make_copy) {
+            type = astTypeCopy(base);
+        } else {
+            type = base;
         }
+        type->offset += offset;
+
+        strMapAdd(fields_dict,n->key,type);
     }
+    strMapIteratorRelease(it);
 }
 
 List *parseClassOrUnionFields(Cctrl *cc, aoStr *name,
@@ -259,12 +260,12 @@ int CalcPadding(int offset, int size) {
     return offset % size == 0 ? 0 : size - offset % size;
 }
 
-Dict *parseClassOffsets(int *real_size, List *fields, AstType *base_class,
+StrMap *parseClassOffsets(int *real_size, List *fields, AstType *base_class,
         aoStr *clsname, int is_intrinsic)
 {
     int offset,size,padding;
     AstType *field;
-    Dict *fields_dict = dictNew(&default_table_type);
+    StrMap *fields_dict = strMapNew(32);
 
     /* XXX: Assumes the class definition will be made later */
     if (listEmpty(fields)) {
@@ -285,7 +286,7 @@ Dict *parseClassOffsets(int *real_size, List *fields, AstType *base_class,
             field->offset = offset;
             offset+=field->size;
             if (field->clsname) {
-                dictSet(fields_dict,aoStrMove(field->clsname),field);
+                strMapAdd(fields_dict,aoStrMove(field->clsname),field);
             }
         }
 
@@ -320,7 +321,7 @@ Dict *parseClassOffsets(int *real_size, List *fields, AstType *base_class,
         }
 
         if (field->clsname) {
-            dictSet(fields_dict,aoStrMove(field->clsname),field);
+            strMapAdd(fields_dict,aoStrMove(field->clsname),field);
         }
     }
 
@@ -328,10 +329,10 @@ Dict *parseClassOffsets(int *real_size, List *fields, AstType *base_class,
     return fields_dict;
 }
 
-Dict *parseUnionOffsets(int *real_size, List *fields) {
+StrMap *parseUnionOffsets(int *real_size, List *fields) {
     int max_size;
     AstType *field;
-    Dict *fields_dict = dictNew(&default_table_type);
+    StrMap *fields_dict = strMapNew(32);
 
     max_size = 0;
     listForEach(fields) {
@@ -346,14 +347,14 @@ Dict *parseUnionOffsets(int *real_size, List *fields) {
 
         field->offset = 0;
         if (field->clsname) {
-            dictSet(fields_dict,field->clsname->data, field);
+            strMapAdd(fields_dict,field->clsname->data, field);
         }
     }
     *real_size = max_size;
     return fields_dict;
 }
 
-AstType *parseClassOrUnion(Cctrl *cc, Dict *env,
+AstType *parseClassOrUnion(Cctrl *cc, StrMap *env,
         int is_class,
         unsigned int (*computeSize)(List *),
         int is_intrinsic)
@@ -364,8 +365,8 @@ AstType *parseClassOrUnion(Cctrl *cc, Dict *env,
     lexeme *tok = cctrlTokenGet(cc);
     AstType *prev = NULL, *ref = NULL, *base_class = NULL;
     List *fields = NULL;
-    Dict *fields_dict;
-    cc->localenv = dictNewWithParent(cc->localenv);
+    StrMap *fields_dict;
+    cc->localenv = strMapNewWithParent(32, cc->localenv);
 
     if (tok->tk_type == TK_IDENT) {
         tag = aoStrDupRaw(tok->start,tok->len);
@@ -381,7 +382,7 @@ AstType *parseClassOrUnion(Cctrl *cc, Dict *env,
                 loggerPanic("line %d: Expected Identifier for class inheritance\n",
                         tok->line);
             }
-            base_class = dictGetLen(cc->clsdefs,tok->start,tok->len);
+            base_class = strMapGetLen(cc->clsdefs,tok->start,tok->len);
             if (base_class == NULL) {
                 loggerPanic("line %d: class %.*s has not been defined\n",
                         tok->line,tok->len,tok->start);
@@ -397,7 +398,7 @@ AstType *parseClassOrUnion(Cctrl *cc, Dict *env,
     }
 
     if (tag) {
-        prev = dictGetLen(env, tag->data, tag->len);
+        prev = strMapGetLen(env, tag->data, tag->len);
     }
 
     fields = parseClassOrUnionFields(cc,tag,computeSize,&class_size);
@@ -428,7 +429,7 @@ AstType *parseClassOrUnion(Cctrl *cc, Dict *env,
         ref = astClassType(NULL,tag,0,is_intrinsic); 
     }
     if (tag) {
-        dictSet(env,tag->data,ref);
+        strMapAdd(env,tag->data,ref);
     }
     return ref;
 }
@@ -509,7 +510,7 @@ Ast *parseDecl(Cctrl *cc) {
         return NULL;
     }
     var = astLVar(type,varname->start,varname->len);
-    if (!dictSet(cc->localenv,var->lname->data,var)) {
+    if (!strMapAdd(cc->localenv,var->lname->data,var)) {
         loggerPanic("line: %ld variable %s already declared\n",
                 cc->lineno,astLValueToString(var,0));
     }
@@ -574,8 +575,8 @@ Ast *parseDesugarArrayLoop(Cctrl *cc, Ast *iteratee, Ast *static_array) {
         iteratee->type = deref_type;
     }
 
-    dictSet(cc->localenv,RANGE_LOOP_IDX,counter_var);
-    dictSet(cc->localenv,iteratee->lname->data,iteratee);
+    strMapAdd(cc->localenv,RANGE_LOOP_IDX,counter_var);
+    strMapAdd(cc->localenv,iteratee->lname->data,iteratee);
 
     if (cc->tmp_locals) {
         listAppend(cc->tmp_locals,counter_var);
@@ -628,8 +629,8 @@ Ast *parseCreateForRange(Cctrl *cc, Ast *iteratee, Ast *container,
     Ast *counter_var = astLVar(ast_int_type,str_lit(RANGE_LOOP_IDX));
     Ast *counter = astDecl(counter_var,astI64Type(0));
 
-    dictSet(cc->localenv,RANGE_LOOP_IDX,counter_var);
-    dictSet(cc->localenv,iteratee->lname->data,iteratee);
+    strMapAdd(cc->localenv,RANGE_LOOP_IDX,counter_var);
+    strMapAdd(cc->localenv,iteratee->lname->data,iteratee);
     if (cc->tmp_locals) {
         listAppend(cc->tmp_locals,counter_var);
         listAppend(cc->tmp_locals,iteratee);
@@ -659,8 +660,8 @@ Ast *parseRangeLoop(Cctrl *cc, AstType *type, Ast *iteratee) {
                         cc->lineno, astLValueToString(container, 0));
             }
 
-            AstType *size_field = dictGet(container->type->ptr->fields, "size");
-            AstType *entries_field = dictGet(container->type->ptr->fields, "entries");
+            AstType *size_field = strMapGet(container->type->ptr->fields, "size");
+            AstType *entries_field = strMapGet(container->type->ptr->fields, "entries");
 
             parseAssertContainerHasFields(cc,size_field,entries_field);
 
@@ -680,7 +681,7 @@ Ast *parseRangeLoop(Cctrl *cc, AstType *type, Ast *iteratee) {
             loggerPanic("line %ld: can only range over arrays and pointers\n", cc->lineno);
         }
     } else if (container->kind == AST_CLASS_REF) {
-        Dict *fields = NULL;
+        StrMap *fields = NULL;
         if (container->type->kind == AST_TYPE_POINTER) {
             fields = container->type->ptr->fields;
         } else if (container->type->kind == AST_TYPE_ARRAY) {
@@ -689,8 +690,8 @@ Ast *parseRangeLoop(Cctrl *cc, AstType *type, Ast *iteratee) {
             fields = container->type->fields;
         }
 
-        AstType *size_field = dictGet(fields, "size");
-        AstType *entries_field = dictGet(fields, "entries");
+        AstType *size_field = strMapGet(fields, "size");
+        AstType *entries_field = strMapGet(fields, "entries");
 
         parseAssertContainerHasFields(cc,size_field,entries_field);
 
@@ -735,7 +736,7 @@ Ast *parseForLoopInitialiser(Cctrl *cc) {
 
         /* can be : for an auto loop or ';' for a normal loop */
         tok = cctrlTokenPeek(cc); 
-        if (!dictSet(cc->localenv,init_var->lname->data,init_var)) {
+        if (!strMapAdd(cc->localenv,init_var->lname->data,init_var)) {
             loggerPanic("line: %ld variable %s already declared\n",
                     cc->lineno,astLValueToString(init_var,0));
         }
@@ -775,7 +776,7 @@ Ast *parseForStatement(Cctrl *cc) {
     cc->tmp_loop_begin = for_middle;
     cc->tmp_loop_end = for_end;
 
-    cc->localenv = dictNewWithParent(cc->localenv);
+    cc->localenv = strMapNewWithParent(32, cc->localenv);
     forinit = parseForLoopInitialiser(cc);
     //parseOptDeclOrStmt(cc);
 
@@ -818,7 +819,7 @@ Ast *parseWhileStatement(Cctrl *cc) {
     cc->tmp_loop_begin = while_begin;
     cc->tmp_loop_end = while_end;
 
-    cc->localenv = dictNewWithParent(cc->localenv);
+    cc->localenv = strMapNewWithParent(32, cc->localenv);
     whilecond = parseExpr(cc,16);
     cctrlTokenExpect(cc,')');
     whilebody = parseStatement(cc);
@@ -843,7 +844,7 @@ Ast *parseDoWhileStatement(Cctrl *cc) {
     cc->tmp_loop_begin = while_begin;
     cc->tmp_loop_end = while_end;
 
-    cc->localenv = dictNewWithParent(cc->localenv);
+    cc->localenv = strMapNewWithParent(32, cc->localenv);
 
     whilebody = parseStatement(cc);
     
@@ -902,7 +903,7 @@ Ast *parseReturnStatement(Cctrl *cc) {
 
     AstType *ok = astTypeCheck(cc->tmp_rettype,retval,'\0');
     if (!ok) {
-        Ast *func = dictGet(cc->global_env,cc->tmp_fname->data);
+        Ast *func = strMapGet(cc->global_env,cc->tmp_fname->data);
         typeCheckReturnTypeWarn(cc,lineno,func,check,retval);
     }
     return astReturn(retval,cc->tmp_rettype);
@@ -1071,7 +1072,7 @@ Ast *parseStatement(Cctrl *cc) {
     lexeme *tok, *peek;
     aoStr *label;
     Ast *ret, *ast;
-    Dict *env;
+    StrMap *env;
     tok = cctrlTokenGet(cc);
 
     if (tok->tk_type == TK_KEYWORD) {
@@ -1106,7 +1107,7 @@ Ast *parseStatement(Cctrl *cc) {
                             PUNCT_TERM_SEMI|PUNCT_TERM_COMMA);
 
                     cc->localenv = env;
-                    dictSet(env,gvar_ast->gname->data,gvar_ast);
+                    strMapAdd(env,gvar_ast->gname->data,gvar_ast);
                     listAppend(cc->ast_list,ast);
                     return ast;
                 }
@@ -1142,7 +1143,7 @@ Ast *parseStatement(Cctrl *cc) {
                     ast = astDecl(gvar_ast,NULL);
                 }
                 cc->localenv = env;
-                dictSet(env,gvar_ast->gname->data,gvar_ast);
+                strMapAdd(env,gvar_ast->gname->data,gvar_ast);
                 listAppend(cc->ast_list,ast);
                 return ast;
             }
@@ -1222,7 +1223,7 @@ Ast *parseCompoundStatement(Cctrl *cc) {
     lexeme *tok, *varname, *peek;
 
     stmts = listNew();
-    cc->localenv = dictNewWithParent(cc->localenv);
+    cc->localenv = strMapNewWithParent(32, cc->localenv);
     tok = NULL;
 
     tok = cctrlTokenPeek(cc);
@@ -1242,14 +1243,14 @@ Ast *parseCompoundStatement(Cctrl *cc) {
                     }
                     type = parseArrayDimensions(cc,next_type);
                     var = astLVar(type,varname->start,varname->len);
-                    if (!dictSet(cc->localenv,var->lname->data,var)) {
+                    if (!strMapAdd(cc->localenv,var->lname->data,var)) {
                         loggerPanic("line: %ld variable %s already declared\n",
                                 cc->lineno,astLValueToString(var,0));
                     }
                 } else {
                     cctrlTokenGet(cc);
                     var = parseFunctionPointer(cc,next_type);
-                    dictSet(cc->localenv,var->fname->data,var);
+                    strMapAdd(cc->localenv,var->fname->data,var);
                 }
 
                 if (cc->tmp_locals) {
@@ -1302,18 +1303,18 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
     Ast *func = NULL;
     AstType *fn_type;
 
-    cc->localenv = dictNewWithParent(cc->localenv);
+    cc->localenv = strMapNewWithParent(32, cc->localenv);
     cc->tmp_locals = locals;
 
     /* Upgrade a prototype to an actual function */
-    func = dictGetLen(cc->global_env,fname,len);
+    func = strMapGetLen(cc->global_env,fname,len);
     if (!func) {
         cc->tmp_params = params;
         cc->tmp_rettype = rettype;
         fn_type = astMakeFunctionType(cc->tmp_rettype, astParamTypes(params));
         func = astFunction(fn_type,fname,len,params,NULL,locals,
                 has_var_args);
-        dictSet(cc->global_env,func->fname->data,func);
+        strMapAdd(cc->global_env,func->fname->data,func);
     } else {
         switch (func->kind) {
             case AST_EXTERN_FUNC:
@@ -1366,7 +1367,7 @@ Ast *parseExternFunctionProto(Cctrl *cc, AstType *rettype, char *fname, int len)
     int has_var_args = 0;
     List *params;
     lexeme *tok;
-    cc->localenv = dictNewWithParent(cc->localenv);
+    cc->localenv = strMapNewWithParent(32, cc->localenv);
     cc->tmp_locals = NULL;
 
     params = parseParams(cc,')', &has_var_args,1);
@@ -1379,14 +1380,14 @@ Ast *parseExternFunctionProto(Cctrl *cc, AstType *rettype, char *fname, int len)
     AstType *type = astMakeFunctionType(rettype, astParamTypes(params));
     func = astFunction(type,fname,len,params,NULL,NULL,0);
     func->kind = AST_EXTERN_FUNC;
-    dictSet(cc->global_env,func->fname->data,func);
+    strMapAdd(cc->global_env,func->fname->data,func);
     return func;
 }
 
 Ast *parseFunctionOrDef(Cctrl *cc, AstType *rettype, char *fname, int len) {
     int has_var_args = 0;
     cctrlTokenExpect(cc,'(');
-    cc->localenv = dictNewWithParent(cc->localenv);
+    cc->localenv = strMapNewWithParent(32, cc->localenv);
     cc->tmp_locals = listNew();
 
     List *params = parseParams(cc,')',&has_var_args,1);
@@ -1401,7 +1402,7 @@ Ast *parseFunctionOrDef(Cctrl *cc, AstType *rettype, char *fname, int len) {
         AstType *type = astMakeFunctionType(rettype, astParamTypes(params));
         Ast *fn = astFunction(type,fname,len,params,NULL,NULL,has_var_args);
         fn->kind = AST_FUN_PROTO;
-        dictSet(cc->global_env,fn->fname->data,fn);
+        strMapAdd(cc->global_env,fn->fname->data,fn);
         return fn;
     }
 }
@@ -1436,7 +1437,7 @@ Ast *parseAsmFunctionBinding(Cctrl *cc) {
                 tok->line);
     }
     c_fname = aoStrDupRaw(tok->start,tok->len);
-    cc->localenv = dictNewWithParent(cc->localenv);
+    cc->localenv = strMapNewWithParent(32, cc->localenv);
     cctrlTokenExpect(cc,'(');
 
     params = parseParams(cc,')',&has_var_args,0);
@@ -1447,7 +1448,7 @@ Ast *parseAsmFunctionBinding(Cctrl *cc) {
 
     cc->localenv = NULL;
     /* Map a c function to an ASM function */
-    dictSet(cc->asm_funcs,c_fname->data,asm_func);
+    strMapAdd(cc->asm_funcs,c_fname->data,asm_func);
     cctrlTokenExpect(cc,';');
     return asm_func;
 }
@@ -1572,7 +1573,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
                 cctrlTokenExpect(cc,';');
                 *is_global = 1;
                 return ast;
-            } else if ((variable = dictGetLen(cc->global_env,tok->start, tok->len))) {
+            } else if ((variable = strMapGetLen(cc->global_env,tok->start, tok->len))) {
                 cctrlTokenRewind(cc);
                 ast = parseExpr(cc,16);
                 cctrlTokenExpect(cc,';');
@@ -1631,7 +1632,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
             }
             ast = astDecl(variable,NULL);
             listAppend(cc->ast_list,ast);
-            dictSet(cc->global_env,variable->gname->data,variable);
+            strMapAdd(cc->global_env,variable->gname->data,variable);
             cctrlTokenRewind(cc);
             *is_global = 1;
             
@@ -1640,7 +1641,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
             return ast;
         } else if (type->kind == AST_TYPE_ARRAY) {
             variable = astGVar(type,name->start,name->len,0);
-            dictSet(cc->global_env,variable->gname->data,variable);
+            strMapAdd(cc->global_env,variable->gname->data,variable);
             ast = parseVariableInitialiser(cc,variable,PUNCT_TERM_COMMA|PUNCT_TERM_SEMI);
             if (type->kind == AST_TYPE_AUTO) {
                 parseAssignAuto(cc,ast);
@@ -1655,7 +1656,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
         if (tokenPunctIs(tok,';') || tokenPunctIs(tok, ',')) {
             cctrlTokenGet(cc);
             variable = astGVar(type,name->start,name->len,0);
-            dictSet(cc->global_env,variable->gname->data,variable);
+            strMapAdd(cc->global_env,variable->gname->data,variable);
             return astDecl(variable,NULL);
         }
         loggerPanic("line %d: Cannot handle '%s'\n",tok->line,

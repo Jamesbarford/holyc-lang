@@ -3,7 +3,7 @@
 
 #include "aostr.h"
 #include "ast.h"
-#include "dict.h"
+#include "map.h"
 #include "lexer.h"
 
 #define HCC_VERSION "beta-v0.0.6"
@@ -22,31 +22,31 @@ typedef struct TokenIter {
 typedef struct Cctrl {
     /* The global environment for user defined types, functions and global
      * variables */
-    Dict *global_env;
+    StrMap *global_env;
 
     /* key words defined in the language */
-    Dict *symbol_table;
+    StrMap *symbol_table;
 
     /* Class definitions */
-    Dict *clsdefs;
+    StrMap *clsdefs;
 
     /* Union definitions */
-    Dict *uniondefs;
+    StrMap *uniondefs;
 
     /* Local environment for a function */
-    Dict *localenv;
+    StrMap *localenv;
 
     /* assembly functions that have been bound to HC */
-    Dict *asm_funcs;
+    StrMap *asm_funcs;
 
     /* Macro definitions */
-    Dict *macro_defs;
+    StrMap *macro_defs;
 
     /* Registers */
-    Dict *x86_registers;
+    StrMap *x86_registers;
 
     /* libc function names */
-    Dict *libc_functions;
+    StrMap *libc_functions;
 
     /* asm blocks */
     List *asm_blocks;
@@ -107,7 +107,7 @@ typedef struct Cctrl {
 /* Instantiate a new compiler control struct */
 Cctrl *cctrlNew(void);
 /* Slimmed down Cctrl, for expanding macros */
-Cctrl *ccMacroProcessor(Dict *macro_defs);
+Cctrl *ccMacroProcessor(StrMap *macro_defs);
 void cctrlInitTokenIter(Cctrl *cc, List *tokens);
 lexeme *cctrlTokenGet(Cctrl *cc);
 lexeme *cctrlTokenPeek(Cctrl *cc);

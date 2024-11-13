@@ -96,6 +96,7 @@ typedef struct StrMap {
             mask; /* Used for hashing, as the capacity is always a power of 2
                    * we can use fast modulo of `<int> & capacity-1`. */
     unsigned long threashold; /* rebuild threashold */
+    struct StrMap *parent;
     void (*_free_value)(
             void *_value); /* User defined callback for freeing values */
     void (*_free_key)(void *_key); /* User defined callback for freeing keys */
@@ -106,8 +107,15 @@ typedef struct StrMap {
                            *entries? */
 } StrMap;
 
+typedef struct StrMapIterator {
+    StrMap *map;
+    long idx;
+} StrMapIterator;
+
+
 StrMap *strMapNew(unsigned long capacity);
-void *strMapGetLen(StrMap *map, long key_len, char *key);
+StrMap *strMapNewWithParent(unsigned long capacity, StrMap *parent);
+void *strMapGetLen(StrMap *map, char *key, long key_len);
 void *strMapGet(StrMap *map, char *key);
 int strMapAdd(StrMap *map, char *key, void *value);
 int strMapHas(StrMap *map, char *key);
@@ -116,6 +124,12 @@ void strMapRelease(StrMap *map);
 int strMapResize(StrMap *map);
 void strMapSetFreeValue(StrMap *map, void (*_free_value)(void *value));
 void strMapSetFreeKey(StrMap *map, void (*_free_key)(void *key));
+
+StrMapIterator *strMapIteratorNew(StrMap *map);
+void strMapIteratorRelease(StrMapIterator *it);
+StrMapNode *strMapNext(StrMapIterator *it);
+
+
 
 typedef struct IntSet {
     unsigned long size;
