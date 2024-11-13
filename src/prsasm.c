@@ -147,7 +147,7 @@ void prsAsmPunct(Cctrl *cc, lexeme *tok, aoStr *buf) {
 }
 
 static void maybePutRegister(Cctrl *cc, aoStr *buf, aoStr *maybe_register) {
-    if (dictGetLen(cc->x86_registers,
+    if (strMapGetLen(cc->x86_registers,
                 maybe_register->data,maybe_register->len) != NULL) {
         aoStrCatPrintf(buf,"%%%s",maybe_register->data);
     } else {
@@ -248,7 +248,7 @@ Ast *prsAsmToATT(Cctrl *cc) {
                                 /* Only a few functions get called as one 
                                  * operation */
                                 aoStrToLowerCase(op1);
-                                if (dictGetLen(cc->libc_functions,
+                                if (strMapGetLen(cc->libc_functions,
                                             op1->data,op1->len) != NULL) {
                                     stdfunc = astNormaliseFunctionName(op1->data);
                                     aoStrCatPrintf(curblock,"%s\n",stdfunc->data);
@@ -264,7 +264,7 @@ Ast *prsAsmToATT(Cctrl *cc) {
                                 aoStrCatPrintf(curblock,"\t%s%s",op1->data,getTabs(op1));
 
                                 if (op1->len == 4 && !memcmp(op1->data,"call",4)) {
-                                    if (dictGetLen(cc->libc_functions,
+                                    if (strMapGetLen(cc->libc_functions,
                                                 op2->data,op2->len) != NULL) { 
                                         stdfunc = astNormaliseFunctionName(op2->data);
                                         aoStrCatPrintf(curblock,"%s\n",stdfunc->data);

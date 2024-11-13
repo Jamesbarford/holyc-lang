@@ -35,7 +35,6 @@ set(SOURCES
     cfg-print.c
     cfg.c
     compile.c
-    dict.c
     lexer.c
     list.c
     main.c
@@ -56,7 +55,6 @@ set(HEADERS
     cfg.h
     compile.h
     config.h
-    dict.h
     lexer.h
     list.h
     map.h

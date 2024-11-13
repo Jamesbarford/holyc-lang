@@ -2,7 +2,6 @@
 #define AST_H
 
 #include "aostr.h"
-#include "dict.h"
 #include "map.h"
 #include "list.h"
 
@@ -89,7 +88,7 @@ typedef struct AstType {
 
     /* Class */
     aoStr *clsname;
-    Dict *fields;
+    StrMap *fields;
     int offset;
     int is_intrinsic;
 
@@ -350,7 +349,7 @@ AstType *astMakeFunctionType(AstType *rettype, List *param_types);
 AstType *astConvertArray(AstType *ast_type);
 List *astParamTypes(List *params);
 Ast *astClassRef(AstType *type, Ast *cls, char *field_name);
-AstType *astClassType(Dict *fields, aoStr *clsname, int size, int is_intrinsic);
+AstType *astClassType(StrMap *fields, aoStr *clsname, int size, int is_intrinsic);
 Ast *astCast(Ast *var, AstType *to);
 
 AstType *astGetResultType(long op, AstType *a, AstType *b);

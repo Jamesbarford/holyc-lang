@@ -6,9 +6,9 @@
 #include "aostr.h"
 #include "ast.h"
 #include "cctrl.h"
-#include "dict.h"
 #include "lexer.h"
 #include "list.h"
+#include "map.h"
 #include "prsutil.h"
 #include "prslib.h"
 #include "util.h"
@@ -163,8 +163,8 @@ List *parseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
         if (tokenPunctIs(pname, TK_ELLIPSIS)) {
             cctrlTokenGet(cc);
             var = astVarArgs();
-            dictSet(cc->localenv,var->argc->lname->data,var->argc);
-            dictSet(cc->localenv,var->argv->lname->data,var->argv);
+            strMapAdd(cc->localenv,var->argc->lname->data,var->argc);
+            strMapAdd(cc->localenv,var->argv->lname->data,var->argv);
             listAppend(params,var);
             if (cc->tmp_locals) {
                 listAppend(cc->tmp_locals, var->argc);
@@ -194,7 +194,7 @@ List *parseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
                     type = astMakePointerType(type->ptr);
                 }
                 var = parseFunctionPointer(cc,type);
-                dictSet(cc->localenv,var->fname->data,var);
+                strMapAdd(cc->localenv,var->fname->data,var);
                 if (cc->tmp_locals) {
                     listAppend(cc->tmp_locals, var);
                 }
@@ -234,7 +234,7 @@ List *parseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
         if (tokenPunctIs(tok, '=')) {
             var = parseDefaultFunctionParam(cc,var);
             if (store) {
-                if (!dictSet(cc->localenv,var->declvar->lname->data,var)) {
+                if (!strMapAdd(cc->localenv,var->declvar->lname->data,var)) {
                     loggerPanic("line: %ld variable %s already declared\n",
                             cc->lineno,astLValueToString(var,0));
                 }
@@ -242,7 +242,7 @@ List *parseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
             tok = cctrlTokenGet(cc);
         } else {
             if (store) {
-                if (!dictSet(cc->localenv,var->lname->data,var)) {
+                if (!strMapAdd(cc->localenv,var->lname->data,var)) {
                     loggerPanic("line: %ld variable %s already declared\n",
                             cc->lineno,astLValueToString(var,0));
                 }
@@ -360,17 +360,17 @@ void parseDeclInternal(Cctrl *cc, lexeme **tok, AstType **type) {
 
 static Ast *findFunctionDecl(Cctrl *cc, char *fname, int len) {
     Ast *decl;
-    if ((decl = dictGetLen(cc->global_env,fname,len)) != NULL) {
+    if ((decl = strMapGetLen(cc->global_env,fname,len)) != NULL) {
         if (decl->kind == AST_FUNC ||
             decl->kind == AST_EXTERN_FUNC ||
             decl->kind == AST_FUN_PROTO) {
             return decl;
         }
-    } else if (cc->localenv && (decl = dictGetLen(cc->localenv,fname,len)) != NULL) {
+    } else if (cc->localenv && (decl = strMapGetLen(cc->localenv,fname,len)) != NULL) {
         if (decl->kind == AST_FUNPTR || decl->kind == AST_LVAR) {
             return decl;
         }
-    } else if ((decl = dictGetLen(cc->asm_funcs,fname,len)) != NULL) {
+    } else if ((decl = strMapGetLen(cc->asm_funcs,fname,len)) != NULL) {
         /* Assembly function */
         return decl;
     }
@@ -734,7 +734,7 @@ Ast *parseGetClassField(Cctrl *cc, Ast *cls) {
     if (type->fields == NULL && cls->kind == AST_DEREF) {
         type = cls->cls->type;
     }
-    AstType *field = dictGetLen(type->fields, tok->start, tok->len);
+    AstType *field = strMapGetLen(type->fields, tok->start, tok->len);
     if (!field) {
         loggerPanic("line %d: Property: %.*s does not exist on class\n", 
                 tok->line,tok->len, tok->start);

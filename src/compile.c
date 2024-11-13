@@ -8,7 +8,6 @@
 #include "cfg-print.h"
 #include "cfg.h"
 #include "compile.h"
-#include "dict.h"
 #include "x86.h"
 #include "lexer.h"
 #include "list.h"
@@ -27,7 +26,7 @@ void compilePrintTokens(Cctrl *cc) {
 void compilePrintAst(Cctrl *cc) {
     List *it;
     Ast *ast;
-    //DictNode *dn;
+    //StrMapNode *dn;
     char *tmp;
 
     printf("AST: \n");
@@ -74,9 +73,9 @@ List *compileToTokens(Cctrl *cc, char *entrypath, int lexer_flags) {
     List *tokens;
     lexer l;
     aoStr *builtin_path;
-    Dict *seen_files;
+    StrMap *seen_files;
 
-    seen_files = dictNew(&default_table_type);
+    seen_files = strMapNew(32);
     tokens = listNew();
     builtin_path = aoStrDupRaw("/usr/local/include/tos.HH",25); //aoStrNew();
 
@@ -92,7 +91,7 @@ List *compileToTokens(Cctrl *cc, char *entrypath, int lexer_flags) {
 
     tokens = lexToLexemes(cc->macro_defs,&l);
     lexemePrintList(tokens);
-    dictRelease(seen_files);
+    strMapRelease(seen_files);
     return tokens;
 }
 
@@ -100,9 +99,9 @@ int compileToAst(Cctrl *cc, char *entrypath, int lexer_flags) {
     List *tokens;
     lexer l;
     aoStr *builtin_path;
-    Dict *seen_files;
+    StrMap *seen_files;
 
-    seen_files = dictNew(&default_table_type);
+    seen_files = strMapNew(32);
     tokens = listNew();
     builtin_path = aoStrDupRaw("/usr/local/include/tos.HH",25); //aoStrNew();
 
@@ -118,7 +117,7 @@ int compileToAst(Cctrl *cc, char *entrypath, int lexer_flags) {
 
     tokens = lexToLexemes(cc->macro_defs,&l);
 
-    dictRelease(seen_files);
+    strMapRelease(seen_files);
     cctrlInitTokenIter(cc,tokens);
     parseToAst(cc);
 

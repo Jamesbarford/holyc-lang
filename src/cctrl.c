@@ -6,7 +6,6 @@
 
 #include "ast.h"
 #include "cctrl.h"
-#include "dict.h"
 #include "lexer.h"
 #include "list.h"
 #include "util.h"
@@ -66,20 +65,20 @@ static void cctrlAddBuiltinMacros(Cctrl *cc) {
     long bufsize = sizeof(char)*128;
 
     le = lexemeSentinal();
-    if (IS_BSD)        dictSet(cc->macro_defs,"IS_BSD",le);
-    if (IS_MACOS)      dictSet(cc->macro_defs,"IS_MACOS",le);
-    else if (IS_LINUX) dictSet(cc->macro_defs,"IS_LINUX",le);
+    if (IS_BSD)        strMapAdd(cc->macro_defs,"IS_BSD",le);
+    if (IS_MACOS)      strMapAdd(cc->macro_defs,"IS_MACOS",le);
+    else if (IS_LINUX) strMapAdd(cc->macro_defs,"IS_LINUX",le);
     
     if (IS_X86_64)      {
-        dictSet(cc->macro_defs,"IS_X86_64",le);
+        strMapAdd(cc->macro_defs,"IS_X86_64",le);
         le = lexemeNew("X86_64",6);
         le->tk_type = TK_STR;
-        dictSet(cc->macro_defs,"__ARCH__",le);
+        strMapAdd(cc->macro_defs,"__ARCH__",le);
     } else if (IS_ARM_64) {
-        dictSet(cc->macro_defs,"IS_ARM_64",le);
+        strMapAdd(cc->macro_defs,"IS_ARM_64",le);
         le = lexemeNew("ARM_64",6);
         le->tk_type = TK_STR;
-        dictSet(cc->macro_defs,"__ARCH__",le);
+        strMapAdd(cc->macro_defs,"__ARCH__",le);
     }
 
     gettimeofday(&tm,NULL);
@@ -97,14 +96,14 @@ static void cctrlAddBuiltinMacros(Cctrl *cc) {
     time[len] = '\0';
     le = lexemeNew(time,len);
     le->tk_type = TK_STR;
-    dictSet(cc->macro_defs,"__TIME__",le);
+    strMapAdd(cc->macro_defs,"__TIME__",le);
 
     len = snprintf(date,bufsize,"%04d/%02d/%02d",
             ptm->tm_year+1900,ptm->tm_mon+1,ptm->tm_mday);
     date[len] = '\0';
     le = lexemeNew(date,len);
     le->tk_type = TK_STR;
-    dictSet(cc->macro_defs,"__DATE__",le);
+    strMapAdd(cc->macro_defs,"__DATE__",le);
 
     len = snprintf(time_stamp,bufsize,
             "%d-%02d-%02d %02d:%02d:%02d",
@@ -114,19 +113,19 @@ static void cctrlAddBuiltinMacros(Cctrl *cc) {
     date[len] = '\0';
     le = lexemeNew(time_stamp,len);
     le->tk_type = TK_STR;
-    dictSet(cc->macro_defs,"__TIMESTAMP__",le);
+    strMapAdd(cc->macro_defs,"__TIMESTAMP__",le);
 
 #ifdef HCC_LINK_SQLITE3
     le = lexemeSentinal();
-    dictSet(cc->macro_defs,"__HCC_LINK_SQLITE3__",le);
+    strMapAdd(cc->macro_defs,"__HCC_LINK_SQLITE3__",le);
 #endif
 
     le = lexemeNew((char *)cctrlGetVersion(),len);
     le->tk_type = TK_STR;
-    dictSet(cc->macro_defs,"__HCC_VERSION__",le);
+    strMapAdd(cc->macro_defs,"__HCC_VERSION__",le);
 }
 
-Cctrl *ccMacroProcessor(Dict *macro_defs) {
+Cctrl *ccMacroProcessor(StrMap *macro_defs) {
     Cctrl *cc = malloc(sizeof(Cctrl));
     cc->tkit = malloc(sizeof(TokenIter));
     cc->macro_defs = macro_defs;
@@ -142,14 +141,14 @@ Cctrl *cctrlNew(void) {
     aoStr **str_array;
     int len;
 
-    cc->global_env = dictNew(&default_table_type);
-    cc->clsdefs = dictNew(&default_table_type);
-    cc->uniondefs = dictNew(&default_table_type);
-    cc->symbol_table = dictNew(&default_table_type);
-    cc->asm_funcs = dictNew(&default_table_type);
-    cc->macro_defs = dictNew(&default_table_type);
-    cc->x86_registers = dictNew(&default_table_type);
-    cc->libc_functions = dictNew(&default_table_type);
+    cc->global_env = strMapNew(32);
+    cc->clsdefs = strMapNew(32);
+    cc->uniondefs = strMapNew(32);
+    cc->symbol_table = strMapNew(32);
+    cc->asm_funcs = strMapNew(32);
+    cc->macro_defs = strMapNew(32);
+    cc->x86_registers = strMapNew(32);
+    cc->libc_functions = strMapNew(32);
     cc->strings = listNew();
     cc->asm_blocks = listNew();
     cc->ast_list = listNew();
@@ -168,14 +167,14 @@ Cctrl *cctrlNew(void) {
     str_array = aoStrSplit(x86_registers,',',&len);
     for (int i = 0; i < len; ++i) {
         char *reg = aoStrMove(str_array[i]);
-        dictSet(cc->x86_registers,reg,reg);
+        strMapAdd(cc->x86_registers,reg,reg);
     }
     free(str_array);
 
     str_array = aoStrSplit(libc_functions,',',&len);
     for (int i = 0; i < len; ++i) {
         char *libc_func = aoStrMove(str_array[i]);
-        dictSet(cc->libc_functions,libc_func,libc_func);
+        strMapAdd(cc->libc_functions,libc_func,libc_func);
     }
     free(str_array);
 
@@ -186,7 +185,7 @@ Cctrl *cctrlNew(void) {
         type->issigned = bilt->issigned;
         type->kind = bilt->kind;
         type->ptr = NULL;
-        dictSet(cc->symbol_table, bilt->name, type);
+        strMapAdd(cc->symbol_table, bilt->name, type);
     }
 
     cctrlAddBuiltinMacros(cc);
@@ -194,8 +193,8 @@ Cctrl *cctrlNew(void) {
     Ast *cmd_args = astGlobalCmdArgs();
     listAppend(cc->ast_list,cmd_args->argc);
     listAppend(cc->ast_list,cmd_args->argv);
-    dictSet(cc->global_env,"argc",cmd_args->argc->declvar);
-    dictSet(cc->global_env,"argv",cmd_args->argv->declvar);
+    strMapAdd(cc->global_env,"argc",cmd_args->argc->declvar);
+    strMapAdd(cc->global_env,"argv",cmd_args->argv->declvar);
     return cc;
 }
 
@@ -216,7 +215,7 @@ lexeme *cctrlTokenPeek(Cctrl *cc) {
 
     retval = (lexeme *)it->cur->value;
     if (retval->tk_type == TK_IDENT) {
-        if ((macro = dictGetLen(cc->macro_defs,retval->start,retval->len)) != NULL) {
+        if ((macro = strMapGetLen(cc->macro_defs,retval->start,retval->len)) != NULL) {
             return macro;
         }
     }
@@ -264,20 +263,20 @@ Ast *cctrlGetVar(Cctrl *cc, char *varname, int len) {
     Ast *ast_var;
     lexeme *tok;
 
-    if (cc->localenv && (ast_var = dictGetLen(cc->localenv, varname, len)) != NULL) {
+    if (cc->localenv && (ast_var = strMapGetLen(cc->localenv, varname, len)) != NULL) {
         return ast_var;
     }
 
-    if ((ast_var = dictGetLen(cc->global_env, varname, len)) != NULL) {
+    if ((ast_var = strMapGetLen(cc->global_env, varname, len)) != NULL) {
         return ast_var;
     }
 
-    if ((ast_var = dictGetLen(cc->asm_funcs, varname, len)) != NULL) {
+    if ((ast_var = strMapGetLen(cc->asm_funcs, varname, len)) != NULL) {
         return ast_var;
     }
 
     /* Expand a macro definition */
-    if ((tok = dictGetLen(cc->macro_defs, varname, len)) != NULL) {
+    if ((tok = strMapGetLen(cc->macro_defs, varname, len)) != NULL) {
         switch (tok->tk_type) {
         case TK_I64:
             return astI64Type(tok->i64);
@@ -297,14 +296,14 @@ Ast *cctrlGetVar(Cctrl *cc, char *varname, int len) {
 AstType *cctrlGetKeyWord(Cctrl *cc, char *name, int len) {
     AstType *type;
     assert(name != NULL);
-    if ((type = dictGetLen(cc->symbol_table,name,len)) != NULL) {
+    if ((type = strMapGetLen(cc->symbol_table,name,len)) != NULL) {
         return type;
     }
     /* Classes are types */
-    if ((type = dictGetLen(cc->clsdefs,name,len)) != NULL) {
+    if ((type = strMapGetLen(cc->clsdefs,name,len)) != NULL) {
         return type;
     }
-    if ((type = dictGetLen(cc->uniondefs,name,len)) != NULL) {
+    if ((type = strMapGetLen(cc->uniondefs,name,len)) != NULL) {
         return type;
     }
     return NULL;
@@ -316,6 +315,6 @@ int cctrlIsKeyword(Cctrl *cc, char *name, int len) {
 
 void cctrlSetCommandLineDefines(Cctrl *cc, List *defines_list) {
     listForEach(defines_list) {
-        dictSet(cc->macro_defs,(char*)it->value,lexemeSentinal());
+        strMapAdd(cc->macro_defs,(char*)it->value,lexemeSentinal());
     }
 }

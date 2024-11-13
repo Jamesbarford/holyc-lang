@@ -9,7 +9,7 @@
 #include "aostr.h"
 #include "ast.h"
 #include "cctrl.h"
-#include "dict.h"
+#include "map.h"
 #include "lexer.h"
 #include "list.h"
 #include "prslib.h"
@@ -17,7 +17,7 @@
 #include "util.h"
 
 /* prototypes */
-int lexPreProcIf(Dict *macro_defs, lexer *l);
+int lexPreProcIf(StrMap *macro_defs, lexer *l);
 
 typedef struct {
     char *name;
@@ -155,8 +155,8 @@ void lexInit(lexer *l, char *source, int flags) {
     l->flags = flags;
     l->files = listNew();
     l->all_source = listNew();
-    l->symbol_table = dictNew(&default_table_type);
-    dictSetFreeKey(l->symbol_table, NULL);
+    l->symbol_table = strMapNew(32);
+    l->symbol_table->_free_key = NULL;
     if (macro_proccessor == NULL) {
         macro_proccessor = ccMacroProcessor(NULL);
     }
@@ -164,7 +164,7 @@ void lexInit(lexer *l, char *source, int flags) {
      * hoist to 'compile.c'*/
     for (int i = 0; i < static_size(lexer_types); ++i) {
         LexerTypes *bilt = &lexer_types[i]; 
-        dictSet(l->symbol_table, bilt->name, bilt);
+        strMapAdd(l->symbol_table, bilt->name, bilt);
     }
 }
 
@@ -494,7 +494,7 @@ void lexPushFile(lexer *l, aoStr *filename) {
     f->ptr = src;
     f->lineno = 1;
     f->filename = filename;
-    dictSet(l->seen_files,filename->data,filename);
+    strMapAdd(l->seen_files,filename->data,filename);
     if (l->cur_file) {
         listAppend(l->files,l->cur_file);
     }
@@ -890,7 +890,7 @@ int lex(lexer *l, lexeme *le) {
             le->tk_type = tk_type;
             le->line = l->lineno;
 
-            if ((type = dictGetLen(l->symbol_table,le->start,le->len)) != NULL) {
+            if ((type = strMapGetLen(l->symbol_table,le->start,le->len)) != NULL) {
                 le->tk_type = TK_KEYWORD;
                 le->i64 = type->kind;
                 type = NULL;
@@ -1156,7 +1156,7 @@ error:
 }
 
 int lexHasFile(lexer *l, aoStr *file) {
-    return dictGet(l->seen_files,file->data) != NULL;
+    return strMapGet(l->seen_files,file->data) != NULL;
 }
 
 void lexInclude(lexer *l) {
@@ -1192,7 +1192,7 @@ void lexInclude(lexer *l) {
     }
 }
 
-lexeme *lexDefine(Dict *macro_defs, lexer *l) {
+lexeme *lexDefine(StrMap *macro_defs, lexer *l) {
     int tk_type,iters;
     List *macro_tokens;
     lexeme next,*start,*end,*expanded,*macro;
@@ -1215,7 +1215,7 @@ lexeme *lexDefine(Dict *macro_defs, lexer *l) {
         if (!lex(l,&next)) break;
 
         if (next.tk_type == TK_IDENT) {
-            if ((macro = dictGetLen(macro_defs,next.start,next.len)) != NULL) {
+            if ((macro = strMapGetLen(macro_defs,next.start,next.len)) != NULL) {
                 listAppend(macro_tokens,lexemeCopy(macro));
                 tk_type = macro->tk_type;
                 continue;
@@ -1243,7 +1243,7 @@ lexeme *lexDefine(Dict *macro_defs, lexer *l) {
     end = macro_tokens->prev->value;
 
     if (start==end && iters == 1) {
-        dictSet(macro_defs,ident->data,lexemeSentinal());
+        strMapAdd(macro_defs,ident->data,lexemeSentinal());
         listRelease(macro_tokens,NULL);
         return NULL;
     }
@@ -1258,7 +1258,7 @@ lexeme *lexDefine(Dict *macro_defs, lexer *l) {
 
     if (start == end) {
         expanded = lexemeCopy(start);
-        dictSet(macro_defs,ident->data,expanded);
+        strMapAdd(macro_defs,ident->data,expanded);
     } else {
         cctrlInitTokenIter(macro_proccessor,macro_tokens);
         Ast *ast = parseExpr(macro_proccessor,16);
@@ -1281,14 +1281,14 @@ lexeme *lexDefine(Dict *macro_defs, lexer *l) {
             expanded->i64 = evalIntConstExpr(ast);
             expanded->line = start->line;
         }
-        dictSet(macro_defs,ident->data,expanded);
+        strMapAdd(macro_defs,ident->data,expanded);
         astRelease(ast);
     }
     lexemelistRelease(macro_tokens);
     return expanded;
 }
 
-void lexUndef(Dict *macro_defs, lexer *l) {
+void lexUndef(StrMap *macro_defs, lexer *l) {
     lexeme next;
     char tmp[256];
     int tmp_len = 0;
@@ -1300,10 +1300,10 @@ void lexUndef(Dict *macro_defs, lexer *l) {
     tmp_len = snprintf(tmp,sizeof(tmp),"%.*s",
             next.len,next.start);
     tmp[tmp_len] = '\0';
-    dictDelete(macro_defs,tmp);
+    strMapRemove(macro_defs,tmp);
 }
 
-void lexExpandAndCollect(lexer *l, Dict *macro_defs, List *tokens, int should_collect) {
+void lexExpandAndCollect(lexer *l, StrMap *macro_defs, List *tokens, int should_collect) {
     lexeme next,*macro;
     int endif_count = 1;
 
@@ -1336,7 +1336,7 @@ void lexExpandAndCollect(lexer *l, Dict *macro_defs, List *tokens, int should_co
                     case KW_ELIF_DEF: {
                         lex(l,&next);
                         should_collect = 0;
-                        if ((macro = dictGetLen(macro_defs,next.start,next.len)) != NULL) {
+                        if ((macro = strMapGetLen(macro_defs,next.start,next.len)) != NULL) {
                             should_collect = 1;
                         }
                         break;
@@ -1352,7 +1352,7 @@ void lexExpandAndCollect(lexer *l, Dict *macro_defs, List *tokens, int should_co
                     case KW_IF_DEF: {
                         lex(l,&next);
                         should_collect = 0;
-                        if ((macro = dictGetLen(macro_defs,next.start,next.len)) != NULL) {
+                        if ((macro = strMapGetLen(macro_defs,next.start,next.len)) != NULL) {
                             should_collect = 1;
                         }
                         endif_count++;
@@ -1361,7 +1361,7 @@ void lexExpandAndCollect(lexer *l, Dict *macro_defs, List *tokens, int should_co
                     case KW_IF_NDEF: {
                         lex(l,&next);
                         should_collect = 0;
-                        if ((macro = dictGetLen(macro_defs,next.start,next.len)) == NULL) {
+                        if ((macro = strMapGetLen(macro_defs,next.start,next.len)) == NULL) {
                             should_collect = 1;
                         }
                         endif_count++;
@@ -1395,7 +1395,7 @@ done:
     return;
 }
 
-int lexPreProcIf(Dict *macro_defs, lexer *l) {
+int lexPreProcIf(StrMap *macro_defs, lexer *l) {
     int tk_type,iters,should_collect;
     List *macro_tokens;
     lexeme next,*start,*end,*expanded,*macro;
@@ -1425,7 +1425,7 @@ int lexPreProcIf(Dict *macro_defs, lexer *l) {
         } 
 
         if (next.tk_type == TK_IDENT) {
-            if ((macro = dictGetLen(macro_defs,next.start,next.len)) != NULL) {
+            if ((macro = strMapGetLen(macro_defs,next.start,next.len)) != NULL) {
                 listAppend(macro_tokens,lexemeCopy(macro));
                 tk_type = macro->tk_type;
             }
@@ -1485,7 +1485,7 @@ int lexPreProcIf(Dict *macro_defs, lexer *l) {
     return should_collect;
 }
 
-List *lexUntil(Dict *macro_defs, lexer *l, char to) {
+List *lexUntil(StrMap *macro_defs, lexer *l, char to) {
     List *tokens; 
 
     int ok;
@@ -1536,7 +1536,7 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
         }
         
         if (le.tk_type == TK_IDENT) {
-            if ((macro = dictGetLen(macro_defs,le.start,le.len)) != NULL) {
+            if ((macro = strMapGetLen(macro_defs,le.start,le.len)) != NULL) {
                 copy = lexemeCopy(macro);
                 listAppend(tokens, copy);
                 continue;
@@ -1563,7 +1563,7 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
                         if (next.tk_type != TK_IDENT) {
                             loggerPanic("line %d: Syntax is: #ifdef <TK_IDENT>\n",next.line);
                         }
-                        macro = dictGetLen(macro_defs,next.start,next.len);
+                        macro = strMapGetLen(macro_defs,next.start,next.len);
                         if ((next.i64 == KW_IF_DEF && macro) || (next.i64 == KW_IF_NDEF && !macro))  {
                             lexExpandAndCollect(l,macro_defs,tokens,1);
                         } else {
@@ -1586,7 +1586,7 @@ List *lexUntil(Dict *macro_defs, lexer *l, char to) {
     return tokens;
 }
 
-List *lexToLexemes(Dict *defs, lexer *l) {
+List *lexToLexemes(StrMap *defs, lexer *l) {
     return lexUntil(defs,l,'\0');
 }
 
