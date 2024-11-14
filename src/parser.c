@@ -8,6 +8,7 @@
 #include "cctrl.h"
 #include "lexer.h"
 #include "list.h"
+#include "map.h"
 #include "parser.h"
 #include "prslib.h"
 #include "prsasm.h"
@@ -53,16 +54,25 @@ Ast *parseFloatingCharConst(Cctrl *cc, lexeme *tok) {
     return ast;
 }
 
+void parseTypeCheckClassFieldInitaliser(Cctrl *cc, AstType *cls_field_type, Ast *init) {
+    if (!astTypeCheck(cls_field_type, init, '=')) {
+        char *cls_field_str = astTypeToColorString(cls_field_type);
+        char *init_field = astTypeToColorString(init->type);
+        char *var_string = astLValueToString(init,0);
+        cctrlWarning(cc,"Incompatible value being assigned to class field expected '%s' got '%s %s'",
+                cls_field_str,init_field,var_string);
+        free(cls_field_str);
+        free(init_field);
+        free(var_string);
+    }
+}
+
 Ast *parseDeclArrayInitInt(Cctrl *cc, AstType *type) {
     lexeme *tok = cctrlTokenGet(cc);
     List *initlist;
     Ast *init;
 
-    if (type->kind == AST_TYPE_CLASS) {
-        cctrlRaiseException(cc,"Initalising an array of classes is unsupported");
-    }
-
-    if (type->ptr->kind == AST_TYPE_CHAR && tok->tk_type == TK_STR) {
+    if (type->ptr && type->ptr->kind == AST_TYPE_CHAR && tok->tk_type == TK_STR) {
         return astString(tok->start,tok->len);
     }
 
@@ -72,6 +82,12 @@ Ast *parseDeclArrayInitInt(Cctrl *cc, AstType *type) {
     }
 
     initlist = listNew();
+    ssize_t i = 0;
+    StrMap *cls_fields = NULL;
+    if (type->kind == AST_TYPE_CLASS) {
+        cls_fields = type->fields;
+    }
+
     while (1) {
         tok = cctrlTokenGet(cc);
         if (tokenPunctIs(tok, '}')) {
@@ -89,10 +105,24 @@ Ast *parseDeclArrayInitInt(Cctrl *cc, AstType *type) {
             continue;
         } else {
             init = parseExpr(cc,16);
-            if ((astGetResultType('=', init->type, type->ptr)) == NULL) {
-                cctrlRaiseException(cc,"Incompatiable types: %s %s",
-                        astTypeToString(init->type),
-                        astTypeToString(type->ptr));
+            if (type->ptr) {
+              if ((astGetResultType('=', init->type, type->ptr)) == NULL) {
+                  cctrlRaiseException(cc,"Incompatiable types: %s %s",
+                          astTypeToString(init->type),
+                          astTypeToString(type->ptr));
+              }
+            } else if (type->kind == AST_TYPE_CLASS) {
+                if (i >= cls_fields->indexes->size) {
+                    cctrlRaiseException(cc, 
+                            "More initialisers than class fields for class: %s",
+                            astTypeToString(type));
+                }
+
+                ssize_t cls_field_idx = cls_fields->indexes->entries[i];
+                StrMapNode *entry = cls_fields->entries[cls_field_idx];
+                AstType *cls_field_type = entry->value;
+                parseTypeCheckClassFieldInitaliser(cc,cls_field_type,init);
+                i++;
             }
         }
         listAppend(initlist,init);
@@ -457,6 +487,11 @@ Ast *parseVariableAssignment(Cctrl *cc, Ast *var, long terminator_flags) {
             cctrlRaiseException(cc,"Invalid array initializer: expected %d items but got %d",
                 var->type->len, len);
         }
+        lexeme *tok = cctrlTokenGet(cc);
+        assertTokenIsTerminator(cc,tok,terminator_flags);
+        return astDecl(var,init);
+    } else if (var->type->kind == AST_TYPE_CLASS) {
+        init = parseDeclArrayInitInt(cc,var->type);
         lexeme *tok = cctrlTokenGet(cc);
         assertTokenIsTerminator(cc,tok,terminator_flags);
         return astDecl(var,init);

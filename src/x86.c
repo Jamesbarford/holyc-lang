@@ -1399,23 +1399,35 @@ void asmArrayInit(Cctrl *cc, aoStr *buf, Ast *ast, AstType *type, int offset) {
             offset += type->ptr->size;
             continue;
         }
-        switch (tmp->type->kind) {
-        case AST_TYPE_CHAR:
-        case AST_TYPE_INT:
-            if (tmp->type->issigned) {
-                aoStrCatPrintf(buf, "movq   $%lld, %%rax\n\t", tmp->i64);
-            } else if (!tmp->type->issigned) {
-                aoStrCatPrintf(buf, "movq   $%lu, %%rax\n\t",
-                               (unsigned long)tmp->i64);
+
+        if (tmp->kind == AST_STRING) {
+            aoStrCatPrintf(buf,"leaq    %s(%%rip), %%rax\n\t",tmp->slabel->data);
+            aoStrCatPrintf(buf,"movq    %%rax, %d(%%rbp)\n\t",offset);
+            offset += 8;
+        } else {
+            switch (tmp->type->kind) {
+            case AST_TYPE_CHAR:
+            case AST_TYPE_INT:
+                if (tmp->type->issigned) {
+                    aoStrCatPrintf(buf, "movq   $%lld, %%rax\n\t", tmp->i64);
+                } else if (!tmp->type->issigned) {
+                    aoStrCatPrintf(buf, "movq   $%lu, %%rax\n\t",
+                                   (unsigned long)tmp->i64);
+                }
+                break;
+            default:
+                asmExpression(cc, buf, it->value);
+                break;
             }
-            break;
-        default:
-            asmExpression(cc, buf, it->value);
-            break;
+            if (type->ptr) {
+                asmLSave(buf,type->ptr,offset);
+                offset += type->ptr->size;
+            } else {
+                asmLSave(buf,tmp->type,offset);
+                offset += tmp->type->size;
+            }
         }
 
-        asmLSave(buf,type->ptr,offset);
-        offset += type->ptr->size;
     }
 }
 
