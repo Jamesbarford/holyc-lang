@@ -7,6 +7,7 @@
 #ifndef AOSTR_H
 #define AOSTR_H
 
+#include <stdarg.h>
 #include <stddef.h>
 
 typedef struct aoStr aoStr;
@@ -43,6 +44,7 @@ aoStr *aoStrEncode(aoStr *buf);
 void aoStrArrayRelease(aoStr **arr, int count);
 aoStr **aoStrSplit(char *to_split, char delimiter, int *count);
 char *mprintf(const char *fmt, ...);
+char *mprintVa(const char *fmt, va_list ap);
 aoStr *aoStrError(void);
 
 #endif

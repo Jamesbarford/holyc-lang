@@ -24,8 +24,7 @@ void prsAsmMem(Cctrl *cc, aoStr *buf) {
     lexeme *tok;
     tok = cctrlTokenGet(cc);
     if (tok->tk_type != TK_IDENT) {
-        loggerPanic("line %d: [<register>] expected got: %s\n",
-                tok->line,lexemeToString(tok));
+        cctrlRaiseException(cc,"[<register>] expected got: %s",lexemeToString(tok));
     }
     cctrlTokenExpect(cc,']');
     aoStrCatPrintf(buf,"(%%%.*s)",tok->len,tok->start);
@@ -33,15 +32,14 @@ void prsAsmMem(Cctrl *cc, aoStr *buf) {
 
 void prsAsmOffset(Cctrl *cc, aoStr *buf, lexeme *tok) {
     if (tok->tk_type != TK_I64) {
-        loggerPanic("line %d: Expected TK_I64 type got: %s\n",
-                tok->line,lexemeToString(tok));
+        cctrlRaiseException(cc,"Expected TK_I64 type got: %s",lexemeToString(tok));
     }
 
     cctrlTokenExpect(cc,'[');
     tok = cctrlTokenGet(cc);
     if (tok->tk_type != TK_IDENT) {
-        loggerPanic("line %d: Expected <number>[<register>] Got: %s\n",
-                tok->line, lexemeToString(tok));
+        cctrlRaiseException(cc,"Expected <number>[<register>] Got: %s",
+                lexemeToString(tok));
     }
     cctrlTokenExpect(cc,']');
     aoStrCatPrintf(buf, "(%%%.*s)",tok->len,tok->start);
@@ -52,13 +50,13 @@ void prsAsmImm(Cctrl *cc, aoStr *buf, lexeme *tok) {
     switch (tok->tk_type) {
         case TK_PUNCT:
             if (tok->i64 != '-') {
-                loggerPanic("line %d: Expected '-'<numerical>\n", tok->line);
+                cctrlRaiseException(cc,"Expected '-'<numerical>");
             }
 
             tok = cctrlTokenGet(cc);
             if (tok->tk_type != TK_I64 && tok->tk_type != TK_F64) {
-                loggerPanic("line %d: Expected -<numerical> got: %s\n",
-                        tok->line, lexemeToString(tok));
+                cctrlRaiseException(cc,"Expected -<numerical> got: %s\n",
+                        lexemeToString(tok));
             }
             next = cctrlTokenPeek(cc);
             if (!tokenPunctIs(next,'[')) {
@@ -103,12 +101,12 @@ void prsAsmLabel(Cctrl *cc, aoStr *buf) {
 
     tok = cctrlTokenGet(cc);
     if (!tokenPunctIs(tok,'@')) {
-        loggerPanic("line %d: Labels must be: '@@<int>'\n", tok->line);
+        cctrlRaiseException(cc,": Labels must be: '@@<int>'");
     }
 
     tok = cctrlTokenGet(cc);
     if (tok->tk_type != TK_I64) {
-        loggerPanic("line %d: Labels must be: '@@<int>'\n", tok->line);
+        cctrlRaiseException(cc,": Labels must be: '@@<int>'");
     }
     
     label_num = tok->i64;
@@ -135,7 +133,7 @@ void prsAsmPunct(Cctrl *cc, lexeme *tok, aoStr *buf) {
             break;
         default:
             lexemePrint(tok);
-            loggerPanic("line %d: Unexpected character\n", tok->line);
+            cctrlRaiseException(cc,": Unexpected character");
     }
 
     next = cctrlTokenPeek(cc);
@@ -300,9 +298,9 @@ Ast *prsAsmToATT(Cctrl *cc) {
                                 aoStrRelease(op3);
                                 break;
                             default:
-                                loggerPanic("line %ld: Unexpected number of arguments for"
-                                        " x86 transpilation: %d"" Expression\n",
-                                        cc->lineno, count);
+                                cctrlRaiseException(cc,"Unexpected number of arguments for"
+                                        " x86 transpilation: %d"" Expression",
+                                        count);
                         }
                         isbol = 1;
                         count = 0;

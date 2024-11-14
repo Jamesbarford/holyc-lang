@@ -655,6 +655,30 @@ int strMapAdd(StrMap *map, char *key, void *value) {
     }
 }
 
+int strMapAddOrErr(StrMap *map, char *key, void *value) {
+    int is_free;
+
+    if (map->size >= map->threashold) {
+        if (!strMapResize(map)) {
+            /* This means we have run out of memory */
+            return 0;
+        }
+    }
+
+    long key_len = strlen(key);
+    unsigned long idx = strMapGetNextIdx(map, key, key_len, &is_free);
+
+    if (is_free) {
+        StrMapNode *n = strMapNodeNew(key, key_len, value);
+        intVecPush(map->indexes,idx);
+        map->entries[idx] = n;
+        map->size++;
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
 int strMapRemove(StrMap *map, char *key) {
     unsigned long idx, mask, probe;
     long len = strlen(key);
@@ -679,10 +703,15 @@ int strMapRemove(StrMap *map, char *key) {
 }
 
 void *strMapGetLen(StrMap *map, char *key, long key_len) {
-    for (; map; map = map->parent) {
+    if (!key) return NULL;
+    for (; map != NULL; map = map->parent) {
         unsigned long idx = strMapGetIdx(map,key,key_len);
-        if (idx != HT_DELETED)
-            return map->entries[idx]->value;
+        if (idx != HT_DELETED) {
+            StrMapNode *n = map->entries[idx];
+            assert(n);
+            return n->value;
+            //->value;
+        }
     }
     return NULL;
 }

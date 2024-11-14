@@ -74,14 +74,16 @@ void assertIsPointer(Ast *ast, long lineno) {
 
 /* Check if one of the characters matches and the flag wants that character to
  * terminate */
-void assertTokenIsTerminator(lexeme *tok, long terminator_flags) {
+void assertTokenIsTerminator(Cctrl *cc, lexeme *tok, long terminator_flags) {
     if (tok == NULL) {
-        loggerPanic("NULL token passed to assertTokenIsTerminator\n");
+        cctrlRaiseException(cc,"NULL token passed to assertTokenIsTerminator");
     }
 
     if (tok->tk_type != TK_PUNCT) {
-        loggerPanic("line %d: Expected token of type TK_PUNCT, got type: %s\n",
-                tok->line,lexemeTypeToString(tok->tk_type));
+        cctrlTokenRewind(cc);
+        cctrlTokenRewind(cc);
+        cctrlRaiseException(cc,"Expected token of type TK_PUNCT, got type: %s",
+                lexemeTypeToString(tok->tk_type));
     }
 
     if ((tok->i64 == ';' && (terminator_flags & PUNCT_TERM_SEMI)) ||
@@ -92,20 +94,20 @@ void assertTokenIsTerminator(lexeme *tok, long terminator_flags) {
 
     if ((terminator_flags & PUNCT_TERM_SEMI) &&
         (terminator_flags & PUNCT_TERM_COMMA)) {
-        loggerPanic("line %d: Expected ';' or ',' got: %s\n",
-                tok->line, lexemePunctToString(tok->i64));
+        cctrlRaiseException(cc,"Expected ';' or ',' got: %s",
+                lexemePunctToString(tok->i64));
     } else if ((terminator_flags & PUNCT_TERM_SEMI)) {
-        loggerPanic("line %d: Expected ';' got: %s\n",
-                tok->line, lexemePunctToString(tok->i64));
+        cctrlRaiseException(cc,"Expected ';' got: %s",
+                lexemePunctToString(tok->i64));
     } else if ((terminator_flags & PUNCT_TERM_COMMA)) {
-        loggerPanic("line %d: Expected ',' got: %s\n",
-                tok->line, lexemePunctToString(tok->i64));
+        cctrlRaiseException(cc,"Expected ',' got: %s",
+                lexemePunctToString(tok->i64));
     } else if (terminator_flags & PUNCT_TERM_RPAREN) {
-        loggerPanic("line %d: Expected ')' got: %s\n",
-                tok->line, lexemePunctToString(tok->i64));
+        cctrlRaiseException(cc,"Expected ')' got: %s",
+                lexemePunctToString(tok->i64));
     } else {
-        loggerPanic("line %d: Expected terminating token with flags: 0x%lX, got: %s\n",
-                tok->line, terminator_flags, lexemeToString(tok));
+        cctrlRaiseException(cc,"Expected terminating token with flags: 0x%lX, got: %s",
+                terminator_flags, lexemeToString(tok));
     }
 }
 

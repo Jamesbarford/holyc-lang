@@ -372,10 +372,8 @@ error:
     return NULL;
 }
 
-/* Allocating printf */
-char *mprintf(const char *fmt, ...) {
-    va_list ap, copy;
-    va_start(ap,fmt);
+char *mprintVa(const char *fmt, va_list ap) {
+    va_list copy;
 
     int allocated = 256;
     int len = 0;
@@ -401,8 +399,16 @@ char *mprintf(const char *fmt, ...) {
         break;
     }
     buffer[len] = '\0';
-    va_end(ap);
     return buffer;
+}
+
+/* Allocating printf */
+char *mprintf(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap,fmt);
+    char *buf = mprintVa(fmt, ap);
+    va_end(ap);
+    return buf;
 }
 
 aoStr *aoStrError(void) {

@@ -19,6 +19,8 @@
 #define ESC_CYAN   "\033[0;36m"
 #define ESC_WHITE  "\033[0;37m"
 #define ESC_RESET  "\033[0m"
+#define ESC_BOLD   "\x1b[1m"
+#define ESC_CLEAR_BOLD "\x1b[0m"
 
 #define min(x,y) (((x) < (y) ? (x) : (y)))
 

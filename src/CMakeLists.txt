@@ -26,6 +26,7 @@ endif()
 
 # Optionally, add more flags or options depending on the build type
 # For example, optimization flags for Release builds:
+set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -g")
 set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O2")
 
 set(SOURCES
