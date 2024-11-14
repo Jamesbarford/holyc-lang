@@ -67,7 +67,9 @@ static void cctrlAddBuiltinMacros(Cctrl *cc) {
 
     le = lexemeSentinal();
     if (IS_BSD)        strMapAdd(cc->macro_defs,"IS_BSD",le);
-    if (IS_MACOS)      strMapAdd(cc->macro_defs,"IS_MACOS",le);
+#ifdef IS_MACOS
+    strMapAdd(cc->macro_defs,"IS_MACOS",le);
+#endif
     else if (IS_LINUX) strMapAdd(cc->macro_defs,"IS_LINUX",le);
     
     if (IS_X86_64)      {
