@@ -117,9 +117,5 @@ int compileToAst(Cctrl *cc, char *entrypath, int lexer_flags) {
     aoStrRelease(builtin_path);
     listRelease(l->files,NULL);
     free(l);
-
-    /* @Leak - Jamesbarford 2024/07/19, when should this be freed if at all? */
-    // listRelease(code_list,free);
-    // lexemelistRelease(tokens);
     return 1;
 }

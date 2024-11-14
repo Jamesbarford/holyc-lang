@@ -241,24 +241,20 @@ void tokenRingBufferPush(TokenRingBuffer *ring_buffer, lexeme *token) {
     ring_buffer->entries[ring_buffer->head] = token;
     ring_buffer->head = tokenRingBufferGetIdx(ring_buffer->head);
     if (ring_buffer->size == CCTRL_TOKEN_BUFFER_SIZE) {
-        printf("Moving tail\n");
         ring_buffer->tail = tokenRingBufferGetIdx(ring_buffer->tail);
     } else {
         ring_buffer->size++;
     }
-    //printf("PUSH: %ld\n",ring_buffer->size);
 }
 
 /* Take one token from the ring buffer */
 lexeme *tokenRingBufferPop(TokenRingBuffer *ring_buffer) {
     if (tokenRingBufferEmpty(ring_buffer)) {
-        printf(" EMPTY\n");
         return NULL;
     }
     lexeme *token = ring_buffer->entries[ring_buffer->tail];
     ring_buffer->tail = tokenRingBufferGetIdx(ring_buffer->tail);
     ring_buffer->size--;
-    //printf("POP: %ld %s\n",ring_buffer->size,lexemeToString(token));
     return token;
 }
 
@@ -275,7 +271,6 @@ int tokenRingBufferRewind(TokenRingBuffer *ring_buffer) {
     //    return 0;
     //}
     ring_buffer->tail = (ring_buffer->tail - 1 + CCTRL_TOKEN_BUFFER_SIZE) & CCTRL_TOKEN_BUFFER_MASK;
-    //printf("REWIND\n");
     ring_buffer->size++;
     return 1;
 }
@@ -415,7 +410,6 @@ void cctrlTokenExpect(Cctrl *cc, long expected) {
     lexeme *tok = cctrlTokenGet(cc);
     if (!tokenPunctIs(tok, expected)) {
         if (!tok) {
-            //lexemePrintList(cc->tkit->tokens->next);
             loggerPanic("line %ld: Ran out of tokens\n",cc->lineno);
         } else {
             cctrlRaiseException(cc,"Syntax error expected '%c' got: '%.*s'",

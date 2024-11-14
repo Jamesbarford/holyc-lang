@@ -710,7 +710,6 @@ void *strMapGetLen(StrMap *map, char *key, long key_len) {
             StrMapNode *n = map->entries[idx];
             assert(n);
             return n->value;
-            //->value;
         }
     }
     return NULL;

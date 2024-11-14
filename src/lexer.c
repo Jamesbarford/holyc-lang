@@ -1677,7 +1677,7 @@ void lexemeFree(void *_le) {
 
 static void lexReleaseLexFile(lexFile *lex_file) {
     aoStrRelease(lex_file->filename);
-    free(lex_file->ptr);
+    aoStrRelease(lex_file->src);
     free(lex_file);
 }
 
