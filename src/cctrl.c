@@ -127,7 +127,6 @@ static void cctrlAddBuiltinMacros(Cctrl *cc) {
 
 Cctrl *ccMacroProcessor(StrMap *macro_defs) {
     Cctrl *cc = malloc(sizeof(Cctrl));
-    cc->tkit = malloc(sizeof(TokenIter));
     cc->macro_defs = macro_defs;
     cc->strings = listNew();
     return cc;
@@ -154,7 +153,6 @@ Cctrl *cctrlNew(void) {
     cc->ast_list = listNew();
     cc->initalisers = listNew();
     cc->initaliser_locals = listNew();
-    cc->tkit = malloc(sizeof(TokenIter));
     /* These are temoraries that the parser will allocate and 
      * NULL out between parses of classes and functions */
     cc->localenv = NULL;
@@ -196,13 +194,6 @@ Cctrl *cctrlNew(void) {
     strMapAdd(cc->global_env,"argc",cmd_args->argc->declvar);
     strMapAdd(cc->global_env,"argv",cmd_args->argv->declvar);
     return cc;
-}
-
-void cctrlInitTokenIter(Cctrl *cc, List *tokens) {
-    cc->tkit->count = 0;
-    cc->tkit->tokens = tokens;
-    listPrepend(tokens,lexemeSentinal());
-    cc->tkit->cur = tokens->next->next;
 }
 
 static lexeme *token_ring_buffer[CCTRL_TOKEN_BUFFER_SIZE];
@@ -335,8 +326,6 @@ void cctrlTokenRewind(Cctrl *cc) {
     if (!tokenRingBufferRewind(ring_buffer)) {
         return;
     }
-    //lexeme *token = ring_buffer->entries[ring_buffer->tail];
-    //cc->lineno = token->line;
 }
 
 lexeme *cctrlTokenGet(Cctrl *cc) {
@@ -355,45 +344,6 @@ lexeme *cctrlTokenGet(Cctrl *cc) {
         return token;
     }
     return NULL;
-}
-
-/* Have a look at the next lexeme but don't consume */
-lexeme *cctrlTokenPeek2(Cctrl *cc) {
-    TokenIter *it = cc->tkit;
-    lexeme *retval, *macro;
-
-    if (it->cur == it->tokens) {
-        return NULL;
-    }
-
-    retval = (lexeme *)it->cur->value;
-    if (!retval) return NULL;
-    if (retval->tk_type == TK_IDENT) {
-        if ((macro = strMapGetLen(cc->macro_defs,retval->start,retval->len)) != NULL) {
-            return macro;
-        }
-    }
-    return retval;
-}
-
-/** 
- * Get the current lexeme pointed to by cur and set cur to the 
- * next lexeme */
-lexeme *cctrlTokenGet2(Cctrl *cc) {
-    lexeme *tok;
-    if ((tok = cctrlTokenPeek(cc)) != NULL) {
-        cc->lineno = tok->line;
-        cc->tkit->cur = cc->tkit->cur->next;
-        return tok;
-    }
-    return NULL;
-}
-
-/* Go back one */
-void cctrlTokenRewind2(Cctrl *cc) {
-    cc->tkit->cur = cc->tkit->cur->prev;
-    lexeme *current = (lexeme *)cc->tkit->cur->value;
-    cc->lineno = current->line;
 }
 
 aoStr *cctrlCreateErrorLine(Cctrl *cc,

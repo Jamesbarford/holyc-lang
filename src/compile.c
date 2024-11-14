@@ -109,6 +109,8 @@ int compileToAst(Cctrl *cc, char *entrypath, int lexer_flags) {
     cctrlInitParse(cc,l);
 
     parseToAst(cc);
+    
+    lexerPoolRelease();
 
     strMapRelease(seen_files);
     lexReleaseAllFiles(l);

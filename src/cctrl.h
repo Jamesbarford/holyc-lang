@@ -16,14 +16,6 @@ static const char *cctrlGetVersion(void) {
     return HCC_VERSION;
 }
 
-typedef struct TokenIter {
-    /* All of the tokens */
-    List *tokens;
-    /* Current position in the list */
-    List *cur;
-    ssize_t count;
-} TokenIter;
-
 typedef struct TokenRingBuffer {
     ssize_t tail;
     ssize_t head;
@@ -112,9 +104,6 @@ typedef struct Cctrl {
     /* Temporary name of the function being parsed */
     aoStr *tmp_fname;
 
-    /* A list of tokens that have been through the lexer */
-    TokenIter *tkit;
-
     /* current line number */
     ssize_t lineno;
 
@@ -131,7 +120,6 @@ typedef struct Cctrl {
 Cctrl *cctrlNew(void);
 /* Slimmed down Cctrl, for expanding macros */
 Cctrl *ccMacroProcessor(StrMap *macro_defs);
-void cctrlInitTokenIter(Cctrl *cc, List *tokens);
 lexeme *cctrlTokenGet(Cctrl *cc);
 lexeme *cctrlTokenPeek(Cctrl *cc);
 void cctrlInitMacroProcessor(Cctrl *cc);
