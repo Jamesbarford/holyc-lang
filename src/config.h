@@ -3,8 +3,6 @@
 
 #if defined(__APPLE__) && defined(MAC_OS_X_VERSION_10_6)
 #define IS_MACOS 1
-#else 
-#define IS_MACOS 0
 #endif
 #if defined(__APPLE__) && defined(MAC_OS_X_VERSION_10_6) || \
         defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)

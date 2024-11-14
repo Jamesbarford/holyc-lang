@@ -231,7 +231,7 @@ void emitFile(aoStr *asmbuf, hccOpts *opts) {
     } else {
         if (opts->run) {
             aoStr *run_cmd = aoStrNew();
-#ifdef IS_MACOS
+#if IS_MACOS
             aoStrCatPrintf(run_cmd,"echo '%s' | gcc -x assembler - "CLIBS" -L/usr/local/lib && ./a.out && rm ./a.out",
                     asmbuf->data);
 #else
