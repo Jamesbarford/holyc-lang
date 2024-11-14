@@ -59,8 +59,7 @@ Ast *parseDeclArrayInitInt(Cctrl *cc, AstType *type) {
     Ast *init;
 
     if (type->kind == AST_TYPE_CLASS) {
-        loggerPanic("line %d: Initalising an array of classes is unsupported\n",
-                tok->line);
+        cctrlRaiseException(cc,"Initalising an array of classes is unsupported");
     }
 
     if (type->ptr->kind == AST_TYPE_CHAR && tok->tk_type == TK_STR) {
@@ -68,8 +67,8 @@ Ast *parseDeclArrayInitInt(Cctrl *cc, AstType *type) {
     }
 
     if (!tokenPunctIs(tok, '{')) {
-        loggerPanic("line %ld: Expected intializer list starting with '{' got: '%c'",
-                cc->lineno,(char)tok->i64);
+        cctrlRaiseException(cc,"Expected intializer list starting with '{' got: '%c'",
+                (char)tok->i64);
     }
 
     initlist = listNew();
@@ -91,9 +90,8 @@ Ast *parseDeclArrayInitInt(Cctrl *cc, AstType *type) {
         } else {
             init = parseExpr(cc,16);
             if ((astGetResultType('=', init->type, type->ptr)) == NULL) {
-                loggerPanic("line %ld: Incompatiable types: %s %s\n",
-                        cc->lineno,
-                        astToString(init),
+                cctrlRaiseException(cc,"Incompatiable types: %s %s",
+                        astTypeToString(init->type),
                         astTypeToString(type->ptr));
             }
         }
@@ -174,20 +172,21 @@ List *parseClassOrUnionFields(Cctrl *cc, aoStr *name,
                     continue;
                 }
                 default:
-                    loggerPanic("line %d: Unexpected keyword: %.*s\n",
+                    cctrlRaiseException(cc,"Unexpected keyword: '%.*s' while parsing class %s",
                             tok->line,
-                            tok->len,tok->start);
+                            tok->len,tok->start, name->data);
             }
         } else {
-            loggerPanic("Unexpected type: %s\n", lexemeToString(tok_name));
+            cctrlRaiseException(cc,"Unexpected type '%s' while parsing class %s\n",
+                    lexemeToString(tok_name), name->data);
         }
 
         while (1) {
             next_type = parsePointerType(cc,base_type);
             tok_name = cctrlTokenGet(cc);
             if (!tok_name) {
-                loggerPanic("line %ld: <type> <variable_name | (> expected got NULL\n",
-                        cc->lineno);
+                cctrlRaiseException(cc, "<type> <variable_name | (> expected got NULL while parsing class %s",
+                        name->data);
             }
             if (!tokenPunctIs(tok_name, '(')) {
                 next_type = parseArrayDimensions(cc,next_type);
@@ -210,8 +209,8 @@ List *parseClassOrUnionFields(Cctrl *cc, aoStr *name,
             } else if (tokenPunctIs(tok,';')) {
                 break;
             } else {
-                loggerPanic("line %d: Unexpected token: %s\n",
-                        tok->line,lexemeToString(tok));
+                cctrlRaiseException(cc, "Unexpected token '%s' while parsing class %s",
+                        lexemeToString(tok), name->data);
            }
         }
     }
@@ -374,23 +373,20 @@ AstType *parseClassOrUnion(Cctrl *cc, StrMap *env,
         tok = cctrlTokenGet(cc);
         if (tokenPunctIs(tok, ':')) { // Class inheritance
             if (!is_class) {
-                loggerPanic("line %d: Cannot use inheritance with a union\n",
-                        tok->line);
+                cctrlRaiseException(cc,"Cannot use inheritance with a union");
             }
             tok = cctrlTokenGet(cc);
             if (tok->tk_type != TK_IDENT) {
-                loggerPanic("line %d: Expected Identifier for class inheritance\n",
-                        tok->line);
+                cctrlRaiseException(cc, "Expected Identifier for class inheritance");
             }
             base_class = strMapGetLen(cc->clsdefs,tok->start,tok->len);
             if (base_class == NULL) {
-                loggerPanic("line %d: class %.*s has not been defined\n",
-                        tok->line,tok->len,tok->start);
+                cctrlRaiseException(cc,"class %.*s has not been defined\n",
+                        tok->len,tok->start);
             }
 
             if (tokenPunctIs(cctrlTokenPeek(cc),',')) {
-                loggerPanic("line %d: Only one base class allowed at this time\n",
-                        tok->line);
+                cctrlRaiseException(cc,"Only one base class allowed at this time");
             }
         } else {
             cctrlTokenRewind(cc);
@@ -458,17 +454,17 @@ Ast *parseVariableAssignment(Cctrl *cc, Ast *var, long terminator_flags) {
             var->type->len = len;
             var->type->size = len * var->type->ptr->size;
         } else if (var->type->len != len) {
-            loggerPanic("line %ld: Invalid array initializeer: expected %d items but got %d\n",
-                cc->lineno,var->type->len, len);
+            cctrlRaiseException(cc,"Invalid array initializer: expected %d items but got %d",
+                var->type->len, len);
         }
         lexeme *tok = cctrlTokenGet(cc);
-        assertTokenIsTerminator(tok,terminator_flags);
+        assertTokenIsTerminator(cc,tok,terminator_flags);
         return astDecl(var,init);
     }
 
     init = parseExpr(cc,16);
     lexeme *tok = cctrlTokenGet(cc);
-    assertTokenIsTerminator(tok,terminator_flags);
+    assertTokenIsTerminator(cc,tok,terminator_flags);
     if (var->kind == AST_GVAR && var->type->kind == AST_TYPE_INT) {
         init = astI64Type(evalIntConstExpr(init));
     }
@@ -489,13 +485,12 @@ Ast *parseVariableInitialiser(Cctrl *cc, Ast *var, long terminator_flags) {
         return parseVariableAssignment(cc,var,terminator_flags);
     }
     if (var->type->len == -1) {
-        loggerPanic("line %d: Missing array initializer: %s\n",
-                tok->line,astToString(var));
+        cctrlRaiseException(cc, "Missing array initializer: %s",astToString(var));
     }
     cctrlTokenRewind(cc);
     tok = cctrlTokenGet(cc);
 
-    assertTokenIsTerminator(tok,terminator_flags);
+    assertTokenIsTerminator(cc,tok,terminator_flags);
     return astDecl(var,NULL);
 }
 
@@ -510,9 +505,8 @@ Ast *parseDecl(Cctrl *cc) {
         return NULL;
     }
     var = astLVar(type,varname->start,varname->len);
-    if (!strMapAdd(cc->localenv,var->lname->data,var)) {
-        loggerPanic("line: %ld variable %s already declared\n",
-                cc->lineno,astLValueToString(var,0));
+    if (!strMapAddOrErr(cc->localenv,var->lname->data,var)) {
+        cctrlRaiseException(cc,"variable %s already declared",astLValueToString(var,0));
     }
     if (cc->tmp_locals) {
         listAppend(cc->tmp_locals, var);
@@ -558,7 +552,7 @@ Ast *parseOptExpr(Cctrl *cc) {
     cctrlTokenRewind(cc);
     Ast *ast = parseExpr(cc,16);
     tok = cctrlTokenGet(cc);
-    assertTokenIsTerminator(tok,PUNCT_TERM_SEMI|PUNCT_TERM_COMMA);
+    assertTokenIsTerminator(cc,tok,PUNCT_TERM_SEMI|PUNCT_TERM_COMMA);
     return ast;
 }
 
@@ -602,24 +596,24 @@ void parseAssertContainerHasFields(Cctrl *cc, AstType *size_field,
                                    AstType *entries_field)
 {
     if (!size_field) {
-        loggerPanic("line: %ld - Range for loop must be on a struct with both a 'size' and 'entries' property\n", cc->lineno);
+        cctrlRaiseException(cc,"Range for loop must be on a struct with both a 'size' and 'entries' property");
     }
 
     if (!astIsIntType(size_field)) {
-        loggerPanic("line %ld - Range for loop struct's size field must be an int got: %s\n",
-                cc->lineno,astTypeToColorString(size_field));
+        cctrlRaiseException(cc,"Range for loop struct's size field must be an int got: %s",
+                astTypeToColorString(size_field));
     }
 
     if (!entries_field) {
-        loggerPanic("line: %ld - Range for loop must be on a struct with both a 'size' and 'entries' property\n", cc->lineno);
+        cctrlRaiseException(cc,"Range for loop must be on a struct with both a 'size' and 'entries' property");
     }
 
     if (entries_field->kind != AST_TYPE_POINTER && entries_field->kind != AST_TYPE_ARRAY) {
-        loggerPanic("line: %ld - entries field must be a pointer or array got '%s'\n", cc->lineno, astKindToString(entries_field->kind));
+        cctrlRaiseException(cc,"'entries' field must be a pointer or array got '%s'", astKindToString(entries_field->kind));
     }
 
     if (entries_field->ptr->kind == AST_TYPE_VOID) {
-        loggerPanic("line: %ld - cannot dereferenee void pointer\n", cc->lineno);
+        cctrlRaiseException(cc,"cannot dereference void pointer");
     }
 }
 
@@ -656,8 +650,8 @@ Ast *parseRangeLoop(Cctrl *cc, AstType *type, Ast *iteratee) {
     if (container->kind == AST_LVAR) {
         if (container->type->kind == AST_TYPE_POINTER) {
             if (container->type->ptr->kind != AST_TYPE_CLASS) {
-                loggerPanic("line %ld: pointer '%s' has no fields; range requires 'I64 size' and '<type> *entries'\n",
-                        cc->lineno, astLValueToString(container, 0));
+                cctrlRaiseException(cc,"pointer '%s' has no fields; range requires 'I64 size' and '<type> *entries'",
+                        astLValueToString(container, 0));
             }
 
             AstType *size_field = strMapGet(container->type->ptr->fields, "size");
@@ -678,7 +672,7 @@ Ast *parseRangeLoop(Cctrl *cc, AstType *type, Ast *iteratee) {
         } else if (container->type->kind == AST_TYPE_ARRAY) {
             return parseDesugarArrayLoop(cc,iteratee,container);
         } else {
-            loggerPanic("line %ld: can only range over arrays and pointers\n", cc->lineno);
+            cctrlRaiseException(cc,"can only range over arrays and pointers");
         }
     } else if (container->kind == AST_CLASS_REF) {
         StrMap *fields = NULL;
@@ -706,7 +700,7 @@ Ast *parseRangeLoop(Cctrl *cc, AstType *type, Ast *iteratee) {
 
         return parseCreateForRange(cc, iteratee, container, size_ref, entries_ref);
     }
-    loggerPanic("Can only handle lvars, arrays and class references at this time got: %s %s\n",
+    cctrlRaiseException(cc,"Can only handle lvars, arrays and class references at this time got: %s %s",
                 astKindToString(container->kind), astToString(container));
 }
 
@@ -727,8 +721,8 @@ Ast *parseForLoopInitialiser(Cctrl *cc) {
         AstType *type = parseDeclSpec(cc);
         tok = cctrlTokenGet(cc);
         if (tok->tk_type != TK_IDENT) {
-            loggerPanic("line: %ld expected Identifier got: %s\n",
-                    cc->lineno, lexemeToString(tok)); 
+            cctrlRaiseException(cc,"expected Identifier got: %s",
+                    lexemeToString(tok)); 
         }
 
         /* We have a for loop variable */
@@ -736,9 +730,9 @@ Ast *parseForLoopInitialiser(Cctrl *cc) {
 
         /* can be : for an auto loop or ';' for a normal loop */
         tok = cctrlTokenPeek(cc); 
-        if (!strMapAdd(cc->localenv,init_var->lname->data,init_var)) {
-            loggerPanic("line: %ld variable %s already declared\n",
-                    cc->lineno,astLValueToString(init_var,0));
+        if (!strMapAddOrErr(cc->localenv,init_var->lname->data,init_var)) {
+            cctrlRaiseException(cc,"%ld variable %s already declared",
+                    astLValueToString(init_var,0));
         }
         
         /* For this to work the type must have:
@@ -851,7 +845,7 @@ Ast *parseDoWhileStatement(Cctrl *cc) {
     tok = cctrlTokenGet(cc);
 
     if (tok->tk_type != TK_KEYWORD && tok->i64 != KW_WHILE) {
-        loggerPanic("line %ld: Expected keyword 'while'\n",cc->lineno);
+        cctrlRaiseException(cc,"Expected keyword 'while'");
     }
 
     cctrlTokenExpect(cc, '(');
@@ -866,8 +860,7 @@ Ast *parseDoWhileStatement(Cctrl *cc) {
 
 Ast *parseBreakStatement(Cctrl *cc) {
     if (cc->tmp_loop_end == NULL) {
-        loggerPanic("line %ld: Floating break, not inside a breakable statement\n",
-                cc->lineno);
+        cctrlRaiseException(cc,"Floating break, not inside a breakable statement");
     }
     Ast *ast = astBreak(cc->tmp_loop_end);
     cctrlTokenExpect(cc,';');
@@ -876,8 +869,7 @@ Ast *parseBreakStatement(Cctrl *cc) {
 
 Ast *parseContinueStatement(Cctrl *cc) {
     if (cc->tmp_loop_begin == NULL) {
-        loggerPanic("line %ld: Floating continue, not inside a loop\n",
-                cc->lineno);
+        cctrlRaiseException(cc,"Floating continue, not inside a loop");
     }
     Ast *ast = astContinue(cc->tmp_loop_begin);
     cctrlTokenExpect(cc,';');
@@ -911,7 +903,7 @@ Ast *parseReturnStatement(Cctrl *cc) {
 
 Ast *parseCaseLabel(Cctrl *cc, lexeme *tok) {
     if (cc->tmp_case_list == NULL) {
-        loggerPanic("line %d: unexpected 'case' found\n",tok->line);
+        cctrlRaiseException(cc,"unexpected 'case' found");
     }
     Ast *case_, *prev;
     lexeme *peek;
@@ -937,7 +929,7 @@ Ast *parseCaseLabel(Cctrl *cc, lexeme *tok) {
         end = evalIntConstExpr(parseExpr(cc,16));
         cctrlTokenExpect(cc,':');
         if (begining > end) {
-            loggerPanic("line %d: Condition is in the wrong order '%d' must be lower than '%d'\n",
+            cctrlRaiseException(cc,"Condition is in the wrong order '%d' must be lower than '%d'",
                     tok->line,begining, end);
         }
     } else {
@@ -975,7 +967,7 @@ Ast *parseCaseLabel(Cctrl *cc, lexeme *tok) {
 Ast *parseDefaultStatement(Cctrl *cc, lexeme *tok) {
     cctrlTokenExpect(cc,':');
     if (cc->tmp_default_case) {
-        loggerPanic("line %d: Duplicate default case\n",tok->line);
+        cctrlRaiseException(cc,"Duplicate default case");
     }
     lexeme *peek;
     List *stmts = listNew();
@@ -1008,8 +1000,7 @@ Ast *parseSwitchStatement(Cctrl *cc) {
     peek = cctrlTokenPeek(cc);
 
     if (!tokenPunctIs(peek,'[') && !tokenPunctIs(peek, '(')) {
-        loggerPanic("line %ld: Switch '(' or '[' expected got: %s\n",
-                cc->lineno,
+        cctrlRaiseException(cc,"Switch '(' or '[' expected got: %s",
                 lexemeToString(peek));
     }
 
@@ -1022,7 +1013,7 @@ Ast *parseSwitchStatement(Cctrl *cc) {
     cctrlTokenGet(cc);
     cond = parseExpr(cc,16);
     if (!astIsIntType(cond->type)) {
-        loggerPanic("line %ld: Switch can only have int's at this time\n", cc->lineno);
+        cctrlRaiseException(cc,"Switch can only have int's at this time");
     }
     cctrlTokenExpect(cc,terminating_char);
 
@@ -1095,7 +1086,7 @@ Ast *parseStatement(Cctrl *cc) {
                 tok = cctrlTokenGet(cc);
 
                 if (tok->tk_type != TK_IDENT) {
-                    loggerPanic("line %d: Expected variable name at line\n",tok->line);
+                    cctrlRaiseException(cc,"Expected variable name following type %s", astTypeToString(type));
                 }
                 type = parseArrayDimensions(cc,type);
 
@@ -1132,9 +1123,8 @@ Ast *parseStatement(Cctrl *cc) {
                     if (ast->declinit->kind == AST_ASM_FUNCALL ||
                         parseIsFunctionCall(ast->declinit))
                     {
-                        loggerPanic("line %ld: '%s %s' must be a compile time "
-                                "constant\n",
-                                cc->lineno,
+                        cctrlRaiseException(cc,"'%s %s' must be a compile time "
+                                "constant",
                                 astTypeToColorString(gvar_ast->type),
                                 astLValueToString(ast,0));
                     }
@@ -1165,12 +1155,12 @@ Ast *parseStatement(Cctrl *cc) {
                 cctrlTokenRewind(cc);
                 ast = parseExpr(cc,16);
                 tok = cctrlTokenGet(cc);
-                assertTokenIsTerminator(tok,PUNCT_TERM_SEMI|PUNCT_TERM_COMMA);
+                assertTokenIsTerminator(cc,tok,PUNCT_TERM_SEMI|PUNCT_TERM_COMMA);
                 return ast;
             }
             default:
-                loggerPanic("line %d: Unexpected keyword: %.*s\n",
-                        tok->line,tok->len,tok->start);
+                cctrlRaiseException(cc,"Unexpected keyword: %.*s",
+                        tok->len,tok->start);
         }
     }
 
@@ -1201,7 +1191,7 @@ Ast *parseStatement(Cctrl *cc) {
     cctrlTokenRewind(cc);
     ast = parseExpr(cc,16);
     tok = cctrlTokenGet(cc);
-    assertTokenIsTerminator(tok,PUNCT_TERM_SEMI|PUNCT_TERM_COMMA);
+    assertTokenIsTerminator(cc,tok,PUNCT_TERM_SEMI|PUNCT_TERM_COMMA);
     return ast;
 }
 
@@ -1243,9 +1233,9 @@ Ast *parseCompoundStatement(Cctrl *cc) {
                     }
                     type = parseArrayDimensions(cc,next_type);
                     var = astLVar(type,varname->start,varname->len);
-                    if (!strMapAdd(cc->localenv,var->lname->data,var)) {
-                        loggerPanic("line: %ld variable %s already declared\n",
-                                cc->lineno,astLValueToString(var,0));
+                    if (!strMapAddOrErr(cc->localenv,var->lname->data,var)) {
+                        cctrlRaiseException(cc,"variable '%s' already declared",
+                                astLValueToString(var,0));
                     }
                 } else {
                     cctrlTokenGet(cc);
@@ -1273,8 +1263,7 @@ Ast *parseCompoundStatement(Cctrl *cc) {
                 } else if (tokenPunctIs(tok,';')) {
                     break;
                 } else {
-                    loggerPanic("line %d: Unexpected token: %s\n",
-                            tok->line, lexemeToString(tok));
+                    cctrlRaiseException(cc,"Unexpected token: %s",lexemeToString(tok));
                 }
             }
         } else { 
@@ -1318,16 +1307,14 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
     } else {
         switch (func->kind) {
             case AST_EXTERN_FUNC:
-                loggerPanic("line %ld: Cannot redefine extern function: %.*s\n",
-                        cc->lineno,len,fname);
+                cctrlRaiseException(cc,"Cannot redefine extern function: %.*s",len,fname);
 
             case AST_FUNC:
-                loggerPanic("line %ld: Cannot redefine function: %.*s\n",
-                        cc->lineno,len,fname);
+                cctrlRaiseException(cc,"Cannot redefine function: %.*s",len,fname);
 
             case AST_ASM_FUNC_BIND:
-                loggerPanic("line %ld: Cannot redefine asm function: %.*s\n",
-                        cc->lineno,len,fname);
+                cctrlRaiseException(cc,"Cannot redefine asm function: %.*s",
+                        len,fname);
 
             case AST_FUN_PROTO:
                 /* upgrade prototype to a function */
@@ -1341,7 +1328,7 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
                 break;
 
             default:
-                loggerPanic("line %ld: unexpected function: %.*s -> %s\n",
+                cctrlRaiseException(cc,"Unexpected function: %.*s -> %s",
                         cc->lineno,
                         len,fname, astToString(func));
                 break;
@@ -1373,9 +1360,9 @@ Ast *parseExternFunctionProto(Cctrl *cc, AstType *rettype, char *fname, int len)
     params = parseParams(cc,')', &has_var_args,1);
     tok = cctrlTokenGet(cc);
     if (!tokenPunctIs(tok, ';')) {
-        loggerPanic("line %d: extern %.*s() cannot have a function body "
-                "this will be defined elsewhere\n",
-                tok->line,len,fname);
+        cctrlRaiseException(cc,"extern %.*s() cannot have a function body "
+                "this will be defined elsewhere",
+                len,fname);
     }
     AstType *type = astMakeFunctionType(rettype, astParamTypes(params));
     func = astFunction(type,fname,len,params,NULL,NULL,0);
@@ -1396,8 +1383,8 @@ Ast *parseFunctionOrDef(Cctrl *cc, AstType *rettype, char *fname, int len) {
         return parseFunctionDef(cc,rettype,fname,len,params,has_var_args);
     } else {
         if (rettype->kind == AST_TYPE_AUTO) {
-            loggerPanic("line %ld: auto cannot be used with a function prototype %.*s() at this time\n",
-                    cc->lineno,len,fname);
+            cctrlRaiseException(cc,"auto cannot be used with a function prototype %.*s() at this time",
+                    len,fname);
         }
         AstType *type = astMakeFunctionType(rettype, astParamTypes(params));
         Ast *fn = astFunction(type,fname,len,params,NULL,NULL,has_var_args);
@@ -1418,23 +1405,21 @@ Ast *parseAsmFunctionBinding(Cctrl *cc) {
     tok = cctrlTokenGet(cc);
 
     if (tok->tk_type != TK_IDENT && tok->start[0] != '_') {
-        loggerPanic("line %d: ASM function binds must begin with '_' got: %.*s\n",
-                tok->line,tok->len,tok->start);
+        cctrlRaiseException(cc,"ASM function binds must begin with '_' got: %.*s",
+                tok->len,tok->start);
     }
 
     asm_fname = aoStrDupRaw(tok->start,tok->len);
     rettype = parseDeclSpec(cc);
 
     if (rettype->kind == AST_TYPE_AUTO) {
-        loggerPanic("line %ld: auto cannot be used with an assembly binding for function %s(), type cannot be automatically deduced\n",
-                cc->lineno,
+        cctrlRaiseException(cc,"auto cannot be used with an assembly binding for function %s(), type cannot be automatically deduced",
                 asm_fname->data);
     }
 
     tok = cctrlTokenGet(cc);
     if (tok->tk_type != TK_IDENT) {
-        loggerPanic("line %d: ASM function requires c function name\n",
-                tok->line);
+        cctrlRaiseException(cc,"line %d: ASM function requires c function name");
     }
     c_fname = aoStrDupRaw(tok->start,tok->len);
     cc->localenv = strMapNewWithParent(32, cc->localenv);
@@ -1470,8 +1455,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
                     if ((asm_func = parseAsmFunctionBinding(cc)) != NULL) {
                         return asm_func;
                     }
-                    loggerPanic("line %d: Floating \"_extern\" keyword, expected \"_extern '_ASM_FUNC'\"\n", 
-                            tok->line);
+                    cctrlRaiseException(cc,"Floating \"_extern\" keyword, expected \"_extern '_ASM_FUNC'\""); 
                 }
 
                 case KW_ASM: {
@@ -1481,8 +1465,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
                         listAppend(cc->asm_blocks,asm_block);
                         return asm_block;
                     }
-                    loggerPanic("line %d: Floating \"asm\" keyword, expected \"asm {\"\n", 
-                            tok->line);
+                    cctrlRaiseException(cc,"Floating \"asm\" keyword, expected \"asm {\"");
                 }
 
                 case KW_EXTERN: {
@@ -1495,8 +1478,8 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
                                 name->start,name->len);
                         return extern_func;
                     }
-                    loggerPanic("line %d: Can only call external c functions for the "
-                            "time being.\n", tok->line);
+                    cctrlRaiseException(cc,"Can only call external c functions for the "
+                            "time being");
                 }
                 case KW_PUBLIC:
                 case KW_PRIVATE:
@@ -1507,7 +1490,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
                 case KW_STATIC:
                     type = parseDeclSpec(cc);
                     if (type == NULL) {
-                        loggerPanic("line %ld: Expected type declaration\n",cc->lineno);
+                        cctrlRaiseException(cc,"Expected type declaration");
                     }
                     /* static at the global scope does not yet do anything */
                     is_static = 1;
@@ -1561,8 +1544,8 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
                     return parseForStatement(cc);
 
                 default:
-                    loggerPanic("line %d: Unexpected floating keyword: %.*s\n",
-                            tok->line,tok->len,tok->start);
+                    cctrlRaiseException(cc,"Unexpected floating keyword: %.*s",
+                            tok->len,tok->start);
             }
         } else if (tok->tk_type == TK_IDENT) {
             /* top level function call */
@@ -1583,8 +1566,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
                 cctrlTokenRewind(cc);
                 type = parseDeclSpec(cc);
                 if (type == NULL) {
-                    loggerPanic("line %d: Undefined type: %.*s\n",
-                            tok->line,tok->len,tok->start);
+                    cctrlRaiseException(cc,"Undefined type: %.*s",tok->len,tok->start);
                 }
             }
         } else if (tok->tk_type == TK_CHAR_CONST) {
@@ -1604,21 +1586,21 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
             switch (name->i64) {
                 case KW_CLASS:
                     if (!astIsIntType(type)) {
-                        loggerPanic("line %ld: Can only make intrinsic types from integer types, got %s\n",
-                                cc->lineno,astTypeToString(type));
+                        cctrlRaiseException(cc,"Can only make intrinsic types from integer types, got %s",
+                                astTypeToString(type));
                     }
                     parseClassDef(cc,1);
                     cctrlTokenExpect(cc,';');
                     continue;
-                default:
-                    loggerPanic("line %ld: %s can only prefix a class\n",
-                            cc->lineno,lexemeToString(name));
+                default: {
+                    lexemePrint(tok);
+                    cctrlRaiseException(cc,"%s can only prefix a class",lexemeToString(name));
+                }
             }
         }
 
         if (name->tk_type != TK_IDENT) {
-            loggerPanic("line %d: Identifier expected: got %s\n",
-                    name->line, lexemeToString(name));
+            cctrlRaiseException(cc,"Identifier expected: got %s",lexemeToString(name));
         }
 
         type = parseArrayDimensions(cc,type);
@@ -1627,8 +1609,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
         if (tokenPunctIs(tok,'=') && type->kind != AST_TYPE_ARRAY) {
             variable = astGVar(type,name->start,name->len,0);
             if (type->kind == AST_TYPE_AUTO) {
-                loggerPanic("line %ld: auto cannot be used without an initialiser\n",
-                        cc->lineno);
+                cctrlRaiseException(cc,"line auto cannot be used without an initialiser");
             }
             ast = astDecl(variable,NULL);
             listAppend(cc->ast_list,ast);
@@ -1659,8 +1640,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
             strMapAdd(cc->global_env,variable->gname->data,variable);
             return astDecl(variable,NULL);
         }
-        loggerPanic("line %d: Cannot handle '%s'\n",tok->line,
-                lexemeToString(tok));
+        cctrlRaiseException(cc,"Cannot handle '%s'",lexemeToString(tok));
     }
 }
 

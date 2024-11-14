@@ -229,6 +229,21 @@ void emitFile(aoStr *asmbuf, hccOpts *opts) {
         fprintf(stderr,"%s\n",lib.install_cmd);
         system(lib.install_cmd);
     } else {
+        if (opts->run) {
+            aoStr *run_cmd = aoStrNew();
+#ifdef IS_MACOS
+            aoStrCatPrintf(run_cmd,"echo '%s' | gcc -x assembler - "CLIBS" -L/usr/local/lib && ./a.out && rm ./a.out",
+                    asmbuf->data);
+#else
+            writeAsmToTmp(asmbuf);
+            aoStrCatPrintf(run_cmd,"gcc -L/usr/local/lib %s "CLIBS" && ./a.out && rm ./a.out",
+                    ASM_TMP_FILE);
+#endif
+            system(run_cmd->data);
+            aoStrRelease(run_cmd);
+            exit(0);
+        }
+
         writeAsmToTmp(asmbuf);
         if (opts->clibs) {
             aoStrCatPrintf(cmd, "gcc -L/usr/local/lib %s %s "CLIBS" -o %s", 
@@ -238,12 +253,7 @@ void emitFile(aoStr *asmbuf, hccOpts *opts) {
                     ASM_TMP_FILE, opts->output_filename);
         }
         system(cmd->data);
-        if (opts->run) {
-            char run_cmd[64];
-            snprintf(run_cmd,sizeof(run_cmd),"./%s",opts->output_filename);
-            system(run_cmd);
-            unlink(opts->output_filename);
-        }
+
     }
     if (strnlen(opts->clibs,10) > 1) {
         free(opts->clibs);
@@ -391,9 +401,7 @@ int main(int argc, char **argv) {
     }
 
     if (opts.print_tokens) {
-        List *tokens = compileToTokens(cc,opts.infile,lexer_flags);
-        lexemePrintList(tokens);
-        lexemelistRelease(tokens);
+        compileToTokens(cc,opts.infile,lexer_flags);
         return 0;
     }
 

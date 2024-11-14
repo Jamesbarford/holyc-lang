@@ -88,8 +88,8 @@ install(TARGETS hcc DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
 install(FILES ${CMAKE_SOURCE_DIR}/holyc-lib/tos.HH DESTINATION ${CMAKE_INSTALL_PREFIX}/include)
 
 # Custom installation step to run `hcc` during install
-#if (DEFINED HCC_LINK_SQLITE3)
-#    install(CODE "execute_process(COMMAND hcc -DHCC_LINK_SQLITE3 -lib tos ${CMAKE_SOURCE_DIR}/holyc-lib/all.HC WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/holyc-lib)")
-#else()
-install(CODE "execute_process(COMMAND hcc -lib tos ${CMAKE_SOURCE_DIR}/holyc-lib/all.HC WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/holyc-lib)")
-    #endif()
+if (DEFINED HCC_LINK_SQLITE3)
+    install(CODE "execute_process(COMMAND hcc -DHCC_LINK_SQLITE3 -lib tos ${CMAKE_SOURCE_DIR}/holyc-lib/all.HC WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/holyc-lib)")
+else()
+    install(CODE "execute_process(COMMAND hcc -lib tos ${CMAKE_SOURCE_DIR}/holyc-lib/all.HC WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/holyc-lib)")
+endif()

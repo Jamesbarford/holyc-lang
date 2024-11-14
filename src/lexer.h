@@ -1,6 +1,8 @@
 #ifndef LEXER_H
 #define LEXER_H
 
+#include <sys/types.h>
+
 #include "aostr.h"
 #include "map.h"
 #include "list.h"
@@ -77,7 +79,7 @@
 #define KW_PUBLIC       6
 #define KW_ATOMIC       8
 #define KW_DEFINE       10
-#define KW_INCLUDE      12
+#define KW_PP_INCLUDE   12
 #define KW_CAST  14
 #define KW_SIZEOF       16
 #define KW_RETURN       18
@@ -107,6 +109,17 @@
 #define KW_DO           66
 #define KW_STATIC       67
 #define KW_ELIF_DEF     68
+#define KW_PP_IF        69
+#define KW_PP_ELSE      70
+#define KW_PP_DEFINE    71
+#define KW_PP_IF_NDEF   72
+#define KW_PP_IF_DEF    73
+#define KW_PP_ELIF_DEF  74
+#define KW_PP_ENDIF     75
+#define KW_PP_ELIF      76
+#define KW_PP_DEFINED   77
+#define KW_PP_UNDEF     78
+#define KW_PP_ERROR     79
 
 /* Compiler Flags*/
 #define CCF_ESCAPE_STRING_NEWLINES (1ULL << 40)
@@ -137,6 +150,7 @@ typedef struct lexFile {
     aoStr *filename; /* name of the file */
     char *ptr; /* Where we are in the file */
     int lineno; /* line number in the file */
+    aoStr *src; /* source */
 } lexFile;
 
 typedef struct lexer {
@@ -151,6 +165,8 @@ typedef struct lexer {
     int lineno;
     int flags;
     int ishex;
+    int collecting;
+    int skip_else;
     char *builtin_root;
     List *files;
     List *all_source;/* This saves all of the files we see so we can free them later */
@@ -166,18 +182,18 @@ void lexSetBuiltinRoot(lexer *l, char *root);
 void lexInit(lexer *l, char *source, int flag);
 void lexPushFile(lexer *l, aoStr *filename);
 int lex(lexer *l, lexeme *le);
-List *lexToLexemes(StrMap *macro_defs, lexer *l);
-List *lexUntil(StrMap *macro_defs, lexer *l, char to);
+lexeme *lexToken(StrMap *macro_defs, lexer *l);
 void lexemePrint(lexeme *le);
 char *lexemeTypeToString(int tk_type);
 char *lexemePunctToString(long op);
 char *lexemePunctToStringWithFlags(long op, unsigned long flags);
 char *lexemePunctToEncodedString(long op);
 char *lexemeToString(lexeme *tok);
-void lexemePrintList(List *tokens);
-void lexemelistRelease(List *tokens);
 void lexReleaseAllFiles(lexer *l);
 int tokenPunctIs(lexeme *tok, long ch);
 int tokenIdentIs(lexeme *tok, char *ident, int len);
+void lexemeFree(void *_le);
+const char *lexerReportLine(lexer *l, ssize_t lineno);
+void lexerPoolRelease(void);
 
 #endif // !LEXER_H

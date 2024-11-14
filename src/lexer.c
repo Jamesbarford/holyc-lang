@@ -12,6 +12,7 @@
 #include "map.h"
 #include "lexer.h"
 #include "list.h"
+#include "memory.h"
 #include "prslib.h"
 #include "prsutil.h"
 #include "util.h"
@@ -66,6 +67,19 @@ static LexerTypes lexer_types[] = {
     {"defined", KW_DEFINED},
     {"undef", KW_UNDEF},
 
+    {"#if", KW_PP_IF},
+    {"#else", KW_PP_ELSE},
+    {"#define", KW_PP_DEFINE},
+    {"#ifndef", KW_PP_IF_NDEF},
+    {"#ifdef", KW_PP_IF_DEF},
+    {"#elifdef", KW_PP_ELIF_DEF},
+    {"#endif", KW_PP_ENDIF},
+    {"#elif", KW_PP_ELIF},
+    {"#defined", KW_PP_DEFINED},
+    {"#undef", KW_PP_UNDEF},
+    {"#error", KW_PP_ERROR},
+    {"#include", KW_PP_INCLUDE},
+
     {"cast", KW_CAST},
     {"sizeof", KW_SIZEOF},
     {"return", KW_RETURN},
@@ -78,7 +92,6 @@ static LexerTypes lexer_types[] = {
     {"class", KW_CLASS},
     {"union", KW_UNION},
 
-    {"include", KW_INCLUDE},
     {"static", KW_STATIC},
 };
 
@@ -128,6 +141,20 @@ lexeme *lexemeTokNew(char *start, int len, int line, long ch) {
     return copy;
 }
 
+static MemoryPool *lexeme_pool = NULL;
+void lexerPoolRelease(void) {
+    if (lexeme_pool) {
+        memPoolRelease(lexeme_pool);
+    }
+}
+
+/* Copy the lexeme with memory allocated from the pool */
+lexeme *lexemePoolCpy(lexeme *le) {
+    lexeme *cpy = memPoolAlloc(lexeme_pool);
+    memcpy(cpy,le,sizeof(lexeme));
+    return cpy;
+}
+
 lexeme *lexemeCopy(lexeme *le) {
     lexeme *copy = malloc(sizeof(lexeme));
     memcpy(copy,le,sizeof(lexeme));
@@ -157,9 +184,12 @@ void lexInit(lexer *l, char *source, int flags) {
     l->all_source = listNew();
     l->symbol_table = strMapNew(32);
     l->symbol_table->_free_key = NULL;
+    l->collecting = 1;
+    l->skip_else = 1;
     if (macro_proccessor == NULL) {
         macro_proccessor = ccMacroProcessor(NULL);
     }
+    lexeme_pool = memPoolNew(sizeof(lexeme),64);
     /* XXX: create one symbol table for the whole application ;
      * hoist to 'compile.c'*/
     for (int i = 0; i < static_size(lexer_types); ++i) {
@@ -367,7 +397,7 @@ char *lexemeToString(lexeme *tok) {
                 case KW_PUBLIC:      aoStrCatPrintf(str,"public");  break;
                 case KW_ATOMIC:      aoStrCatPrintf(str,"atomic");  break;
                 case KW_DEFINE:      aoStrCatPrintf(str,"define");  break;
-                case KW_INCLUDE:     aoStrCatPrintf(str,"include"); break;
+                case KW_PP_INCLUDE:     aoStrCatPrintf(str,"include"); break;
                 case KW_CAST:        aoStrCatPrintf(str,"cast"); break;
                 case KW_SIZEOF:      aoStrCatPrintf(str,"sizeof");  break;
                 case KW_RETURN:      aoStrCatPrintf(str,"return");  break;
@@ -397,6 +427,19 @@ char *lexemeToString(lexeme *tok) {
                 case KW_DO:          aoStrCatPrintf(str,"do");      break;
                 case KW_STATIC:      aoStrCatPrintf(str,"static");  break;
                 case KW_DEFINED:     aoStrCatPrintf(str,"defined"); break;
+
+                case KW_PP_IF: aoStrCatPrintf(str,"#if"); break;   
+                case KW_PP_ELSE: aoStrCatPrintf(str,"#else"); break;   
+                case KW_PP_DEFINE: aoStrCatPrintf(str,"#define"); break;  
+                case KW_PP_IF_NDEF: aoStrCatPrintf(str,"#ifndef"); break; 
+                case KW_PP_IF_DEF: aoStrCatPrintf(str,"#ifdef"); break;
+                case KW_PP_ELIF_DEF:aoStrCatPrintf(str,"#elifdef"); break;
+                case KW_PP_ENDIF: aoStrCatPrintf(str,"#endif"); break;   
+                case KW_PP_ELIF: aoStrCatPrintf(str,"#elif"); break;    
+                case KW_PP_DEFINED: aoStrCatPrintf(str,"#defined"); break; 
+                case KW_PP_UNDEF:  aoStrCatPrintf(str,"#undef"); break;  
+                case KW_PP_ERROR: aoStrCatPrintf(str,"#error"); break;   
+
                 default:
                     loggerPanic("line %d: Keyword %.*s: is not defined\n",
                             tok->line,tok->len,tok->start);
@@ -404,8 +447,8 @@ char *lexemeToString(lexeme *tok) {
             return aoStrMove(str);
         }
     }
-    loggerPanic("line %d: Unexpected type %s\n",
-            tok->line,lexemeTypeToString(tok->tk_type));
+    loggerPanic("line %d: Unexpected type %s |%.*s|\n",
+            tok->line,lexemeTypeToString(tok->tk_type),tok->len,tok->start);
 }
 
 /* Print one lexeme */
@@ -459,7 +502,7 @@ static char lexPeek(lexer *l) {
 }
 
 /* Read an entire file to a mallocated buffer */
-char *lexReadfile(char *path) {
+char *lexReadfile(char *path, ssize_t *_len) {
     char *buf;
     int fd,rbytes,len,size;
 
@@ -481,6 +524,7 @@ char *lexReadfile(char *path) {
         loggerPanic("Failed to read whole file\n");
     }
 
+    *_len = len;
     buf[len-1] = '\0';
     close(fd);
     return buf;
@@ -490,8 +534,15 @@ void lexPushFile(lexer *l, aoStr *filename) {
     /* We need to save what we are currently lexing and 
      * make the file we've just seen the file we want to lex */
     lexFile *f = malloc(sizeof(lexFile));
-    char *src = lexReadfile(filename->data);
-    f->ptr = src;
+    ssize_t file_len = 0;
+    char *src = lexReadfile(filename->data, &file_len);
+    aoStr *src_code = malloc(sizeof(aoStr));
+    src_code->data = src;
+    src_code->len = file_len;
+    src_code->capacity = 0;
+
+    f->ptr = src_code->data;
+    f->src = src_code;
     f->lineno = 1;
     f->filename = filename;
     strMapAdd(l->seen_files,filename->data,filename);
@@ -854,6 +905,18 @@ int lexNumeric(lexer *l, int _isfloat) {
     }
 }
 
+LexerTypes *lexPreProcDirective(lexer *l) {
+    lexeme le;
+    if (!lex(l,&le)) return 0;
+    char buffer[32];
+    ssize_t len = snprintf(buffer,sizeof(buffer),"#%.*s",le.len,le.start);
+    LexerTypes *type = strMapGetLen(l->symbol_table,buffer,len);
+    if (!type) {
+        loggerPanic("line %d: invalid preprocessor directive '%s'\n", le.line, buffer);
+    }
+    return type;
+}
+
 int lex(lexer *l, lexeme *le) {
     char ch, *start;
     int tk_type;
@@ -906,6 +969,8 @@ int lex(lexer *l, lexeme *le) {
             le->len = l->ptr - start;
             le->tk_type = tk_type;
             le->line = l->lineno;
+            le->start = start;
+            le->len = 0;
             if (tk_type == TK_F64) {
                 le->f64 = l->cur_f64;
             } else {
@@ -1130,7 +1195,13 @@ int lex(lexer *l, lexeme *le) {
             lexemeAssignOp(le,start,1,'\\',l->lineno);
             return 1;
 
-        case '#':
+        case '#': {
+            type = lexPreProcDirective(l);
+            le->tk_type = TK_KEYWORD;
+            le->i64 = type->kind;
+            return 1;
+        }
+
         case '~':
         case '(':
         case ')':
@@ -1186,7 +1257,6 @@ void lexInclude(lexer *l) {
 
     if (!lexHasFile(l,include_path)) {
         lexPushFile(l,include_path);
-        //List(l->files, include_path);
     } else {
         aoStrRelease(include_path);
     }
@@ -1194,18 +1264,18 @@ void lexInclude(lexer *l) {
 
 lexeme *lexDefine(StrMap *macro_defs, lexer *l) {
     int tk_type,iters;
-    List *macro_tokens;
     lexeme next,*start,*end,*expanded,*macro;
     aoStr *ident;
+    PtrVec *tokens = ptrVecNew();
 
 
     tk_type = -1;
-    macro_tokens = listNew();
     /* <ident> <value> */
     lex(l, &next);
     if (next.tk_type != TK_IDENT) {
         loggerPanic("line %d: Syntax is: #define <TK_IDENT> <value>\n",next.line);
     }
+
     ident = aoStrDupRaw(next.start, next.len);
     /* A define must be on one line a \n determines the end of a define */
     l->flags |= CCF_ACCEPT_NEWLINES;
@@ -1216,7 +1286,7 @@ lexeme *lexDefine(StrMap *macro_defs, lexer *l) {
 
         if (next.tk_type == TK_IDENT) {
             if ((macro = strMapGetLen(macro_defs,next.start,next.len)) != NULL) {
-                listAppend(macro_tokens,lexemeCopy(macro));
+                ptrVecPush(tokens, lexemeCopy(macro));
                 tk_type = macro->tk_type;
                 continue;
             }
@@ -1233,18 +1303,18 @@ lexeme *lexDefine(StrMap *macro_defs, lexer *l) {
             }
         }
         if (!tokenPunctIs(&next,'\n') && !tokenPunctIs(&next,'\0')) {
-            listAppend(macro_tokens,lexemeCopy(&next));
+            ptrVecPush(tokens, lexemeCopy(&next));
         }
     } while (!tokenPunctIs(&next,'\n') && !tokenPunctIs(&next,'\0'));
     /* Turn off the flag */
     l->flags &= ~CCF_ACCEPT_NEWLINES;
 
-    start = macro_tokens->next->value;
-    end = macro_tokens->prev->value;
+    start = tokens->entries[0]; 
+    end = tokens->entries[tokens->size - 1];
 
-    if (start==end && iters == 1) {
+    if (start == end && iters == 1) {
         strMapAdd(macro_defs,ident->data,lexemeSentinal());
-        listRelease(macro_tokens,NULL);
+        ptrVecRelease(tokens);
         return NULL;
     }
 
@@ -1253,38 +1323,54 @@ lexeme *lexDefine(StrMap *macro_defs, lexer *l) {
                 next.line,ident->data);
     }
 
-    start = macro_tokens->next->value;
-    end = macro_tokens->prev->value;
-
     if (start == end) {
         expanded = lexemeCopy(start);
         strMapAdd(macro_defs,ident->data,expanded);
     } else {
-        cctrlInitTokenIter(macro_proccessor,macro_tokens);
+        /* XXX: this is a hack as sometimes the number of tokens in a macro 
+         * will exceed what is allowed in our ring buffer. Conveniently PtrVec 
+         * has some fields we can use. */
+        cctrlInitMacroProcessor(macro_proccessor);
+        macro_proccessor->token_buffer->entries = (lexeme **)tokens->entries;
+        macro_proccessor->token_buffer->size = tokens->size;
+
         Ast *ast = parseExpr(macro_proccessor,16);
         expanded = lexemeNew(start->start,end->len-start->len);
         expanded->tk_type = tk_type;
         if (tk_type == TK_STR) {
-            if (ast->kind != TK_STR && ast->kind != AST_STRING) {
+            if (!ast && start->tk_type == TK_STR) {
+                expanded->start = strndup(start->start,start->len);
+                expanded->len = start->len;
+            } else if (ast && ast->kind != TK_STR && ast->kind != AST_STRING) {
                 loggerPanic("line %d: #define %s expected string but got: %s\n",
                         next.line,ident->data,astKindToString(ast->kind));
-            }
-            if (ast->kind == AST_STRING) {
+            } else if (ast && ast->kind == AST_STRING) {
                 /* Copy as we will free the AST which will free the string*/
                 expanded->start = strndup(ast->sval->data,ast->sval->len);
                 expanded->len = ast->sval->len;
+            } else {
+                loggerPanic("line: %d failed to parse #define %s\n",
+                        next.line, ident->data);
             }
         } else if (tk_type == TK_F64) {
             expanded->f64 = (long double)evalFloatExpr(ast);
             expanded->line = start->line;
         } else if (tk_type == TK_I64 || tk_type == TK_CHAR_CONST) {
-            expanded->i64 = evalIntConstExpr(ast);
+            if (ast) {
+                expanded->i64 = evalIntConstExpr(ast);
+            } else {
+                printf("Failed to expand: %s\n",ident->data);
+                expanded->i64 = -1;
+            }
             expanded->line = start->line;
         }
         strMapAdd(macro_defs,ident->data,expanded);
         astRelease(ast);
     }
-    lexemelistRelease(macro_tokens);
+    for (ssize_t i = 0; i < tokens->size; ++i) {
+        lexemeFree(tokens->entries[i]);
+    }
+    ptrVecRelease(tokens);
     return expanded;
 }
 
@@ -1303,106 +1389,14 @@ void lexUndef(StrMap *macro_defs, lexer *l) {
     strMapRemove(macro_defs,tmp);
 }
 
-void lexExpandAndCollect(lexer *l, StrMap *macro_defs, List *tokens, int should_collect) {
-    lexeme next,*macro;
-    int endif_count = 1;
-
-    do {
-        if (!lex(l,&next)) {
-            break;
-        }
-        if (tokenPunctIs(&next,'#')) {
-            lex(l,&next);
-            if (next.tk_type == TK_KEYWORD) {
-                switch (next.i64) {
-                    case KW_INCLUDE: {
-                        if (should_collect) {
-                            lexInclude(l);
-                        }
-                        break;
-                    }
-                    case KW_DEFINE: {
-                        if (should_collect) {
-                            lexDefine(macro_defs,l);
-                        }
-                        break;
-                    }
-                    case KW_UNDEF: {
-                        if (should_collect) {
-                            lexUndef(macro_defs, l);
-                        }
-                        break;
-                    }
-                    case KW_ELIF_DEF: {
-                        lex(l,&next);
-                        should_collect = 0;
-                        if ((macro = strMapGetLen(macro_defs,next.start,next.len)) != NULL) {
-                            should_collect = 1;
-                        }
-                        break;
-                    }
-                    case KW_ELIF: {
-                        should_collect = lexPreProcIf(macro_defs,l);
-                        break;
-                    }
-                    case KW_IF: {
-                        should_collect = lexPreProcIf(macro_defs,l);
-                        break;
-                    }
-                    case KW_IF_DEF: {
-                        lex(l,&next);
-                        should_collect = 0;
-                        if ((macro = strMapGetLen(macro_defs,next.start,next.len)) != NULL) {
-                            should_collect = 1;
-                        }
-                        endif_count++;
-                        break;
-                    }
-                    case KW_IF_NDEF: {
-                        lex(l,&next);
-                        should_collect = 0;
-                        if ((macro = strMapGetLen(macro_defs,next.start,next.len)) == NULL) {
-                            should_collect = 1;
-                        }
-                        endif_count++;
-                        break;
-                    }
-                    case KW_ENDIF:
-                        endif_count--;
-                        if (endif_count == 0) {
-                            goto done;
-                        }
-                        break;
-
-                    case KW_ELSE: {
-                        if (should_collect) should_collect = 0;
-                        else should_collect = 1;
-                        break;
-                    }
-                    default:
-                       loggerPanic("line %d: Invalid #<keyword> '%.*s'\n",
-                               next.line,next.len,next.start);
-
-                }
-            }
-        } else {
-            if (should_collect) {
-                listAppend(tokens,lexemeCopy(&next));
-            }
-        }
-    } while (1);
-done:
-    return;
-}
-
 int lexPreProcIf(StrMap *macro_defs, lexer *l) {
     int tk_type,iters,should_collect;
-    List *macro_tokens;
+    PtrVec *macro_tokens;
     lexeme next,*start,*end,*expanded,*macro;
 
     tk_type = -1;
     should_collect = 0;
-    macro_tokens = listNew();
+    macro_tokens = ptrVecNew();
 
     /* An if must be on one line a \n determines the end of a define */
     l->flags |= CCF_ACCEPT_NEWLINES;
@@ -1426,7 +1420,7 @@ int lexPreProcIf(StrMap *macro_defs, lexer *l) {
 
         if (next.tk_type == TK_IDENT) {
             if ((macro = strMapGetLen(macro_defs,next.start,next.len)) != NULL) {
-                listAppend(macro_tokens,lexemeCopy(macro));
+                ptrVecPush(macro_tokens,lexemeCopy(macro));
                 tk_type = macro->tk_type;
             }
             if (!lex(l,&next)) break;
@@ -1442,25 +1436,24 @@ int lexPreProcIf(StrMap *macro_defs, lexer *l) {
             }
         }
         if (!tokenPunctIs(&next,'\n') && !tokenPunctIs(&next,'\0')) {
-            listAppend(macro_tokens,lexemeCopy(&next));
+            ptrVecPush(macro_tokens,lexemeCopy(&next));
         }
         if (!lex(l,&next)) break;
     }
     /* Turn off the flag */
     l->flags &= ~CCF_ACCEPT_NEWLINES;
 
-    start = macro_tokens->next->value;
-    end = macro_tokens->prev->value;
+    start = macro_tokens->entries[0];
+    end = macro_tokens->entries[macro_tokens->size-1];
 
     if (start == end && iters == 1) {
         loggerPanic("line %d: a #if must evaluate some expression\n",next.line);
         return 0;
     }
+    cctrlInitMacroProcessor(macro_proccessor);
+    macro_proccessor->token_buffer->entries = (lexeme **)macro_tokens->entries;
+    macro_proccessor->token_buffer->size = macro_tokens->size;
 
-    start = macro_tokens->next->value;
-    end = macro_tokens->prev->value;
-
-    cctrlInitTokenIter(macro_proccessor,macro_tokens);
     Ast *ast = parseExpr(macro_proccessor,16);
     expanded = lexemeNew(start->start,end->len-start->len);
     expanded->tk_type = tk_type;
@@ -1481,113 +1474,198 @@ int lexPreProcIf(StrMap *macro_defs, lexer *l) {
         expanded->line = start->line;
     }
     astRelease(ast);
-    lexemelistRelease(macro_tokens);
+    for (ssize_t i = 0; i < macro_tokens->size; ++i) {
+        lexemeFree(macro_tokens->entries[i]);
+    }
+    ptrVecRelease(macro_tokens);
+
     return should_collect;
 }
 
-List *lexUntil(StrMap *macro_defs, lexer *l, char to) {
-    List *tokens; 
+/* Decide if we should collect tokens or not */
+int lexPreProcBoolean(lexer *l, StrMap *macro_defs, lexeme *le, int can_collect) {
+    lexeme next,*macro;
 
-    int ok;
+    switch (le->i64) {
+        case KW_PP_IF: {
+            int ok = lexPreProcIf(macro_defs,l);
+            if (ok) {
+                l->collecting = 1;
+                l->skip_else = 1;
+            } else {
+                l->collecting = 0;
+                l->skip_else = 0;
+            }
+            return ok;
+        }
+
+        case KW_PP_IF_DEF: {
+            lex(l,&next);
+            if ((macro = strMapGetLen(macro_defs,next.start,next.len)) != NULL) {
+                l->collecting = 1;
+                l->skip_else = 1;
+                return 1;
+            } 
+
+            l->collecting = 0;
+            l->skip_else = 0;
+            return 0;
+        }
+
+        case KW_PP_IF_NDEF: {
+            lex(l,&next);
+            if ((macro = strMapGetLen(macro_defs,next.start,next.len)) == NULL) {
+                l->collecting = 0;
+                l->skip_else = 1;
+                return 1;
+            }
+            l->collecting = 1;
+            l->skip_else = 0;
+            return 0;
+        }
+
+        case KW_PP_ELIF: {
+            if (l->skip_else) return 0;
+            int ok = lexPreProcIf(macro_defs,l);
+            if (ok) {
+                l->skip_else = 1;
+            } else {
+                l->skip_else = 0;
+            }
+            return ok;
+        }
+
+        case KW_PP_ELIF_DEF: {
+            if (l->skip_else) return 0;
+            lex(l,&next);
+            if ((macro = strMapGetLen(macro_defs,next.start,next.len)) != NULL) {
+                l->collecting = 1;
+                l->skip_else = 1;
+                return 1;
+            }
+            l->collecting = 0;
+            l->skip_else = 0;
+            return 0;
+        }
+
+
+        case KW_PP_ELSE: {
+            if (l->skip_else) return 0;
+            l->collecting = 1;
+            return 1;
+        }
+
+        case KW_PP_ENDIF:
+            l->skip_else = 0;
+            l->collecting = 1;
+            return 1;
+
+        default:
+            return 0;
+    }
+}
+
+lexeme *lexToken(StrMap *macro_defs, lexer *l) {
     lexeme le,next,*copy,*macro;
-    char prevous_to;
 
-    prevous_to = to;
-    tokens = listNew();
     macro_proccessor->macro_defs = macro_defs;
 
     while (1) {
-        ok = lex(l,&le);
-        if (!ok) {
-            break;
+        if (!lex(l,&le)) {
+            return NULL;
         }
 
-        if (l->flags & (CCF_ASM_BLOCK) && tokenPunctIs(&le, to)) {
-            copy = lexemeCopy(&le);
-            listAppend(tokens, copy);
+        if (l->flags & (CCF_ASM_BLOCK) && tokenPunctIs(&le, '}')) {
+            copy = lexemePoolCpy(&le);
             /* turn off assembly lexing */
             l->flags &= ~(CCF_MULTI_COLON|CCF_ACCEPT_NEWLINES|CCF_ASM_BLOCK);
-            to = prevous_to;
-            continue;
+            return copy;
         }
 
         if (le.tk_type == TK_KEYWORD) {
             switch (le.i64) {
                 case KW_ASM:
-                    lex(l,&next);
-                    if (!tokenPunctIs(&next,'{')) {
-                        loggerPanic("line %d: asm '{' expected Got: %s\n",
-                                next.line, lexemeToString(&next));
-                    }
-                    copy = lexemeCopy(&le);
-                    listAppend(tokens, copy);
-                    copy = lexemeCopy(&next);
-                    listAppend(tokens, copy);
-
                     l->flags |= (CCF_MULTI_COLON|CCF_ACCEPT_NEWLINES|CCF_ASM_BLOCK);
+                    copy = lexemePoolCpy(&le);
+                    return copy;
 
-                    to = '}';
+                case KW_PP_INCLUDE: {
+                    lexInclude(l);
                     continue;
+                }
+                case KW_PP_DEFINE: {
+                    copy = lexDefine(macro_defs,l);
+                    continue;
+                }
+                case KW_PP_UNDEF: {
+                    lexUndef(macro_defs, l);
+                    continue;
+                }
+
+                case KW_PP_ELIF_DEF:
+                case KW_PP_ELIF:
+                case KW_PP_ELSE: {
+                    if (l->skip_else) {
+                        while (lex(l,&le)) {
+                            if (le.tk_type == TK_KEYWORD && le.i64 == KW_PP_ENDIF) {
+                                break;
+                            }
+                        }
+                        l->skip_else = 0;
+                    } else {
+                        int should_collect = 0;
+                        int line = le.line;
+                        while ((should_collect = lexPreProcBoolean(l,macro_defs,&le, should_collect)) != 1) {
+                            int ok = lex(l,&le);
+                            if (!ok) {
+                                loggerPanic("line %d: Unterminated #if\n", line);
+                            }
+                        }
+                    }
+                    continue;
+                }
+
+                case KW_PP_IF_DEF:
+                case KW_PP_IF_NDEF:
+                case KW_PP_IF: {
+                    int should_collect = 0;
+                    int line = le.line;
+                    while ((should_collect = lexPreProcBoolean(l,macro_defs,&le,should_collect)) != 1) {
+                        int ok = lex(l,&le);
+                        if (!ok) {
+                            loggerPanic("line %d: Unterminated #if\n", line);
+                        }
+                    }
+                    continue;
+                }
+                case KW_PP_ENDIF:
+                    l->skip_else = 0;
+                    continue;
+
+                case KW_PP_ERROR:
+                    lex(l,&next);
+                    loggerPanic("line %d: %.*s",next.line,next.len,next.start);
+                    break;
+
                 default:
-                    copy = lexemeCopy(&le);
-                    listAppend(tokens, copy);
-                    continue;
+                    copy = lexemePoolCpy(&le);
+                    return copy;
             }
         }
         
         if (le.tk_type == TK_IDENT) {
             if ((macro = strMapGetLen(macro_defs,le.start,le.len)) != NULL) {
-                copy = lexemeCopy(macro);
-                listAppend(tokens, copy);
-                continue;
+                copy = lexemePoolCpy(macro);
+                return copy;
             }
-            copy = lexemeCopy(&le);
-            listAppend(tokens, copy);
-            continue;
+            copy = lexemePoolCpy(&le);
+            return copy;
         }
 
-        if (l->flags & CCF_PRE_PROC && tokenPunctIs(&le, '#')) {
-            if (lex(l,&next) && next.tk_type == TK_KEYWORD) {
-                switch (next.i64) {
-                    case KW_INCLUDE: lexInclude(l); break;
-                    case KW_DEFINE: copy = lexDefine(macro_defs,l); break;
-                    case KW_UNDEF: lexUndef(macro_defs, l); break;
-                    case KW_IF: {
-                        int should_collect = lexPreProcIf(macro_defs,l);
-                        lexExpandAndCollect(l,macro_defs,tokens,should_collect);
-                        break;
-                    }
-                    case KW_IF_NDEF:
-                    case KW_IF_DEF:
-                        lex(l, &next);
-                        if (next.tk_type != TK_IDENT) {
-                            loggerPanic("line %d: Syntax is: #ifdef <TK_IDENT>\n",next.line);
-                        }
-                        macro = strMapGetLen(macro_defs,next.start,next.len);
-                        if ((next.i64 == KW_IF_DEF && macro) || (next.i64 == KW_IF_NDEF && !macro))  {
-                            lexExpandAndCollect(l,macro_defs,tokens,1);
-                        } else {
-                            lexExpandAndCollect(l,macro_defs,tokens,0);
-                        }
-                        break;
-                    default:
-                        loggerPanic("line %d: #%.*s invalid \n",next.line,
-                                next.len,next.start);
-                }
-            } else if (tokenIdentIs(&next,"error",5)) {
-                lex(l,&next);
-                loggerPanic("line %d: %.*s",next.line,next.len,next.start);
-            }
-        } else {
-            copy = lexemeCopy(&le);
-            listAppend(tokens, copy);
-        }
+        copy = lexemePoolCpy(&le);
+        return copy;
     }
-    return tokens;
-}
-
-List *lexToLexemes(StrMap *defs, lexer *l) {
-    return lexUntil(defs,l,'\0');
+    return NULL;
 }
 
 void lexemeFree(void *_le) {
@@ -1597,13 +1675,9 @@ void lexemeFree(void *_le) {
     }
 }
 
-void lexemelistRelease(List *tokens) {
-    listRelease(tokens,lexemeFree);
-}
-
 static void lexReleaseLexFile(lexFile *lex_file) {
     aoStrRelease(lex_file->filename);
-    free(lex_file->ptr);
+    aoStrRelease(lex_file->src);
     free(lex_file);
 }
 
@@ -1612,8 +1686,25 @@ void lexReleaseAllFiles(lexer *l) {
             ((void (*))&lexReleaseLexFile));
 }
 
-void lexemePrintList(List *tokens) {
-    listForEach(tokens) {
-        lexemePrint(it->value);
+const char *lexerReportLine(lexer *l, ssize_t lineno) {
+    static char buffer[4096];
+    char *tmp_ptr = buffer;
+
+    char *ptr = l->cur_file->src->data;
+    ssize_t line = 1;
+
+    while (line != lineno && *ptr) {
+        if (*ptr == '\n') {
+            line++;
+        }
+        ptr++;
     }
+    if (!*ptr) {
+        memcpy((void*)buffer,str_lit("invalid line number"));
+    }
+    while (*ptr && *ptr != '\n') {
+        *tmp_ptr++ = *ptr++;
+    }
+    *tmp_ptr = '\0';
+    return buffer;
 }

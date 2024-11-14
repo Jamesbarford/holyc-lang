@@ -127,7 +127,6 @@ static void cctrlAddBuiltinMacros(Cctrl *cc) {
 
 Cctrl *ccMacroProcessor(StrMap *macro_defs) {
     Cctrl *cc = malloc(sizeof(Cctrl));
-    cc->tkit = malloc(sizeof(TokenIter));
     cc->macro_defs = macro_defs;
     cc->strings = listNew();
     return cc;
@@ -154,7 +153,6 @@ Cctrl *cctrlNew(void) {
     cc->ast_list = listNew();
     cc->initalisers = listNew();
     cc->initaliser_locals = listNew();
-    cc->tkit = malloc(sizeof(TokenIter));
     /* These are temoraries that the parser will allocate and 
      * NULL out between parses of classes and functions */
     cc->localenv = NULL;
@@ -198,41 +196,212 @@ Cctrl *cctrlNew(void) {
     return cc;
 }
 
-void cctrlInitTokenIter(Cctrl *cc, List *tokens) {
-    cc->tkit->tokens = tokens;
-    listPrepend(tokens,lexemeSentinal());
-    cc->tkit->cur = tokens->next->next;
+static lexeme *token_ring_buffer[CCTRL_TOKEN_BUFFER_SIZE];
+
+TokenRingBuffer *tokenRingBufferStaticNew(void) {
+    TokenRingBuffer *ring_buffer = (TokenRingBuffer *)malloc(sizeof(TokenRingBuffer));
+    ring_buffer->tail = 0;
+    ring_buffer->head = 0;
+    ring_buffer->size = 0;
+    ring_buffer->entries = token_ring_buffer;
+    for (ssize_t i = 0; i < CCTRL_TOKEN_BUFFER_SIZE; ++i) {
+        ring_buffer->entries[i] = NULL;
+    }
+    return ring_buffer;
 }
 
-/* Have a look at the next lexeme but don't consume */
-lexeme *cctrlTokenPeek(Cctrl *cc) {
-    TokenIter *it = cc->tkit;
-    lexeme *retval, *macro;
+TokenRingBuffer *tokenRingBufferNew(void) {
+    TokenRingBuffer *ring_buffer = (TokenRingBuffer *)malloc(sizeof(TokenRingBuffer));
+    ring_buffer->tail = 0;
+    ring_buffer->head = 0;
+    ring_buffer->size = 0;
+    return ring_buffer;
+}
 
-    if (it->cur == it->tokens) {
+ssize_t tokenRingBufferGetIdx(ssize_t idx) {
+    return (idx + 1) & CCTRL_TOKEN_BUFFER_MASK;
+}
+
+void tokenBufferPrint(TokenRingBuffer *ring_buffer) {
+    for (int i = 0, idx = ring_buffer->tail; i < ring_buffer->size;
+            i++, idx = tokenRingBufferGetIdx(idx)) {
+        printf(">> %s\n", lexemeToString(ring_buffer->entries[idx]));
+    }
+    printf("\n");
+}
+
+
+int tokenRingBufferEmpty(TokenRingBuffer *ring_buffer) {
+    return ring_buffer->size == 0;
+}
+
+
+/* Add a token to the ring buffer and remove the oldest element */
+void tokenRingBufferPush(TokenRingBuffer *ring_buffer, lexeme *token) {
+    ring_buffer->entries[ring_buffer->head] = token;
+    ring_buffer->head = tokenRingBufferGetIdx(ring_buffer->head);
+    if (ring_buffer->size == CCTRL_TOKEN_BUFFER_SIZE) {
+        ring_buffer->tail = tokenRingBufferGetIdx(ring_buffer->tail);
+    } else {
+        ring_buffer->size++;
+    }
+}
+
+/* Take one token from the ring buffer */
+lexeme *tokenRingBufferPop(TokenRingBuffer *ring_buffer) {
+    if (tokenRingBufferEmpty(ring_buffer)) {
         return NULL;
     }
-
-    retval = (lexeme *)it->cur->value;
-    if (retval->tk_type == TK_IDENT) {
-        if ((macro = strMapGetLen(cc->macro_defs,retval->start,retval->len)) != NULL) {
-            return macro;
-        }
-    }
-    return retval;
+    lexeme *token = ring_buffer->entries[ring_buffer->tail];
+    ring_buffer->tail = tokenRingBufferGetIdx(ring_buffer->tail);
+    ring_buffer->size--;
+    return token;
 }
 
-/** 
- * Get the current lexeme pointed to by cur and set cur to the 
- * next lexeme */
-lexeme *cctrlTokenGet(Cctrl *cc) {
-    lexeme *tok;
-    if ((tok = cctrlTokenPeek(cc)) != NULL) {
-        cc->lineno = tok->line;
-        cc->tkit->cur = cc->tkit->cur->next;
-        return tok;
+lexeme *tokenRingBufferPeek(TokenRingBuffer *ring_buffer) {
+    /* we are out of tokens */
+    if (tokenRingBufferEmpty(ring_buffer)) {
+        return NULL;
+    }
+    return ring_buffer->entries[ring_buffer->tail];
+}
+
+int tokenRingBufferRewind(TokenRingBuffer *ring_buffer) {
+    //if (tokenRingBufferEmpty(ring_buffer)) { //|| ring_buffer->tail == ring_buffer->head) {
+    //    return 0;
+    //}
+    ring_buffer->tail = (ring_buffer->tail - 1 + CCTRL_TOKEN_BUFFER_SIZE) & CCTRL_TOKEN_BUFFER_MASK;
+    ring_buffer->size++;
+    return 1;
+}
+
+void cctrlInitParse(Cctrl *cc, lexer *lexer_) {
+    cc->lexer_ = lexer_;
+    cc->token_buffer = tokenRingBufferStaticNew();
+    for (int i = 0; i < CCTRL_TOKEN_BUFFER_SIZE; ++i) {
+        lexeme *token = lexToken(cc->macro_defs, cc->lexer_);
+        if (!token) break;
+        tokenRingBufferPush(cc->token_buffer,token);
+    }
+}
+
+void cctrlInitMacroProcessor(Cctrl *cc) {
+    cc->lexer_ = NULL;
+    /* The caller will tack on the entries and size */
+    TokenRingBuffer *ring_buffer = (TokenRingBuffer *)malloc(sizeof(TokenRingBuffer));
+    ring_buffer->tail = 0;
+    ring_buffer->head = 0;
+    ring_buffer->size = 0;
+    cc->token_buffer = ring_buffer;
+}
+
+lexeme *cctrlMaybeExpandToken(Cctrl *cc, lexeme *token) {
+    if (token->tk_type != TK_IDENT) {
+        return token;
+    }
+
+    lexeme *maybe_define = strMapGetLen(cc->macro_defs, token->start, token->len);
+    if (maybe_define) {
+        return maybe_define;
+    }
+    return token; 
+}
+
+lexeme *cctrlTokenPeek(Cctrl *cc) {
+    lexeme *token = tokenRingBufferPeek(cc->token_buffer);
+    if (token) {
+        cc->lineno = token->line;
+        return cctrlMaybeExpandToken(cc,token);
     }
     return NULL;
+}
+
+void cctrlTokenRewind(Cctrl *cc) {
+    TokenRingBuffer *ring_buffer = cc->token_buffer;
+    if (!tokenRingBufferRewind(ring_buffer)) {
+        return;
+    }
+}
+
+lexeme *cctrlTokenGet(Cctrl *cc) {
+    lexeme *token = cctrlTokenPeek(cc);
+    if (token) {
+        tokenRingBufferPop(cc->token_buffer);
+        if (cc->token_buffer->size < 3 && cc->lexer_) {
+            for (ssize_t i = 0; i < 10; ++i) {
+                lexeme *new_token = lexToken(cc->macro_defs,cc->lexer_);
+                if (!new_token) {
+                    break;
+                }
+                tokenRingBufferPush(cc->token_buffer, new_token);
+            }
+        }
+        return token;
+    }
+    return NULL;
+}
+
+aoStr *cctrlCreateErrorLine(Cctrl *cc,
+                            ssize_t lineno, 
+                            char *msg)
+{
+    aoStr *buf = aoStrNew();
+
+    if (cc->lexer_) {
+        lexFile *file = cc->lexer_->cur_file;
+        aoStrCatPrintf(buf, "%s:%d ",
+                file->filename->data,
+                lineno);
+    } else {
+        aoStrCatPrintf(buf, "Parsing macro:%d ", lineno);
+    }
+
+    aoStrCatLen(buf,str_lit(ESC_BOLD_RED));
+    aoStrCatLen(buf,str_lit("error: "));
+    aoStrCatLen(buf,str_lit(ESC_RESET));
+    aoStrCatPrintf(buf,"%s",msg);
+    if (buf->data[buf->len - 1] != '\n') {
+        aoStrPutChar(buf,'\n');
+    }
+
+    if (cc->lexer_) {
+        const char *line_buffer = lexerReportLine(cc->lexer_,lineno);
+        aoStrCatPrintf(buf, "%4ld |    %s\n", lineno, line_buffer);
+    }
+    aoStrCatLen(buf, str_lit("     |\n"));
+    return buf;
+}
+
+void cctrlRaiseException(Cctrl *cc, char *fmt, ...) {
+    va_list ap;
+    va_start(ap,fmt);
+    char *msg = mprintVa(fmt, ap);
+    va_end(ap);
+
+    aoStr *bold_msg = aoStrNew();
+    aoStrCatPrintf(bold_msg, ESC_BOLD"%s"ESC_CLEAR_BOLD, msg);
+    aoStr *buf = cctrlCreateErrorLine(cc,cc->lineno,bold_msg->data);
+
+    fprintf(stderr,"%s",buf->data);
+    aoStrRelease(buf);
+    aoStrRelease(bold_msg);
+    free(msg);
+    exit(EXIT_FAILURE);
+}
+
+void cctrlIce(Cctrl *cc, char *fmt, ...) {
+    va_list ap;
+    va_start(ap,fmt);
+    char *msg = mprintVa(fmt, ap);
+    va_end(ap);
+    char *ice_msg = mprintf(ESC_BOLD_RED"INTERNAL COMPILER ERROR"ESC_RESET" - hcc %s\n",
+            cctrlGetVersion());
+    aoStr *error_line = cctrlCreateErrorLine(cc,cc->lineno,msg);
+    fprintf(stderr,"%s%s",ice_msg,error_line->data);
+    aoStrRelease(error_line);
+    free(ice_msg);
+    free(msg);
+    exit(EXIT_FAILURE);
 }
 
 /* assert the token we are currently pointing at is a TK_PUNCT and the 'i64'
@@ -241,22 +410,14 @@ void cctrlTokenExpect(Cctrl *cc, long expected) {
     lexeme *tok = cctrlTokenGet(cc);
     if (!tokenPunctIs(tok, expected)) {
         if (!tok) {
-            //lexemePrintList(cc->tkit->tokens->next);
             loggerPanic("line %ld: Ran out of tokens\n",cc->lineno);
         } else {
-            loggerPanic("line %d: Syntax error in on line expected '%c' got: %.*s\n",
-                    tok->line, (char)expected,
-                    tok->len, tok->start);
+            cctrlRaiseException(cc,"Syntax error expected '%c' got: '%.*s'",
+                    (char)expected, tok->len, tok->start);
         }
     }
 }
 
-/* Go back one */
-void cctrlTokenRewind(Cctrl *cc) {
-    cc->tkit->cur = cc->tkit->cur->prev;
-    lexeme *current = (lexeme *)cc->tkit->cur->value;
-    cc->lineno = current->line;
-}
 
 /* Get variable either from the local or global scope */
 Ast *cctrlGetVar(Cctrl *cc, char *varname, int len) {
