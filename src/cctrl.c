@@ -66,11 +66,12 @@ static void cctrlAddBuiltinMacros(Cctrl *cc) {
     long bufsize = sizeof(char)*128;
 
     le = lexemeSentinal();
-    if (IS_BSD)        strMapAdd(cc->macro_defs,"IS_BSD",le);
+    if (IS_BSD)   strMapAdd(cc->macro_defs,"IS_BSD",le);
+    if (IS_LINUX) strMapAdd(cc->macro_defs,"IS_LINUX",le);
+
 #ifdef IS_MACOS
     strMapAdd(cc->macro_defs,"IS_MACOS",le);
 #endif
-    else if (IS_LINUX) strMapAdd(cc->macro_defs,"IS_LINUX",le);
     
     if (IS_X86_64)      {
         strMapAdd(cc->macro_defs,"IS_X86_64",le);

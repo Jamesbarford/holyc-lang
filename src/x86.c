@@ -309,7 +309,7 @@ void asmGLoad(aoStr *buf, AstType *type, aoStr *label, int offset) {
 
 void asmLLoad(aoStr *buf, AstType *type, int offset) {
     char *reg = NULL;
-    
+
     switch (type->kind) {
         case AST_TYPE_ARRAY:
             aoStrCatPrintf(buf, "# LOAD LEAQ START: %s\n\t", astKindToString(type->kind));
@@ -1389,11 +1389,11 @@ void asmFunCall(Cctrl *cc, aoStr *buf, Ast *ast) {
     asmPrepFuncCallArgs(cc,buf,ast);
 }
 
+/* This is also used for initalising classes as they are treated much in the 
+ * same way as arrays */
 void asmArrayInit(Cctrl *cc, aoStr *buf, Ast *ast, AstType *type, int offset) {
-    Ast *tmp;
-
     listForEach(ast->arrayinit) {
-        tmp = it->value;
+        Ast *tmp = it->value;
         if (tmp->kind == AST_ARRAY_INIT) {
             asmArrayInit(cc,buf,tmp,type->ptr,offset);
             offset += type->ptr->size;
@@ -1405,20 +1405,7 @@ void asmArrayInit(Cctrl *cc, aoStr *buf, Ast *ast, AstType *type, int offset) {
             aoStrCatPrintf(buf,"movq    %%rax, %d(%%rbp)\n\t",offset);
             offset += 8;
         } else {
-            switch (tmp->type->kind) {
-            case AST_TYPE_CHAR:
-            case AST_TYPE_INT:
-                if (tmp->type->issigned) {
-                    aoStrCatPrintf(buf, "movq   $%lld, %%rax\n\t", tmp->i64);
-                } else if (!tmp->type->issigned) {
-                    aoStrCatPrintf(buf, "movq   $%lu, %%rax\n\t",
-                                   (unsigned long)tmp->i64);
-                }
-                break;
-            default:
-                asmExpression(cc, buf, it->value);
-                break;
-            }
+            asmExpression(cc, buf, tmp);
             if (type->ptr) {
                 asmLSave(buf,type->ptr,offset);
                 offset += type->ptr->size;
@@ -1427,7 +1414,6 @@ void asmArrayInit(Cctrl *cc, aoStr *buf, Ast *ast, AstType *type, int offset) {
                 offset += tmp->type->size;
             }
         }
-
     }
 }
 
