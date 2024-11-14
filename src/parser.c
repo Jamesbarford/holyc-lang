@@ -490,7 +490,7 @@ Ast *parseVariableAssignment(Cctrl *cc, Ast *var, long terminator_flags) {
         lexeme *tok = cctrlTokenGet(cc);
         assertTokenIsTerminator(cc,tok,terminator_flags);
         return astDecl(var,init);
-    } else if (var->type->kind == AST_TYPE_CLASS) {
+    } else if (var->type->kind == AST_TYPE_CLASS && !var->type->is_intrinsic) {
         init = parseDeclArrayInitInt(cc,var->type);
         lexeme *tok = cctrlTokenGet(cc);
         assertTokenIsTerminator(cc,tok,terminator_flags);
