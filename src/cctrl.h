@@ -134,5 +134,6 @@ int cctrlIsKeyword(Cctrl *cc, char *name, int len);
 AstType *cctrlGetKeyWord(Cctrl *cc, char *name, int len);
 [[noreturn]] void cctrlRaiseException(Cctrl *cc, char *fmt, ...);
 [[noreturn]] void cctrlIce(Cctrl *cc, char *fmt, ...);
+void cctrlWarning(Cctrl *cc, char *fmt, ...);
 
 #endif // !CCTRL_H

@@ -4,6 +4,7 @@
 #include <time.h>
 #include <sys/time.h>
 
+#include "aostr.h"
 #include "ast.h"
 #include "cctrl.h"
 #include "lexer.h"
@@ -341,9 +342,14 @@ lexeme *cctrlTokenGet(Cctrl *cc) {
     return NULL;
 }
 
+#define CCTRL_ICE   0
+#define CCTRL_ERROR 1
+#define CCTRL_WARN  2
+
 aoStr *cctrlCreateErrorLine(Cctrl *cc,
                             ssize_t lineno, 
-                            char *msg)
+                            char *msg,
+                            int severity)
 {
     aoStr *buf = aoStrNew();
 
@@ -356,9 +362,25 @@ aoStr *cctrlCreateErrorLine(Cctrl *cc,
         aoStrCatPrintf(buf, "Parsing macro:%d ", lineno);
     }
 
-    aoStrCatLen(buf,str_lit(ESC_BOLD_RED));
-    aoStrCatLen(buf,str_lit("error: "));
-    aoStrCatLen(buf,str_lit(ESC_RESET));
+    switch (severity) {
+        case CCTRL_ERROR:
+            aoStrCatLen(buf,str_lit(ESC_BOLD_RED));
+            aoStrCatLen(buf,str_lit("error: "));
+            aoStrCatLen(buf,str_lit(ESC_RESET));
+            break;
+        case CCTRL_WARN:
+            aoStrCatLen(buf,str_lit(ESC_BOLD_YELLOW));
+            aoStrCatLen(buf,str_lit("warning: "));
+            aoStrCatLen(buf,str_lit(ESC_RESET));
+            break;
+        case CCTRL_ICE: {
+            char *ice_msg = mprintf(ESC_BOLD_RED"INTERNAL COMPILER ERROR"ESC_RESET" - hcc %s\n",
+                                    cctrlGetVersion());
+            aoStrCat(buf,ice_msg);
+            free(ice_msg);
+            break;
+        }
+    }
     aoStrCatPrintf(buf,"%s",msg);
     if (buf->data[buf->len - 1] != '\n') {
         aoStrPutChar(buf,'\n');
@@ -372,35 +394,38 @@ aoStr *cctrlCreateErrorLine(Cctrl *cc,
     return buf;
 }
 
-void cctrlRaiseException(Cctrl *cc, char *fmt, ...) {
-    va_list ap;
-    va_start(ap,fmt);
+void cctrlMessagVnsPrintF(Cctrl *cc, char *fmt, va_list ap, int severity) {
     char *msg = mprintVa(fmt, ap);
-    va_end(ap);
-
     aoStr *bold_msg = aoStrNew();
     aoStrCatPrintf(bold_msg, ESC_BOLD"%s"ESC_CLEAR_BOLD, msg);
-    aoStr *buf = cctrlCreateErrorLine(cc,cc->lineno,bold_msg->data);
+    aoStr *buf = cctrlCreateErrorLine(cc,cc->lineno,bold_msg->data,severity);
 
     fprintf(stderr,"%s",buf->data);
     aoStrRelease(buf);
     aoStrRelease(bold_msg);
     free(msg);
+}
+
+void cctrlRaiseException(Cctrl *cc, char *fmt, ...) {
+    va_list ap;
+    va_start(ap,fmt);
+    cctrlMessagVnsPrintF(cc,fmt,ap,CCTRL_ERROR);
+    va_end(ap);
     exit(EXIT_FAILURE);
+}
+
+void cctrlWarning(Cctrl *cc, char *fmt, ...) {
+    va_list ap;
+    va_start(ap,fmt);
+    cctrlMessagVnsPrintF(cc,fmt,ap,CCTRL_WARN);
+    va_end(ap);
 }
 
 void cctrlIce(Cctrl *cc, char *fmt, ...) {
     va_list ap;
     va_start(ap,fmt);
-    char *msg = mprintVa(fmt, ap);
+    cctrlMessagVnsPrintF(cc,fmt,ap,CCTRL_ICE);
     va_end(ap);
-    char *ice_msg = mprintf(ESC_BOLD_RED"INTERNAL COMPILER ERROR"ESC_RESET" - hcc %s\n",
-            cctrlGetVersion());
-    aoStr *error_line = cctrlCreateErrorLine(cc,cc->lineno,msg);
-    fprintf(stderr,"%s%s",ice_msg,error_line->data);
-    aoStrRelease(error_line);
-    free(ice_msg);
-    free(msg);
     exit(EXIT_FAILURE);
 }
 
