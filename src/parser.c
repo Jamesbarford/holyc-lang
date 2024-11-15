@@ -46,8 +46,7 @@ Ast *parseFloatingCharConst(Cctrl *cc, lexeme *tok) {
     str[7] = ((unsigned long)ch) >> 56 & 0xFF;
     str[8] = '\0';
 
-    ast = astString(str,sizeof(str));
-    listAppend(cc->strings,ast);
+    ast = cctrlGetOrSetString(cc,str,sizeof(str));
     listAppend(argv,ast);
     ast = astFunctionCall(ast_void_type,"printf",6,argv,listNew());
     cctrlTokenExpect(cc,';');

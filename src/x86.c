@@ -2084,25 +2084,20 @@ void asmGlobalVar(StrMap *seen_globals, aoStr *buf, Ast* ast) {
 }
 
 void asmDataSection(Cctrl *cc, aoStr *buf) {
-    List *it;
-    Ast *ast;
-    char *label, *str, *ptr;
-    aoStr *escaped;
-    
-    it = cc->strings->next;
-
     aoStrCatPrintf(buf, "sign_bit:\n\t.quad 0x8000000000000000\n");
     aoStrCatPrintf(buf, "one_dbl:\n\t.double 1.0\n");
 
-    while (it != cc->strings) {
-        ast = (Ast *)it->value;
+    StrMapIterator *it = strMapIteratorNew(cc->strs);
+    StrMapNode *n = NULL;
+    while ((n = strMapNext(it)) != NULL) {
+        Ast *ast = (Ast *)n->value;
         assert(ast->kind == AST_STRING);
 
-        label = ast->slabel->data;
-        str = ast->sval->data;
-        escaped = aoStrAlloc(1<<10);
+        char *label = ast->slabel->data;
+        char *str = ast->sval->data;
+        aoStr *escaped = aoStrAlloc(1<<10);
 
-        ptr = str;
+        char *ptr = str;
         while (*ptr) {
             switch (*ptr) {
                 case '\\': aoStrCatPrintf(escaped,"\\"); break;
@@ -2125,9 +2120,9 @@ void asmDataSection(Cctrl *cc, aoStr *buf) {
                     , escaped->data);
         }
         aoStrRelease(escaped);
-        it = it->next;
     }
     aoStrPutChar(buf,'\t');
+    strMapIteratorRelease(it);
 } 
 
 void asmStoreParam(aoStr *buf, int *_ireg, int *_arg, int offset) {

@@ -616,10 +616,7 @@ static Ast *parsePrimary(Cctrl *cc) {
             aoStrCatPrintf(str,"%.*s",tok->len,tok->start);
         }
         cctrlTokenRewind(cc);
-        ast = astString(str->data, str->len);
-        if (cc->strings) {
-            listAppend(cc->strings, ast);
-        }
+        ast = cctrlGetOrSetString(cc, str->data, str->len);
         free(str);
         return ast;
     }

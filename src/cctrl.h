@@ -65,7 +65,7 @@ typedef struct Cctrl {
     List *asm_blocks;
 
     /* Strings */
-    List *strings;
+    StrMap *strs;
 
     /* The Ast Tree */
     List *ast_list;
@@ -135,5 +135,6 @@ AstType *cctrlGetKeyWord(Cctrl *cc, char *name, int len);
 [[noreturn]] void cctrlRaiseException(Cctrl *cc, char *fmt, ...);
 [[noreturn]] void cctrlIce(Cctrl *cc, char *fmt, ...);
 void cctrlWarning(Cctrl *cc, char *fmt, ...);
+Ast *cctrlGetOrSetString(Cctrl *cc, char *str, int len);
 
 #endif // !CCTRL_H
