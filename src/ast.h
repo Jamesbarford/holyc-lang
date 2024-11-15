@@ -174,6 +174,9 @@ typedef struct Ast {
             Ast *ref; /* for function pointers, a reference to the variable 
                        * allows for keeping track of the offset when converting 
                        * to assembly. */
+            Ast *default_fn; /* For function pointers, allows setting a default
+                              * value... we could use this for all default vals
+                              * might be easier?*/
             int has_var_args;
         };
 
