@@ -72,7 +72,7 @@ U0 FloatVecSort(FloatVec *vec, I64 high, I64 low=0)
     I64 idx = low;
 
     for (I64 i = low; i < high; ++i) {
-      if (arr[i] <= pivot) {
+      if (arr[i] < pivot) {
         F64 tmp = arr[i];
         arr[i] = arr[idx];
         arr[idx] = tmp;
@@ -230,11 +230,10 @@ U0 *PtrVecGet(PtrVec *vec, I64 idx)
   return vec->entries[idx];
 }
 
-U0 PtrVecSort(PtrVec *vec, I64 high, I64 low,
-               I64 (*_compare_fn)(U0 *_arg1, U0 *_arg2))
+U0 QSortGeneric(U0 **arr, I64 high, I64 low, 
+    I64 (*_compare_fn)(U0 *_arg1, U0 *_arg2))
 {
   if (low < high) {
-    U0 **arr = vec->entries;
     U0 *pivot = arr[high];
     I64 idx = low;
 
@@ -249,9 +248,14 @@ U0 PtrVecSort(PtrVec *vec, I64 high, I64 low,
 
     arr[high] = arr[idx];
     arr[idx] = pivot;
-    PtrVecSort2(vec,high,low+1,_compare_fn);
-    PtrVecSort2(vec,high-1,low,_compare_fn);
+    QSortGeneric(arr,high,low+1,_compare_fn);
+    QSortGeneric(arr,high-1,low,_compare_fn);
   }
+}
+
+U0 PtrVecSort(PtrVec *vec, I64 (*_compare_fn)(U0 *_arg1, U0 *_arg2))
+{
+  QSortGeneric(vec->entries,vec->size-1,0,_compare_fn);
 }
 
 I64 PtrVecClear(PtrVec *vec)
