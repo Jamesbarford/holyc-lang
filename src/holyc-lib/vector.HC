@@ -64,6 +64,29 @@ F64 FloatVecGet(FloatVec *vec, I64 idx)
   return vec->entries[idx];
 }
 
+U0 FloatVecSort(FloatVec *vec, I64 high, I64 low=0)
+{
+  if (low < high) {
+    F64 *arr = vec->entries;
+    F64 pivot = arr[high];
+    I64 idx = low;
+
+    for (I64 i = low; i < high; ++i) {
+      if (arr[i] <= pivot) {
+        F64 tmp = arr[i];
+        arr[i] = arr[idx];
+        arr[idx] = tmp;
+        idx++;
+      }
+    }
+
+    arr[high] = arr[idx];
+    arr[idx] = pivot;
+    FloatVecSort(vec,high,low+1);
+    FloatVecSort(vec,high-1,low);
+  }
+}
+
 U0 FloatVecClear(FloatVec *vec)
 {
   vec->size = 0;
@@ -76,7 +99,6 @@ U0 FloatVecRelease(FloatVec *vec)
     Free(vec);
   }
 }
-
 
 
 IntVec *IntVecNew(I64 size = 32)
@@ -123,6 +145,29 @@ I64 IntVecGet(IntVec *vec, I64 idx)
   }
 #endif
   return vec->entries[idx];
+}
+
+U0 IntVecSort(IntVec *vec, I64 high, I64 low=0)
+{
+  if (low < high) {
+    I64 *arr = vec->entries;
+    I64 pivot = arr[high];
+    I64 idx = low;
+
+    for (I64 i = low; i < high; ++i) {
+      if (arr[i] <= pivot) {
+        I64 tmp = arr[i];
+        arr[i] = arr[idx];
+        arr[idx] = tmp;
+        idx++;
+      }
+    }
+
+    arr[high] = arr[idx];
+    arr[idx] = pivot;
+    IntVecSort(vec,high,low+1);
+    IntVecSort(vec,high-1,low);
+  }
 }
 
 I64 IntVecClear(IntVec *vec)
@@ -185,14 +230,43 @@ U0 *PtrVecGet(PtrVec *vec, I64 idx)
   return vec->entries[idx];
 }
 
+U0 PtrVecSort(PtrVec *vec, I64 high, I64 low,
+               I64 (*_compare_fn)(U0 *_arg1, U0 *_arg2))
+{
+  if (low < high) {
+    U0 **arr = vec->entries;
+    U0 *pivot = arr[high];
+    I64 idx = low;
+
+    for (I64 i = low; i < high; ++i) {
+      if (_compare_fn(arr[i],pivot)) {
+        U0 *tmp = arr[i];
+        arr[i] = arr[idx];
+        arr[idx] = tmp;
+        idx++;
+      }
+    }
+
+    arr[high] = arr[idx];
+    arr[idx] = pivot;
+    PtrVecSort2(vec,high,low+1,_compare_fn);
+    PtrVecSort2(vec,high-1,low,_compare_fn);
+  }
+}
+
 I64 PtrVecClear(PtrVec *vec)
 {
   vec->size = 0;
 }
 
-I64 PtrVecRelease(PtrVec *vec)
-{
+I64 PtrVecRelease(PtrVec *vec, U0 (*_free_value)(U0 *_val) = NULL)
+{ // Optionally pass a callback to free each item in the vector 
   if (vec) {
+    if (_free_value) {
+      for (U0 *it : vec) {
+        _free_value(it);
+      }
+    }
     Free(vec->entries);
     Free(vec);
   }
