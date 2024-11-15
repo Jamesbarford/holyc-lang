@@ -9,6 +9,7 @@
 #include "cctrl.h"
 #include "lexer.h"
 #include "list.h"
+#include "map.h"
 #include "util.h"
 #include "config.h"
 
@@ -132,7 +133,7 @@ static void cctrlAddBuiltinMacros(Cctrl *cc) {
 Cctrl *ccMacroProcessor(StrMap *macro_defs) {
     Cctrl *cc = malloc(sizeof(Cctrl));
     cc->macro_defs = macro_defs;
-    cc->strings = listNew();
+    cc->strs = strMapNew(32);
     return cc;
 }
 
@@ -152,7 +153,7 @@ Cctrl *cctrlNew(void) {
     cc->macro_defs = strMapNew(32);
     cc->x86_registers = strMapNew(32);
     cc->libc_functions = strMapNew(32);
-    cc->strings = listNew();
+    cc->strs = strMapNew(32);
     cc->asm_blocks = listNew();
     cc->ast_list = listNew();
     cc->initalisers = listNew();
@@ -472,9 +473,7 @@ Ast *cctrlGetVar(Cctrl *cc, char *varname, int len) {
         case TK_F64:
             return astF64Type(tok->f64);
         case TK_STR:
-            ast_var = astString(tok->start, tok->len);
-            listAppend(cc->strings, ast_var);
-            return ast_var;
+            return cctrlGetOrSetString(cc, tok->start, tok->len);
         default:
             return NULL;
         }
@@ -506,4 +505,19 @@ void cctrlSetCommandLineDefines(Cctrl *cc, List *defines_list) {
     listForEach(defines_list) {
         strMapAdd(cc->macro_defs,(char*)it->value,lexemeSentinal());
     }
+}
+
+/* De-duplicates strings by checking their existance */
+Ast *cctrlGetOrSetString(Cctrl *cc, char *str, int len) {
+    Ast *ast_str = NULL;
+    if (cc->strs) {
+        ast_str = strMapGetLen(cc->strs, str, len);
+        if (!ast_str) {
+            ast_str = astString(str,len);
+            strMapAdd(cc->strs, ast_str->sval->data, ast_str);
+        }
+    } else {
+        ast_str = astString(str,len);
+    }
+    return ast_str;
 }
