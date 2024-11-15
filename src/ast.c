@@ -256,6 +256,7 @@ Ast *astFunctionPtr(AstType *type, char *fname, int len, List *params) {
     ast->kind = AST_FUNPTR;
     ast->fname = aoStrDupRaw(fname, len);
     ast->params = params;
+    ast->default_fn = NULL;
     return ast;
 }
 static void astFreeFunctionPtr(Ast *ast) {

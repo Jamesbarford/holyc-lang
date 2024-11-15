@@ -1186,6 +1186,8 @@ void asmPopFloatArgs(aoStr *buf, List *argv) {
     }
 }
 
+/* For default arguments this should be an int vector and we just look up
+ * the index, having 2 linked lists is very tricky to manage */
 #define FUN_EXISTS 0x1
 #define FUN_EXTERN 0x2
 #define FUN_VARARG 0x4
@@ -1265,7 +1267,13 @@ void asmPrepFuncCallArgs(Cctrl *cc, aoStr *buf, Ast *funcall) {
         } else if (funparam != NULL) {
             /* Handling default function parameters, these can only come at
              * the end of a function call presently */
-            tmp = ((Ast *)funparam->value)->declinit;
+            Ast *param_ast = (Ast*)funparam->value;
+            /* For function pointers the value is stored elsewhere */
+            if (param_ast->kind == AST_FUNPTR) {
+                tmp = param_ast->default_fn->declinit;
+            } else {
+                tmp = param_ast->declinit;
+            }
         } else {
             break;
         }
@@ -1663,6 +1671,8 @@ void asmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
                         aoStrCatPrintf(buf,"movq   %%%s, %%rax\n\t", reg);
                         aoStrCatPrintf(buf,"# deref ptr end\n\t");
                         break;
+                    /* We want to derefernce a 'U0**' ptr */
+                    case AST_TYPE_VOID:
                     case AST_TYPE_CLASS:
                         aoStrCatPrintf(buf,"# deref class start\n\t");
                         aoStrCatPrintf(buf,"movq   (%%%s), %%rax\n\t", reg);

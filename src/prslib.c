@@ -192,12 +192,20 @@ List *parseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
                     type = astMakePointerType(type->ptr);
                 }
                 var = parseFunctionPointer(cc,type);
-                strMapAdd(cc->localenv,var->fname->data,var);
+                if (!strMapAddOrErr(cc->localenv,var->fname->data,var)) {
+                    cctrlRaiseException(cc,"variable %s already declared",
+                            astLValueToString(var,0));
+                }
                 if (cc->tmp_locals) {
                     listAppend(cc->tmp_locals, var);
                 }
                 listAppend(params, var);
                 tok = cctrlTokenGet(cc);
+                if (tokenPunctIs(tok, '=')) {
+                    Ast *default_fnptr = parseDefaultFunctionParam(cc,var);
+                    var->default_fn = default_fnptr;
+                    tok = cctrlTokenGet(cc);
+                }
                 if (tokenPunctIs(tok, terminator)) {
                     return params;
                 }

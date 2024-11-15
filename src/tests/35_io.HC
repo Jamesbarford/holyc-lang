@@ -1,7 +1,7 @@
 #include "./testhelper.HC"
 
 #define TEST_FILE "__file__.txt"
-#define TEST_DATA "hello\n";
+#define TEST_DATA "hello\n"
 
 Bool __fail_and_cleanup(U0)
 {
