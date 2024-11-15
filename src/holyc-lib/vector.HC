@@ -64,7 +64,7 @@ F64 FloatVecGet(FloatVec *vec, I64 idx)
   return vec->entries[idx];
 }
 
-U0 FloatVecSort(FloatVec *vec, I64 high, I64 low=0)
+U0 FloatVecSortInternal(FloatVec *vec, I64 high, I64 low=0)
 {
   if (low < high) {
     F64 *arr = vec->entries;
@@ -82,9 +82,14 @@ U0 FloatVecSort(FloatVec *vec, I64 high, I64 low=0)
 
     arr[high] = arr[idx];
     arr[idx] = pivot;
-    FloatVecSort(vec,high,low+1);
-    FloatVecSort(vec,high-1,low);
+    FloatVecSortInternal(vec,high,low+1);
+    FloatVecSortInternal(vec,high-1,low);
   }
+}
+
+U0 FloatVecSort(FloatVec *vec)
+{
+  FloatVecSortInternal(vec,vec->size-1,0);
 }
 
 U0 FloatVecClear(FloatVec *vec)
@@ -147,7 +152,7 @@ I64 IntVecGet(IntVec *vec, I64 idx)
   return vec->entries[idx];
 }
 
-U0 IntVecSort(IntVec *vec, I64 high, I64 low=0)
+U0 IntVecSortInternal(IntVec *vec, I64 high, I64 low=0)
 {
   if (low < high) {
     I64 *arr = vec->entries;
@@ -165,9 +170,14 @@ U0 IntVecSort(IntVec *vec, I64 high, I64 low=0)
 
     arr[high] = arr[idx];
     arr[idx] = pivot;
-    IntVecSort(vec,high,low+1);
-    IntVecSort(vec,high-1,low);
+    IntVecSortInternal(vec,high,low+1);
+    IntVecSortInternal(vec,high-1,low);
   }
+}
+
+U0 IntVecSort(IntVec *vec)
+{
+  IntVecSortInternal(vec,vec->size-1,0);
 }
 
 I64 IntVecClear(IntVec *vec)

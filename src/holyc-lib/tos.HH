@@ -161,7 +161,7 @@ public F64 FloatVecPop(FloatVec *vec, Bool *_ok);
 public F64 FloatVecGet(FloatVec *vec, I64 idx);
 public U0 FloatVecClear(FloatVec *vec);
 public U0 FloatVecRelease(FloatVec *vec);
-public U0 FloatVecSort(FloatVec *vec, I64 high, I64 low=0);
+public U0 FloatVecSort(FloatVec *vec);
 
 public IntVec *IntVecNew(I64 size = 32);
 public U64 IntVecCapacity(IntVec *vec);
@@ -170,7 +170,7 @@ public I64 IntVecPop(IntVec *vec, Bool *_ok);
 public I64 IntVecGet(IntVec *vec, I64 idx);
 public I64 IntVecClear(IntVec *vec);
 public I64 IntVecRelease(IntVec *vec);
-public U0 IntVecSort(IntVec *vec, I64 high, I64 low=0);
+public U0 IntVecSort(IntVec *vec);
 
 public PtrVec *PtrVecNew(I64 size = 32);
 public U64 PtrVecCapacity(IntVec *vec);
@@ -180,8 +180,7 @@ public U0 *PtrVecGet(PtrVec *vec, I64 idx);
 public I64 PtrVecClear(PtrVec *vec);
 public I64 PtrVecRelease(PtrVec *vec, U0 (*_free_value)(U0 *_val) = NULL);
 public U0 PtrVecSort(PtrVec *vec,
-                     I64(*_compare_fn)(U0 *_cmp_arg1, U0 *_cmp_arg2));
-
+                     I64 (*_compare_fn)(U0 *_arg1, U0 *_arg2))
 
 public class IntMapNode
 {
