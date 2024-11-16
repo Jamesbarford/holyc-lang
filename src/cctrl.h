@@ -75,7 +75,7 @@ typedef struct Cctrl {
 
     /* Temporary function parameters, for trying to keep track of function 
      * pointers */
-    List *tmp_params;
+    PtrVec *tmp_params;
 
     /* Local variables */
     List *tmp_locals;

@@ -9,6 +9,8 @@
 #include "map.h"
 #include "util.h"
 
+#define VECTOR_INITIAL_CAPACITY 4
+
 void setAllLongs(long *array, unsigned long len, long value) {
     for (long i = 0; i < len; ++i) {
         array[i] = value;
@@ -20,8 +22,8 @@ void setAllLongs(long *array, unsigned long len, long value) {
     do {                                                              \
         vec = (ret_type *)malloc(sizeof(ret_type));                   \
         vec->size = 0;                                                \
-        vec->capacity = 32;                                           \
-        vec->entries = (entry_type *)malloc(sizeof(entry_type) * 32); \
+        vec->capacity = VECTOR_INITIAL_CAPACITY;                      \
+        vec->entries = (entry_type *)malloc(sizeof(entry_type) * VECTOR_INITIAL_CAPACITY); \
     } while (0)
 
 #define vectorResize(vec, type)                           \

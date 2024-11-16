@@ -30,7 +30,9 @@ typedef struct PtrVec {
     int capacity;
     void **entries;
 } PtrVec;
-#define vecEmpty(vec) (vec)->size == 0
+#define vecInBounds(vec, idx) ((idx >= 0) && idx < (vec)->size)
+#define vecGetInBounds(vec, idx) (vecInBounds(vec,idx) ? (vec)->entries[idx] : NULL)
+#define vecEmpty(vec) ((vec)->size == 0)
 #define vecGet(type,vec,idx) ((type)((vec)->entries[idx]))
 #define vecTail(type,vec) ((type)((vec)->entries[(vec)->size-1]))
 
