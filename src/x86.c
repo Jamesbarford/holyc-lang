@@ -1207,13 +1207,13 @@ void asmPopFloatArgs(aoStr *buf, List *argv) {
 void asmPrepFuncCallArgs(Cctrl *cc, aoStr *buf, Ast *funcall) {
     int int_cnt,float_cnt,stack_cnt,stackoffset,needs_padding,var_arg_start,argc,
         flags;
-    List *int_args, *float_args, *stack_args, 
-         *funparam, *funarg, *params;
-    Ast *tmp, *fun, *arg;
+    List *int_args, *float_args, *stack_args;
+    Ast *funarg; 
+    Ast *tmp, *fun, *arg, *funparam;
 
     flags = 0;
     fun = strMapGetLen(cc->global_env,funcall->fname->data,funcall->fname->len);
-    funarg = funparam = params = NULL;
+    funarg = funparam = NULL;
 
     /* This should exist on the AST */
     if (fun) {
@@ -1232,32 +1232,14 @@ void asmPrepFuncCallArgs(Cctrl *cc, aoStr *buf, Ast *funcall) {
     var_arg_start = -1;
     argc = 0;
     if (flags & (FUN_EXISTS|FUN_VARARG) && !(flags & FUN_EXTERN)) {
-        listForEach(fun->params) {
+        for (ssize_t i = 0; i < fun->params->size; ++i) {
             var_arg_start++;
-            arg = it->value;
+            arg = fun->params->entries[i];
             if (arg->kind == AST_VAR_ARGS) {
                 break;
             }
         }
         var_arg_start += 1;
-    }
-
-    /* Get the function parameters, either from the function call or the 
-     * function definition. Try to get them from the definition first */
-    if (flags & FUN_EXISTS) {
-        if (fun->params != fun->params->next) {
-            params = fun->params;
-            funparam =  params->next;
-        }
-    } else {
-        if (funcall->paramtypes && funcall->paramtypes != funcall->paramtypes->next) {
-            params = funcall->paramtypes;
-            funparam = params->next;
-        }
-    }
-        
-    if (funcall->args != funcall->args->next) {
-        funarg = funcall->args->next;
     }
 
     int_cnt = float_cnt = stack_cnt = stackoffset = 0;
@@ -1266,26 +1248,35 @@ void asmPrepFuncCallArgs(Cctrl *cc, aoStr *buf, Ast *funcall) {
     float_args = listNew();
     stack_args = listNew();
 
+    funarg = NULL;
+    ssize_t i = 0;
     while (1) {
+        /* Handling the case for either more arguments than parameters or
+         * more parameters than arguments */
+        if (fun && fun->params) {
+            funparam = vecGetInBounds(fun->params,i);
+        }
+        funarg = vecGetInBounds(funcall->args,i);
+        i++;
+
         if (funarg != NULL) {
-            tmp = funarg->value;
+            tmp = funarg;
             if (tmp->kind == AST_PLACEHOLDER) {
-                loggerDebug("place holder: %s\n",astToString(funparam->value));
-                tmp = ((Ast *)funparam->value)->declinit;
+                loggerDebug("place holder: %s\n",astToString(funparam));
+                tmp = funparam->declinit;
                 if (tmp == NULL) {
                     loggerPanic("Default parameter not provided for function call: %s()\n",
                             funcall->fname->data);
                 }
             }
-        } else if (funparam != NULL) {
+        } else if (funparam) {
             /* Handling default function parameters, these can only come at
              * the end of a function call presently */
-            Ast *param_ast = (Ast*)funparam->value;
             /* For function pointers the value is stored elsewhere */
-            if (param_ast->kind == AST_FUNPTR) {
-                tmp = param_ast->default_fn->declinit;
+            if (funparam->kind == AST_FUNPTR) {
+                tmp = funparam->default_fn->declinit;
             } else {
-                tmp = param_ast->declinit;
+                tmp = funparam->declinit;
             }
         } else {
             break;
@@ -1323,20 +1314,7 @@ void asmPrepFuncCallArgs(Cctrl *cc, aoStr *buf, Ast *funcall) {
                 stack_cnt++;
             }
         }
-
-        /* Handling the case for either more arguments than parameters or
-         * more parameters than arguments */
-        if (funarg != NULL && funarg->next != funcall->args) {
-            funarg = funarg->next;
-        } else {
-            funarg = NULL;
-        }
-
-        if (funparam != NULL && funparam->next != params) {
-            funparam = funparam->next;
-        } else {
-            funparam = NULL;
-        }
+        
     }
 
     stack_cnt *= 8;
@@ -2243,8 +2221,8 @@ int asmFunctionInit(Cctrl *cc, aoStr *buf, Ast *func) {
         }
     }
 
-    listForEach(func->params) {
-        ast_tmp = it->value;
+    for (ssize_t i = 0; i < func->params->size; ++i) {
+        ast_tmp = vecGet(Ast *, func->params, i);
         switch (ast_tmp->kind) {
         case AST_DEFAULT_PARAM:
             locals += align(ast_tmp->declvar->type->size, 8);
@@ -2269,8 +2247,8 @@ int asmFunctionInit(Cctrl *cc, aoStr *buf, Ast *func) {
 
     /* We can use register arguments */
     offset = stack_space;
-    listForEach(func->params) {
-        ast_tmp = it->value;
+    for (ssize_t i = 0; i < func->params->size; ++i) {
+        ast_tmp = vecGet(Ast *, func->params, i);
 
         if (ast_tmp->kind != AST_VAR_ARGS && astIsFloatType(ast_tmp->type)) {
             asmStoreParamFloat(buf,&freg,&arg,offset);

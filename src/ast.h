@@ -94,7 +94,7 @@ typedef struct AstType {
 
     /* Function */
     AstType *rettype;
-    List *params;
+    PtrVec *params;
 } AstType;
 
 
@@ -165,10 +165,10 @@ typedef struct Ast {
             /* asm function binding */
             aoStr *asmfname;
             aoStr *fname;
-            List *args;
-            List *paramtypes;
+            PtrVec *args;
+            PtrVec *params;
+
             /* Declaration */
-            List *params;
             List *locals;
             Ast *body;
             Ast *ref; /* for function pointers, a reference to the variable 
@@ -176,7 +176,7 @@ typedef struct Ast {
                        * to assembly. */
             Ast *default_fn; /* For function pointers, allows setting a default
                               * value... we could use this for all default vals
-                              * might be easier?*/
+                              * might be easier? */
             int has_var_args;
         };
 
@@ -280,6 +280,7 @@ extern Ast *ast_forever_sentinal;
 
 AstType *astTypeCopy(AstType *type);
 void astRelease(Ast *ast);
+void astVectorRelease(PtrVec *vec);
 void astReleaseList(List *ast_list);
 
 /* Literals */
@@ -320,23 +321,22 @@ Ast *astSwitch(Ast *cond, PtrVec *cases, Ast *case_default,
 Ast *astDefault(aoStr *case_label,List *case_asts);
 
 /* Functions */
-Ast *astFunctionCall(AstType *type, char *fname, int len, List *argv,
-                     List *paramtypes);
-Ast *astFunction(AstType *rettype, char *fname, int len, List *params,
+Ast *astFunctionCall(AstType *type, char *fname, int len, PtrVec *argv);
+Ast *astFunction(AstType *rettype, char *fname, int len, PtrVec *params,
                  Ast *body, List *locals, int has_var_args);
 Ast *astReturn(Ast *retval, AstType *rettype);
 Ast *astFunctionPtr(AstType *type, char *fname, int len, 
-        List *params);
+                    PtrVec *params);
+
 Ast *astFunctionPtrCall(AstType *type, char *fname, int len,
-        List *argv, List *paramtypes, Ast *ref);
+                         PtrVec *argv, Ast *ref);
 Ast *astFunctionDefaultParam(Ast *var, Ast *init);
 Ast *astVarArgs(void);
 
 Ast *astAsmBlock(aoStr *asm_stmt, List *funcs);
 Ast *astAsmFunctionBind(AstType *rettype, aoStr *asm_fname, 
-        aoStr *fname, List *params);
-Ast *astAsmFunctionCall(AstType *rettype, aoStr *asm_fname, List *argv,
-        List *paramtypes);
+        aoStr *fname, PtrVec *params);
+Ast *astAsmFunctionCall(AstType *rettype, aoStr *asm_fname, PtrVec *argv);
 Ast *astAsmFunctionDef(aoStr *asm_fname, aoStr *asm_stmt);
 
 /* Gotos */
@@ -348,9 +348,8 @@ Ast *astJump(char *jumpname, int len);
 AstType *astMakePointerType(AstType *type);
 AstType *astMakeArrayType(AstType *type, int len);
 AstType *astMakeClassField(AstType *type, int offset);
-AstType *astMakeFunctionType(AstType *rettype, List *param_types);
+AstType *astMakeFunctionType(AstType *rettype, PtrVec *param_types);
 AstType *astConvertArray(AstType *ast_type);
-List *astParamTypes(List *params);
 Ast *astClassRef(AstType *type, Ast *cls, char *field_name);
 AstType *astClassType(StrMap *fields, aoStr *clsname, int size, int is_intrinsic);
 Ast *astCast(Ast *var, AstType *to);

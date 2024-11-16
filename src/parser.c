@@ -35,7 +35,7 @@ Ast *parseFloatingCharConst(Cctrl *cc, lexeme *tok) {
     unsigned long ch = (unsigned long)tok->i64;
     Ast *ast;
     char str[9];
-    List *argv = listNew();
+    PtrVec *argv = ptrVecNew();
     str[0] = ch & 0xFF;
     str[1] = ((unsigned long)ch) >> 8  & 0xFF;
     str[2] = ((unsigned long)ch) >> 16 & 0xFF;
@@ -47,8 +47,8 @@ Ast *parseFloatingCharConst(Cctrl *cc, lexeme *tok) {
     str[8] = '\0';
 
     ast = cctrlGetOrSetString(cc,str,sizeof(str));
-    listAppend(argv,ast);
-    ast = astFunctionCall(ast_void_type,"printf",6,argv,listNew());
+    ptrVecPush(argv,ast);
+    ast = astFunctionCall(ast_void_type,"printf",6,argv);
     cctrlTokenExpect(cc,';');
     return ast;
 }
@@ -314,7 +314,7 @@ StrMap *parseClassOffsets(int *real_size, List *fields, AstType *base_class,
             field->offset = offset;
             offset+=field->size;
             if (field->clsname) {
-                strMapAdd(fields_dict,aoStrMove(field->clsname),field);
+                strMapAdd(fields_dict,field->clsname->data,field);
             }
         }
 
@@ -349,7 +349,7 @@ StrMap *parseClassOffsets(int *real_size, List *fields, AstType *base_class,
         }
 
         if (field->clsname) {
-            strMapAdd(fields_dict,aoStrMove(field->clsname),field);
+            strMapAdd(fields_dict,field->clsname->data,field);
         }
     }
 
@@ -1320,7 +1320,7 @@ Ast *parseCompoundStatement(Cctrl *cc) {
 }
 
 Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
-        char *fname, int len, List *params, int has_var_args) 
+        char *fname, int len, PtrVec *params, int has_var_args) 
 {
     List *locals = listNew();
     Ast *func = NULL;
@@ -1334,7 +1334,7 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
     if (!func) {
         cc->tmp_params = params;
         cc->tmp_rettype = rettype;
-        fn_type = astMakeFunctionType(cc->tmp_rettype, astParamTypes(params));
+        fn_type = astMakeFunctionType(cc->tmp_rettype, params);
         func = astFunction(fn_type,fname,len,params,NULL,locals,
                 has_var_args);
         strMapAdd(cc->global_env,func->fname->data,func);
@@ -1353,7 +1353,7 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
             case AST_FUN_PROTO:
                 /* upgrade prototype to a function */
                 func->locals = cc->tmp_locals;
-                astReleaseList(func->params);
+                astVectorRelease(func->params);
                 func->params = params;
                 cc->tmp_params = func->params;
                 cc->tmp_rettype = func->type->rettype;
@@ -1386,7 +1386,7 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
 Ast *parseExternFunctionProto(Cctrl *cc, AstType *rettype, char *fname, int len) {
     Ast *func;
     int has_var_args = 0;
-    List *params;
+    PtrVec *params;
     lexeme *tok;
     cc->localenv = strMapNewWithParent(32, cc->localenv);
     cc->tmp_locals = NULL;
@@ -1398,7 +1398,7 @@ Ast *parseExternFunctionProto(Cctrl *cc, AstType *rettype, char *fname, int len)
                 "this will be defined elsewhere",
                 len,fname);
     }
-    AstType *type = astMakeFunctionType(rettype, astParamTypes(params));
+    AstType *type = astMakeFunctionType(rettype, params);
     func = astFunction(type,fname,len,params,NULL,NULL,0);
     func->kind = AST_EXTERN_FUNC;
     strMapAdd(cc->global_env,func->fname->data,func);
@@ -1411,7 +1411,7 @@ Ast *parseFunctionOrDef(Cctrl *cc, AstType *rettype, char *fname, int len) {
     cc->localenv = strMapNewWithParent(32, cc->localenv);
     cc->tmp_locals = listNew();
 
-    List *params = parseParams(cc,')',&has_var_args,1);
+    PtrVec *params = parseParams(cc,')',&has_var_args,1);
     lexeme *tok = cctrlTokenGet(cc);
     if (tokenPunctIs(tok, '{')) {
         return parseFunctionDef(cc,rettype,fname,len,params,has_var_args);
@@ -1420,7 +1420,7 @@ Ast *parseFunctionOrDef(Cctrl *cc, AstType *rettype, char *fname, int len) {
             cctrlRaiseException(cc,"auto cannot be used with a function prototype %.*s() at this time",
                     len,fname);
         }
-        AstType *type = astMakeFunctionType(rettype, astParamTypes(params));
+        AstType *type = astMakeFunctionType(rettype, params);
         Ast *fn = astFunction(type,fname,len,params,NULL,NULL,has_var_args);
         fn->kind = AST_FUN_PROTO;
         strMapAdd(cc->global_env,fn->fname->data,fn);
@@ -1432,7 +1432,6 @@ Ast *parseAsmFunctionBinding(Cctrl *cc) {
     lexeme *tok;
     aoStr *asm_fname, *c_fname;
     AstType *rettype;
-    List *params;
     Ast *asm_func;
     int has_var_args = 0;
 
@@ -1459,10 +1458,10 @@ Ast *parseAsmFunctionBinding(Cctrl *cc) {
     cc->localenv = strMapNewWithParent(32, cc->localenv);
     cctrlTokenExpect(cc,'(');
 
-    params = parseParams(cc,')',&has_var_args,0);
+    PtrVec *params = parseParams(cc,')',&has_var_args,0);
 
     asm_func = astAsmFunctionBind(
-            astMakeFunctionType(rettype, astParamTypes(params)),
+            astMakeFunctionType(rettype, params),
             asm_fname,c_fname,params);
 
     cc->localenv = NULL;
