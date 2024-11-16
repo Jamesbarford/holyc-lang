@@ -64,32 +64,14 @@ F64 FloatVecGet(FloatVec *vec, I64 idx)
   return vec->entries[idx];
 }
 
-U0 FloatVecSortInternal(FloatVec *vec, I64 high, I64 low=0)
+I64 _FloatCmp(F64 f1, F64 f2)
 {
-  if (low < high) {
-    F64 *arr = vec->entries;
-    F64 pivot = arr[high];
-    I64 idx = low;
-
-    for (I64 i = low; i < high; ++i) {
-      if (arr[i] < pivot) {
-        F64 tmp = arr[i];
-        arr[i] = arr[idx];
-        arr[idx] = tmp;
-        idx++;
-      }
-    }
-
-    arr[high] = arr[idx];
-    arr[idx] = pivot;
-    FloatVecSortInternal(vec,high,low+1);
-    FloatVecSortInternal(vec,high-1,low);
-  }
+  return (f1 < f2)(Bool);
 }
 
 U0 FloatVecSort(FloatVec *vec)
 {
-  FloatVecSortInternal(vec,vec->size-1,0);
+  QSortGeneric(vec->entries(U0**),vec->size-1,0,&_FloatCmp);
 }
 
 U0 FloatVecClear(FloatVec *vec)
@@ -152,32 +134,14 @@ I64 IntVecGet(IntVec *vec, I64 idx)
   return vec->entries[idx];
 }
 
-U0 IntVecSortInternal(IntVec *vec, I64 high, I64 low=0)
+I64 _IntCmp(I64 i1, I64 i2)
 {
-  if (low < high) {
-    I64 *arr = vec->entries;
-    I64 pivot = arr[high];
-    I64 idx = low;
-
-    for (I64 i = low; i < high; ++i) {
-      if (arr[i] <= pivot) {
-        I64 tmp = arr[i];
-        arr[i] = arr[idx];
-        arr[idx] = tmp;
-        idx++;
-      }
-    }
-
-    arr[high] = arr[idx];
-    arr[idx] = pivot;
-    IntVecSortInternal(vec,high,low+1);
-    IntVecSortInternal(vec,high-1,low);
-  }
+  return i1 < i2;
 }
 
 U0 IntVecSort(IntVec *vec)
 {
-  IntVecSortInternal(vec,vec->size-1,0);
+  QSortGeneric(vec->entries(U0**),vec->size-1,0,&_IntCmp);
 }
 
 I64 IntVecClear(IntVec *vec)
