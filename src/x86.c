@@ -210,7 +210,11 @@ void asmToInt(aoStr *buf, AstType *type) {
 
 void asmToFloat(aoStr *buf, AstType *type) {
     if (type->kind != AST_TYPE_FLOAT) {
-        aoStrCatPrintf(buf, "cvtsi2sd  %%rax, %%xmm0\n\t");
+        if (type->has_var_args) {
+            aoStrCatPrintf(buf, "movq    %%rax, %%xmm0\n\t");
+        } else {
+            aoStrCatPrintf(buf, "cvtsi2sd  %%rax, %%xmm0\n\t");
+        }
     }
 }
 
@@ -371,9 +375,10 @@ void asmFloatToInt(aoStr *buf, AstType *type) {
 }
 
 void asmCast(aoStr *buf, AstType *from, AstType *to) {
-    if (astIsIntType(from) && to->kind == AST_TYPE_FLOAT)
-        aoStrCatPrintf(buf, "cvtsi2sd %%rax, %%xmm0\n\t");
-    else if (astIsIntType(from) && astIsIntType(to)) {
+    if (from->kind == to->kind && from->size == to->size) return;
+    if (astIsIntType(from) && to->kind == AST_TYPE_FLOAT) {
+        asmToFloat(buf, from);
+    } else if (astIsIntType(from) && astIsIntType(to)) {
         if (to->size > from->size) {
             if (to->is_intrinsic && from->size == 8) return;
             AstUpCastInt(buf, from, to->issigned);
@@ -987,15 +992,9 @@ void asmBinaryOp(Cctrl *cc, aoStr *buf, Ast *ast) {
             }
         } else {
             asmExpression(cc,buf,ast->right);
-            // asmLoadConvert(buf,ast->type,ast->right->type);
         }
-        if (ast->right->kind == AST_DEREF && astIsFloatType(ast->left->type)) {
-            aoStrCatPrintf(buf, "movq    %%rax, %%xmm0\n\t");
-            asmAssign(cc,buf, ast->left);
-        } else {
-            asmLoadConvert(buf,ast->type,ast->right->type);
-            asmAssign(cc,buf, ast->left);
-        }
+        asmLoadConvert(buf,ast->type,ast->right->type);
+        asmAssign(cc,buf, ast->left);
         return;
     }
 
@@ -1593,6 +1592,7 @@ void asmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
             asmBinOpFunctionAssign(cc,buf,ast->declvar,ast->declinit);
         } else {
             asmExpression(cc,buf, ast->declinit);
+            asmCast(buf,ast->declinit->type, ast->declvar->type);
             asmLSave(buf, ast->declvar->type, ast->declvar->loff);
         }
         return;
@@ -1638,13 +1638,13 @@ void asmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
                 aoStrCatPrintf(buf, "movq   %%rax, %%rcx\n\t"
                         "leaq (%%%s), %%rax\n\t", reg);
             } else if (result->kind != AST_TYPE_POINTER) {
-                aoStrCatPrintf(buf,"# deref not ptr start: %s %s\n\t", astKindToString(result->kind), astKindToString(op_type->kind));
+                aoStrCatPrintf(buf,"# deref not ptr start: %s %s\n\t",
+                        astKindToString(result->kind), astKindToString(op_type->kind));
                // aoStrCatPrintf(buf,"movq   (%%%s), %%rax\n\t", reg);
                
 
                 if (result->kind == AST_TYPE_FLOAT) {
-                    aoStrCatPrintf(buf, "movq   %%rax, %%rcx\n\t"
-                                        "movq   (%%%s), %%xmm0\n\t", reg);
+                    aoStrCatPrintf(buf, "movq   (%%rax), %%xmm0\n\t");
                 } else {
                     // reg = asmGetIntReg(result,'c');
                     char *mov = asmGetPtrMove(result);
