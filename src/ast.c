@@ -702,12 +702,24 @@ static void astFreeAsmFunctionCall(Ast *ast) {
     free(ast);
 }
 
+int astIsVarArg(Ast *ast) {
+    if (ast->kind == AST_LVAR) {
+        return ast->type->has_var_args == 1 && 
+               ast->lname->len == 4 &&
+               !memcmp(ast->lname->data, str_lit("argv"));
+    }
+    return 0;
+}
+
 Ast *astVarArgs(void) {
     Ast *ast = astNew();
     ast->kind = AST_VAR_ARGS;
     ast->type = NULL;
-    ast->argc = astLVar(ast_int_type,"argc",4);
-    ast->argv = astLVar(astMakeArrayType(ast_int_type,0),"argv",4);
+    AstType *int_clone = astTypeCopy(ast_int_type);
+    ast->argc = astLVar(int_clone,"argc",4);
+    ast->argv = astLVar(astMakeArrayType(int_clone,0),"argv",4);
+    ast->argv->type->has_var_args = 1;
+    ast->argc->type->has_var_args = 1;
     return ast;
 }
 static void astFreeVarArgs(Ast *ast) {

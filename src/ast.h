@@ -362,6 +362,7 @@ aoStr *astMakeLabel(void);
 aoStr *astMakeTmpName(void);
 int astIsIntType(AstType *type);
 int astIsFloatType(AstType *type);
+int astIsVarArg(Ast *ast);
 int astIsRangeOperator(long op);
 Ast *astGlobalCmdArgs(void);
 
