@@ -131,7 +131,39 @@ int evalClassRef(Ast *ast, int offset) {
     return evalIntConstExpr(ast) + offset;
 }
 
-double evalFloatExpr(Ast *ast) {
+int astIsArithmetic(long op, int is_float) {
+    switch (op) {
+        case '+':
+        case '-':
+        case '*':
+        case '/':
+            return 1;
+        case '%':
+        case TK_SHL:
+        case TK_SHR:
+        case '&':
+        case '|':
+        case '^':
+            return !is_float;
+        default:
+            return 0;
+    }
+}
+
+int astCanEval(Ast *ast, int *_ok, int is_float) {
+    if (ast->left && ast->right) {
+        return astCanEval(ast->left, _ok,is_float) && 
+               astCanEval(ast->right, _ok,is_float);
+    } else if (astIsArithmetic(ast->kind, is_float)) {
+        return 1;
+    } else if (ast->kind == AST_LITERAL && (astIsIntType(ast->type) || astIsFloatType(ast->type))) {
+        return 1;
+    }
+    *_ok = 0;
+    return 0;
+}
+
+double evalFloatExprOrErr(Ast *ast, int *_ok) {
     switch (ast->kind) {
     case AST_LITERAL:
         if (astIsFloatType(ast->type)) {
@@ -139,28 +171,146 @@ double evalFloatExpr(Ast *ast) {
         } else if (astIsIntType(ast->type)) {
             return (double)ast->i64;
         }
-    case '+': return evalFloatExpr(ast->left) + evalFloatExpr(ast->right);
+    case '+': return evalFloatExprOrErr(ast->left, _ok) + evalFloatExprOrErr(ast->right, _ok);
     case '-': {
         if (ast->right == NULL && ast->operand != NULL) {
             return -ast->operand->f64;
         }
-        return evalFloatExpr(ast->left) - evalFloatExpr(ast->right);
+        return evalFloatExprOrErr(ast->left, _ok) - evalFloatExprOrErr(ast->right, _ok);
     }
-    case '/': return evalFloatExpr(ast->left) / evalFloatExpr(ast->right);
-    case '*': return evalFloatExpr(ast->left) * evalFloatExpr(ast->right);
-    case TK_EQU_EQU: return evalFloatExpr(ast->left) == evalFloatExpr(ast->right);
-    case TK_GREATER_EQU: return evalFloatExpr(ast->left) >= evalFloatExpr(ast->right);
-    case TK_LESS_EQU: return evalFloatExpr(ast->left) <= evalFloatExpr(ast->right);
-    case TK_NOT_EQU: return evalFloatExpr(ast->left) != evalFloatExpr(ast->right);
-    case TK_OR_OR: return evalFloatExpr(ast->left) || evalFloatExpr(ast->right);
-    case TK_AND_AND: return evalFloatExpr(ast->left) && evalFloatExpr(ast->right);
-    default:
-        loggerPanic("%s is an invalid floating point constant expression operator\n",
-                astKindToString(ast->kind));
+    case '/': return evalFloatExprOrErr(ast->left, _ok) / evalFloatExprOrErr(ast->right, _ok);
+    case '*': return evalFloatExprOrErr(ast->left, _ok) * evalFloatExprOrErr(ast->right, _ok);
+    case TK_EQU_EQU: return evalFloatExprOrErr(ast->left, _ok) == evalFloatExprOrErr(ast->right, _ok);
+    case TK_GREATER_EQU: return evalFloatExprOrErr(ast->left, _ok) >= evalFloatExprOrErr(ast->right, _ok);
+    case TK_LESS_EQU: return evalFloatExprOrErr(ast->left, _ok) <= evalFloatExprOrErr(ast->right, _ok);
+    case TK_NOT_EQU: return evalFloatExprOrErr(ast->left, _ok) != evalFloatExprOrErr(ast->right, _ok);
+    case TK_OR_OR: return evalFloatExprOrErr(ast->left, _ok) || evalFloatExprOrErr(ast->right, _ok);
+    case TK_AND_AND: return evalFloatExprOrErr(ast->left, _ok) && evalFloatExprOrErr(ast->right, _ok);
+    default: {
+        *_ok = 0;
+        return 0;
+    }
     }
 }
 
-long evalIntConstExpr(Ast *ast) {
+double evalFloatExpr(Ast *ast) {
+    int ok = 1;
+    double result = evalFloatExprOrErr(ast,&ok);
+    if (!ok) {
+        loggerPanic("Expected float expression: %s\n", astToString(ast));
+    }
+    return result;
+}
+
+double evalFloatArithmeticOrErr(Ast *ast, int *_ok) {
+    if (!astCanEval(ast,_ok,1)) {
+        *_ok = 0;
+        return 0.0;
+    }
+    switch (ast->kind) {
+    case AST_LITERAL:
+        if (astIsFloatType(ast->type)) {
+            return ast->f64;
+        } else if (astIsIntType(ast->type)) {
+            return (double)ast->i64;
+        }
+    case '+': return evalFloatExprOrErr(ast->left, _ok) + evalFloatExprOrErr(ast->right, _ok);
+    case '-': {
+        if (ast->right == NULL && ast->operand != NULL) {
+            return -ast->operand->f64;
+        }
+        return evalFloatExprOrErr(ast->left, _ok) - evalFloatExprOrErr(ast->right, _ok);
+    }
+    case '/': return evalFloatExprOrErr(ast->left, _ok) / evalFloatExprOrErr(ast->right, _ok);
+    case '*': return evalFloatExprOrErr(ast->left, _ok) * evalFloatExprOrErr(ast->right, _ok);
+    default: {
+        *_ok = 0;
+        return 0;
+    }
+    }
+}
+
+double evalOneFloatExprOrErr(Ast *LHS, Ast *RHS, long op, int *_ok) {
+    if (LHS->kind == AST_LITERAL && RHS->kind == AST_LITERAL) {
+        ssize_t result = 0;
+        ssize_t left = astIsIntType(LHS->type) ? (double)LHS->i64 : LHS->f64;
+        ssize_t right = astIsIntType(RHS->type) ? (double)RHS->i64 : LHS->f64;
+        switch(op) {
+            case '+':    result = left + right; break;
+            case '-':    result = left - right; break;
+            case '*':    result = left * right; break;
+            case '/':    result = left / right; break;
+            default:
+                loggerPanic("Invalid operator: '%s'\n",
+                        astKindToString(op));
+        }
+        *_ok = 1;
+        return result;
+    }
+    *_ok = 0;
+    return 0;
+}
+
+long evalIntArithmeticOrErr(Ast *ast, int *_ok) {
+    if (!astCanEval(ast,_ok,0)) {
+        *_ok = 0;
+        return 0.0;
+    }
+
+    switch (ast->kind) {
+    case AST_LITERAL:
+        if (astIsIntType(ast->type)) {
+            return ast->i64;
+        } else if (astIsFloatType(ast->type)) {
+            return (long)ast->f64;
+        }
+    case '+': return evalIntArithmeticOrErr(ast->left, _ok) + evalIntArithmeticOrErr(ast->right, _ok);
+    case '-': {
+        return evalIntArithmeticOrErr(ast->left, _ok) - evalIntArithmeticOrErr(ast->right, _ok);
+    }
+    case TK_SHL: return evalIntArithmeticOrErr(ast->left, _ok) << evalIntArithmeticOrErr(ast->right, _ok);
+    case TK_SHR: return evalIntArithmeticOrErr(ast->left, _ok) >> evalIntArithmeticOrErr(ast->right, _ok);
+    case '&': return evalIntArithmeticOrErr(ast->left, _ok) & evalIntArithmeticOrErr(ast->right, _ok);
+    case '|': return evalIntArithmeticOrErr(ast->left, _ok) | evalIntArithmeticOrErr(ast->right, _ok);
+    case '^': return evalIntArithmeticOrErr(ast->left, _ok) ^ evalIntArithmeticOrErr(ast->right, _ok);
+    case '*': return evalIntArithmeticOrErr(ast->left, _ok) * evalIntArithmeticOrErr(ast->right, _ok);
+    case '/': return evalIntArithmeticOrErr(ast->left, _ok) / evalIntArithmeticOrErr(ast->right, _ok);
+    case '%': return evalIntArithmeticOrErr(ast->left, _ok) % evalIntArithmeticOrErr(ast->right, _ok);
+    default: {
+        *_ok = 0;
+        return 0;
+    }
+    }
+}
+
+long evalOneIntExprOrErr(Ast *LHS, Ast *RHS, long op, int *_ok) {
+    if (LHS->kind == AST_LITERAL && RHS->kind == AST_LITERAL) {
+        ssize_t left =  astIsIntType(LHS->type) ? LHS->i64 : (ssize_t)LHS->f64;
+        ssize_t right = astIsIntType(RHS->type) ? RHS->i64 : (ssize_t)LHS->f64;
+        ssize_t result = 0;
+        switch(op) {
+            case '+':    result = left + right; break;
+            case '-':    result = left - right; break;
+            case '*':    result = left * right; break;
+            case '^':    result = left ^ right; break;
+            case '&':    result = left & right; break;
+            case '|':    result = left | right; break;
+            case TK_SHL: result = left << right; break;
+            case TK_SHR: result = left >> right; break;
+            case '/':    result = left / right; break;
+            case '%':    result = left % right; break;
+            default:
+                loggerPanic("Invalid operator: '%s'\n",
+                        astKindToString(op));
+        }
+        *_ok = 1;
+        return result;
+    }
+    *_ok = 0;
+    return 0;
+}
+
+long evalIntConstExprOrErr(Ast *ast, int *_ok) {
     switch (ast->kind) {
     case AST_LITERAL:
         if (astIsIntType(ast->type)) {
@@ -174,38 +324,49 @@ long evalIntConstExpr(Ast *ast) {
         }
     case AST_DEREF:
         if (ast->operand->type->kind == AST_TYPE_POINTER) {
-            return evalIntConstExpr(ast->operand);
+            return evalIntConstExprOrErr(ast->operand, _ok);
         }
-    case '+': return evalIntConstExpr(ast->left) + evalIntConstExpr(ast->right);
+    case '+': return evalIntConstExprOrErr(ast->left, _ok) + evalIntConstExprOrErr(ast->right, _ok);
     case '-': {
         if (ast->right == NULL && ast->operand != NULL) {
             return -ast->operand->i64;
         }
-        return evalIntConstExpr(ast->left) - evalIntConstExpr(ast->right);
+        return evalIntConstExprOrErr(ast->left, _ok) - evalIntConstExprOrErr(ast->right, _ok);
     }
-    case TK_SHL: return evalIntConstExpr(ast->left) << evalIntConstExpr(ast->right);
-    case TK_SHR: return evalIntConstExpr(ast->left) >> evalIntConstExpr(ast->right);
-    case '&': return evalIntConstExpr(ast->left) & evalIntConstExpr(ast->right);
-    case '|': return evalIntConstExpr(ast->left) | evalIntConstExpr(ast->right);
-    case '^': return evalIntConstExpr(ast->left) ^ evalIntConstExpr(ast->right);
-    case '*': return evalIntConstExpr(ast->left) * evalIntConstExpr(ast->right);
-    case '/': return evalIntConstExpr(ast->left) / evalIntConstExpr(ast->right);
-    case '%': return evalIntConstExpr(ast->left) % evalIntConstExpr(ast->right);
+    case TK_SHL: return evalIntConstExprOrErr(ast->left, _ok) << evalIntConstExprOrErr(ast->right, _ok);
+    case TK_SHR: return evalIntConstExprOrErr(ast->left, _ok) >> evalIntConstExprOrErr(ast->right, _ok);
+    case '&': return evalIntConstExprOrErr(ast->left, _ok) & evalIntConstExprOrErr(ast->right, _ok);
+    case '|': return evalIntConstExprOrErr(ast->left, _ok) | evalIntConstExprOrErr(ast->right, _ok);
+    case '^': return evalIntConstExprOrErr(ast->left, _ok) ^ evalIntConstExprOrErr(ast->right, _ok);
+    case '*': return evalIntConstExprOrErr(ast->left, _ok) * evalIntConstExprOrErr(ast->right, _ok);
+    case '/': return evalIntConstExprOrErr(ast->left, _ok) / evalIntConstExprOrErr(ast->right, _ok);
+    case '%': return evalIntConstExprOrErr(ast->left, _ok) % evalIntConstExprOrErr(ast->right, _ok);
     case '~': {
         if (ast->operand != NULL) {
             return ~ast->operand->i64;
         }
     }
-    case '!': return !evalIntConstExpr(ast->operand);
-    case TK_EQU_EQU: return evalIntConstExpr(ast->left) == evalIntConstExpr(ast->right);
-    case TK_GREATER_EQU: return evalIntConstExpr(ast->left) >= evalIntConstExpr(ast->right);
-    case TK_LESS_EQU: return evalIntConstExpr(ast->left) <= evalIntConstExpr(ast->right);
-    case TK_NOT_EQU: return evalIntConstExpr(ast->left) != evalIntConstExpr(ast->right);
-    case TK_OR_OR: return evalIntConstExpr(ast->left) || evalIntConstExpr(ast->right);
-    case TK_AND_AND: return evalIntConstExpr(ast->left) && evalIntConstExpr(ast->right);
-    default:
+    case '!': return !evalIntConstExprOrErr(ast->operand, _ok);
+    case TK_EQU_EQU: return evalIntConstExprOrErr(ast->left, _ok) == evalIntConstExprOrErr(ast->right, _ok);
+    case TK_GREATER_EQU: return evalIntConstExprOrErr(ast->left, _ok) >= evalIntConstExprOrErr(ast->right, _ok);
+    case TK_LESS_EQU: return evalIntConstExprOrErr(ast->left, _ok) <= evalIntConstExprOrErr(ast->right, _ok);
+    case TK_NOT_EQU: return evalIntConstExprOrErr(ast->left, _ok) != evalIntConstExprOrErr(ast->right, _ok);
+    case TK_OR_OR: return evalIntConstExprOrErr(ast->left, _ok) || evalIntConstExprOrErr(ast->right, _ok);
+    case TK_AND_AND: return evalIntConstExprOrErr(ast->left, _ok) && evalIntConstExprOrErr(ast->right, _ok);
+    default: {
+        *_ok = 0;
+        return 0;
+    }
+    }
+}
+
+long evalIntConstExpr(Ast *ast) {
+    int ok = 1;
+    ssize_t res = evalIntConstExprOrErr(ast,&ok);
+    if (!ok) {
         loggerPanic("Expected integer expression: %s\n", astToString(ast));
     }
+    return res;
 }
 
 void assertLValue(Ast *ast, long lineno) {

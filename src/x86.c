@@ -762,6 +762,19 @@ void asmBinaryOpIntArithmetic(Cctrl *cc,aoStr *buf, Ast *ast, int reverse) {
        is_unsinged = 1; 
     }
 
+    int ok = 1;
+    ssize_t result = evalIntArithmeticOrErr(ast,&ok);
+    if (!ok) {
+        ok = 1;
+        result = evalOneIntExprOrErr(LHS,RHS,ast->kind,&ok);
+    }
+
+    if (ok) {
+        aoStrCatPrintf(buf, "movq   $%lld, %%rax\n\t",result);
+        aoStrCatPrintf(buf, "# INt arithmetic END, folded value \n\t");
+        return;
+    }
+
     switch(ast->kind) {
     case '+':    op = "addq"; break;
     case '-':    op = "subq"; break;
@@ -818,6 +831,7 @@ void asmBinaryOpFloatArithmetic(Cctrl *cc, aoStr *buf, Ast *ast, int reverse) {
     Ast *LHS,*RHS;
     LHS = ast->left;
     RHS = ast->right;
+
     switch(ast->kind) {
     case '+': op = "addsd"; break;
     case '-': op = "subsd"; break;
@@ -851,9 +865,9 @@ void asmBinaryOpFloatArithmetic(Cctrl *cc, aoStr *buf, Ast *ast, int reverse) {
 
 void asmLoadConvert(aoStr *buf, AstType *to, AstType *from) {
     if (to->kind == AST_TYPE_FLOAT) {
-        asmToFloat(buf,from);
+        asmToFloat(buf,to);
     } else {
-        asmToInt(buf,from);
+        asmToInt(buf,to);
     }
 }
 

@@ -36,7 +36,7 @@ F64 FAdd(F64 something, ...)
   F64 arg,acc;
   acc = 0.0;
   for (I64 i = 0; i < argc; ++i) {
-    arg = argv[i];
+    arg = argv[i](F64);
     acc += arg;
   }
   return acc+something;
