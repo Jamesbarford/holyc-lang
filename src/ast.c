@@ -624,7 +624,7 @@ AstType *astClassType(StrMap *fields, aoStr *clsname, int size, int is_intrinsic
 Ast *astCompountStatement(List *stmts) {
     Ast *ast = astNew();
     ast->kind = AST_COMPOUND_STMT;
-    ast->type = NULL;
+    ast->type = ast_void_type;
     ast->stms = stmts;
     return ast;
 }
@@ -1472,7 +1472,11 @@ void _astToString(aoStr *str, Ast *ast, int depth) {
 
         case AST_FUNC: {
             tmp = astFunctionToString(ast);
-            aoStrCatPrintf(str, "<function_def> %s\n", tmp);
+            if (ast->flags & AST_FLAG_INLINE) {
+                aoStrCatPrintf(str, "<function_def_inline> %s\n", tmp);
+            } else {
+                aoStrCatPrintf(str, "<function_def> %s\n", tmp);
+            }
             free(tmp);
             for (ssize_t i = 0; i < ast->params->size; ++i) {
                 param = ast->params->entries[i];

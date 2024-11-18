@@ -159,6 +159,14 @@ void listMergeAppend(List *l1, List *l2) {
     free(l2);
 }
 
+List *listCopy(List *l) {
+    List *cpy = listNew();
+    listForEach(l) {
+        listAppend(cpy,it->value);
+    }
+    return cpy;
+}
+
 #ifdef LIST_TEST
 
 typedef struct Int {

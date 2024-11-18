@@ -2409,6 +2409,10 @@ aoStr *asmGenerate(Cctrl *cc) {
     listForEach(cc->ast_list) {
         ast = (Ast *)it->value;
         if (ast->kind == AST_FUNC) {
+            /* We do not emit inline functions */
+            if (ast->flags & AST_FLAG_INLINE) {
+                continue;
+            }
             asmFunction(cc,asmbuf,ast);
         } else if (ast->kind == AST_DECL || ast->kind == AST_GVAR) {
             asmGlobalVar(seen_globals,asmbuf,ast);

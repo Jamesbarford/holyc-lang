@@ -367,7 +367,7 @@ void parseDeclInternal(Cctrl *cc, lexeme **tok, AstType **type) {
 }
 
 
-static Ast *findFunctionDecl(Cctrl *cc, char *fname, int len) {
+Ast *findFunctionDecl(Cctrl *cc, char *fname, int len) {
     Ast *decl;
     if ((decl = strMapGetLen(cc->global_env,fname,len)) != NULL) {
         if (decl->kind == AST_FUNC ||
@@ -477,19 +477,47 @@ PtrVec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
     return argv_vec;
 }
 
+Ast *parseInlineFunctionCall(Cctrl *cc, Ast *fn, PtrVec *argv) {
+    List *stmts = listNew();
+    List *fn_body = listCopy(fn->body->stms);
+    if (fn->params->size == argv->size) {
+        int size = fn->params->size;
+        for (int i = 0; i < size; ++i) {
+            Ast *param = fn->params->entries[i];
+            Ast *arg = argv->entries[i];
+            Ast *var_decl = astDecl(param,arg);
+            listAppend(cc->tmp_func->locals, param);
+            listAppend(stmts, var_decl);
+        }
+    } else {
+        cctrlRaiseException(cc,"Cannot presently inline a function with default arguments or where the number of parameters does not match the number of arguments");
+    }
+    listMergeAppend(stmts, fn_body);
+    if (!listEmpty(fn->locals)) {
+        List *fn_locals = listCopy(fn->locals);
+        listMergeAppend(cc->tmp_func->locals, fn_locals);
+    }
+    Ast *inlined = astCompountStatement(stmts);
+    inlined->inline_ret = fn->inline_ret;
+    inlined->type = fn->type->rettype;
+    return inlined;
+}
+
 /* Read function arguments for a function being called */
 Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
-    AstType *rettype;
-    Ast *decl;
+    AstType *rettype = NULL;
+    Ast *maybe_fn = findFunctionDecl(cc,fname,len);
+    PtrVec *argv = parseArgv(cc,maybe_fn,terminator,fname,len);
 
-    decl = findFunctionDecl(cc,fname,len);
-    if (decl) {
-        rettype = decl->type->rettype;
+    if (maybe_fn) {
+        rettype = maybe_fn->type->rettype;
+        if (maybe_fn->flags & AST_FLAG_INLINE) {
+            return parseInlineFunctionCall(cc, maybe_fn, argv);
+        }
     }
 
-    PtrVec *argv = parseArgv(cc,decl,terminator,fname,len);
 
-    if (!decl) {
+    if (!maybe_fn) {
         if ((len == 6 && !strncmp(fname,"printf",6))) {
             rettype = ast_int_type;
             return astFunctionCall(rettype,fname,len,argv);
@@ -497,15 +525,15 @@ Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
         cctrlRaiseException(cc,"Function: %.*s() not defined",len,fname);
     }
 
-    switch (decl->kind) {
+    switch (maybe_fn->kind) {
         case AST_LVAR:
         case AST_FUNPTR:
-            return astFunctionPtrCall(rettype,fname,len,argv,decl);
+            return astFunctionPtrCall(rettype,fname,len,argv,maybe_fn);
 
         case AST_ASM_FUNCDEF:
         case AST_ASM_FUNC_BIND:
             return astAsmFunctionCall(rettype,
-                    aoStrDup(decl->asmfname),argv);
+                    aoStrDup(maybe_fn->asmfname),argv);
 
         case AST_EXTERN_FUNC:
         case AST_FUNC:
@@ -540,6 +568,9 @@ static Ast *parseIdentifierOrFunction(Cctrl *cc, char *name, int len,
             if ((tokenPunctIs(tok,';') || tokenPunctIs(tok,',') || 
                 tokenPunctIs(tok,')'))  
                     && parseIsFunction(ast)) {
+                if (ast->flags & AST_FLAG_INLINE) {
+                    return parseInlineFunctionCall(cc,ast,ptrVecNew());
+                }
                 if (ast->kind == AST_ASM_FUNC_BIND || ast->kind == AST_ASM_FUNCDEF) {
                     return astAsmFunctionCall(ast->type->rettype,
                             aoStrDup(ast->asmfname),ptrVecNew());
@@ -586,6 +617,12 @@ static Ast *parsePrimary(Cctrl *cc) {
     case TK_IDENT: {
         ast = parseIdentifierOrFunction(cc, tok->start, tok->len,
                 can_call_function);
+        if (tokenPunctIs(prev, '&')) {
+            if (ast->flags & AST_FLAG_INLINE) {
+                cctrlRaiseException(cc,"Inline functions cannot be used as function pointers: '%.*s'",tok->len, tok->start);
+            }
+            
+        }
         return ast;
     }
     case TK_I64: {
