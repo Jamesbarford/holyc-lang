@@ -21,4 +21,7 @@ AstType *parseFunctionPointerType(Cctrl *cc,
 Ast *findFunctionDecl(Cctrl *cc, char *fname, int len);
 Ast *parseCreateBinaryOp(Cctrl *cc, long operation, Ast *left, Ast *right);
 
+PtrVec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len);
+Ast *parseFunctionPrepArgv(Cctrl *cc, Ast *function_declaration, AstType *rettype,
+                         char *fname, int len, PtrVec *argv);
 #endif

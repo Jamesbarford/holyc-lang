@@ -195,6 +195,10 @@ char *lexemeToString(Lexeme *tok);
 void lexReleaseAllFiles(Lexer *l);
 int tokenPunctIs(Lexeme *tok, long ch);
 int tokenIdentIs(Lexeme *tok, char *ident, int len);
+
+int tokenIsIdent(Lexeme *tok);
+int tokenIsKeyword(Lexeme *tok);
+
 void lexemeFree(void *_le);
 char *lexerReportLine(Lexer *l, ssize_t lineno);
 void lexerPoolRelease(void);

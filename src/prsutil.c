@@ -32,6 +32,7 @@ inline int parseIsFunction(Ast *ast) {
             case AST_ASM_FUNC_BIND:
             case AST_ASM_FUNCDEF:
             case AST_EXTERN_FUNC:
+            case AST_LAMBDA:
                 return 1;
             default:
                 return 0;
@@ -41,9 +42,9 @@ inline int parseIsFunction(Ast *ast) {
 }
 
 int parseIsFunctionCall(Ast *ast) {
-    return ast && (ast->type->kind == AST_FUNCALL || 
-           ast->type->kind == AST_FUNPTR_CALL || 
-           ast->type->kind == AST_ASM_FUNCALL);
+    return ast && (ast->kind == AST_FUNCALL || 
+           ast->kind == AST_FUNPTR_CALL || 
+           ast->kind == AST_ASM_FUNCALL);
 }
 
 void assertIsFloat(Ast *ast, long lineno) {

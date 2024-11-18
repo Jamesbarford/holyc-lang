@@ -6,6 +6,7 @@
 #include "aostr.h"
 #include "ast.h"
 #include "cctrl.h"
+#include "lambda.h"
 #include "lexer.h"
 #include "list.h"
 #include "map.h"
@@ -1450,12 +1451,37 @@ void parseCompoundStatementInternal(Cctrl *cc, Ast *body) {
                 if (!tokenPunctIs(peek,'(')) {
                     /* A normal variable */
                     varname = cctrlTokenGet(cc);
+<<<<<<< HEAD
                     if (varname->tk_type != TK_IDENT) {
                         cctrlTokenRewind(cc);
                         cctrlRaiseException(cc,"Expected type declaration with identifer got '%.*s' - should be"ESC_BLUE" '%s "ESC_RESET ESC_BOLD"<var_name>'",
                                 peek->len, peek->start, astTypeToString(next_type));
+=======
+                    if (!tokenIsIdent(varname)) {
+                        if (varname) {
+                            cctrlRaiseException(cc,"Expected variable name got: %s", lexemeToString(varname));
+                        } else {
+                            cctrlRaiseException(cc,"Expected variable name got (null)");
+                        }
+                    }
+
+                    printf("here\n");
+                    peek = cctrlTokenPeek(cc);
+                    lexeme *peek_two = cctrlTokenPeekBy(cc, 1);
+                    /* We have a lambda definition in a function scope */
+                    if (tokenPunctIs(peek, '=') && tokenPunctIs(peek_two, '[')) {
+                        cctrlTokenGet(cc);
+                        Ast *ast_lambda = parseLambda(cc, next_type, varname);
+                        listAppend(cc->ast_list, ast_lambda);
+                        break;
+                    } else if (tokenPunctIs(peek, '(')) {
+                        cctrlTokenGet(cc);
+                        Ast *ast_lambda = parseLambdaNoCapture(cc, next_type, varname);
+                        astPrint(ast_lambda);
+                        listAppend(cc->ast_list, ast_lambda);
                         break;
                     }
+
                     type = parseArrayDimensions(cc,next_type);
                     var = astLVar(type,varname->start,varname->len);
                     if (!strMapAddOrErr(cc->localenv,var->lname->data,var)) {
@@ -1875,7 +1901,21 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
         type = parseArrayDimensions(cc,type);
         tok = cctrlTokenPeek(cc);
 
-        if (tokenPunctIs(tok,'=') && type->kind != AST_TYPE_ARRAY) {
+        if (tokenPunctIs(tok, '=') && type->kind == AST_TYPE_AUTO) {
+            cctrlTokenGet(cc);
+            tok = cctrlTokenPeek(cc);
+            if (!tokenPunctIs(tok, '[')) {
+                cctrlRaiseException(cc,
+                        "Only lambdas can be defined at a top level with the auto keyword"
+                        " expected token '[' got %s\n",lexemeToString(tok));
+            }
+            Ast *ast_lambda = parseLambda(cc, type, name);
+            if (strMapAddOrErr(cc->global_env, ast_lambda->fname->data, ast_lambda)) {
+                cctrlRaiseException(cc,"Item with name '%s' already declared",
+                                    ast_lambda->fname->data);
+            }
+            return ast_lambda;
+        }  else if (tokenPunctIs(tok,'=') && type->kind != AST_TYPE_ARRAY) {
             variable = astGVar(type,name->start,name->len,0);
             if (type->kind == AST_TYPE_AUTO) {
                 cctrlRaiseException(cc,"line auto cannot be used without an initialiser");

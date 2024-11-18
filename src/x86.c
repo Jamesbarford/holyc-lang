@@ -975,6 +975,16 @@ void asmBinOpFunctionAssign(Cctrl *cc, aoStr *buf, Ast *fnptr, Ast *fn) {
                     "movq    %%rax, %d(%%rbp)\n\t",
                     fn->loff, fnptr->loff);
             break;
+        
+        case AST_LAMBDA: {
+            normalised = asmNormaliseFunctionName(fn->asmfname->data);
+            aoStrCatPrintf(buf,
+                              "leaq   %s(%%rip), %%rax\n\t"
+                              "movq    %%rax, %d(%%rbp)\n\t",
+                              normalised, fnptr->loff);
+            free(normalised);
+            break;
+        }
 
         case AST_ASM_FUNCDEF:
         case AST_ASM_FUNC_BIND: {
@@ -2181,6 +2191,7 @@ void asmGetRegisterCounts(List *params, int *ireg, int *freg) {
     }
 }
 
+<<<<<<< HEAD
 int asmFunctionInit(Cctrl *cc, aoStr *buf, Ast *func) {
     (void)cc;
     int offset = 0;
@@ -2188,6 +2199,33 @@ int asmFunctionInit(Cctrl *cc, aoStr *buf, Ast *func) {
     Ast *ast_tmp = NULL;
 
     char *fname = asmNormaliseFunctionName(func->fname->data);
+=======
+int asmSaveRegisters(Cctrl *cc, aoStr *buf) {
+    static const int save_size = 176;
+    aoStrCatPrintf(buf,
+            "subq    $%d, %%rsp\n\t"
+            "movq    %%rdi, (%%rsp)\n\t"
+            "movq    %%rsi, 8(%%rsp)\n\t"
+            "movq    %%rdx, 16(%%rsp)\n\t"
+            "movq    %%rcx, 24(%%rsp)\n\t"
+            "movq    %%r8, 32(%%rsp)\n\t"
+            "movq    %%r9, 40(%%rsp)\n\t"
+            "movaps  %%xmm0, 48(%%rsp)\n\t"
+            "movaps  %%xmm1, 64(%%rsp)\n\t"
+            "movaps  %%xmm2, 80(%%rsp)\n\t"
+            "movaps  %%xmm3, 96(%%rsp)\n\t"
+            "movaps  %%xmm4, 112(%%rsp)\n\t"
+            "movaps  %%xmm5, 128(%%rsp)\n\t"
+            "movaps  %%xmm6, 144(%%rsp)\n\t"
+            "movaps  %%xmm7, 160(%%rsp)\n\t",
+            save_size);
+    return save_size;
+}
+
+int asmFunctionInit(Cctrl *cc, aoStr *buf, Ast *func, char *fname) {
+    int offset = 0;
+    int ireg = 0, freg = 0, locals = 0, arg = 2;
+    Ast *ast_tmp = NULL;
 
     aoStrCatPrintf(buf, ".text"            "\n\t"
                         ".global %s\n"
@@ -2301,8 +2339,16 @@ int asmHasRet(aoStr *buf) {
 }
 
 void asmFunction(Cctrl *cc, aoStr *buf, Ast *func) {
-    assert(func->kind == AST_FUNC);
-    cc->stack_local_space = asmFunctionInit(cc,buf,func);
+    assert(func->kind == AST_FUNC || func->kind == AST_LAMBDA);
+
+    char *fname = NULL;
+    if (func->kind == AST_FUNC) {
+        fname = asmNormaliseFunctionName(func->fname->data);
+    } else {
+        fname = asmNormaliseFunctionName(func->lambdafname->data);
+    }
+
+    cc->stack_local_space = asmFunctionInit(cc,buf,func,fname);
     asmExpression(cc,buf,func->body);
     if (!asmHasRet(buf)) {
         asmFunctionLeave(buf);
@@ -2402,7 +2448,7 @@ aoStr *asmGenerate(Cctrl *cc) {
 
     listForEach(cc->ast_list) {
         ast = (Ast *)it->value;
-        if (ast->kind == AST_FUNC) {
+        if (ast->kind == AST_FUNC || ast->kind == AST_LAMBDA) {
             /* We do not emit inline functions */
             if (ast->flags & AST_FLAG_INLINE) {
                 continue;

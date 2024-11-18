@@ -164,6 +164,13 @@ char *astAnnonymousLabel(void) {
     return mprintf("cls_label %d",tmp_anonymous_label++);
 }
 
+Ast *astLVarCopy(Ast *ast) {
+    Ast *cpy = astNew();
+    memcpy(cpy, ast, sizeof(Ast));
+    cpy->lname = aoStrDup(ast->lname);
+    return cpy;
+}
+
 Ast *astLVar(AstType *type, char *name, int len) {
     Ast *ast = astNew();
     ast->kind = AST_LVAR;
@@ -753,6 +760,7 @@ static void astFreeCast(Ast *ast) {
     free(ast);
 }
 
+<<<<<<< HEAD
 Ast *astComment(char *comment, int len) {
     Ast *ast = astNew();
     ast->type = NULL;
@@ -760,6 +768,57 @@ Ast *astComment(char *comment, int len) {
     printf("astComment(): %.*s\n",len,comment);
     ast->sval = aoStrDupRaw(comment, len);
     return ast;
+}
+
+=======
+Ast *
+astMakeLambda(AstType *lambda_rettype, aoStr *lambda_global_name,
+                aoStr *lambda_name, PtrVec *params, Ast *body, List *locals,
+                StrMap *lambda_capture_map, int has_var_args)
+{
+    Ast *ast = astNew();
+    ast->type = lambda_rettype;
+    lambda_rettype->has_var_args = has_var_args;
+    ast->kind = AST_LAMBDA;
+    ast->fname = lambda_name;
+    ast->lambdafname = lambda_global_name;
+    ast->params = params;
+    ast->locals = locals;
+    ast->body = body;
+    ast->has_var_args = has_var_args;
+    ast->params = params;
+    ast->capture = lambda_capture_map;
+    return ast;
+}
+
+
+AstType *astMakeReferenceType(AstType *type) {
+    AstType *reference_type = astTypeNew();
+    reference_type->kind = AST_TYPE_REFERENCE;
+    reference_type->ptr = type;
+    reference_type->size = 8;
+    return reference_type;
+}
+
+Ast *astMakeParamReference(Ast *ast) {
+    Ast *cpy = astLVarCopy(ast);
+    cpy->type = astMakeReferenceType(ast->type);
+    return cpy;
+}
+
+/* Copies the AST and makes a reference */
+Ast *astMakeLVarReference(Ast *ast) {
+    Ast *cpy = astLVarCopy(ast);
+    cpy->type = astMakeReferenceType(ast->type);
+    return astUnaryOperator(astMakeReferenceType(cpy->type), AST_ADDR, cpy);
+}
+
+int astTypeIsReference(AstType *type) {
+    return type->kind == AST_TYPE_REFERENCE;
+}
+
+int astTypeIsPtrOrReference(AstType *type) {
+    return type->kind == AST_TYPE_POINTER || type->kind == AST_TYPE_REFERENCE;
 }
 
 aoStr *astNormaliseFunctionName(char *fname) {
@@ -899,6 +958,7 @@ start_routine:
             return ast_float_type;
         case AST_TYPE_ARRAY:
         case AST_TYPE_POINTER:
+        case AST_TYPE_REFERENCE:
             return ptr2;
         }
     case AST_TYPE_FLOAT:
@@ -1114,6 +1174,13 @@ static aoStr *astTypeToAoStrInternal(AstType *type) {
         aoStrCatLen(str,str_lit("F64"));
         return str;
 
+    case AST_TYPE_REFERENCE: {
+        aoStr *ref_type = astTypeToAoStrInternal(type->ptr);
+        aoStrCatPrintf(str, "&ref %s", ref_type->data);
+        aoStrRelease(ref_type);
+        return str;
+    }
+
     case AST_TYPE_POINTER: {
         aoStr *ptr_type = astTypeToAoStrInternal(type->ptr);
         aoStrCatPrintf(str, "%s*", ptr_type->data);
@@ -1281,7 +1348,7 @@ static char *astFunctionToStringInternal(Ast *func, AstType *type) {
         case AST_ASM_FUNCALL:
             strparams = astParamsToString(func->args);
             break;
-
+        case AST_LAMBDA:  
         case AST_FUNC:
         case AST_FUN_PROTO:
             strparams = astParamsToString(func->params);
@@ -1524,6 +1591,7 @@ void _astToString(aoStr *str, Ast *ast, int depth) {
             break;
         }
 
+        case AST_LAMBDA:
         case AST_FUNC: {
             tmp = astFunctionToString(ast);
             if (ast->flags & AST_FLAG_INLINE) {
@@ -1858,6 +1926,7 @@ char *astKindToString(int kind) {
     case AST_TYPE_CLASS: return "AST_TYPE_CLASS";
     case AST_TYPE_UNION: return "AST_TYPE_UNION";
     case AST_TYPE_AUTO:  return "AST_TYPE_AUTO";
+    case AST_TYPE_REFERENCE: return "AST_TYPE_REFERENCE";
 
     case AST_GVAR:       return "AST_GVAR";
     case AST_DEREF:      return "AST_DEREF";
@@ -1869,6 +1938,7 @@ char *astKindToString(int kind) {
     case AST_DECL:       return "AST_DECL";
     case AST_STRING:     return "AST_STRING";
     case AST_FUNCALL:    return "AST_FUNCALL";
+    case AST_LAMBDA:     return "AST_LAMBDA";
     case AST_LITERAL:    return "AST_LITERAL";
     case AST_ARRAY_INIT: return "AST_ARRAY_INIT";
     case AST_IF:         return "AST_IF";
@@ -2058,6 +2128,7 @@ static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
             break;
         }
 
+        case AST_LAMBDA:
         case AST_FUNC:
         case AST_FUN_PROTO:
         case AST_EXTERN_FUNC:
@@ -2268,6 +2339,7 @@ void astRelease(Ast *ast) {
         case AST_LVAR: astFreeLVar(ast); break;
         case AST_EXTERN_FUNC:
         case AST_FUN_PROTO:
+        case AST_LAMBDA:  
         case AST_FUNC: astFreeFunction(ast); break;
         case AST_DECL: astFreeDecl(ast); break;
 
