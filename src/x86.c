@@ -976,6 +976,16 @@ void asmBinOpFunctionAssign(Cctrl *cc, aoStr *buf, Ast *fnptr, Ast *fn) {
                     "movq    %%rax, %d(%%rbp)\n\t",
                     fn->loff, fnptr->loff);
             break;
+        
+        case AST_LAMBDA: {
+            normalised = asmNormaliseFunctionName(fn->asmfname->data);
+            aoStrCatPrintf(buf,
+                              "leaq   %s(%%rip), %%rax\n\t"
+                              "movq    %%rax, %d(%%rbp)\n\t",
+                              normalised, fnptr->loff);
+            free(normalised);
+            break;
+        }
 
         case AST_ASM_FUNCDEF:
         case AST_ASM_FUNC_BIND:
@@ -2187,13 +2197,10 @@ int asmSaveRegisters(Cctrl *cc, aoStr *buf) {
     return save_size;
 }
 
-int asmFunctionInit(Cctrl *cc, aoStr *buf, Ast *func) {
+int asmFunctionInit(Cctrl *cc, aoStr *buf, Ast *func, char *fname) {
     int offset = 0;
     int ireg = 0, freg = 0, locals = 0, arg = 2;
     Ast *ast_tmp = NULL;
-    char *fname = NULL;
-
-    fname = asmNormaliseFunctionName(func->fname->data);
 
     aoStrCatPrintf(buf, ".text"            "\n\t"
                         ".global %s\n"
@@ -2307,8 +2314,16 @@ int asmHasRet(aoStr *buf) {
 }
 
 void asmFunction(Cctrl *cc, aoStr *buf, Ast *func) {
-    assert(func->kind == AST_FUNC);
-    cc->stack_local_space = asmFunctionInit(cc,buf,func);
+    assert(func->kind == AST_FUNC || func->kind == AST_LAMBDA);
+
+    char *fname = NULL;
+    if (func->kind == AST_FUNC) {
+        fname = asmNormaliseFunctionName(func->fname->data);
+    } else {
+        fname = asmNormaliseFunctionName(func->lambdafname->data);
+    }
+
+    cc->stack_local_space = asmFunctionInit(cc,buf,func,fname);
     asmExpression(cc,buf,func->body);
     if (!asmHasRet(buf)) {
         asmFunctionLeave(buf);
@@ -2408,7 +2423,7 @@ aoStr *asmGenerate(Cctrl *cc) {
 
     listForEach(cc->ast_list) {
         ast = (Ast *)it->value;
-        if (ast->kind == AST_FUNC) {
+        if (ast->kind == AST_FUNC || ast->kind == AST_LAMBDA) {
             asmFunction(cc,asmbuf,ast);
         } else if (ast->kind == AST_DECL || ast->kind == AST_GVAR) {
             asmGlobalVar(seen_globals,asmbuf,ast);

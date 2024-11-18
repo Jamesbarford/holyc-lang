@@ -18,5 +18,7 @@ AstType *parseFullType(Cctrl *cc);
 Ast *parseFunctionPointer(Cctrl *cc, AstType *rettype);
 AstType *parseFunctionPointerType(Cctrl *cc,
         char **fnptr_name, int *fnptr_name_len, AstType *rettype);
-
+PtrVec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len);
+Ast *parseFunctionPrepArgv(Cctrl *cc, Ast *function_declaration, AstType *rettype,
+                         char *fname, int len, PtrVec *argv);
 #endif

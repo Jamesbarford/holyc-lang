@@ -1,15 +1,18 @@
 #include <assert.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <limits.h>
 
 #include "aostr.h"
 #include "ast.h"
 #include "cctrl.h"
+#include "lambda.h"
 #include "lexer.h"
 #include "list.h"
 #include "map.h"
+#include "parser.h"
 #include "prsutil.h"
 #include "prslib.h"
 #include "util.h"
@@ -372,11 +375,12 @@ static Ast *findFunctionDecl(Cctrl *cc, char *fname, int len) {
     if ((decl = strMapGetLen(cc->global_env,fname,len)) != NULL) {
         if (decl->kind == AST_FUNC ||
             decl->kind == AST_EXTERN_FUNC ||
-            decl->kind == AST_FUN_PROTO) {
+            decl->kind == AST_FUN_PROTO || 
+            decl->kind == AST_LAMBDA) {
             return decl;
         }
     } else if (cc->localenv && (decl = strMapGetLen(cc->localenv,fname,len)) != NULL) {
-        if (decl->kind == AST_FUNPTR || decl->kind == AST_LVAR) {
+        if (decl->kind == AST_FUNPTR || decl->kind == AST_LVAR || decl->kind == AST_LAMBDA) {
             return decl;
         }
     } else if ((decl = strMapGetLen(cc->asm_funcs,fname,len)) != NULL) {
@@ -386,16 +390,44 @@ static Ast *findFunctionDecl(Cctrl *cc, char *fname, int len) {
     return NULL;
 }
 
+Ast *parseFunctionPrepArgv(Cctrl *cc, Ast *function_declaration, AstType *rettype,
+                         char *fname, int len, PtrVec *argv)
+{
+    switch (function_declaration->kind) {
+    case AST_LVAR:
+    case AST_FUNPTR:
+        return astFunctionPtrCall(rettype, fname, len, argv,
+                                     function_declaration);
+
+    case AST_ASM_FUNCDEF:
+    case AST_ASM_FUNC_BIND:
+        return astAsmFunctionCall(rettype,
+                                     aoStrDup(function_declaration->asmfname),
+                                     argv);
+
+    case AST_LAMBDA: {
+        return parseLambdaCreateCall(cc, function_declaration, argv);
+    }
+    case AST_EXTERN_FUNC:
+    case AST_FUNC:
+    case AST_FUN_PROTO:
+        return astFunctionCall(rettype, fname, len, argv);
+    default: {
+        cctrlRaiseException(cc, "Unknown function: %.*s",len,fname);
+    }
+    }
+}
+
+
 PtrVec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
     List *var_args = NULL, *parameter = NULL;
     Ast *ast, *param = NULL;
-    AstType *check, *rettype;
-    lexeme *tok;
+    AstType *check;
+    lexeme *tok, *peek, *peek2;
     PtrVec *params = NULL;
     size_t param_idx = 0;
 
     if (decl) {
-        rettype = decl->type->rettype;
         params = decl->params;
     }
 
@@ -407,6 +439,59 @@ PtrVec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
         if (params && vecInBounds(params, param_idx)) {
             param = params->entries[param_idx++];
         }
+
+        peek = cctrlTokenPeek(cc);
+        peek2 = cctrlTokenPeekBy(cc,1);
+
+        if (tokenPunctIs(peek,'(') && (tokenIsIdent(peek2) || tokenIsKeyword(peek2))) {
+            AstType *ast_maybe_type = cctrlGetKeyWord(cc,peek2->start,peek2->len);
+            if (ast_maybe_type) {
+                cctrlTokenGet(cc);
+                aoStr *new_fn_name = aoStrNew();
+                /* XXX: This needs to be a random string */
+                aoStrCatLen(new_fn_name,str_lit("example"));
+                int has_var_args = 0;
+                /* need to setup a new hashtable to store local vars */
+                StrMap *locals = strMapNewWithParent(32,cc->global_env);
+                /* XXX: factor out, we do not need 2 ways of storing local 
+                 * variables. */
+                StrMap *prev_locals = cc->localenv;
+                List *prev_local_list = cc->tmp_locals;
+                List *local_list = listNew();
+
+                cc->localenv = locals;
+                cc->tmp_locals = local_list;
+                PtrVec *lambda_def_args = parseParams(cc,
+                                                    ')',
+                                                    &has_var_args,
+                                                    1);
+                lexeme *tok = cctrlTokenGet(cc);
+                /* XXX: Need to add this to the ast list AND add it to the global_env
+                 * maybe we need something separate for function definitions? 
+                 * Then in x86 can loop over it at the end without having to do
+                 * guess work
+                 * */
+                if (tokenPunctIs(tok, '{')) {
+                    Ast *body = parseCompoundStatement(cc);
+                    AstType *rettype = astMakeFunctionType(ast_void_type, params);
+                    Ast *fn = astFunction(rettype, new_fn_name->data, new_fn_name->len, lambda_def_args, 
+                            body, local_list, has_var_args);
+
+                    /* We do have a function, but we can't define the return type 
+                     * at the moment */
+                    astPrint(fn);
+                }
+                cc->tmp_locals = prev_local_list;
+                cc->localenv = prev_locals;
+                for (ssize_t ii = 0; ii < lambda_def_args->size; ++ii) {
+                    astPrint(lambda_def_args->entries[ii]);
+                }
+                astTypePrint(ast_maybe_type);
+            }
+            exit(0);
+        }
+
+
         ast = parseExpr(cc,16);
         if (ast == NULL) {
             if (param && param->kind == AST_DEFAULT_PARAM) {
@@ -479,42 +564,29 @@ PtrVec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
 
 /* Read function arguments for a function being called */
 Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
-    AstType *rettype;
-    Ast *decl;
-
-    decl = findFunctionDecl(cc,fname,len);
+    AstType *rettype = NULL;
+    Ast *decl = findFunctionDecl(cc,fname,len);
     if (decl) {
         rettype = decl->type->rettype;
     }
 
-    PtrVec *argv = parseArgv(cc,decl,terminator,fname,len);
-
     if (!decl) {
         if ((len == 6 && !strncmp(fname,"printf",6))) {
             rettype = ast_int_type;
+            PtrVec *argv = parseArgv(cc,decl,terminator,fname,len);
             return astFunctionCall(rettype,fname,len,argv);
         }
         cctrlRaiseException(cc,"Function: %.*s() not defined",len,fname);
     }
 
-    switch (decl->kind) {
-        case AST_LVAR:
-        case AST_FUNPTR:
-            return astFunctionPtrCall(rettype,fname,len,argv,decl);
-
-        case AST_ASM_FUNCDEF:
-        case AST_ASM_FUNC_BIND:
-            return astAsmFunctionCall(rettype,
-                    aoStrDup(decl->asmfname),argv);
-
-        case AST_EXTERN_FUNC:
-        case AST_FUNC:
-        case AST_FUN_PROTO:
-            return astFunctionCall(rettype,fname,len,argv);
-        default: {
-            cctrlRaiseException(cc,"Unknown function: %.*s", len, fname);
-        }
+    Ast *function_scope = strMapGet(cc->global_env, cc->tmp_fname->data);
+    int is_lambda = function_scope->kind == AST_LAMBDA;
+    if (is_lambda) {
+        return parseLambdaInnerFunctionArguments(cc, decl, function_scope);
     }
+
+    PtrVec *argv = parseArgv(cc,decl,terminator,fname,len);
+    return parseFunctionPrepArgv(cc, decl, rettype, fname, len, argv);
 }
 
 /* parse either a function call or a variable being used */

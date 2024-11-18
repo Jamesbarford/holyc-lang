@@ -271,6 +271,15 @@ lexeme *tokenRingBufferPeek(TokenRingBuffer *ring_buffer) {
     return ring_buffer->entries[ring_buffer->tail];
 }
 
+lexeme *cctrlTokenPeekBy(Cctrl *cc, ssize_t by) {
+    TokenRingBuffer *ring_buffer = cc->token_buffer;
+    if (tokenRingBufferEmpty(ring_buffer)) {
+        return NULL;
+    }
+    ssize_t idx = (ring_buffer->tail + by) & CCTRL_TOKEN_BUFFER_MASK; 
+    return ring_buffer->entries[idx];
+}
+
 int tokenRingBufferRewind(TokenRingBuffer *ring_buffer) {
     //if (tokenRingBufferEmpty(ring_buffer)) { //|| ring_buffer->tail == ring_buffer->head) {
     //    return 0;

@@ -18,6 +18,7 @@
 #define AST_TYPE_INLINE       9
 #define AST_TYPE_UNION        10
 #define AST_TYPE_AUTO         11
+#define AST_TYPE_REFERENCE    12 
 
 /* Relates to the 'kind' property on the Ast struct */
 #define AST_GVAR           256
@@ -58,6 +59,7 @@
 #define AST_PLACEHOLDER    291
 #define AST_SWITCH         292
 #define AST_DEFAULT        293
+#define AST_LAMBDA         294
 
 /* @Cleanup
  * Urgently get rid of this, we do not need `n` ways of setting a label on 
@@ -162,11 +164,14 @@ typedef struct Ast {
 
         /* Function call, declaration, pointer or assembly */
         struct {
+            aoStr *lambdafname;
             /* asm function binding */
             aoStr *asmfname;
             aoStr *fname;
             PtrVec *args;
             PtrVec *params;
+            /* lambda capture group */
+            StrMap *capture;
 
             /* Declaration */
             List *locals;
@@ -331,6 +336,22 @@ Ast *astFunctionPtr(AstType *type, char *fname, int len,
 Ast *astFunctionPtrCall(AstType *type, char *fname, int len,
                          PtrVec *argv, Ast *ref);
 Ast *astFunctionDefaultParam(Ast *var, Ast *init);
+Ast *astMakeLambda(AstType *lambda_rettype, aoStr *lambda_global_name,
+                     aoStr *lambda_name, PtrVec *lambda_params, Ast *lambda_body,
+                     List *lambda_locals, StrMap *lambda_capture_map,
+                     int has_var_args);
+
+
+AstType *astMakeReferenceType(AstType *type);
+Ast *astMakeLvarReference(Ast *ast);
+Ast *astMakeParamReference(Ast *ast);
+
+
+int astTypeIsReference(AstType *type);
+int astTypeIsPtrOrReference(AstType *type);
+
+
+
 Ast *astVarArgs(void);
 
 Ast *astAsmBlock(aoStr *asm_stmt, List *funcs);

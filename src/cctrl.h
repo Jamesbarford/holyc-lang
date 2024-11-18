@@ -122,6 +122,7 @@ Cctrl *cctrlNew(void);
 Cctrl *ccMacroProcessor(StrMap *macro_defs);
 lexeme *cctrlTokenGet(Cctrl *cc);
 lexeme *cctrlTokenPeek(Cctrl *cc);
+lexeme *cctrlTokenPeekBy(Cctrl *cc, ssize_t by);
 void cctrlInitMacroProcessor(Cctrl *cc);
 void cctrlTokenRewind(Cctrl *cc);
 void cctrlTokenExpect(Cctrl *cc, long expected);
