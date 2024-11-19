@@ -506,10 +506,23 @@ Ast *parseVariableAssignment(Cctrl *cc, Ast *var, long terminator_flags) {
     if (var->type->kind == AST_TYPE_AUTO) {
         var->type = init->type;
     }
+
+    /* Check what we are trying to assign is valid */
     AstType *ok = astTypeCheck(var->type,init,'=');
     if (!ok) {
         typeCheckWarn(cc,'=',var,init);
     }
+
+    /* This is for when we have parsed a call to an inline function that is 
+     * being assigned to a variable */
+    if (init->kind == AST_COMPOUND_STMT) {
+        /* Attach the Ast to the current function that is being called */
+        if (cc->tmp_func) {
+            listAppend(cc->tmp_func->body->stms,init);
+        }
+        return astDecl(var,init->inline_ret);
+    }
+
     return astDecl(var,init);
 }
 
@@ -920,10 +933,15 @@ Ast *parseReturnStatement(Cctrl *cc) {
         cc->tmp_rettype = parseReturnAuto(cc,retval);
     }
 
+    Ast *maybe_fn = findFunctionDecl(cc,cc->tmp_fname->data,cc->tmp_fname->len);
+
     if (retval) check = retval->type;
     else        check = ast_void_type;
 
-    if (check->kind == AST_TYPE_VOID && cc->tmp_rettype->kind == AST_TYPE_VOID) {
+    if (check->kind == AST_TYPE_VOID && maybe_fn->type->rettype->kind == AST_TYPE_VOID) {
+        if (maybe_fn->flags & AST_FLAG_INLINE) {
+            return astDecl(maybe_fn->inline_ret,NULL);
+        }
         return astReturn(retval,cc->tmp_rettype);
     }
 
@@ -931,6 +949,9 @@ Ast *parseReturnStatement(Cctrl *cc) {
     if (!ok) {
         Ast *func = strMapGet(cc->global_env,cc->tmp_fname->data);
         typeCheckReturnTypeWarn(cc,lineno,func,check,retval);
+    }
+    if (maybe_fn->flags & AST_FLAG_INLINE) {
+        return astDecl(maybe_fn->inline_ret,retval);
     }
     return astReturn(retval,cc->tmp_rettype);
 }
@@ -1240,13 +1261,10 @@ Ast *parseDeclOrStatement(Cctrl *cc) {
     return parseStatement(cc);
 }
 
-Ast *parseCompoundStatement(Cctrl *cc) {
-    List *stmts; 
+void parseCompoundStatementInternal(Cctrl *cc, Ast *body) {
     Ast *stmt, *var;
     AstType *base_type, *type, *next_type;
     lexeme *tok, *varname, *peek;
-
-    stmts = listNew();
     cc->localenv = strMapNewWithParent(32, cc->localenv);
     tok = NULL;
 
@@ -1287,7 +1305,7 @@ Ast *parseCompoundStatement(Cctrl *cc) {
                 }
 
                 if (stmt) {
-                    listAppend(stmts,stmt);
+                    listAppend(body->stms,stmt);
                 }
                 cctrlTokenRewind(cc);
                 tok = cctrlTokenGet(cc);
@@ -1306,7 +1324,7 @@ Ast *parseCompoundStatement(Cctrl *cc) {
                     tok = cctrlTokenPeek(cc);
                     continue;
                 }
-                listAppend(stmts,stmt);
+                listAppend(body->stms,stmt);
             } else {
                 break;
             }
@@ -1316,14 +1334,22 @@ Ast *parseCompoundStatement(Cctrl *cc) {
     cc->localenv = cc->localenv->parent;
     cctrlTokenExpect(cc,'}');
     cctrlTokenPeek(cc);
-    return astCompountStatement(stmts);
+}
+
+Ast *parseCompoundStatement(Cctrl *cc) {
+    List *stmts = listNew();
+    Ast *ast_compound = astCompountStatement(stmts);
+    parseCompoundStatementInternal(cc, ast_compound);
+    return ast_compound;
 }
 
 Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
-        char *fname, int len, PtrVec *params, int has_var_args) 
+        char *fname, int len, PtrVec *params, int has_var_args, int is_inline) 
 {
     List *locals = listNew();
     Ast *func = NULL;
+    List *body = listNew();
+    Ast *func_body = astCompountStatement(body);
     AstType *fn_type;
 
     cc->localenv = strMapNewWithParent(32, cc->localenv);
@@ -1371,15 +1397,26 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
 
     /* XXX: This allows us to do recursion by parsing the body after */
     cc->tmp_fname = func->fname;
-    Ast *body = parseCompoundStatement(cc);
-    func->body = body;
+    Ast *prev_func = cc->tmp_func;
+    cc->tmp_func = func;
+    func->body = func_body;
+
+    if (is_inline) {
+        func->flags |= AST_FLAG_INLINE;
+        func->inline_ret = astLVar(func->type->rettype, str_lit("retval"));
+    }
+    parseCompoundStatementInternal(cc, func_body);
     fn_type->rettype = cc->tmp_rettype;
+    if (is_inline) {
+        listAppend(func->locals,func->inline_ret);
+    }
 
     cc->localenv = NULL;
     cc->tmp_locals = NULL;
     cc->tmp_rettype = NULL;
     cc->tmp_params = NULL;
     cc->tmp_fname = NULL;
+    cc->tmp_func = prev_func;
     return func;
 }
 
@@ -1405,7 +1442,7 @@ Ast *parseExternFunctionProto(Cctrl *cc, AstType *rettype, char *fname, int len)
     return func;
 }
 
-Ast *parseFunctionOrDef(Cctrl *cc, AstType *rettype, char *fname, int len) {
+Ast *parseFunctionOrDef(Cctrl *cc, AstType *rettype, char *fname, int len, int is_inline) {
     int has_var_args = 0;
     cctrlTokenExpect(cc,'(');
     cc->localenv = strMapNewWithParent(32, cc->localenv);
@@ -1414,7 +1451,7 @@ Ast *parseFunctionOrDef(Cctrl *cc, AstType *rettype, char *fname, int len) {
     PtrVec *params = parseParams(cc,')',&has_var_args,1);
     lexeme *tok = cctrlTokenGet(cc);
     if (tokenPunctIs(tok, '{')) {
-        return parseFunctionDef(cc,rettype,fname,len,params,has_var_args);
+        return parseFunctionDef(cc,rettype,fname,len,params,has_var_args,is_inline);
     } else {
         if (rettype->kind == AST_TYPE_AUTO) {
             cctrlRaiseException(cc,"auto cannot be used with a function prototype %.*s() at this time",
@@ -1433,10 +1470,9 @@ Ast *parseAsmFunctionBinding(Cctrl *cc) {
     aoStr *asm_fname, *c_fname;
     AstType *rettype;
     Ast *asm_func;
-    int has_var_args = 0;
+    int has_var_args = 0, is_inline = 0;
 
     tok = cctrlTokenGet(cc);
-
     if (tok->tk_type != TK_IDENT && tok->start[0] != '_') {
         cctrlRaiseException(cc,"ASM function binds must begin with '_' got: %.*s",
                 tok->len,tok->start);
@@ -1468,6 +1504,9 @@ Ast *parseAsmFunctionBinding(Cctrl *cc) {
     /* Map a c function to an ASM function */
     strMapAdd(cc->asm_funcs,c_fname->data,asm_func);
     cctrlTokenExpect(cc,';');
+    if (is_inline) {
+        asm_func->flags |= AST_FLAG_INLINE;
+    }
     return asm_func;
 }
 
@@ -1514,10 +1553,22 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
                     cctrlRaiseException(cc,"Can only call external c functions for the "
                             "time being");
                 }
+                case KW_INLINE: {
+                    peek = cctrlTokenPeek(cc);
+                    if (!cctrlGetKeyWord(cc, peek->start, peek->len)) {
+                        cctrlRaiseException(cc,"Expected return type declaration got: '%.*s'",
+                                peek->len,peek->start);
+                    }
+                    type = parseFullType(cc);
+                    name = cctrlTokenGet(cc);
+                    
+                    ast = parseFunctionOrDef(cc,type,name->start,name->len,1); 
+                    ast->flags |= AST_FLAG_INLINE;
+                    return ast;
+                }
                 case KW_PUBLIC:
                 case KW_PRIVATE:
                 case KW_ATOMIC:
-                case KW_INLINE:
                     continue;
 
                 case KW_STATIC:
@@ -1664,7 +1715,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
         }
 
         if (tokenPunctIs(tok, '(')) {
-            return parseFunctionOrDef(cc,type,name->start,name->len); 
+            return parseFunctionOrDef(cc,type,name->start,name->len,0); 
         }
 
         if (tokenPunctIs(tok,';') || tokenPunctIs(tok, ',')) {

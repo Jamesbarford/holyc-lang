@@ -93,6 +93,9 @@ typedef struct Cctrl {
     /* For parsing a switch */
     Ast *tmp_default_case;
 
+    /* Function being parsed */
+    Ast *tmp_func;
+
     /* When parsing & converting to assembly these keep a reference to the
      * current loop's labels */
     aoStr *tmp_loop_begin;

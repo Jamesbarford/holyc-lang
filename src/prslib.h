@@ -18,5 +18,6 @@ AstType *parseFullType(Cctrl *cc);
 Ast *parseFunctionPointer(Cctrl *cc, AstType *rettype);
 AstType *parseFunctionPointerType(Cctrl *cc,
         char **fnptr_name, int *fnptr_name_len, AstType *rettype);
+Ast *findFunctionDecl(Cctrl *cc, char *fname, int len);
 
 #endif

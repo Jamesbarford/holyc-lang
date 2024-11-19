@@ -25,5 +25,6 @@ void listClear(List *ll, void (*freeValue)(void *));
 int listCount(List *ll);
 void listMergeAppend(List *l1, List *l2);
 void listMergePrepend(List *l1, List *l2);
+List *listCopy(List *l);
 
 #endif // !LIST_H

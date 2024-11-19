@@ -98,9 +98,12 @@ typedef struct AstType {
 } AstType;
 
 
+#define AST_FLAG_INLINE (1<<0)
+
 typedef struct Ast Ast;
 typedef struct Ast {
     long kind;
+    unsigned long flags;
     AstType *type;
     int loff;
     union {
@@ -220,7 +223,10 @@ typedef struct Ast {
 
         /* @Typeo
          * Compound statement */
-        List *stms;
+        struct {
+            Ast *inline_ret;
+            List *stms;
+        };
 
         /* Class */
         struct {
