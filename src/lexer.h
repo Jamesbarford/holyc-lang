@@ -123,12 +123,13 @@
 
 /* Compiler Flags*/
 #define CCF_ESCAPE_STRING_NEWLINES (1ULL << 40)
-#define CCF_MULTI_CHAR_OP   (1<<0)
-#define CCF_PRE_PROC        (1<<1)
-#define CCF_ACCEPT_NEWLINES (1<<2)
-#define CCF_MULTI_COLON     (1<<3)
-#define CCF_ASM_BLOCK       (1<<4)
-#define CCF_BLOCK           (1<<5)
+#define CCF_MULTI_CHAR_OP     (1<<0)
+#define CCF_PRE_PROC          (1<<1)
+#define CCF_ACCEPT_NEWLINES   (1<<2)
+#define CCF_MULTI_COLON       (1<<3)
+#define CCF_ASM_BLOCK         (1<<4)
+#define CCF_BLOCK             (1<<5)
+#define CCF_ACCEPT_WHITESPACE (1<<6)
 
 #define LEXEME_RAW_PUNCT              (1<<0)
 #define LEXEME_ENCODE_PUNCT           (1<<1)
@@ -195,5 +196,6 @@ int tokenIdentIs(lexeme *tok, char *ident, int len);
 void lexemeFree(void *_le);
 const char *lexerReportLine(lexer *l, ssize_t lineno);
 void lexerPoolRelease(void);
+int lexemeEq(lexeme *l1, lexeme *l2);
 
 #endif // !LEXER_H

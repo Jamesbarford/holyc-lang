@@ -55,6 +55,7 @@ static LexerTypes lexer_types[] = {
     {"for", KW_FOR},
     {"goto", KW_GOTO},
     {"default", KW_DEFAULT},
+    {"return", KW_RETURN},
 
     {"if", KW_IF},
     {"else", KW_ELSE},
@@ -82,7 +83,6 @@ static LexerTypes lexer_types[] = {
 
     {"cast", KW_CAST},
     {"sizeof", KW_SIZEOF},
-    {"return", KW_RETURN},
     {"inline", KW_INLINE},
     {"atomic", KW_ATOMIC},
     {"volatile", KW_VOLATILE},
@@ -891,6 +891,7 @@ int lexNumeric(lexer *l, int _isfloat) {
         return -1;
     }
 
+    l->cur_strlen = numlen;
     l->ptr += numlen - 1;
     if (isfloat) {
         l->cur_f64 = strtold(start, &endptr);
@@ -930,11 +931,19 @@ int lex(lexer *l, lexeme *le) {
         case '\r':
         case '\n':
             l->lineno++;
-            if (l->flags & CCF_ACCEPT_NEWLINES) {
+            if (l->flags & (CCF_ACCEPT_NEWLINES|CCF_ACCEPT_WHITESPACE)) {
                 lexemeAssignOp(le,start,1,ch,l->lineno);
                 return 1;
             }
             break;
+
+        case ' ':
+            if (l->flags & (CCF_ACCEPT_WHITESPACE)) {
+                lexemeAssignOp(le,start,1,ch,l->lineno);
+                return 1;
+            }
+            break;
+
 
         case '\0':
             return 0;
@@ -966,11 +975,10 @@ int lex(lexer *l, lexeme *le) {
                         l->lineno);
                 goto error;
             }
-            le->len = l->ptr - start;
+            le->len = l->cur_strlen;
             le->tk_type = tk_type;
             le->line = l->lineno;
             le->start = start;
-            le->len = 0;
             if (tk_type == TK_F64) {
                 le->f64 = l->cur_f64;
             } else {
@@ -1707,4 +1715,26 @@ const char *lexerReportLine(lexer *l, ssize_t lineno) {
     }
     *tmp_ptr = '\0';
     return buffer;
+}
+
+int lexemeEq(lexeme *l1, lexeme *l2) {
+    if (l1->tk_type  != l2->tk_type) {
+        return 0;
+    }
+
+    switch (l1->tk_type) {
+        case TK_STR:
+        case TK_IDENT: return l1->len == l2->len && !memcmp(l1->start,l2->start,l1->len);
+
+        case TK_KEYWORD:
+        case TK_I64:
+        case TK_PUNCT:
+        case TK_EOF:
+        case TK_CHAR_CONST: return l1->i64 == l2->i64;
+        case TK_F64: return l1->f64 == l2->f64;
+        default:
+            loggerPanic("Cannot compare %s with %s\n",
+                        lexemeToString(l1),
+                        lexemeToString(l2));
+    }
 }

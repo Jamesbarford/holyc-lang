@@ -104,7 +104,9 @@ Ast *parseDeclArrayInitInt(Cctrl *cc, AstType *type) {
             continue;
         } else {
             init = parseExpr(cc,16);
-            if (type->ptr) {
+            if (init == NULL) {
+                cctrlRaiseExceptionFromTo(cc,'{','}',"Array initaliser encountered an unexpected token");
+            } else if (type->ptr) {
               if ((astGetResultType('=', init->type, type->ptr)) == NULL) {
                   cctrlRaiseException(cc,"Incompatiable types: %s %s",
                           astTypeToString(init->type),
@@ -483,8 +485,9 @@ Ast *parseVariableAssignment(Cctrl *cc, Ast *var, long terminator_flags) {
             var->type->len = len;
             var->type->size = len * var->type->ptr->size;
         } else if (var->type->len != len) {
-            cctrlRaiseException(cc,"Invalid array initializer: expected %d items but got %d",
-                var->type->len, len);
+            cctrlRaiseExceptionFromTo(cc,'{', '}',
+                                     "Invalid array initializer: expected %d items but got %d",
+                                      var->type->len, len);
         }
         lexeme *tok = cctrlTokenGet(cc);
         assertTokenIsTerminator(cc,tok,terminator_flags);
@@ -599,7 +602,7 @@ Ast *parseOptExpr(Cctrl *cc) {
     cctrlTokenRewind(cc);
     Ast *ast = parseExpr(cc,16);
     tok = cctrlTokenGet(cc);
-    assertTokenIsTerminator(cc,tok,PUNCT_TERM_SEMI|PUNCT_TERM_COMMA);
+    assertTokenIsTerminatorWithMsg(cc,tok,PUNCT_TERM_SEMI|PUNCT_TERM_COMMA, "for loop requires either a conditional statement or a semi colon to terminate the initalisation");
     return ast;
 }
 
@@ -1141,7 +1144,9 @@ Ast *parseStatement(Cctrl *cc) {
                 tok = cctrlTokenGet(cc);
 
                 if (tok->tk_type != TK_IDENT) {
-                    cctrlRaiseException(cc,"Expected variable name following type %s", astTypeToString(type));
+                    cctrlTokenRewind(cc);
+                    cctrlRaiseException(cc,"Expected variable name following type declaration '%s' - '%s' <var_name>",
+                            astTypeToString(type), astTypeToString(type));
                 }
                 type = parseArrayDimensions(cc,type);
 
@@ -1213,9 +1218,11 @@ Ast *parseStatement(Cctrl *cc) {
                 assertTokenIsTerminator(cc,tok,PUNCT_TERM_SEMI|PUNCT_TERM_COMMA);
                 return ast;
             }
-            default:
-                cctrlRaiseException(cc,"Unexpected keyword: %.*s",
+            default: {
+                cctrlTokenRewind(cc);
+                cctrlRaiseException(cc,"Keyword '%.*s' cannot be used in this context",
                         tok->len,tok->start);
+            }
         }
     }
 
@@ -1241,6 +1248,16 @@ Ast *parseStatement(Cctrl *cc) {
 
     if (tokenPunctIs(tok,'{')) {
         return parseCompoundStatement(cc);
+    }
+
+    if (tok->tk_type == TK_I64) {
+        cctrlRaiseException(cc,"Floating integer constant '%ld' cannot be used in this context", tok->i64);
+    } else if (tok->tk_type == TK_F64) {
+        cctrlRaiseException(cc,"Floating integer constant '%f' cannot be used in this context", tok->f64);
+    } else if (tok->tk_type == TK_PUNCT && (tok->i64 == ',')) {
+        lexemePrint(tok);
+        cctrlTokenRewind(cc);
+        cctrlRaiseException(cc, "Floating '%c' cannot be used in this context", tok->i64);
     }
 
     cctrlTokenRewind(cc);
@@ -1276,11 +1293,14 @@ void parseCompoundStatementInternal(Cctrl *cc, Ast *body) {
             while (1) {
                 next_type = parsePointerType(cc,base_type);
                 peek = cctrlTokenPeek(cc);
-                
+
                 if (!tokenPunctIs(peek,'(')) {
                     /* A normal variable */
                     varname = cctrlTokenGet(cc);
-                    if (!varname) {
+                    if (varname->tk_type != TK_IDENT) {
+                        cctrlTokenRewind(cc);
+                        cctrlRaiseException(cc,"Expected type declaration with identifer got '%.*s' - should be"ESC_BLUE" '%s "ESC_RESET ESC_BOLD"<var_name>'",
+                                peek->len, peek->start, astTypeToString(next_type));
                         break;
                     }
                     type = parseArrayDimensions(cc,next_type);
@@ -1662,6 +1682,10 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
             ast = parseFunctionArguments(cc,"printf",6,';');
             *is_global = 1;
             return ast;
+        } else if (tok->tk_type == TK_I64) {
+            cctrlRaiseException(cc,"Floating integer constant '%ld' cannot be used in this context", tok->i64);
+        } else if (tok->tk_type == TK_F64) {
+            cctrlRaiseException(cc,"Floating integer constant '%f' cannot be used in this context", tok->f64);
         }
 
         name = cctrlTokenGet(cc);
@@ -1677,7 +1701,6 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
                     cctrlTokenExpect(cc,';');
                     continue;
                 default: {
-                    lexemePrint(tok);
                     cctrlRaiseException(cc,"%s can only prefix a class",lexemeToString(name));
                 }
             }
