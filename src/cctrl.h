@@ -8,7 +8,7 @@
 #include "map.h"
 #include "lexer.h"
 
-#define HCC_VERSION "beta-v0.0.6"
+#define HCC_VERSION "beta-v0.0.7"
 #define CCTRL_TOKEN_BUFFER_SIZE 16
 #define CCTRL_TOKEN_BUFFER_MASK CCTRL_TOKEN_BUFFER_SIZE-1
 
