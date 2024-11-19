@@ -288,7 +288,7 @@ AstType *parseBaseDeclSpec(Cctrl *cc) {
 
     if (tok->tk_type == TK_KEYWORD || tok->tk_type == TK_IDENT) {
         if ((type = parseGetType(cc, tok)) == NULL) {
-            cctrlRaiseException(cc,"Type %.*s not found",tok->len,tok->start);
+            cctrlRaiseException(cc,"Invalid type '%.*s' expected type declaration",tok->len,tok->start);
         }
     } else {
         cctrlRaiseException(cc,"Declaration or specfier must be an identifier got: %.*s",
@@ -448,7 +448,12 @@ PtrVec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
         }
 
         if (!tokenPunctIs(tok,',')) {
-            cctrlRaiseException(cc,"Unexpected token: '%.*s' expected identifier or ')' to end the argument list",
+            cctrlTokenRewind(cc);
+            cctrlTokenRewind(cc);
+            cctrlTokenPeek(cc);
+            cctrlInfo(cc, "Function call: %.*s not terminated correctly", len,fname);
+            cctrlTokenGet(cc);
+            cctrlRaiseException(cc,"Expected ',' with an identifier or ')' to end the argument list got %.*s",
                    tok->len, tok->start);
         }
 
@@ -522,6 +527,13 @@ Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
             rettype = ast_int_type;
             return astFunctionCall(rettype,fname,len,argv);
         }
+        /* Walk back untill we fin the missing function */
+        lexeme *peek = cctrlTokenPeek(cc);
+        while (peek->len != len && memcmp(fname,peek->start,len) != 0) {
+            cctrlTokenRewind(cc);
+            peek = cctrlTokenPeek(cc);
+        }
+        
         cctrlRaiseException(cc,"Function: %.*s() not defined",len,fname);
     }
 
@@ -560,7 +572,9 @@ static Ast *parseIdentifierOrFunction(Cctrl *cc, char *name, int len,
     if (!is_lparen) {
         cctrlTokenRewind(cc);
         if ((ast = cctrlGetVar(cc, name, len)) == NULL) {
-            cctrlRaiseException(cc,"Cannot find variable: %.*s", len, name);
+            cctrlTokenRewind(cc);
+            cctrlTokenPeek(cc);
+            cctrlRaiseException(cc,"Variable '%.*s' has not been defined", len, name);
         }
 
         if (can_call_function) {
@@ -590,7 +604,7 @@ static Ast *parseIdentifierOrFunction(Cctrl *cc, char *name, int len,
 
     /* Is a postfix typecast, need to grap the variable and 'ParsePostFixExpr' will do the cast */
     if ((ast = cctrlGetVar(cc, name, len)) == NULL) {
-        cctrlRaiseException(cc,"Cannot find variable: %.*s",len, name);
+        cctrlRaiseException(cc,"Variable '%.*s' has not been defined",len, name);
     }
     cctrlTokenRewind(cc);
     return ast;
@@ -619,6 +633,11 @@ static Ast *parsePrimary(Cctrl *cc) {
                 can_call_function);
         if (tokenPunctIs(prev, '&')) {
             if (ast->flags & AST_FLAG_INLINE) {
+                lexeme *peek = cctrlTokenPeek(cc);
+                while (peek->tk_type != TK_PUNCT && peek->i64 != '&') {
+                    cctrlTokenRewind(cc);
+                    peek = cctrlTokenPeek(cc);
+                }
                 cctrlRaiseException(cc,"Inline functions cannot be used as function pointers: '%.*s'",tok->len, tok->start);
             }
             
@@ -1038,9 +1057,11 @@ Ast *parseUnaryExpr(Cctrl *cc) {
                 }
                 return ast;
             }
-            default:
+            default: {
+                cctrlTokenRewind(cc);
                 cctrlRaiseException(cc,"Unexpected keyword: %.*s while parsing unary expression",
                         tok->len,tok->start);
+            }
         }
     }
 

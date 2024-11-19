@@ -37,6 +37,8 @@ int parseIsClassOrUnion(int kind);
 int parseIsFunction(Ast *ast);
 
 void assertTokenIsTerminator(Cctrl *cc, lexeme *tok, long terminator_flags);
+void assertTokenIsTerminatorWithMsg(Cctrl *cc, lexeme *tok,
+        long terminator_flags, const char *fmt, ...);
 void assertUniqueSwitchCaseLabels(PtrVec *case_vector, Ast *case_);
 void assertIsFloatOrInt(Ast *ast, long lineno);
 void assertIsInt(Ast *ast, long lineno);

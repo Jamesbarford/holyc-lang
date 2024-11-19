@@ -8,9 +8,15 @@
 #include "map.h"
 #include "lexer.h"
 
-#define HCC_VERSION "beta-v0.0.6"
+#define HCC_VERSION "beta-v0.0.7"
 #define CCTRL_TOKEN_BUFFER_SIZE 16
 #define CCTRL_TOKEN_BUFFER_MASK CCTRL_TOKEN_BUFFER_SIZE-1
+
+/* For messages */
+#define CCTRL_ICE   0
+#define CCTRL_INFO  1
+#define CCTRL_WARN  2
+#define CCTRL_ERROR 3
 
 static const char *cctrlGetVersion(void) {
     return HCC_VERSION;
@@ -135,9 +141,11 @@ void cctrlInitParse(Cctrl *cc, lexer *lexer_);
 Ast *cctrlGetVar(Cctrl *cc, char *varname, int len);
 int cctrlIsKeyword(Cctrl *cc, char *name, int len);
 AstType *cctrlGetKeyWord(Cctrl *cc, char *name, int len);
+void cctrlInfo(Cctrl *cc, char *fmt, ...);
+void cctrlWarning(Cctrl *cc, char *fmt, ...);
+[[noreturn]] void cctrlRaiseExceptionFromTo(Cctrl *cc, char from, char to, char *fmt, ...);
 [[noreturn]] void cctrlRaiseException(Cctrl *cc, char *fmt, ...);
 [[noreturn]] void cctrlIce(Cctrl *cc, char *fmt, ...);
-void cctrlWarning(Cctrl *cc, char *fmt, ...);
 Ast *cctrlGetOrSetString(Cctrl *cc, char *str, int len);
 
 #endif // !CCTRL_H
