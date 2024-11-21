@@ -41,6 +41,7 @@ typedef struct hccOpts {
     int emit_dylib;
     int emit_object;
     int run;
+    int assemble;
     char *infile;
     char *infile_no_ext;
     char *asm_outfile;
@@ -132,6 +133,9 @@ void getASMFileName(hccOpts *opts, char *file_name) {
         } else if (tolower(*end) == 'c' && tolower(*(end-1)) == 'h' && 
                 *(end-2) == '.') {
             end -= 2;
+        } else if (tolower(*end) == 's' && *(end-1) == '.'){
+            opts->assemble = 1;
+            end -= 1;
         } else {
             loggerPanic("Unknown file extension, file must end with .HC or .HH case insensitive. Got: %s\n", file_name);
         }
@@ -261,6 +265,34 @@ void emitFile(aoStr *asmbuf, hccOpts *opts) {
     remove(ASM_TMP_FILE);
     aoStrRelease(cmd);
     aoStrRelease(asmbuf);
+}
+
+void assemble(hccOpts *opts) {
+    aoStr *run_cmd = aoStrNew();
+
+    if (opts->run) {
+        ssize_t len = 0;
+        char *buffer = lexReadfile(opts->infile,&len);
+#if IS_MACOS
+        aoStrCatPrintf(run_cmd,"echo '%s' | gcc -x assembler - "CLIBS" -L/usr/local/lib && ./a.out && rm ./a.out",
+                buffer);
+#else
+        aoStr asm_buf = {
+            .data = buffer,
+            .len = len,
+            .offset = 0,
+            .capacity = len,
+        };
+        writeAsmToTmp(&asm_buf);
+        aoStrCatPrintf(run_cmd,"gcc -L/usr/local/lib %s "CLIBS" && ./a.out && rm ./a.out",
+                ASM_TMP_FILE);
+#endif
+        free(buffer);
+    } else {
+        aoStrCatPrintf(run_cmd, "gcc %s -L/usr/local/lib "CLIBS, opts->infile);
+    }
+    system(run_cmd->data);
+    aoStrRelease(run_cmd);
 }
 
 void usage(void) {
@@ -394,6 +426,11 @@ int main(int argc, char **argv) {
     opts.output_filename = "a.out";
     /* now parse cli options */
     parseCliOptions(&opts,argc,argv);
+
+    if (opts.assemble) {
+        assemble(&opts);
+        return 0;
+    }
 
     cc = cctrlNew();
     if (opts.defines_list) {
