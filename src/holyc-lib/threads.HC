@@ -8,6 +8,7 @@
 #define __THREAD_COND_SIZE__     40
 #define __THREAD_CONDATTR_SIZE__ 8
 #define __THREAD_SIZE__          8176
+#define __THREAD_ATTR_SIZE__     56
 
 /* MACOS definitions */
 class pthread_mutex_t 
@@ -40,6 +41,12 @@ class pthread_handler_rec
   U0 (*__routine)(U0 *__arg); // Routine to call
   U0 *__arg;                  // Argument to pass
   pthread_handler_rec *__next;
+};
+
+class pthread_attr_t
+{  
+  I64 __sig;
+  I8 __opaque[__THREAD_ATTR_SIZE__];
 };
 
 class pthread_t 
