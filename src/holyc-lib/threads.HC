@@ -82,7 +82,7 @@ union pthread_attr_t
 
 
 /* this is the spiritual equivilent of typedef  */ 
-public U64 class pthread_t;
+public U64 class pthread_t {};
 
 class __pthread_list_t;
 class __pthread_list_t
@@ -186,6 +186,7 @@ public extern "c" I32 pthread_cond_signal(pthread_cond_t *cond);
 public extern "c" I32 pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *lk);
 public extern "c" I32 pthread_exit(U0 *data=NULL);
 public extern "c" I32 pthread_detach(pthread_t *th);
+public extern "c" I32 pthread_attr_setstacksize(pthread_attr_t *attr, U64 stacksize);
 
 static U0 ThreadSemaphoreSignal(ThreadSemaphore *sem)
 {

@@ -440,6 +440,9 @@ public extern "c" I32 pthread_cond_signal(pthread_cond_t *cond);
 public extern "c" I32 pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *lk);
 public extern "c" I32 pthread_exit(U0 *data = NULL);
 public extern "c" I32 pthread_detach(pthread_t *th);
+public extern "c" I32 pthread_attr_setstacksize(pthread_attr_t *attr, U64 stacksize);
+public extern "c" I32 pthread_attr_init(pthread_attr_t *attr);
+
 ThreadPool *ThreadPoolNew(I64 worker_count);
 public U0 ThreadPoolEnqueue(ThreadPool *pool, U0 *argv,
            U0 (*callback)(U0 *priv_data, U0 *argv));
@@ -519,7 +522,7 @@ public extern "c" U0 free(U0 *ptr);
 public extern "c" U0 *malloc(U64 size);
 public _extern _MALLOC U0 *MAlloc(U64 size);
 public _extern _FREE U0 Free(U0 *ptr);
-public _extern _REALLOC U0 *ReAlloc(U0 *ptr, U64 new_size);
+public U0 *ReAlloc(U0 *ptr, U64 new_size);
 public _extern _CALLOC U0 *CAlloc(U64 new_size);
 public _extern _MSIZE U64 MSize(U0 *ptr);
 public _extern _MEMCPY U0 *MemCpy(U0 *dst, U0 *src, U64 len);
