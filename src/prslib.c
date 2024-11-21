@@ -15,6 +15,7 @@
 #include "util.h"
 
 static AstType *parseArrayDimensionsInternal(Cctrl *cc, AstType *base_type);
+Ast *parseSubscriptExpr(Cctrl *cc, Ast *ast);
 
 void parseAssignAuto(Cctrl *cc, Ast *ast) {
     if (ast->declinit == NULL) {
@@ -640,7 +641,6 @@ static Ast *parsePrimary(Cctrl *cc) {
                 }
                 cctrlRaiseException(cc,"Inline functions cannot be used as function pointers: '%.*s'",tok->len, tok->start);
             }
-            
         }
         return ast;
     }
@@ -681,48 +681,52 @@ static Ast *parsePrimary(Cctrl *cc) {
 
 static int parseGetPriority(lexeme *tok) {
     switch (tok->i64) {
-    case '.': case '[': case TK_ARROW: case '(':
+ //       return 2;
+    case TK_ARROW: 
+    case '.':
+    case '[':
+    case '(':
         return 1;
     case '!': case '~': 
     case TK_PLUS_PLUS: 
     case TK_MINUS_MINUS: 
     case TK_PRE_PLUS_PLUS:
     case TK_PRE_MINUS_MINUS:
-        return 2;
+        return 3;
 
     case '*': case '/': case '%':
-        return 3;
+        return 4;
 
     case '-':
     case '+':
-        return 4;
+        return 5;
 
     case TK_SHL:
     case TK_SHR:
-        return 5;
+        return 6;
 
     case TK_LESS_EQU: 
     case TK_GREATER_EQU:
     case '<':
     case '>':
-        return 6;
+        return 7;
 
     case TK_EQU_EQU:
     case TK_NOT_EQU:
-        return 7;
+        return 8;
 
     case '^': 
-        return 8;
-    case '&':
         return 9;
-    case '|':
+    case '&':
         return 10;
-
-    case TK_AND_AND:
+    case '|':
         return 11;
 
-    case TK_OR_OR:
+    case TK_AND_AND:
         return 12;
+
+    case TK_OR_OR:
+        return 13;
 
     case '=':
     case TK_ADD_EQU: 
@@ -735,7 +739,7 @@ static int parseGetPriority(lexeme *tok) {
     case TK_XOR_EQU: 
     case TK_SHL_EQU: 
     case TK_SHR_EQU:
-        return 13;
+        return 14;
 
     default:
         return -1;
@@ -771,6 +775,11 @@ Ast *parseGetClassField(Cctrl *cc, Ast *cls) {
     }
     AstType *field = strMapGetLen(type->fields, tok->start, tok->len);
     if (!field) {
+        lexeme *prev = cctrlTokenPeek(cc);
+        while (!tokenIdentIs(prev, tok->start, tok->len)) {
+            cctrlTokenRewind(cc);
+            prev = cctrlTokenPeek(cc);
+        }
         cctrlRaiseException(cc,"Property: %.*s does not exist on class", 
                 tok->len, tok->start);
     }
@@ -1071,52 +1080,43 @@ Ast *parseUnaryExpr(Cctrl *cc) {
         return ast;
     }
 
-    /* Obtaining the address of a variable */
-    if (tokenPunctIs(tok, '&')) {
+    if (tok->tk_type == TK_PUNCT) {
+        long unary_op = -1;
+        switch (tok->i64) {
+            case '&': { unary_op = AST_ADDR; break; }
+            case '*': { unary_op = AST_DEREF; break; }
+            case '~': { unary_op = '~'; break; }
+            case '!': { unary_op = '!'; break; }
+            case '-': { unary_op = '-'; break; }
+            case TK_PLUS_PLUS: { unary_op = TK_PRE_PLUS_PLUS; break; }
+            case TK_MINUS_MINUS: { unary_op = TK_PRE_MINUS_MINUS; break; }
+            default:
+                cctrlTokenRewind(cc);
+                return parsePostFixExpr(cc);
+        }
         Ast *operand = parseUnaryExpr(cc);
-        /* We do not take the address of a function */
-        if (parseIsFunction(operand)) {
+        AstType *type = NULL;
+        lexeme *peek = cctrlTokenPeek(cc);
+
+        if (tokenPunctIs(peek, '[') && operand->kind == AST_CLASS_REF) {
+            cctrlTokenGet(cc);
+            operand = parseSubscriptExpr(cc, operand);
+        }
+
+        if (unary_op == AST_ADDR && parseIsFunction(operand)) {
             return operand;
         }
-        return astUnaryOperator(astMakePointerType(operand->type),
-                AST_ADDR,operand);
-    }
 
-    /* Dereferencing */
-    if (tokenPunctIs(tok, '*')) {
-        Ast *operand = parseUnaryExpr(cc);
-        return astUnaryOperator(operand->type->ptr,
-                AST_DEREF,operand);
-    }
+        switch (unary_op) {
+            case AST_ADDR:  type = astMakePointerType(operand->type); break;
+            case AST_DEREF: type = operand->type->ptr; break;
+            case '~':       type = ast_int_type; break;
+            default:        type = operand->type; break;
+        }
 
-    if (tokenPunctIs(tok, TK_PLUS_PLUS)) {
-        Ast *operand = parseUnaryExpr(cc);
-        return astUnaryOperator(operand->type,
-                TK_PRE_PLUS_PLUS,operand);
+        return astUnaryOperator(type, unary_op, operand);
     }
-
-    if (tokenPunctIs(tok, TK_MINUS_MINUS)) {
-        Ast *operand = parseUnaryExpr(cc);
-        return astUnaryOperator(operand->type,
-                TK_PRE_MINUS_MINUS,operand);
-    }
-
-    if (tokenPunctIs(tok,'~')) {
-        Ast *operand = parseUnaryExpr(cc);
-        return astUnaryOperator(ast_int_type,'~',operand);
-    }
-
-    if (tokenPunctIs(tok,'!')) {
-        Ast *operand = parseUnaryExpr(cc);
-        return astUnaryOperator(operand->type,'!',operand);
-    }
-
-    if (tokenPunctIs(tok,'-')) {
-        Ast *operand = parseUnaryExpr(cc);
-        operand = astUnaryOperator(operand->type,'-',operand);
-        return operand;
-    }
-
+    
     cctrlTokenRewind(cc);
     return parsePostFixExpr(cc);
 }
