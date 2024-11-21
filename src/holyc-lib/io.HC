@@ -106,7 +106,7 @@ public U8 *FileRead(U8 *path, I64 *_size=NULL)
   s = MAlloc(len+100);
   size = 0;
 
-  while ((rbytes = read(fd,s,len)) != 0) {
+  while ((rbytes = read(fd,s+size,len)) != 0) {
     size += rbytes;
   }
 

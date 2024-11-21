@@ -400,7 +400,7 @@ static U64 StrMapGetNextIdx(StrMap *map, U8 *key, I64 key_len, Bool *_is_free)
     if (cur->key == NULL) {
       *_is_free = FALSE;
       return idx;
-    } else if (!StrNCmp(cur->key,key,cur->key_len)) {
+    } else if (key_len == cur->key_len && !StrNCmp(cur->key,key,cur->key_len)) {
       *_is_free = FALSE;
       return idx;
     }

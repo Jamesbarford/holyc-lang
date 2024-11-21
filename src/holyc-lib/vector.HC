@@ -222,8 +222,8 @@ U0 QSortGeneric(U0 **arr, I64 high, I64 low,
 
     arr[high] = arr[idx];
     arr[idx] = pivot;
-    QSortGeneric(arr,high,low+1,_compare_fn);
-    QSortGeneric(arr,high-1,low,_compare_fn);
+    QSortGeneric(arr,high,idx+1,_compare_fn);
+    QSortGeneric(arr,idx-1,low,_compare_fn);
   }
 }
 

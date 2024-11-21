@@ -121,7 +121,14 @@ public extern "c" U0 *realloc(U0 *ptr, U64 size);
 
 public _extern _MALLOC U0 *MAlloc(U64 size);
 public _extern _FREE U0 Free(U0 *ptr);
-public _extern _REALLOC U0 *ReAlloc(U0 *ptr, U64 new_size);
+public U0 *ReAlloc(U0 *ptr, U64 new_size)
+{
+  U64 old_size = MSize(ptr);
+  U0 *mem = MAlloc(new_size);
+  MemCpy(mem,ptr,old_size);
+  Free(ptr);
+  return mem;
+}
 public _extern _CALLOC U0 *CAlloc(U64 new_size);
 public _extern _MSIZE U64 MSize(U0 *ptr);
 public _extern _MEMCPY U0 *MemCpy(U0 *dst, U0 *src, U64 len);
