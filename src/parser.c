@@ -209,8 +209,14 @@ List *parseClassOrUnionFields(Cctrl *cc, aoStr *name,
                             name->data);
             }
         } else {
-            cctrlRaiseException(cc,"Unexpected type `%.*s` while parsing class %s",
-                    tok_name->len, tok_name->start, name->data);
+            if (name) {
+                cctrlRaiseException(cc,"Unexpected type `%.*s` while parsing class %s",
+                        tok_name->len, tok_name->start, name->data);
+            } else {
+                cctrlRewindUntilStrMatch(cc,tok_name->start,tok_name->len,NULL);
+                cctrlRaiseException(cc,"Unexpected type `%.*s` while parsing annoymous class",
+                        tok_name->len, tok_name->start);
+            }
         }
 
         while (1) {
@@ -337,11 +343,10 @@ StrMap *parseClassOffsets(int *real_size, List *fields, AstType *base_class,
             continue;
         } else {
             if (field->kind == AST_TYPE_POINTER && field->ptr->kind == AST_TYPE_CLASS) {
-                if (field->ptr->clsname &&
-                    field->ptr->clsname->len == clsname->len && 
-                    !memcmp(clsname->data,
-                        field->ptr->clsname->data,clsname->len)) {
-                    field->fields = fields_dict;
+                if (clsname && field->ptr->clsname) {
+                    if (aoStrCmp(field->ptr->clsname, clsname)) {
+                        field->fields = fields_dict;
+                    }
                 }
             }
             /* Align to the type not the size of the array */
