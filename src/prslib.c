@@ -289,14 +289,15 @@ AstType *parseBaseDeclSpec(Cctrl *cc) {
 
     if (tok->tk_type == TK_KEYWORD || tok->tk_type == TK_IDENT) {
         if ((type = parseGetType(cc, tok)) == NULL) {
-            cctrlRaiseException(cc,"Invalid type '%.*s' expected type declaration",tok->len,tok->start);
+            cctrlRewindUntilStrMatch(cc,tok->start,tok->len,NULL);
+            cctrlRaiseException(cc,"Type `%.*s` has not been declared, expected type declaration",tok->len,tok->start);
         }
-    } else {
-        cctrlRaiseException(cc,"Declaration or specfier must be an identifier got: %.*s",
-                tok->len, tok->start);
+        return type;
     }
-
-    return type;
+    cctrlRewindUntilStrMatch(cc,tok->start,tok->len,NULL);
+    cctrlRaiseException(cc,"Declaration or specfier must be an identifier got %s `%.*s`",
+            lexemeTypeToString(tok->tk_type),
+            tok->len, tok->start);
 }
 
 AstType *parseDeclSpec(Cctrl *cc) {
