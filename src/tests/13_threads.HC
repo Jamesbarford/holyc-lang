@@ -85,6 +85,7 @@ I32 Main()
   I32 correct = 0, tests = 2;
   "Test - Simple Threading: \n";
   if (pthread_test()) correct++;
+  "one down\n";
   if (ThreadPoolTest()) correct++;  
   PrintResult(correct, tests);
   "====\n";
