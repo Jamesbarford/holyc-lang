@@ -1,4 +1,3 @@
-#include <__stdarg_va_list.h>
 #include <string.h>
 #include "aostr.h"
 #include "ast.h"
@@ -100,13 +99,13 @@ static char *getTerminator(long terminator_flags) {
 char *assertionTerminatorMessage(Cctrl *cc, lexeme *tok, long terminator_flags) {
     if ((terminator_flags & PUNCT_TERM_SEMI) &&
         (terminator_flags & PUNCT_TERM_COMMA)) {
-        return "Expected terminating ';' or ','";
+        return "perhaps you meant ';' or ','?";
     } else if ((terminator_flags & PUNCT_TERM_SEMI)) {
-        return "Expected terminating ';'";
+        return "perhaps you meant ';' ?";
     } else if ((terminator_flags & PUNCT_TERM_COMMA)) {
-        return "Expected terminating ','";
+        return "perhaps you meant ',' ?";
     } else if (terminator_flags & PUNCT_TERM_RPAREN) {
-        return "Expected terminating ')'";
+        return "perhaps you meant ')'";
     } else {
         cctrlIce(cc,"Expected terminating token with flags: 0x%lX, got: %s",
                 terminator_flags, lexemeToString(tok));
@@ -126,14 +125,36 @@ void assertTokenIsTerminator(Cctrl *cc, lexeme *tok, long terminator_flags) {
         return;
     }
 
-    cctrlTokenRewind(cc);
-    cctrlTokenRewind(cc);
-    tok = cctrlTokenPeek(cc);
-    cctrlRaiseException(cc, assertionTerminatorMessage(cc,tok,terminator_flags));
+    cctrlRewindUntilPunctMatch(cc,tok->i64,NULL);
+    aoStr *info_msg = NULL;
+    lexeme *next = cctrlTokenPeek(cc);
+    if (tok->line != next->line) {
+        ssize_t next = cc->lineno+1;
+        while (cc->lineno <= next) {
+            cctrlTokenGet(cc);
+        }
+        cctrlTokenRewind(cc);
+        info_msg = cctrlMessagePrintF(cc,CCTRL_INFO,"Next line has a match of identifer `%.*s`",
+                tok->len,tok->start);
+        cctrlRewindUntilPunctMatch(cc,tok->i64,NULL);
+        cctrlTokenGet(cc);
+    }
+    aoStr *error_msg = cctrlMessagePrintF(cc,CCTRL_ERROR,"Unexpected %s `%.*s` %s",lexemeTypeToString(tok->tk_type),
+                                                    tok->len,tok->start,
+                                                   assertionTerminatorMessage(cc,
+                                                   tok,terminator_flags));
+    fprintf(stderr,"%s\n",error_msg->data);
+    if (info_msg) {
+        fprintf(stderr,"%s\n",info_msg->data);
+        aoStrRelease(info_msg);
+    }
+    aoStrRelease(error_msg);
+    exit(EXIT_FAILURE);
 }
 
 void assertTokenIsTerminatorWithMsg(Cctrl *cc, lexeme *tok,
-        long terminator_flags, const char *fmt, ...)
+                                    long terminator_flags,
+                                    const char *fmt, ...)
 {
     if ((tok->i64 == ';' && (terminator_flags & PUNCT_TERM_SEMI)) ||
         (tok->i64 == ')' && (terminator_flags & PUNCT_TERM_RPAREN)) ||
@@ -150,12 +171,13 @@ void assertTokenIsTerminatorWithMsg(Cctrl *cc, lexeme *tok,
         cctrlRaiseException(cc,"NULL token passed to assertTokenIsTerminator");
     }
 
-    cctrlTokenRewind(cc);
-    cctrlTokenRewind(cc);
-    tok = cctrlTokenPeek(cc);
-
+    cctrlRewindUntilPunctMatch(cc,tok->i64,NULL);
     char *token_msg = assertionTerminatorMessage(cc,tok,terminator_flags);
-    cctrlRaiseException(cc,"%s - %s",token_msg,msg);
+    cctrlRaiseException(cc,"Unexpected %s `%.*s` %s - %s",
+                        lexemeTypeToString(tok->tk_type),
+                        tok->len,tok->start,
+                        msg,
+                        token_msg);
     free(msg);
 }
 
@@ -417,7 +439,7 @@ long evalIntConstExpr(Ast *ast) {
     return res;
 }
 
-void assertLValue(Ast *ast, long lineno) {
+int assertLValue(Ast *ast) {
     switch (ast->kind) {
     case AST_LVAR:
     case AST_GVAR:
@@ -426,9 +448,9 @@ void assertLValue(Ast *ast, long lineno) {
     case AST_FUNPTR:
     case AST_DEFAULT_PARAM:
     case AST_CAST:
-        return;
+        return 1;
     default:
-        loggerPanic("line %ld: Expected lvalue, got: %s\n",lineno,astToString(ast));
+        return 0;
     }
 }
 
@@ -449,23 +471,21 @@ void assertUniqueSwitchCaseLabels(PtrVec *case_vector, Ast *case_) {
     }
 }
 
-
-void repeatRedSquiggles(aoStr *str, int count) {
-    aoStrCatLen(str, str_lit(ESC_BOLD_RED));
-    aoStrCatRepeat(str, "~", count);
-    aoStrCatLen(str, str_lit(ESC_RESET));
-}
-
 void typeCheckWarn(Cctrl *cc, long op, Ast *expected, Ast *actual) {
     aoStr *expected_type = astTypeToColorAoStr(expected->type);
     aoStr *actual_type = astTypeToColorAoStr(actual->type);
 
-    cctrlTokenRewind(cc);
-    cctrlTokenRewind(cc);
+
+    int count = 0;
+    cctrlRewindUntilPunctMatch(cc,'=',&count);
+    cctrlTokenGet(cc);
+    count--;
+
     cctrlWarning(cc, "Incompatible types '%s' is not assignable to type '%s'", 
             actual_type->data, expected_type->data);
-    cctrlTokenGet(cc);
-    cctrlTokenGet(cc);
+    for (int i = 0; i < count; ++i) {
+        cctrlTokenGet(cc);
+    }
     aoStrRelease(expected_type);
     aoStrRelease(actual_type);
 }
@@ -492,12 +512,7 @@ void typeCheckReturnTypeWarn(Cctrl *cc, long lineno, Ast *maybe_func,
                         got->data,
                         expected);
 
-    lexeme *peek = cctrlTokenPeek(cc);
-    while (peek->len != 6 && memcmp(peek->start,str_lit("return"))) {
-        cctrlTokenRewind(cc);
-        peek = cctrlTokenPeek(cc);
-    }
-    //cctrlTokenGet(cc);
+    cctrlRewindUntilStrMatch(cc,str_lit("return"),NULL);
     cctrlRaiseException(cc, msg);
     free(msg);
     cctrlTokenGet(cc);

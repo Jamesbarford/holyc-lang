@@ -25,9 +25,9 @@ _CALLOC::
     MOV    -8[RBP],RDI
     CALL   _MALLOC
     MOV    -16[RBP], RAX
-    MOV    RDI, -16[RBP]
-    MOV    RSI, 0
     MOV    RDX, -8[RBP]
+    MOV    RSI, 0
+    MOV    RDI, -16[RBP]
     CALL   _MEMSET
     MOV    RAX, -16[RBP]
     LEAVE
@@ -35,24 +35,25 @@ _CALLOC::
 
 // RDI = U0 *ptr
 // RSI = U64 size
-_REALLOC::
+_REALLOC:: // U0 *ReAlloc(U0 *ptr, I64 size);
     PUSHQ  RBP
     MOVQ   RBP, RSP 
-    SUB    RSP, 32
+    SUB    RSP, 16
     TEST   RDI, RDI
     JZ     @@1
     MOV    -8[RBP], RDI
-    MOV    -16[RBP],RSI
-    MOV    RDI, -16[RBP]
+    MOV    RDI, RSI      // new_size
     CALL   _MALLOC
-    MOV    -24[RBP], RAX
-    MOV    RSI, -8[RBP]
-    MOV    RDI, -24[RBP]
-    MOV    RDX, -16[RBP]
-    CALL   _MEMCPY
+    MOV    -16[RBP], RAX // new memory saved
+    MOV    RDI, -8[RBP]  // find out the old size
+    CALL   _MSIZE
+    MOV    RDX, RAX      // old size
+    MOV    RSI, -8[RBP]  // old pointer
+    MOV    RDI, -16[RBP] // new pointer
+    CALL   _MEMCPY       // copy over
     MOV    RDI, -8[RBP]
     CALL   _FREE
-    MOV    RAX, -24[RBP]
+    MOV    RAX, -16[RBP]
     JMP    @@2
 @@1: // If pointer is NULL
     MOV    RDI, RSI
@@ -118,17 +119,9 @@ public extern "c" U0 free(U0 *ptr);
 public extern "c" U0 *malloc(U64 size);
 public extern "c" U0 *calloc(U64 count, U64 size);
 public extern "c" U0 *realloc(U0 *ptr, U64 size);
-
 public _extern _MALLOC U0 *MAlloc(U64 size);
 public _extern _FREE U0 Free(U0 *ptr);
-public U0 *ReAlloc(U0 *ptr, U64 new_size)
-{
-  U64 old_size = MSize(ptr);
-  U0 *mem = MAlloc(new_size);
-  MemCpy(mem,ptr,old_size);
-  Free(ptr);
-  return mem;
-}
+public _extern _REALLOC U0 *ReAlloc(U0 *ptr, U64 new_size);
 public _extern _CALLOC U0 *CAlloc(U64 new_size);
 public _extern _MSIZE U64 MSize(U0 *ptr);
 public _extern _MEMCPY U0 *MemCpy(U0 *dst, U0 *src, U64 len);

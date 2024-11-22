@@ -216,13 +216,14 @@ int tokenIdentIs(lexeme *tok, char *ident, int len) {
 
 char *lexemeTypeToString(int tk_type) {
     switch (tk_type) {
-    case TK_IDENT: return "TK_IDENT";
-    case TK_PUNCT: return "TK_PUNCT";
-    case TK_I64:   return "TK_I64";
-    case TK_F64:   return "TK_F64";
-    case TK_EOF:   return "TK_EOF";
-    case TK_CHAR_CONST: return "TK_CHAR_CONST";
-    case TK_STR:   return "TK_STR";
+    case TK_IDENT:      return "identifier";
+    case TK_PUNCT:      return "character";
+    case TK_I64:        return "integer";
+    case TK_F64:        return "float";
+    case TK_EOF:        return "end of file";
+    case TK_STR:        return "string";
+    case TK_KEYWORD:    return "keyword";
+    case TK_CHAR_CONST: return "character constant";
     }
     return "UNKNOWN";
 }
@@ -1699,21 +1700,32 @@ const char *lexerReportLine(lexer *l, ssize_t lineno) {
     char *tmp_ptr = buffer;
 
     char *ptr = l->cur_file->src->data;
+    ssize_t size = l->cur_file->src->len;
     ssize_t line = 1;
-
-    while (line != lineno && *ptr) {
-        if (*ptr == '\n') {
+    ssize_t i = 0;
+    
+    for (; i < size; ++i) {
+        if (ptr[i] == '\n') {
             line++;
         }
-        ptr++;
+        if (line == lineno) break;
     }
-    if (!*ptr) {
+    i++;
+
+    if (ptr[i] == '\0') {
         memcpy((void*)buffer,str_lit("invalid line number"));
+        return buffer;
     }
-    while (*ptr && *ptr != '\n') {
-        *tmp_ptr++ = *ptr++;
+
+    while (isspace(ptr[i])) {
+        i++;
+    }
+    while (ptr[i] && ptr[i] != '\n') {
+        *tmp_ptr++ = ptr[i++];
     }
     *tmp_ptr = '\0';
+
+    *ptr = '\0';
     return buffer;
 }
 

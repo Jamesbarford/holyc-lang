@@ -84,6 +84,7 @@ Ast *astUnaryOperator(AstType *type, long kind, Ast *operand) {
 }
 
 static void astFreeUnaryOperator(Ast *ast) {
+    astRelease(ast->operand);
     free(ast);
 }
 
@@ -92,10 +93,7 @@ Ast *astBinaryOp(long operation, Ast *left, Ast *right) {
     ast->type = astGetResultType(operation,left->type,right->type);  
 
     if (ast->type == NULL) {
-        loggerPanic("Incompatiable operands: %s: "ESC_GREEN"%s %s"ESC_RESET"\n",
-                astKindToString(operation),
-                astToString(left),
-                astToString(right));
+        return NULL;
     }
 
     ast->kind = operation;
@@ -776,17 +774,16 @@ int astIsAssignment(long op) {
     }
 }
 
-void assertIsValidPointerOp(long op, long lineno) {
+int astIsValidPointerOp(long op, long lineno) {
     switch (op) {
         case '-': case '+':
         case '<': case TK_LESS_EQU:
         case '>': case TK_GREATER_EQU:
         case TK_EQU_EQU: case TK_NOT_EQU:
         case TK_OR_OR: case TK_AND_AND:    
-            return;
+            return 1;
         default:
-            loggerPanic("Invalid pointer operation: %s at line: %ld\n",
-                    astKindToString(op),lineno);
+            return 0;
     }
 }
 
@@ -809,7 +806,9 @@ start_routine:
             return ptr1;
         }
 
-        assertIsValidPointerOp(op,-1);
+        if (!astIsValidPointerOp(op,-1)) {
+            goto error;
+        }
         if (op != '+' && op != '-'
                 && op != TK_EQU_EQU &&
                 op != TK_NOT_EQU && op != TK_OR_OR && op != TK_AND_AND) {
@@ -2194,8 +2193,10 @@ void astRelease(Ast *ast) {
         return;
     }
     switch(ast->kind) {
-        case '|':case '&':
-        case '!':case '~':
+        case '|':
+        case '&':
+        case '!':
+        case '~':
         case AST_ADDR:
         case AST_DEREF:
         case TK_PLUS_PLUS:
@@ -2251,5 +2252,86 @@ void astRelease(Ast *ast) {
         case '*': case '-':
                 astFreeBinaryOp(ast);
                 break;
+    }
+}
+
+const char *astTypeKindToHumanReadable(AstType *type) {
+    switch (type->kind) {
+        case AST_TYPE_VOID:    return "void type";
+        case AST_TYPE_INT:     return "integer type";
+        case AST_TYPE_FLOAT:   return "float type";
+        case AST_TYPE_CHAR:    return "character type";
+        case AST_TYPE_ARRAY:   return "array type";
+        case AST_TYPE_POINTER: return "pointer type";
+        case AST_TYPE_FUNC:    return "function";
+        case AST_TYPE_CLASS:   return "class";
+        case AST_TYPE_UNION:   return "union";
+        case AST_TYPE_AUTO:    return "auto type";
+        default:
+            loggerPanic("Cannot find kind: %d\n", type->kind);
+    }
+}
+
+const char *astKindToHumanReadable(Ast *ast) {
+    switch (ast->kind) {
+        case '|': return "bitwise OR";
+        case '&': return "bitwise AND";
+        case '!': return "logical NOT";
+        case '~': return "bitwise NOT";
+        case AST_ADDR: return "address";
+        case AST_DEREF: return "dereference";
+        case TK_PLUS_PLUS: return "increment";
+        case TK_MINUS_MINUS: return "decrement";
+        case AST_LITERAL: return "literal";
+        case AST_GVAR: return "global variable";
+        case AST_GOTO: return "goto statement";
+        case AST_LABEL: return "label";
+        case AST_JUMP: return "jump";
+        case AST_LVAR: return "local variable";
+        case AST_EXTERN_FUNC: return "external function";
+        case AST_FUN_PROTO: return "function prototype";
+        case AST_FUNC: return "function";
+        case AST_DECL: return "declaration";
+        case AST_STRING: return "string literal";
+        case AST_FUNCALL: return "function call";
+        case AST_ARRAY_INIT: return "array initialization";
+        case AST_IF: return "if statement";
+        case AST_FOR: return "for loop";
+        case AST_RETURN: return "return statement";
+        case AST_DO_WHILE: return "do-while loop";
+        case AST_WHILE: return "while loop";
+        case AST_CLASS_REF: return "class reference";
+        case AST_COMPOUND_STMT: return "compound statement";
+        case AST_ASM_STMT: return "assembly block";
+        case AST_ASM_FUNC_BIND: return "assembly function binding";
+        case AST_ASM_FUNCALL: return "assembly function call";
+        case AST_FUNPTR: return "function pointer";
+        case AST_FUNPTR_CALL: return "function pointer call";
+        case AST_BREAK: return "break statement";
+        case AST_CONTINUE: return "continue statement";
+        case AST_DEFAULT_PARAM: return "default parameter";
+        case AST_VAR_ARGS: return "variadic arguments";
+        case AST_ASM_FUNCDEF: return "assembly function definition";
+        case AST_CAST: return "type cast";
+        case AST_SWITCH: return "switch statement";
+        case AST_CASE: return "case statement";
+        case AST_DEFAULT: return "default statement";
+        case TK_AND_AND: return "logical AND";
+        case TK_OR_OR: return "logical OR";
+        case TK_EQU_EQU: return "equality comparison";
+        case TK_NOT_EQU: return "inequality comparison";
+        case TK_LESS_EQU: return "less than or equal comparison";
+        case TK_GREATER_EQU: return "greater than or equal comparison";
+        case TK_SHL: return "left shift";
+        case TK_SHR: return "right shift";
+        case TK_ARROW: return "pointer dereference";
+        case '=': return "assignment";
+        case '>': return "greater than comparison";
+        case '<': return "less than comparison";
+        case '/': return "division";
+        case '+': return "addition";
+        case '*': return "multiplication";
+        case '-': return "subtraction";
+        default: return "unknown AST kind";
     }
 }

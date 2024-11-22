@@ -143,9 +143,13 @@ int cctrlIsKeyword(Cctrl *cc, char *name, int len);
 AstType *cctrlGetKeyWord(Cctrl *cc, char *name, int len);
 void cctrlInfo(Cctrl *cc, char *fmt, ...);
 void cctrlWarning(Cctrl *cc, char *fmt, ...);
-[[noreturn]] void cctrlRaiseExceptionFromTo(Cctrl *cc, char from, char to, char *fmt, ...);
+[[noreturn]] void cctrlRaiseExceptionFromTo(Cctrl *cc, char *suggestion, char from, char to, char *fmt, ...);
 [[noreturn]] void cctrlRaiseException(Cctrl *cc, char *fmt, ...);
+[[noreturn]]void cctrlRaiseSuggestion(Cctrl *cc, char *suggestion, char *fmt, ...);
 [[noreturn]] void cctrlIce(Cctrl *cc, char *fmt, ...);
 Ast *cctrlGetOrSetString(Cctrl *cc, char *str, int len);
+void cctrlRewindUntilPunctMatch(Cctrl *cc, long ch, int *_count);
+void cctrlRewindUntilStrMatch(Cctrl *cc, char *str, int len, int *_count);
+aoStr *cctrlMessagePrintF(Cctrl *cc, int severity, char *fmt,...);
 
 #endif // !CCTRL_H

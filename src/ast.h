@@ -392,5 +392,7 @@ aoStr *astLValueToAoStr(Ast *ast, unsigned long lexeme_flags);
 void astPrint(Ast *ast);
 void astTypePrint(AstType *type);
 void astKindPrint(int kind);
+const char *astTypeKindToHumanReadable(AstType *type);
+const char *astKindToHumanReadable(Ast *ast);
 
 #endif

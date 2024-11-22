@@ -1,8 +1,9 @@
 #include <assert.h>
+#include <limits.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
-#include <limits.h>
 
 #include "aostr.h"
 #include "ast.h"
@@ -12,7 +13,6 @@
 #include "map.h"
 #include "prsutil.h"
 #include "prslib.h"
-#include "util.h"
 
 static AstType *parseArrayDimensionsInternal(Cctrl *cc, AstType *base_type);
 Ast *parseSubscriptExpr(Cctrl *cc, Ast *ast);
@@ -449,12 +449,11 @@ PtrVec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
         }
 
         if (!tokenPunctIs(tok,',')) {
-            cctrlTokenRewind(cc);
-            cctrlTokenRewind(cc);
-            cctrlTokenPeek(cc);
-            cctrlInfo(cc, "Function call: %.*s not terminated correctly", len,fname);
-            cctrlTokenGet(cc);
-            cctrlRaiseException(cc,"Expected ',' with an identifier or ')' to end the argument list got %.*s",
+            cctrlRewindUntilPunctMatch(cc, tok->i64, NULL);
+            cctrlInfo(cc, "Function call `%.*s` not terminated correctly", len,fname);
+            cctrlRaiseSuggestion(cc,"terminate with `)`",
+                    "Invalid %s `%.*s` while parsing function call, perhaps you meant to terminate the arguments with `)` or keep going with `,`?",
+                    lexemeTypeToString(tok->tk_type),
                    tok->len, tok->start);
         }
 
@@ -522,7 +521,6 @@ Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
         }
     }
 
-
     if (!maybe_fn) {
         if ((len == 6 && !strncmp(fname,"printf",6))) {
             rettype = ast_int_type;
@@ -559,25 +557,43 @@ Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
 }
 
 /* parse either a function call or a variable being used */
-static Ast *parseIdentifierOrFunction(Cctrl *cc, char *name, int len,
-        int can_call_function)
+static Ast *parseIdentifierOrFunction(Cctrl *cc, 
+                                      char *name, 
+                                      int len,
+                                      int can_call_function)
 {
-    Ast *ast;
-    int is_lparen;
-    lexeme *tok,*peek;
+    Ast *ast = NULL;
 
-    tok = cctrlTokenGet(cc);
-    peek = cctrlTokenPeek(cc);
-    is_lparen = tokenPunctIs(tok,'(');
+    lexeme *tok = cctrlTokenGet(cc);
+    lexeme *peek = cctrlTokenPeek(cc);
+    int is_lparen = tokenPunctIs(tok,'(');
+
+    if ((ast = cctrlGetVar(cc, name, len)) == NULL) {
+        cctrlRewindUntilStrMatch(cc, name, len, NULL);
+        peek = cctrlTokenPeek(cc);
+        if (tok->tk_type == TK_PUNCT) {
+            switch (tok->i64) {
+                case '(': {
+                    char *msg = mprintf("Try defining function `%.*s()`?",len,name);
+                    cctrlRaiseSuggestion(cc,msg,"Variable or function `%.*s` has not been defined", len, name);
+                    free(msg);
+                    break;
+                }
+                case '[': {
+                    char *msg = mprintf("Try defining array `I64 %.*s[] = {1, 2, 3}`?",len,name);
+                    cctrlRaiseSuggestion(cc,msg,"Variable or function `%.*s` has not been defined", len, name);
+                    free(msg);
+                    break;
+                }
+                default:
+                    cctrlRaiseException(cc,"Variable or function `%.*s` has not been defined", len, name);
+                    break;
+            }
+        }
+    }
 
     if (!is_lparen) {
         cctrlTokenRewind(cc);
-        if ((ast = cctrlGetVar(cc, name, len)) == NULL) {
-            cctrlTokenRewind(cc);
-            cctrlTokenPeek(cc);
-            cctrlRaiseException(cc,"Variable '%.*s' has not been defined", len, name);
-        }
-
         if (can_call_function) {
             /* Function calls with no arguments are 'Function;' */
             if ((tokenPunctIs(tok,';') || tokenPunctIs(tok,',') || 
@@ -604,9 +620,6 @@ static Ast *parseIdentifierOrFunction(Cctrl *cc, char *name, int len,
     }
 
     /* Is a postfix typecast, need to grap the variable and 'ParsePostFixExpr' will do the cast */
-    if ((ast = cctrlGetVar(cc, name, len)) == NULL) {
-        cctrlRaiseException(cc,"Variable '%.*s' has not been defined",len, name);
-    }
     cctrlTokenRewind(cc);
     return ast;
 }
@@ -681,7 +694,6 @@ static Ast *parsePrimary(Cctrl *cc) {
 
 static int parseGetPriority(lexeme *tok) {
     switch (tok->i64) {
- //       return 2;
     case TK_ARROW: 
     case '.':
     case '[':
@@ -748,25 +760,40 @@ static int parseGetPriority(lexeme *tok) {
 
 Ast *parseSubscriptExpr(Cctrl *cc, Ast *ast) {
     Ast *subscript = parseExpr(cc,16);
+    if (subscript == NULL) {
+        cctrlRewindUntilPunctMatch(cc,'[',NULL);
+        lexeme *tok = cctrlTokenPeek(cc);
+        cctrlRaiseException(cc,"Failed to parse subscript value last valid %s was `%.*s`",
+                lexemeTypeToString(tok->tk_type),tok->len,tok->start);
+    }
     cctrlTokenExpect(cc, ']');
-    Ast *binop = astBinaryOp('+', ast, subscript);
+    Ast *binop = parseCreateBinaryOp(cc,'+', ast, subscript);
     return astUnaryOperator(binop->type->ptr, AST_DEREF, binop);
 }
 
 Ast *parseGetClassField(Cctrl *cc, Ast *cls) {
     AstType *type;
     if (!parseIsClassOrUnion(cls->type->kind)) {
-        cctrlRaiseException(cc,"Expected class got: %s %s",
-                astKindToString(cls->kind),
-                astToString(cls));
+        char *type_str = astTypeToString(cls->type);
+        char *var_str = astLValueToString(cls,0);
+        cctrlRewindUntilPunctMatch(cc, TK_ARROW, NULL);
+        char *msg = mprintf("Using `->` is an invalid operand for `%s %s`",type_str,var_str);
+        cctrlRaiseSuggestion(cc, msg,
+                                "Expected as class however got %s `%s %s`",
+                                astTypeKindToHumanReadable(cls->type),
+                                type_str,
+                                var_str);
+        free(msg);
     }
 
     type = cls->type;
 
     lexeme *tok = cctrlTokenGet(cc);
     if (tok->tk_type != TK_IDENT) {
-        cctrlRaiseException(cc,"Expected class member got: %s",
-                lexemeToString(tok));
+        cctrlRaiseExceptionFromTo(cc,NULL,'-',*tok->start,"Expected class member got %s `%.*s`",
+                            lexemeTypeToString(tok->tk_type),
+                            tok->len,
+                            tok->start);
     }
 
     // XXX: This is hacky and only for recusive data types 
@@ -775,11 +802,7 @@ Ast *parseGetClassField(Cctrl *cc, Ast *cls) {
     }
     AstType *field = strMapGetLen(type->fields, tok->start, tok->len);
     if (!field) {
-        lexeme *prev = cctrlTokenPeek(cc);
-        while (!tokenIdentIs(prev, tok->start, tok->len)) {
-            cctrlTokenRewind(cc);
-            prev = cctrlTokenPeek(cc);
-        }
+        cctrlRewindUntilStrMatch(cc, tok->start, tok->len, NULL);
         cctrlRaiseException(cc,"Property: %.*s does not exist on class", 
                 tok->len, tok->start);
     }
@@ -805,6 +828,24 @@ static int parseCompoundAssign(lexeme *tok) {
         case TK_SHR_EQU: return TK_SHR;
         default: return 0;
     }
+}
+
+Ast *parseCreateBinaryOp(Cctrl *cc, long operation, Ast *left, Ast *right) {
+    Ast *binop = astBinaryOp(operation,left,right);
+    if (binop == NULL) {
+        char *opstr = lexemePunctToString(operation);
+        const char *left_kind = astTypeKindToHumanReadable(left->type);
+        const char *right_kind = astKindToHumanReadable(right);
+        const char *right_type_kind = astTypeKindToHumanReadable(right->type);
+        cctrlRewindUntilPunctMatch(cc,operation,NULL);
+        char *msg = mprintf("`%s %s %s` is invalid",
+                            astTypeToString(left->type),
+                            opstr,
+                            astTypeToString(right->type));
+        cctrlRaiseSuggestion(cc,msg,"The `%s` operator cannot be applied to a %s with a %s of %s", opstr, left_kind, right_kind, right_type_kind);
+    }
+    return binop;
+    
 }
 
 Ast *parseExpr(Cctrl *cc, int prec) {
@@ -849,20 +890,29 @@ Ast *parseExpr(Cctrl *cc, int prec) {
         }
 
         if (tokenPunctIs(tok, TK_PLUS_PLUS) || tokenPunctIs(tok, TK_MINUS_MINUS)) {
-            assertLValue(LHS,cc->lineno);
+            if (!assertLValue(LHS)) {
+                char *ast_str = astLValueToString(LHS,0);
+                cctrlRaiseException(cc,"Expected an L-Value however got a %s - `%s`",
+                        astKindToHumanReadable(LHS), ast_str);
+            }
             LHS = astUnaryOperator(LHS->type, tok->i64, LHS);
             continue;
         }
 
         if (tokenPunctIs(tok,'[')) {
+            if (LHS->type->kind != AST_TYPE_POINTER && LHS->type->kind != AST_TYPE_ARRAY) {
+                cctrlRewindUntilPunctMatch(cc,'[',NULL);
+                cctrlRaiseException(cc,"Cannot subscript a %s, only pointers or arrays can be subscripted with '['",
+                                   astTypeKindToHumanReadable(LHS->type));
+            }
             LHS = parseSubscriptExpr(cc,LHS);
             continue;
         }
 
         if (tokenPunctIs(tok, TK_ARROW)) {
             if (LHS->type->kind != AST_TYPE_POINTER) {
-                cctrlRaiseException(cc,"Pointer expected got: %s %s",
-                        astTypeToString(LHS->type), astToString(LHS));
+                cctrlRaiseException(cc,"Pointer type expected got `%s` `%s`",
+                        astTypeToString(LHS->type), astLValueToString(LHS,0));
             }
             LHS = astUnaryOperator(LHS->type->ptr, AST_DEREF, LHS);
             LHS = parseGetClassField(cc, LHS);
@@ -871,7 +921,11 @@ Ast *parseExpr(Cctrl *cc, int prec) {
 
         compound_assign = parseCompoundAssign(tok);
         if (tokenPunctIs(tok, '=') || compound_assign) {
-            assertLValue(LHS,cc->lineno);
+            if (!assertLValue(LHS)) {
+                char *ast_str = astLValueToString(LHS,0);
+                cctrlRaiseException(cc,"Expected an L-Value however got a %s - `%s`",
+                        astKindToHumanReadable(LHS), ast_str);
+            }
         }
         
         next_prec = prec2;
@@ -881,7 +935,20 @@ Ast *parseExpr(Cctrl *cc, int prec) {
 
         RHS = parseExpr(cc,next_prec);
         if (!RHS) {
-            cctrlRaiseException(cc,"Second operand missing to: %s",astToString(LHS));
+            lexeme *peek = cctrlTokenPeek(cc);
+            cctrlTokenRewind(cc);
+            char *err_lvar = astLValueToString(LHS,0);
+            char *punct_str = lexemePunctToStringWithFlags(tok->i64,0);
+            char *msg = mprintf("`%s %s var2` is the expected usage however got `%.*s`",
+                    err_lvar,
+                    punct_str,peek->len,peek->start);
+            cctrlRaiseSuggestion(cc,msg,"Second operand missing to `%s %s` got invalid %s `%.*s`",
+                                 err_lvar,
+                                 punct_str,
+                                 lexemeTypeToString(peek->tk_type),
+                                 peek->len, 
+                                 peek->start);
+            free(msg);
         }
 
         if (compound_assign) {
@@ -889,8 +956,8 @@ Ast *parseExpr(Cctrl *cc, int prec) {
             if (!ok) {
                 typeCheckWarn(cc,compound_assign,LHS,RHS);
             }
-            LHS = astBinaryOp('=', LHS, 
-                    astBinaryOp(compound_assign, LHS, RHS));
+            LHS = parseCreateBinaryOp(cc,'=', LHS, 
+                    parseCreateBinaryOp(cc,compound_assign, LHS, RHS));
         } else {
             if (tok->i64 == '=') {
                 AstType *ok = astTypeCheck(LHS->type,RHS,'=');
@@ -898,7 +965,7 @@ Ast *parseExpr(Cctrl *cc, int prec) {
                     typeCheckWarn(cc,'=',LHS,RHS);
                 }
             }
-            LHS = astBinaryOp(tok->i64,LHS,RHS);
+            LHS = parseCreateBinaryOp(cc,tok->i64,LHS,RHS);
         }
     }
 }
@@ -962,32 +1029,6 @@ Ast *parsePostFixExpr(Cctrl *cc) {
     while (1) {
         tok = cctrlTokenGet(cc);
 
-        if (tokenPunctIs(tok,'[')) {
-            /* XXX: something is wrong with the below however, if a pointer gets 
-             * parsed as a binary expression it works, but does not for arrays.
-             * However if you put parenthesis around the pointer access it blows 
-             * up.
-             */
-
-            /* This is for normal arrays */
-            if (ast->type->kind == AST_TYPE_ARRAY) {
-                ast = parseSubscriptExpr(cc,ast);
-                if (tokenPunctIs(cctrlTokenPeek(cc),'(')) {
-                    continue;
-                } else {
-                    return ast;
-                }
-            }
-            peek = cctrlTokenPeek(cc);
-            if (tokenPunctIs(peek,'(')) {
-                continue;
-            } else {
-                cctrlTokenRewind(cc);
-                return ast;
-            }
-        }
-
-
         if (tokenPunctIs(tok,'.')) {
             ast = parseGetClassField(cc,ast);
             continue;
@@ -1016,17 +1057,25 @@ Ast *parsePostFixExpr(Cctrl *cc) {
 
         if (tokenPunctIs(tok,TK_ARROW)) {
             if (ast->type->kind != AST_TYPE_POINTER) {
-                cctrlRaiseException(cc,"Pointer expected got: %s",
-                        astKindToString(ast->type->kind));
+                char *type_str = astTypeToString(ast->type);
+                char *var_str = astLValueToString(ast,0);
+                cctrlRaiseException(cc,"Pointer expected got a %s `%s %s`",
+                                        astTypeKindToHumanReadable(ast->type),
+                                        type_str, 
+                                        var_str);
             }
             ast = astUnaryOperator(ast->type->ptr,AST_DEREF,ast);
             ast = parseGetClassField(cc,ast);
             continue;
         }
 
-        if (tokenPunctIs(tok,TK_PLUS_PLUS) ||
-                tokenPunctIs(tok,TK_MINUS_MINUS)) {
-            assertLValue(ast,cc->lineno);
+        if (tokenPunctIs(tok,TK_PLUS_PLUS) || 
+            tokenPunctIs(tok,TK_MINUS_MINUS)) {
+            if (!assertLValue(ast)) {
+                char *ast_str = astLValueToString(ast,0);
+                cctrlRaiseException(cc,"Expected an L-Value however got a %s - `%s`",
+                        astKindToHumanReadable(ast), ast_str);
+            }
             if (tok->i64 == TK_PLUS_PLUS) {
                 return astUnaryOperator(ast->type,TK_PLUS_PLUS,ast);
             } else {
@@ -1090,15 +1139,21 @@ Ast *parseUnaryExpr(Cctrl *cc) {
             case '-': { unary_op = '-'; break; }
             case TK_PLUS_PLUS: { unary_op = TK_PRE_PLUS_PLUS; break; }
             case TK_MINUS_MINUS: { unary_op = TK_PRE_MINUS_MINUS; break; }
-            default:
+            default: {
                 cctrlTokenRewind(cc);
                 return parsePostFixExpr(cc);
+            }
         }
         Ast *operand = parseUnaryExpr(cc);
         AstType *type = NULL;
         lexeme *peek = cctrlTokenPeek(cc);
 
-        if (tokenPunctIs(peek, '[') && operand->kind == AST_CLASS_REF) {
+        if (!operand) {
+            cctrlRewindUntilPunctMatch(cc,tok->i64,NULL);
+            cctrlRaiseException(cc,"Cannot use unary operator `%c` in this context", tok->i64);
+        }
+
+        if (tokenPunctIs(peek, '[') && (operand->kind == AST_CLASS_REF || operand->type->kind == AST_TYPE_ARRAY)) {
             cctrlTokenGet(cc);
             operand = parseSubscriptExpr(cc, operand);
         }
@@ -1106,6 +1161,7 @@ Ast *parseUnaryExpr(Cctrl *cc) {
         if (unary_op == AST_ADDR && parseIsFunction(operand)) {
             return operand;
         }
+
 
         switch (unary_op) {
             case AST_ADDR:  type = astMakePointerType(operand->type); break;

@@ -105,7 +105,7 @@ Ast *parseDeclArrayInitInt(Cctrl *cc, AstType *type) {
         } else {
             init = parseExpr(cc,16);
             if (init == NULL) {
-                cctrlRaiseExceptionFromTo(cc,'{','}',"Array initaliser encountered an unexpected token");
+                cctrlRaiseExceptionFromTo(cc,NULL,'{','}',"Array initaliser encountered an unexpected token");
             } else if (type->ptr) {
               if ((astGetResultType('=', init->type, type->ptr)) == NULL) {
                   cctrlRaiseException(cc,"Incompatiable types: %s %s",
@@ -203,13 +203,14 @@ List *parseClassOrUnionFields(Cctrl *cc, aoStr *name,
                     continue;
                 }
                 default:
-                    cctrlRaiseException(cc,"Unexpected keyword: '%.*s' while parsing class %s",
-                            tok->line,
-                            tok->len,tok->start, name->data);
+                    cctrlRaiseException(cc,"Unexpected keyword: `%.*s` while parsing class %s",
+                            tok_name->len,
+                            tok_name->start,
+                            name->data);
             }
         } else {
-            cctrlRaiseException(cc,"Unexpected type '%s' while parsing class %s\n",
-                    lexemeToString(tok_name), name->data);
+            cctrlRaiseException(cc,"Unexpected type `%.*s` while parsing class %s",
+                    tok_name->len, tok_name->start, name->data);
         }
 
         while (1) {
@@ -219,12 +220,16 @@ List *parseClassOrUnionFields(Cctrl *cc, aoStr *name,
                 cctrlRaiseException(cc, "<type> <variable_name | (> expected got NULL while parsing class %s",
                         name->data);
             }
-            if (!tokenPunctIs(tok_name, '(')) {
+            if (tok_name->tk_type != TK_IDENT && !tokenPunctIs(tok_name, '(')) {
+                cctrlRewindUntilPunctMatch(cc,tok_name->i64,NULL);
+                cctrlRaiseException(cc, "Unexpected character `%.*s` while parsing class %s",
+                        tok_name->len,tok_name->start,name->data);
+            } else if (tokenPunctIs(tok_name, '(')) {
+                next_type = parseFunctionPointerType(cc,&fnptr_name,&fnptr_name_len,next_type);
+                field_name = aoStrDupRaw(fnptr_name,fnptr_name_len);
+            } else  {
                 next_type = parseArrayDimensions(cc,next_type);
                 field_name = aoStrDupRaw(tok_name->start,tok_name->len);
-            } else {
-               next_type = parseFunctionPointerType(cc,&fnptr_name,&fnptr_name_len,next_type);
-               field_name = aoStrDupRaw(fnptr_name,fnptr_name_len);
             }
 
             field_type = astMakeClassField(next_type, 0);
@@ -240,8 +245,9 @@ List *parseClassOrUnionFields(Cctrl *cc, aoStr *name,
             } else if (tokenPunctIs(tok,';')) {
                 break;
             } else {
-                cctrlRaiseException(cc, "Unexpected token '%s' while parsing class %s",
-                        lexemeToString(tok), name->data);
+                cctrlRewindUntilPunctMatch(cc,tok->i64,NULL);
+                cctrlRaiseException(cc, "Unexpected token '%.*s' while parsing class %s",
+                        tok->len, tok->start, name->data);
            }
         }
     }
@@ -474,6 +480,8 @@ AstType *parseUnionDef(Cctrl *cc) {
 Ast *parseVariableAssignment(Cctrl *cc, Ast *var, long terminator_flags) {
     Ast *init;
     int len;
+    lexeme *peek = cctrlTokenPeek(cc);
+
     if (var->type->kind == AST_TYPE_ARRAY) {
         init = parseDeclArrayInitInt(cc,var->type);
         if (init->kind == AST_STRING) {
@@ -485,14 +493,15 @@ Ast *parseVariableAssignment(Cctrl *cc, Ast *var, long terminator_flags) {
             var->type->len = len;
             var->type->size = len * var->type->ptr->size;
         } else if (var->type->len != len) {
-            cctrlRaiseExceptionFromTo(cc,'{', '}',
+            cctrlRaiseExceptionFromTo(cc, NULL, '{', '}',
                                      "Invalid array initializer: expected %d items but got %d",
                                       var->type->len, len);
         }
         lexeme *tok = cctrlTokenGet(cc);
         assertTokenIsTerminator(cc,tok,terminator_flags);
         return astDecl(var,init);
-    } else if (var->type->kind == AST_TYPE_CLASS && !var->type->is_intrinsic) {
+    } else if (var->type->kind == AST_TYPE_CLASS && 
+               !var->type->is_intrinsic && tokenPunctIs(peek,'{')) {
         init = parseDeclArrayInitInt(cc,var->type);
         lexeme *tok = cctrlTokenGet(cc);
         assertTokenIsTerminator(cc,tok,terminator_flags);
@@ -568,17 +577,59 @@ Ast *parseDecl(Cctrl *cc) {
     return ast;
 }
 
-Ast *parseIfStatement(Cctrl *cc) {
-    Ast *cond, *then, *els;
-    lexeme *tok;
+int parseValidPostControlFlowToken(lexeme *tok) {
+    if (tok->tk_type == TK_IDENT) return 1;
+    if (tok->tk_type == TK_STR) return 1;
+    if (tok->tk_type == TK_PUNCT) {
+        switch (tok->i64) {
+            case TK_MINUS_MINUS:
+            case TK_PLUS_PLUS:
+            case '{':
+            case ';':
+            case '*':
+                return 1;
+        }
+    }
+    if (tok->tk_type == TK_KEYWORD) {
+        switch (tok->i64) {
+            case KW_DO:
+            case KW_FOR:
+            case KW_GOTO:
+            case KW_IF:
+            case KW_RETURN:
+            case KW_SWITCH:
+            case KW_WHILE:
+            case KW_BREAK:
+            case KW_CONTINUE:
+                return 1;
+        }
+    }
+    return 0;
+}
 
+Ast *parseIfStatement(Cctrl *cc) {
     cctrlTokenExpect(cc,'(');
-    cond = parseExpr(cc,16);
+    Ast *cond = parseExpr(cc,16);
     cctrlTokenExpect(cc,')');
-    then = parseStatement(cc);
-    tok = cctrlTokenGet(cc);
+
+    lexeme *peek = cctrlTokenPeek(cc);
+    if (!parseValidPostControlFlowToken(peek)) {
+        cctrlRaiseException(cc,"Unexpected %s `%.*s` while parsing if body", 
+                lexemeTypeToString(peek->tk_type), peek->len, peek->start);
+    }
+
+    Ast *then = parseStatement(cc);
+    lexeme *tok = cctrlTokenGet(cc);
+
     if (tok && tok->tk_type == TK_KEYWORD && tok->i64 == KW_ELSE) {
-        els = parseStatement(cc);
+        lexeme *peek = cctrlTokenPeek(cc);
+        if (!parseValidPostControlFlowToken(peek)) {
+            cctrlTokenRewind(cc);
+            cctrlTokenRewind(cc);
+            cctrlRaiseException(cc,"Unexpected %s `%.*s` while parsing else body", 
+                    lexemeTypeToString(peek->tk_type), peek->len, peek->start);
+        }
+        Ast *els = parseStatement(cc);
         return astIf(cond,then,els);
     }
     cctrlTokenRewind(cc);
@@ -627,12 +678,13 @@ Ast *parseDesugarArrayLoop(Cctrl *cc, Ast *iteratee, Ast *static_array) {
         listAppend(cc->tmp_locals,iteratee);
     }
 
-    Ast *cond = astBinaryOp('<', counter_var, array_len);
+    Ast *cond = parseCreateBinaryOp(cc,'<', counter_var, array_len);
+
 
     Ast *iterator = astDecl(iteratee,
             astUnaryOperator(static_array->type->ptr,
                 AST_DEREF,
-                astBinaryOp('+', static_array, counter_var))
+                parseCreateBinaryOp(cc,'+', static_array, counter_var))
             );
     Ast *step = astUnaryOperator(ast_int_type,TK_PLUS_PLUS,counter_var);
 
@@ -680,11 +732,11 @@ Ast *parseCreateForRange(Cctrl *cc, Ast *iteratee, Ast *container,
         listAppend(cc->tmp_locals,iteratee);
     }
 
-    Ast *cond = astBinaryOp('<', counter_var, size_ref);
+    Ast *cond = parseCreateBinaryOp(cc,'<', counter_var, size_ref);
     Ast *iterator = astDecl(iteratee,
             astUnaryOperator(entries_ref->type->ptr,
                 AST_DEREF,
-                astBinaryOp('+', entries_ref, counter_var))
+                parseCreateBinaryOp(cc,'+', entries_ref, counter_var))
             );
     Ast *step = astUnaryOperator(ast_int_type,TK_PLUS_PLUS,counter_var);
     cctrlTokenExpect(cc,')');
@@ -781,7 +833,7 @@ Ast *parseForLoopInitialiser(Cctrl *cc) {
         /* can be : for an auto loop or ';' for a normal loop */
         tok = cctrlTokenPeek(cc); 
         if (!strMapAddOrErr(cc->localenv,init_var->lname->data,init_var)) {
-            cctrlRaiseException(cc,"%ld variable %s already declared",
+            cctrlRaiseException(cc,"variable `%s` already declared!",
                     astLValueToString(init_var,0));
         }
         
@@ -841,6 +893,12 @@ Ast *parseForStatement(Cctrl *cc) {
         forstep = parseExpr(cc,16);
     }
     cctrlTokenExpect(cc,')');
+
+    lexeme *peek = cctrlTokenPeek(cc);
+    if (!parseValidPostControlFlowToken(peek)) {
+        cctrlRaiseException(cc,"Unexpected %s `%.*s` while parsing for loop body", 
+                lexemeTypeToString(peek->tk_type), peek->len, peek->start);
+    }
     forbody = parseStatement(cc);
     /* Go back up */
     cc->localenv = cc->localenv->parent;
@@ -866,6 +924,13 @@ Ast *parseWhileStatement(Cctrl *cc) {
     cc->localenv = strMapNewWithParent(32, cc->localenv);
     whilecond = parseExpr(cc,16);
     cctrlTokenExpect(cc,')');
+
+    lexeme *peek = cctrlTokenPeek(cc);
+    if (!parseValidPostControlFlowToken(peek)) {
+        cctrlRaiseException(cc,"Unexpected %s `%.*s` while parsing while loop body", 
+                lexemeTypeToString(peek->tk_type), peek->len, peek->start);
+    }
+
     whilebody = parseStatement(cc);
     cc->localenv = cc->localenv->parent;
     cc->tmp_loop_begin = prev_begin;
@@ -889,6 +954,14 @@ Ast *parseDoWhileStatement(Cctrl *cc) {
     cc->tmp_loop_end = while_end;
 
     cc->localenv = strMapNewWithParent(32, cc->localenv);
+
+    lexeme *peek = cctrlTokenPeek(cc);
+    if (!parseValidPostControlFlowToken(peek)) {
+        cctrlRewindUntilStrMatch(cc,peek->start,peek->len,NULL);
+        cctrlRaiseException(cc,"Unexpected %s `%.*s` while parsing do while loop body", 
+                lexemeTypeToString(peek->tk_type), peek->len, peek->start);
+    }
+
 
     whilebody = parseStatement(cc);
     
@@ -987,8 +1060,10 @@ Ast *parseCaseLabel(Cctrl *cc, lexeme *tok) {
         end = evalIntConstExpr(parseExpr(cc,16));
         cctrlTokenExpect(cc,':');
         if (begining > end) {
-            cctrlRaiseException(cc,"Condition is in the wrong order '%d' must be lower than '%d'",
-                    tok->line,begining, end);
+            cctrlRewindUntilStrMatch(cc,str_lit("case"),NULL);
+            char *suggestion = mprintf("Swap the conditions around `case %d ... %d: `",end,begining);
+            cctrlRaiseExceptionFromTo(cc, suggestion, 'c', ':', " Condition is in the wrong order '%d' must be lower than '%d'",
+                    begining, end);
         }
     } else {
         cctrlTokenExpect(cc,':');
@@ -1306,7 +1381,8 @@ void parseCompoundStatementInternal(Cctrl *cc, Ast *body) {
                     type = parseArrayDimensions(cc,next_type);
                     var = astLVar(type,varname->start,varname->len);
                     if (!strMapAddOrErr(cc->localenv,var->lname->data,var)) {
-                        cctrlRaiseException(cc,"variable '%s' already declared",
+                        cctrlRewindUntilStrMatch(cc,var->lname->data,var->lname->len,NULL);
+                        cctrlRaiseException(cc,"variable `%s` already declared",
                                 astLValueToString(var,0));
                     }
                 } else {
@@ -1335,7 +1411,8 @@ void parseCompoundStatementInternal(Cctrl *cc, Ast *body) {
                 } else if (tokenPunctIs(tok,';')) {
                     break;
                 } else {
-                    cctrlRaiseException(cc,"Unexpected token: %s",lexemeToString(tok));
+                    cctrlRaiseException(cc,"Unexpected %s `%.*s` while parsing statement, perhaps you meant to terminate the declaration with `;`?",
+                            lexemeTypeToString(tok->tk_type), tok->len,tok->start);
                 }
             }
         } else { 

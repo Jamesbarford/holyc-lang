@@ -16,7 +16,7 @@
 #define ESC_YELLOW "\033[0;33m"
 #define ESC_BOLD_YELLOW "\033[1;33m"
 #define ESC_BLUE   "\033[0;34m"
-#define ESC_PURPLE "\033[0;35m"
+#define ESC_PURPLE "\x1b\[38;5;171m"
 #define ESC_CYAN   "\033[0;36m"
 #define ESC_BOLD_CYAN   "\033[1;36m"
 #define ESC_WHITE  "\033[0;37m"

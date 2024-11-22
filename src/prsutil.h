@@ -31,7 +31,7 @@ long evalIntConstExprOrErr(Ast *ast, int *_ok);
 long evalOneIntExprOrErr(Ast *LHS, Ast *RHS, long op, int *_ok);
 long evalIntArithmeticOrErr(Ast *ast, int *_ok);
 int evalClassRef(Ast *ast, int offset);
-void assertLValue(Ast *ast, long lineno);
+int assertLValue(Ast *ast);
 int parseIsFloatOrInt(Ast *ast);
 int parseIsClassOrUnion(int kind);
 int parseIsFunction(Ast *ast);
