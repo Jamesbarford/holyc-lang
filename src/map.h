@@ -114,6 +114,7 @@ typedef struct StrMapIterator {
     long idx;
 } StrMapIterator;
 
+unsigned long roundUpToNextPowerOf2(unsigned long v);
 
 StrMap *strMapNew(unsigned long capacity);
 StrMap *strMapNewWithParent(unsigned long capacity, StrMap *parent);
@@ -127,6 +128,8 @@ void strMapRelease(StrMap *map);
 int strMapResize(StrMap *map);
 void strMapSetFreeValue(StrMap *map, void (*_free_value)(void *value));
 void strMapSetFreeKey(StrMap *map, void (*_free_key)(void *key));
+void strMapMerge(StrMap *map1, StrMap *map2);
+void strMapRemoveKeys(StrMap *map1, StrMap *map2);
 
 StrMapIterator *strMapIteratorNew(StrMap *map);
 void strMapIteratorRelease(StrMapIterator *it);

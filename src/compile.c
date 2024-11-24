@@ -15,19 +15,9 @@
 void compilePrintAst(Cctrl *cc) {
     List *it;
     Ast *ast;
-    //StrMapNode *dn;
     char *tmp;
 
     printf("AST: \n");
-    //for (int i = 0; i < cc->clsdefs->capacity; ++i) {
-    //    dn = cc->clsdefs->body[i];
-    //    while (dn) {
-    //        tmp = astTypeToString(dn->val);
-    //        printf("%s\n", tmp);
-    //        free(tmp);
-    //        dn = dn->next;
-    //    }
-    //}
 
     it = cc->ast_list->next;
     while (it != cc->ast_list) {
@@ -90,29 +80,23 @@ void compileToTokens(Cctrl *cc, char *entrypath, int lexer_flags) {
 
 int compileToAst(Cctrl *cc, char *entrypath, int lexer_flags) {
     lexer *l = malloc(sizeof(lexer));
-    aoStr *builtin_path;
-    StrMap *seen_files;
-
-    seen_files = strMapNew(32);
-    builtin_path = aoStrDupRaw("/usr/local/include/tos.HH",25); //aoStrNew();
+    aoStr *builtin_path = aoStrDupRaw(str_lit("/usr/local/include/tos.HH")); 
 
     lexInit(l,NULL,CCF_PRE_PROC);
-    l->seen_files = seen_files;
     l->lineno = 1;
     lexSetBuiltinRoot(l,"/usr/local/include/");
 
-    /* library files */
     lexPushFile(l,aoStrDupRaw(entrypath,strlen(entrypath)));
-    /* the structure is a stack so this will get popped first */
+    /* library files */
+    /* the structure is a so this will get popped first */
     lexPushFile(l,builtin_path);
 
     cctrlInitParse(cc,l);
 
     parseToAst(cc);
-    
+
     lexerPoolRelease();
 
-    strMapRelease(seen_files);
     lexReleaseAllFiles(l);
     aoStrRelease(builtin_path);
     listRelease(l->files,NULL);

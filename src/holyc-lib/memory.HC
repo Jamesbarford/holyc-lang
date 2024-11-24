@@ -1,4 +1,3 @@
-#include "./defs.HH"
 /* Yup we can mix #define's and assembly */
 #define ALIGN_16 0xFFFFFFFFFFFFFFF0
 

@@ -77,8 +77,8 @@ AstType *astTypeCopy(AstType *type) {
 
 Ast *astUnaryOperator(AstType *type, long kind, Ast *operand) {
     Ast *ast = astNew();
-    ast->type = type;
     ast->kind = kind;
+    ast->type = type;
     ast->operand = operand;
     return ast;
 }
@@ -88,12 +88,12 @@ static void astFreeUnaryOperator(Ast *ast) {
     free(ast);
 }
 
-Ast *astBinaryOp(long operation, Ast *left, Ast *right) {
+Ast *astBinaryOp(long operation, Ast *left, Ast *right, int *_is_err) {
     Ast *ast = astNew();
     ast->type = astGetResultType(operation,left->type,right->type);  
 
     if (ast->type == NULL) {
-        return NULL;
+        *_is_err = 1;
     }
 
     ast->kind = operation;
@@ -155,6 +155,13 @@ aoStr *astMakeTmpName(void) {
     aoStr *s = aoStrNew();
     aoStrCatPrintf(s, ".T%d", tmp_name_sequence++);
     return s;
+}
+
+static int tmp_anonymous_label = 0;
+char *astAnnonymousLabel(void) {
+    /* Adding a space makes this an invalid name for other classes as no 
+     * identifier can have spaces. */
+    return mprintf("cls_label %d",tmp_anonymous_label++);
 }
 
 Ast *astLVar(AstType *type, char *name, int len) {
@@ -554,6 +561,13 @@ AstType *astConvertArray(AstType *ast_type) {
     return astMakePointerType(ast_type->ptr);
 }
 
+Ast *astSizeOf(AstType *type) {
+    Ast *ast = astNew();
+    ast->kind = AST_SIZEOF;
+    ast->type = type;
+    return ast;
+}
+
 Ast *astGoto(aoStr *label) {
     Ast *ast = astNew();
     ast->type = NULL;
@@ -739,6 +753,15 @@ static void astFreeCast(Ast *ast) {
     free(ast);
 }
 
+Ast *astComment(char *comment, int len) {
+    Ast *ast = astNew();
+    ast->type = NULL;
+    ast->kind = AST_COMMENT;
+    printf("astComment(): %.*s\n",len,comment);
+    ast->sval = aoStrDupRaw(comment, len);
+    return ast;
+}
+
 aoStr *astNormaliseFunctionName(char *fname) {
     aoStr *newfn = aoStrNew();
 #if IS_BSD
@@ -774,7 +797,7 @@ int astIsAssignment(long op) {
     }
 }
 
-int astIsValidPointerOp(long op, long lineno) {
+int astIsValidPointerOp(long op) {
     switch (op) {
         case '-': case '+':
         case '<': case TK_LESS_EQU:
@@ -784,6 +807,34 @@ int astIsValidPointerOp(long op, long lineno) {
             return 1;
         default:
             return 0;
+    }
+}
+
+int astIsBinCmp(long op) {
+    switch (op) {
+    case TK_AND_AND:
+    case TK_OR_OR:
+    case TK_EQU_EQU:
+    case TK_NOT_EQU:
+    case TK_LESS_EQU:
+    case TK_GREATER_EQU:
+    case '+':
+    case AST_OP_ADD:
+    case '-':
+    case '*':
+    case '~':
+    case '<':
+    case '>':
+    case '/':
+    case '&':
+    case '|':
+    case '=':
+    case '!':
+    case '%':
+    case '^':
+        return 1;
+    default:
+        return 0;
     }
 }
 
@@ -806,7 +857,7 @@ start_routine:
             return ptr1;
         }
 
-        if (!astIsValidPointerOp(op,-1)) {
+        if (!astIsValidPointerOp(op)) {
             goto error;
         }
         if (op != '+' && op != '-'
@@ -1071,7 +1122,11 @@ static aoStr *astTypeToAoStrInternal(AstType *type) {
     }
 
     case AST_TYPE_ARRAY: {
-        aoStrCatPrintf(str, "%s[%d]", astTypeToString(type->ptr), type->size);
+        if (type->size == -1 && type->ptr->clsname != NULL) {
+            aoStrCatPrintf(str, "%s[%s]", astTypeToString(type->ptr), type->ptr->clsname->data);
+        } else {
+            aoStrCatPrintf(str, "%s[%d]", astTypeToString(type->ptr), type->size);
+        }
         return str;
     }
 
@@ -1769,6 +1824,14 @@ void _astToString(aoStr *str, Ast *ast, int depth) {
             }
             break;
         }
+
+        case AST_COMMENT: {
+            aoStrCatPrintf(str, "<comment>\n");
+            aoStrCatRepeat(str, "  ", depth+1);
+            aoStrCatPrintf(str, "%s\n", ast->sval->data);
+            break;
+        }
+
         case TK_PRE_PLUS_PLUS:
         case TK_PLUS_PLUS:   
         case TK_PRE_MINUS_MINUS:
@@ -1827,6 +1890,8 @@ char *astKindToString(int kind) {
     case AST_SWITCH:        return "AST_SWITCH";
     case AST_CASE:          return "AST_CASE";
     case AST_DEFAULT:       return "AST_DEFAULT";
+    case AST_COMMENT:       return "AST_COMMENT";
+    case AST_SIZEOF:        return "AST_SIZEOF";
 
 
     case TK_AND_AND:         return "&&";
@@ -2108,6 +2173,14 @@ static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
             break;
         }
 
+
+        case AST_SIZEOF: {
+            char *type_str = astTypeToString(ast->type);
+            aoStrCatPrintf(str, "sizeof(%s)",type_str);
+            free(type_str);
+            break;
+        }
+
         case AST_BREAK:
             aoStrCatPrintf(str, "break;");
             break;
@@ -2129,6 +2202,11 @@ static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
             } else {
                 astBinaryArgToString(str,str_op,ast,lexeme_flags);
             }
+            break;
+        }
+
+        case AST_COMMENT: {
+            aoStrCatPrintf(str, "%s\n", ast->sval->data);
             break;
         }
 
@@ -2213,7 +2291,12 @@ void astRelease(Ast *ast) {
         case AST_FUN_PROTO:
         case AST_FUNC: astFreeFunction(ast); break;
         case AST_DECL: astFreeDecl(ast); break;
-        case AST_STRING: astFreeString(ast); break;
+
+        case AST_COMMENT:
+        case AST_STRING:
+            astFreeString(ast);
+            break;
+
         case AST_FUNCALL: astFreeFunctionCall(ast); break;
         case AST_ARRAY_INIT: astFreeArrayInit(ast); break;
         case AST_IF: astFreeIf(ast); break;
@@ -2316,6 +2399,8 @@ const char *astKindToHumanReadable(Ast *ast) {
         case AST_SWITCH: return "switch statement";
         case AST_CASE: return "case statement";
         case AST_DEFAULT: return "default statement";
+        case AST_SIZEOF: return "size of";
+        case AST_COMMENT: return "comment";
         case TK_AND_AND: return "logical AND";
         case TK_OR_OR: return "logical OR";
         case TK_EQU_EQU: return "equality comparison";

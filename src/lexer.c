@@ -5,6 +5,7 @@
 #include <pwd.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <assert.h>
 
 #include "aostr.h"
 #include "ast.h"
@@ -184,12 +185,15 @@ void lexInit(lexer *l, char *source, int flags) {
     l->all_source = listNew();
     l->symbol_table = strMapNew(32);
     l->symbol_table->_free_key = NULL;
+    l->seen_files = strMapNew(32);
     l->collecting = 1;
     l->skip_else = 1;
     if (macro_proccessor == NULL) {
         macro_proccessor = ccMacroProcessor(NULL);
     }
-    lexeme_pool = memPoolNew(sizeof(lexeme),64);
+    if (lexeme_pool == NULL) {
+        lexeme_pool = memPoolNew(sizeof(lexeme),64);
+    }
     /* XXX: create one symbol table for the whole application ;
      * hoist to 'compile.c'*/
     for (int i = 0; i < static_size(lexer_types); ++i) {
@@ -311,6 +315,7 @@ char *lexemePunctToString(long op) {
     case '\r':               return "\\r";
     case '\"':               return "\\\"";
     case '\'':               return "\\\'";
+    case '\0':               return "\\0'";
     case TK_AND_AND:         return "&&";
     case TK_OR_OR:           return "||";
     case TK_EQU_EQU:         return "==";
@@ -356,6 +361,10 @@ char *lexemeToString(lexeme *tok) {
     aoStr *str = aoStrNew();
     char *tmp;
     switch (tok->tk_type) {
+        case TK_COMMENT: {
+            aoStrCatPrintf(str,"TK_COMMENT    %.*s",tok->len,tok->start);
+            return aoStrMove(str);
+        }
         case TK_IDENT:
             aoStrCatPrintf(str,"TK_IDENT      %.*s",tok->len,tok->start);
             return aoStrMove(str);
@@ -570,7 +579,7 @@ static void lexSkipCodeComment(lexer *l) {
                 l->lineno++;
             }
             if (*l->ptr == '*' && *(l->ptr + 1) == '/') {
-                l->ptr += 2;
+                while (*l->ptr != '\n') l->ptr++;
                 break;
             }
             l->ptr++;
@@ -1016,7 +1025,17 @@ int lex(lexer *l, lexeme *le) {
 
         case '/':
             if (*l->ptr == '/' || *l->ptr == '*') {
+                start = l->ptr-1;
                 lexSkipCodeComment(l);
+                ssize_t lineno = l->lineno;
+                if (l->flags & CCF_ACCEPT_COMMENTS) {
+                    ssize_t len = l->ptr-start;
+                    le->start = start;
+                    le->len = len;
+                    le->line = lineno;
+                    le->tk_type = TK_COMMENT;
+                    return 1;
+                }
             } else {
                 if (lexPeekMatch(l,'=')) {
                     lexNextChar(l);
@@ -1342,6 +1361,7 @@ lexeme *lexDefine(StrMap *macro_defs, lexer *l) {
         cctrlInitMacroProcessor(macro_proccessor);
         macro_proccessor->token_buffer->entries = (lexeme **)tokens->entries;
         macro_proccessor->token_buffer->size = tokens->size;
+        macro_proccessor->token_buffer->capacity = roundUpToNextPowerOf2(tokens->size);
 
         Ast *ast = parseExpr(macro_proccessor,16);
         expanded = lexemeNew(start->start,end->len-start->len);
@@ -1462,6 +1482,7 @@ int lexPreProcIf(StrMap *macro_defs, lexer *l) {
     cctrlInitMacroProcessor(macro_proccessor);
     macro_proccessor->token_buffer->entries = (lexeme **)macro_tokens->entries;
     macro_proccessor->token_buffer->size = macro_tokens->size;
+    macro_proccessor->token_buffer->capacity = roundUpToNextPowerOf2(macro_tokens->size);
 
     Ast *ast = parseExpr(macro_proccessor,16);
     expanded = lexemeNew(start->start,end->len-start->len);
@@ -1575,7 +1596,7 @@ int lexPreProcBoolean(lexer *l, StrMap *macro_defs, lexeme *le, int can_collect)
 }
 
 lexeme *lexToken(StrMap *macro_defs, lexer *l) {
-    lexeme le,next,*copy,*macro;
+    lexeme le,next,*copy;
 
     macro_proccessor->macro_defs = macro_defs;
 
@@ -1663,10 +1684,6 @@ lexeme *lexToken(StrMap *macro_defs, lexer *l) {
         }
         
         if (le.tk_type == TK_IDENT) {
-            if ((macro = strMapGetLen(macro_defs,le.start,le.len)) != NULL) {
-                copy = lexemePoolCpy(macro);
-                return copy;
-            }
             copy = lexemePoolCpy(&le);
             return copy;
         }
@@ -1704,18 +1721,19 @@ const char *lexerReportLine(lexer *l, ssize_t lineno) {
     ssize_t line = 1;
     ssize_t i = 0;
     
-    for (; i < size; ++i) {
+    for (; i < size-1; ++i) {
         if (ptr[i] == '\n') {
             line++;
         }
+    //    if (ptr[i] == '\0') break;
         if (line == lineno) break;
     }
-    i++;
-
     if (ptr[i] == '\0') {
         memcpy((void*)buffer,str_lit("invalid line number"));
         return buffer;
     }
+
+    i++;
 
     while (isspace(ptr[i])) {
         i++;

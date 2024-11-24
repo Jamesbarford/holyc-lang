@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <ctype.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -137,6 +138,7 @@ Cctrl *ccMacroProcessor(StrMap *macro_defs) {
     Cctrl *cc = malloc(sizeof(Cctrl));
     cc->macro_defs = macro_defs;
     cc->strs = strMapNew(32);
+    cc->ast_list = NULL;
     return cc;
 }
 
@@ -148,6 +150,7 @@ Cctrl *cctrlNew(void) {
     aoStr **str_array;
     int len;
 
+    cc->flags = 0;
     cc->global_env = strMapNew(32);
     cc->clsdefs = strMapNew(32);
     cc->uniondefs = strMapNew(32);
@@ -158,6 +161,7 @@ Cctrl *cctrlNew(void) {
     cc->libc_functions = strMapNew(32);
     cc->strs = strMapNew(32);
     cc->asm_blocks = listNew();
+    cc->asm_functions = strMapNew(32);
     cc->ast_list = listNew();
     cc->initalisers = listNew();
     cc->initaliser_locals = listNew();
@@ -169,6 +173,8 @@ Cctrl *cctrlNew(void) {
     cc->tmp_params = NULL;
     cc->tmp_loop_begin = NULL;
     cc->tmp_loop_end = NULL;
+    cc->tmp_func = NULL;
+    cc->token_buffer = NULL;
 
     str_array = aoStrSplit(x86_registers,',',&len);
     for (int i = 0; i < len; ++i) {
@@ -212,6 +218,7 @@ TokenRingBuffer *tokenRingBufferStaticNew(void) {
     ring_buffer->head = 0;
     ring_buffer->size = 0;
     ring_buffer->entries = token_ring_buffer;
+    ring_buffer->capacity = CCTRL_TOKEN_BUFFER_SIZE;
     for (ssize_t i = 0; i < CCTRL_TOKEN_BUFFER_SIZE; ++i) {
         ring_buffer->entries[i] = NULL;
     }
@@ -226,13 +233,14 @@ TokenRingBuffer *tokenRingBufferNew(void) {
     return ring_buffer;
 }
 
-ssize_t tokenRingBufferGetIdx(ssize_t idx) {
-    return (idx + 1) & CCTRL_TOKEN_BUFFER_MASK;
+/* This always moves forward by one so is more of a get next */
+ssize_t tokenRingBufferGetIdx(ssize_t idx, size_t capacity) {
+    return (idx + 1) & (capacity - 1);
 }
 
 void tokenBufferPrint(TokenRingBuffer *ring_buffer) {
     for (int i = 0, idx = ring_buffer->tail; i < ring_buffer->size;
-            i++, idx = tokenRingBufferGetIdx(idx)) {
+            i++, idx = tokenRingBufferGetIdx(idx, ring_buffer->capacity)) {
         printf(">> %s\n", lexemeToString(ring_buffer->entries[idx]));
     }
     printf("\n");
@@ -247,9 +255,11 @@ int tokenRingBufferEmpty(TokenRingBuffer *ring_buffer) {
 /* Add a token to the ring buffer and remove the oldest element */
 void tokenRingBufferPush(TokenRingBuffer *ring_buffer, lexeme *token) {
     ring_buffer->entries[ring_buffer->head] = token;
-    ring_buffer->head = tokenRingBufferGetIdx(ring_buffer->head);
-    if (ring_buffer->size == CCTRL_TOKEN_BUFFER_SIZE) {
-        ring_buffer->tail = tokenRingBufferGetIdx(ring_buffer->tail);
+    ring_buffer->head = tokenRingBufferGetIdx(ring_buffer->head,
+                                              ring_buffer->capacity);
+    if (ring_buffer->size == ring_buffer->capacity) {
+        ring_buffer->tail = tokenRingBufferGetIdx(ring_buffer->tail,
+                                                  ring_buffer->capacity);
     } else {
         ring_buffer->size++;
     }
@@ -261,9 +271,20 @@ lexeme *tokenRingBufferPop(TokenRingBuffer *ring_buffer) {
         return NULL;
     }
     lexeme *token = ring_buffer->entries[ring_buffer->tail];
-    ring_buffer->tail = tokenRingBufferGetIdx(ring_buffer->tail);
+    ring_buffer->tail = tokenRingBufferGetIdx(ring_buffer->tail,
+                                              ring_buffer->capacity);
     ring_buffer->size--;
     return token;
+}
+
+lexeme *tokenRingBufferPeekBy(TokenRingBuffer *ring_buffer, ssize_t offset) {
+    /* we are out of tokens */
+    if (tokenRingBufferEmpty(ring_buffer)) {
+        return NULL;
+    }
+    ssize_t idx = tokenRingBufferGetIdx(ring_buffer->tail + offset,
+                                        ring_buffer->capacity);
+    return ring_buffer->entries[idx];
 }
 
 lexeme *tokenRingBufferPeek(TokenRingBuffer *ring_buffer) {
@@ -278,19 +299,33 @@ int tokenRingBufferRewind(TokenRingBuffer *ring_buffer) {
     //if (tokenRingBufferEmpty(ring_buffer)) { //|| ring_buffer->tail == ring_buffer->head) {
     //    return 0;
     //}
-    ring_buffer->tail = (ring_buffer->tail - 1 + CCTRL_TOKEN_BUFFER_SIZE) & CCTRL_TOKEN_BUFFER_MASK;
+
+    lexeme *token = ring_buffer->entries[ring_buffer->tail];
+    size_t capacity = ring_buffer->capacity;
+    ssize_t offset = 1;
+    do {
+        ring_buffer->tail = ((ring_buffer->tail - offset) + capacity) & (capacity-1);
+        token = ring_buffer->entries[ring_buffer->tail];
+        offset++;
+    } while (token && token->tk_type == TK_COMMENT);
     ring_buffer->size++;
     return 1;
 }
 
+void cctrLoadNextTokens(Cctrl *cc, ssize_t token_count) {
+    for (ssize_t i = 0; i < token_count; ++i) {
+        lexeme *token = lexToken(cc->macro_defs,cc->lexer_);
+        if (!token) break;
+        tokenRingBufferPush(cc->token_buffer, token);
+    }
+}
+
 void cctrlInitParse(Cctrl *cc, lexer *lexer_) {
     cc->lexer_ = lexer_;
-    cc->token_buffer = tokenRingBufferStaticNew();
-    for (int i = 0; i < CCTRL_TOKEN_BUFFER_SIZE; ++i) {
-        lexeme *token = lexToken(cc->macro_defs, cc->lexer_);
-        if (!token) break;
-        tokenRingBufferPush(cc->token_buffer,token);
+    if (cc->token_buffer == NULL) {
+        cc->token_buffer = tokenRingBufferStaticNew();
     }
+    cctrLoadNextTokens(cc, cc->token_buffer->capacity);
 }
 
 void cctrlInitMacroProcessor(Cctrl *cc) {
@@ -301,6 +336,9 @@ void cctrlInitMacroProcessor(Cctrl *cc) {
     ring_buffer->head = 0;
     ring_buffer->size = 0;
     cc->token_buffer = ring_buffer;
+    cc->ast_list = NULL;
+    cc->tmp_locals = NULL;
+    cc->tmp_func = NULL;
 }
 
 lexeme *cctrlMaybeExpandToken(Cctrl *cc, lexeme *token) {
@@ -310,14 +348,27 @@ lexeme *cctrlMaybeExpandToken(Cctrl *cc, lexeme *token) {
 
     lexeme *maybe_define = strMapGetLen(cc->macro_defs, token->start, token->len);
     if (maybe_define) {
+        if (cc->flags & CCTRL_PASTE_DEFINES) {
+            return token;
+        }
         return maybe_define;
     }
     return token; 
 }
 
+lexeme *cctrlTokenPeekBy(Cctrl *cc, int idx) {
+    return tokenRingBufferPeekBy(cc->token_buffer, idx);
+}
+
 lexeme *cctrlTokenPeek(Cctrl *cc) {
     lexeme *token = tokenRingBufferPeek(cc->token_buffer);
-    if (token) {
+    ssize_t offset = 0;
+    while (token) {
+        if (token->tk_type == TK_COMMENT) {
+            token = tokenRingBufferPeekBy(cc->token_buffer, offset);
+            offset++;
+            continue;
+        }
         cc->lineno = token->line;
         return cctrlMaybeExpandToken(cc,token);
     }
@@ -332,19 +383,20 @@ void cctrlTokenRewind(Cctrl *cc) {
 }
 
 lexeme *cctrlTokenGet(Cctrl *cc) {
-    lexeme *token = cctrlTokenPeek(cc);
-    if (token) {
+    lexeme *token = tokenRingBufferPeek(cc->token_buffer);
+    while (token) {
         tokenRingBufferPop(cc->token_buffer);
-        if (cc->token_buffer->size < 3 && cc->lexer_) {
-            for (ssize_t i = 0; i < 10; ++i) {
-                lexeme *new_token = lexToken(cc->macro_defs,cc->lexer_);
-                if (!new_token) {
-                    break;
-                }
-                tokenRingBufferPush(cc->token_buffer, new_token);
-            }
+        if (token->tk_type == TK_COMMENT) {
+            /* XXX: Not really sure what to do with the comments or where they 
+             * should go ??*/
+            token = tokenRingBufferPeek(cc->token_buffer);
+            continue;
         }
-        return token;
+        if (cc->token_buffer->size < 3 && cc->lexer_) {
+            cctrLoadNextTokens(cc,5);
+        }
+        cc->lineno = token->line;
+        return cctrlMaybeExpandToken(cc, token);
     }
     return NULL;
 }
@@ -524,11 +576,9 @@ void cctrlCreateColoredLine(Cctrl *cc,
     aoStr *colored_buffer = aoStrNew();
     long offset = -1;
     long tok_len = -1;
-    char *ptr = (char *)line_buffer;
     lexeme tok;
     lexer l;
     lexInit(&l, (char *)line_buffer, CCF_ACCEPT_WHITESPACE);
-    int collect_whitespace = 0;
     ssize_t current_offset = 0;
 
     /* This assumes we want the last match of an error as opposed to the first */
@@ -550,7 +600,6 @@ void cctrlCreateColoredLine(Cctrl *cc,
         colored_lexeme = lexemeToColor(cc,&tok, is_err && should_color_err);
         aoStrCat(colored_buffer, colored_lexeme);
         free(colored_lexeme);
-        ptr += tok.len;
         current_offset += tok.len;
     }
 
@@ -634,7 +683,7 @@ aoStr *cctrlCreateErrorLine(Cctrl *cc,
 }
 
 aoStr *cctrlMessagVnsPrintF(Cctrl *cc, char *fmt, va_list ap, int severity) {
-    char *msg = mprintVa(fmt, ap);
+    char *msg = mprintVa(fmt, ap, NULL);
     aoStr *bold_msg = aoStrNew();
     aoStrCatPrintf(bold_msg, ESC_BOLD"%s"ESC_CLEAR_BOLD, msg);
     lexeme *cur_tok = cctrlTokenPeek(cc);
@@ -647,7 +696,7 @@ aoStr *cctrlMessagVnsPrintF(Cctrl *cc, char *fmt, va_list ap, int severity) {
 aoStr *cctrlMessagVnsPrintFWithSuggestion(Cctrl *cc, char *fmt, va_list ap, 
                                           int severity, char *suggestion)
 {
-    char *msg = mprintVa(fmt, ap);
+    char *msg = mprintVa(fmt, ap, NULL);
     aoStr *bold_msg = aoStrNew();
     aoStrCatPrintf(bold_msg, ESC_BOLD"%s"ESC_CLEAR_BOLD, msg);
     lexeme *cur_tok = cctrlTokenPeek(cc);
@@ -721,7 +770,7 @@ void cctrlRewindUntilPunctMatch(Cctrl *cc, long ch, int *_count) {
         cctrlTokenRewind(cc);
         peek = cctrlTokenPeek(cc);
         count++;
-        if (count > 8) break; // has to be some limit
+        if (count > 5) break; // has to be some limit
     }
     if (_count) *_count = count;
 }
@@ -733,6 +782,7 @@ void cctrlRewindUntilStrMatch(Cctrl *cc, char *str, int len, int *_count) {
         cctrlTokenRewind(cc);
         peek = cctrlTokenPeek(cc);
         count++;
+        if (count > 5) break; // has to be some limit
     }
     if (_count) *_count = count;
 }
@@ -765,10 +815,10 @@ void cctrlTokenExpect(Cctrl *cc, long expected) {
     }
 }
 
-void cctrlRaiseExceptionFromTo(Cctrl *cc, char *suggestion, char from, char to, char *fmt, ...) {
-    va_list ap;
-    va_start(ap,fmt);
-    char *msg = mprintVa(fmt, ap);
+aoStr *cctrlRaiseFromTo(Cctrl *cc, int severity, char *suggestion, char from, 
+                        char to, char *fmt, va_list ap)
+{
+    char *msg = mprintVa(fmt, ap, NULL);
     aoStr *bold_msg = aoStrNew();
     aoStrCatPrintf(bold_msg, ESC_BOLD"%s"ESC_CLEAR_BOLD, msg);
     lexeme *cur_tok = cctrlTokenPeek(cc);
@@ -783,7 +833,7 @@ void cctrlRaiseExceptionFromTo(Cctrl *cc, char *suggestion, char from, char to, 
     long tok_len = -1;
     long line_len = -1;
 
-    cctrlFileAndLine(cc,buf,cur_tok->line,char_pos,bold_msg->data,CCTRL_ERROR);
+    cctrlFileAndLine(cc,buf,cur_tok->line,char_pos,bold_msg->data,severity);
     cctrlCreateColoredLine(cc, buf, cur_tok->line, 0, NULL, char_pos, &offset, &tok_len, &line_len);
 
     if (from_idx != -1 && to_idx != -1) {
@@ -795,20 +845,38 @@ void cctrlRaiseExceptionFromTo(Cctrl *cc, char *suggestion, char from, char to, 
             aoStrCat(buf,ESC_BOLD_RED"^"ESC_RESET);
         }
         if (suggestion) {
-            aoStrCatPrintf(buf, ESC_BOLD_RED" %s"ESC_RESET, suggestion);
+            if (isatty(STDOUT_FILENO)) {
+                aoStrCatPrintf(buf, ESC_BOLD_RED" %s"ESC_RESET, suggestion);
+            } else {
+                aoStrCatPrintf(buf, " %s", suggestion);
+            }
         }
     } else {
         aoStrCat(buf, ESC_CYAN"     |"ESC_RESET);
     }
 
-    fprintf(stderr,"%s\n",buf->data);
-    aoStrRelease(buf);
     aoStrRelease(bold_msg);
+    return buf;
+}
+
+void cctrlRaiseExceptionFromTo(Cctrl *cc, char *suggestion, char from, char to, char *fmt, ...) {
+    va_list ap;
+    va_start(ap,fmt);
+    aoStr *buf = cctrlRaiseFromTo(cc,CCTRL_ERROR,suggestion,from,to,fmt,ap);
+    fprintf(stderr,"%s\n",buf->data);
     va_end(ap);
+    aoStrRelease(buf);
     exit(EXIT_FAILURE);
 }
 
-
+void cctrlWarningFromTo(Cctrl *cc, char *suggestion, char from, char to, char *fmt, ...) {
+    va_list ap;
+    va_start(ap,fmt);
+    aoStr *buf = cctrlRaiseFromTo(cc,CCTRL_WARN,suggestion,from,to,fmt,ap);
+    fprintf(stderr,"%s\n",buf->data);
+    va_end(ap);
+    aoStrRelease(buf);
+}
 
 /* Get variable either from the local or global scope */
 Ast *cctrlGetVar(Cctrl *cc, char *varname, int len) {
@@ -831,11 +899,21 @@ Ast *cctrlGetVar(Cctrl *cc, char *varname, int len) {
     if ((tok = strMapGetLen(cc->macro_defs, varname, len)) != NULL) {
         switch (tok->tk_type) {
         case TK_I64:
+            if (cc->flags & CCTRL_PASTE_DEFINES) {
+                return astLVar(ast_int_type, varname, len);
+            }
             return astI64Type(tok->i64);
         case TK_F64:
+            if (cc->flags & CCTRL_PASTE_DEFINES) {
+                return astLVar(ast_float_type, varname, len);
+            }
             return astF64Type(tok->f64);
-        case TK_STR:
+        case TK_STR: {
+            if (cc->flags & CCTRL_PASTE_DEFINES) {
+                return astLVar(astMakePointerType(ast_u8_type), varname, len);
+            }
             return cctrlGetOrSetString(cc, tok->start, tok->len);
+        }
         default:
             return NULL;
         }

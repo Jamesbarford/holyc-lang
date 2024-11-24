@@ -25,7 +25,8 @@ Full documentation for the language can be found here: https://holyc-lang.com/
 A holyc compiler built from scratch in C. Currently it is non optimising,
 walking the AST and compiling it directly to x86_64 assembly code as text which 
 is fed into gcc to assemble. Floating point arithmetic is supported as are most
-of the major language features.
+of the major language features. There is experimental support for transpiling 
+HolyC to C.
 
 ## Example
 Below is a snippet of code showing some of the features supported by this holyc
@@ -113,20 +114,21 @@ HolyC Compiler 2024. UNSTABLE
 hcc [..OPTIONS] <..file>
 
 OPTIONS:
-  -ast     Print the ast and exit
-  -cfg     Create graphviz control flow graph as a .dot file
-  -cfg-png Create graphviz control flow graph as a png
-  -cfg-svg Create graphviz control flow graph as a svg
-  -tokens  Print the tokens and exit
-  -S       Emit assembly only
-  -obj     Emit an objectfile
-  -lib     Emit a dynamic and static library
-  -clibs   Link c libraries like: -clibs=`-lSDL2 -lxml2 -lcurl...`
-  -o       Output filename: hcc -o <name> ./<file>.HC
-  -run     Immediately run the file (not JIT)
-  -g       Not implemented
-  -D<var>  Set a compiler #define (does not accept a value)
-  --help   Print this message
+  -ast       Print the ast and exit
+  -cfg       Create graphviz control flow graph as a .dot file
+  -cfg-png   Create graphviz control flow graph as a png
+  -cfg-svg   Create graphviz control flow graph as a svg
+  -tokens    Print the tokens and exit
+  -S         Emit assembly only
+  -obj       Emit an objectfile
+  -lib       Emit a dynamic and static library
+  -clibs     Link c libraries like: -clibs=`-lSDL2 -lxml2 -lcurl...`
+  -o         Output filename: hcc -o <name> ./<file>.HC
+  -run       Immediately run the file (not JIT)
+  -transpile Transpile the code to C, this is best effort
+  -g         Not implemented
+  -D<var>    Set a compiler #define (does not accept a value)
+  --help     Print this message
 ```
 
 ## Control Flow Graph Example
@@ -167,6 +169,100 @@ Produces the following control flow graph. Note that in order to use
 - You can call any libc code by declaring the prototype with 
   `extern "c" <type> <function_name>`. Then call the function as you usually
   would. See [here](https://holyc-lang.com/learn-functions.html) for examples.
+
+## Experimental Transpiler
+A transpiler can be invoked using `hcc -transpile <file>.HC`, it is best effort 
+however can handle most cases, including assembly. Comments are not preserved
+and some if conditions will require brackets to work correctly
+
+```hc
+asm {
+_TOINT::
+    PUSH    RBP
+    MOV     RBP, RSP
+    MOV     RAX, 0
+    XOR     R8,  R8
+    CMPB    [RDI], '-'
+    JNE     @@01
+    ADD     RDI, 1
+    MOV     R8,  1 // mark as being negative
+@@01:
+    CMPB    [RDI], '0'
+    JL      @@02
+    CMPB    [RDI], '9'
+    JG      @@02
+    MOVB    BL, [RDI]
+    SUBB    BL, '0'
+    MOVZBQ  RBX, BL
+    IMUL    RAX, 10
+    ADD     RAX, RBX
+    ADD     RDI, 1
+    JMP     @@01
+@@02:
+    TEST    R8, R8
+    JZ      @@03
+    NEG     RAX
+@@03:
+    LEAVE
+    RET
+}
+
+public _extern _TOINT I64 ToInt(U8 *str);
+
+U0 Main()
+{ /* entry to function */
+  U8 *number = "12345";
+  auto num = ToInt(number);
+  "%ld\n",num;
+}
+```
+
+Becomes the below:
+```c
+long
+ToInt(unsigned char *str)
+{
+    long retval;
+    __asm__ volatile (
+        "mov $0, %%rax\n\t"
+        "xor %%r8, %%r8\n\t"
+        "cmpb $0x2d, (%%rdi)\n\t"
+        "jne ._toint_1\n\t"
+        "add $1, %%rdi\n\t"
+        "mov $1, %%r8\n\t"
+        "._toint_1:\n\t"
+        "cmpb $0x30, (%%rdi)\n\t"
+        "jl ._toint_2\n\t"
+        "cmpb $0x39, (%%rdi)\n\t"
+        "jg ._toint_2\n\t"
+        "movb (%%rdi), %%bl\n\t"
+        "subb $0x30, %%bl\n\t"
+        "movzbq %%bl, %%rbx\n\t"
+        "imul $10, %%rax\n\t"
+        "add %%rbx, %%rax\n\t"
+        "add $1, %%rdi\n\t"
+        "jmp ._toint_1\n\t"
+        "._toint_2:\n\t"
+        "test %%r8, %%r8\n\t"
+        "jz ._toint_3\n\t"
+        "neg %%rax\n\t"
+        "._toint_3:\n\t"
+        "leave\n\t"
+        "ret\n\t"
+        : "=a"(retval)
+        : "D"(str)
+    );
+    return retval;
+}
+
+int
+main(void)
+{
+    unsigned char *number = "12345";
+    long num = ToInt(number);
+    printf("%ld\n", num);
+}
+```
 
 ## Bugs
 This is a non exhaustive list of things that are buggy, if you find something's

@@ -58,6 +58,8 @@
 #define AST_PLACEHOLDER    291
 #define AST_SWITCH         292
 #define AST_DEFAULT        293
+#define AST_SIZEOF         294
+#define AST_COMMENT        295
 
 /* @Cleanup
  * Urgently get rid of this, we do not need `n` ways of setting a label on 
@@ -106,9 +108,12 @@ typedef struct Ast {
     unsigned long flags;
     AstType *type;
     int loff;
+    long deref_symbol;
     union {
+        struct {
         /* 8, 16, 32, 64 bit number */
-        long long i64;
+            long long i64;
+        };
 
         /* Float & Double */
         struct {
@@ -189,8 +194,10 @@ typedef struct Ast {
             Ast *declinit;
         };
 
-        /* Array initialiser */
-        List *arrayinit;
+        struct {
+            /* Array initialiser */
+            List *arrayinit;
+        };
 
         /* If statement */
         struct {
@@ -218,8 +225,10 @@ typedef struct Ast {
             aoStr *while_end;
         };
 
-        /* Return statement */
-        Ast *retval;
+        struct {
+            /* Return statement */
+            Ast *retval;
+        };
 
         /* @Typeo
          * Compound statement */
@@ -299,7 +308,7 @@ Ast *astString(char *str, int len);
 Ast *astDecl(Ast *var, Ast *init);
 
 /* Symbol operators i.e: +-*&^><*/
-Ast *astBinaryOp(long operation, Ast *left, Ast *right);
+Ast *astBinaryOp(long operation, Ast *left, Ast *right, int *_is_err);
 Ast *astUnaryOperator(AstType *type, long kind, Ast *operand);
 
 /* Variable definitions */
@@ -345,6 +354,10 @@ Ast *astAsmFunctionBind(AstType *rettype, aoStr *asm_fname,
 Ast *astAsmFunctionCall(AstType *rettype, aoStr *asm_fname, PtrVec *argv);
 Ast *astAsmFunctionDef(aoStr *asm_fname, aoStr *asm_stmt);
 
+/* Only used when transpiling */
+Ast *astSizeOf(AstType *type);
+Ast *astComment(char *comment, int len);
+
 /* Gotos */
 Ast *astGoto(aoStr *label);
 Ast *astLabel(aoStr *label);
@@ -373,8 +386,10 @@ Ast *astGlobalCmdArgs(void);
 
 aoStr *astNormaliseFunctionName(char *fname);
 int astIsAssignment(long op);
+int astIsBinCmp(long op);
 Ast *astMakeForeverSentinal(void);
 Ast *astMakeLoopSentinal(void);
+char *astAnnonymousLabel(void);
 
 int astIsLabelMatch(Ast *ast, aoStr *goto_label);
 
@@ -396,3 +411,4 @@ const char *astTypeKindToHumanReadable(AstType *type);
 const char *astKindToHumanReadable(Ast *ast);
 
 #endif
+

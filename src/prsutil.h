@@ -35,6 +35,7 @@ int assertLValue(Ast *ast);
 int parseIsFloatOrInt(Ast *ast);
 int parseIsClassOrUnion(int kind);
 int parseIsFunction(Ast *ast);
+int astIsArithmetic(long op, int is_float);
 
 void assertTokenIsTerminator(Cctrl *cc, lexeme *tok, long terminator_flags);
 void assertTokenIsTerminatorWithMsg(Cctrl *cc, lexeme *tok,

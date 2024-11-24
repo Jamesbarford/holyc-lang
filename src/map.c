@@ -148,8 +148,22 @@ static unsigned long intMapHashFunction(long key, unsigned long mask) {
     return key & mask;
 }
 
+unsigned long roundUpToNextPowerOf2(unsigned long v) {
+    v--;
+    v |= v >> 1;
+    v |= v >> 2;
+    v |= v >> 4;
+    v |= v >> 8;
+    v |= v >> 16;
+    v |= v >> 32;
+    v++;
+    return v;
+}
+
+
 IntMap *intMapNew(unsigned long capacity) {
     IntMap *map = malloc(sizeof(IntMap));
+    capacity = roundUpToNextPowerOf2(capacity);
     map->capacity = capacity;
     map->mask = capacity - 1;
     map->size = 0;
@@ -450,6 +464,7 @@ unsigned long strMapHashFunction(char *key, long key_len, unsigned long mask) {
 
 StrMap *strMapNew(unsigned long capacity) {
     StrMap *map = malloc(sizeof(StrMap));
+    capacity = roundUpToNextPowerOf2(capacity);
     map->capacity = capacity;
     map->mask = capacity - 1;
     map->size = 0;
@@ -566,6 +581,24 @@ void strMapRelease(StrMap *map) { // free the entire hashtable
         free(map->entries);
         free(map);
     }
+}
+
+void strMapMerge(StrMap *map1, StrMap *map2) {
+    StrMapIterator *it = strMapIteratorNew(map2);
+    StrMapNode *n = NULL;
+    while ((n = strMapNext(it)) != NULL) {
+        strMapAddOrErr(map1, n->key, n->value);
+    }
+    strMapIteratorRelease(it);
+}
+
+void strMapRemoveKeys(StrMap *map1, StrMap *map2) {
+    StrMapIterator *it = strMapIteratorNew(map2);
+    StrMapNode *n = NULL;
+    while ((n = strMapNext(it)) != NULL) {
+        strMapRemove(map1, n->key);
+    }
+    strMapIteratorRelease(it);
 }
 
 // Resize the hashtable, will return false if OMM
