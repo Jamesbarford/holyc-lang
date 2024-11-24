@@ -30,10 +30,16 @@ typedef struct TranspileCtx {
     StrMap *used_defines;
     StrMap *skip_defines;
     StrMap *skip_types;
+    Cctrl *cc;
     aoStr *buf;
 } TranspileCtx;
 
-static void transpileFields(TranspileCtx *ctx, StrMap *fields, char *clsname, aoStr *buf, ssize_t *ident);
+static void transpileFields(TranspileCtx *ctx,
+                            StrMap *fields,
+                            StrMap *seen,
+                            char *clsname, 
+                            aoStr *buf,
+                            ssize_t *ident);
 aoStr *transpileVarDecl(TranspileCtx *ctx, AstType *type, char *name);
 void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent);
 aoStr *transpileArgvList(PtrVec *argv, TranspileCtx *ctx);
@@ -261,7 +267,7 @@ void transpileInitMaps(void) {
     }
 }
 
-TranspileCtx *transpileCtxNew(void) {
+TranspileCtx *transpileCtxNew(Cctrl *cc) {
     TranspileCtx *ctx = malloc(sizeof(TranspileCtx));
     ctx->used_types = strMapNew(32);
     ctx->used_defines = strMapNew(32);
@@ -270,6 +276,7 @@ TranspileCtx *transpileCtxNew(void) {
     ctx->skip_types = transpile_skip_classes_map;
     ctx->skip_defines = transpile_skip_defines_map;
     ctx->buf = NULL;
+    ctx->cc = cc;
     ctx->flags = 0;
     if (isatty(STDOUT_FILENO)) {
         ctx->flags |= TRANSPILE_FLAG_ISATTY;
@@ -425,6 +432,8 @@ static void transpileEndStmt(aoStr *str) {
 
 void transpileBinaryOp(TranspileCtx *ctx, aoStr *buf, char *op, Ast *ast, ssize_t *indent) {
     ssize_t saved_indent = *indent;
+    int needs_brackets = 0;
+
     *indent = 0;
     if (ast->left && ast->left->kind == AST_DEREF) {
         if (ast->left) {
@@ -437,10 +446,36 @@ void transpileBinaryOp(TranspileCtx *ctx, aoStr *buf, char *op, Ast *ast, ssize_
             transpileAstInternal(ast->right,ctx, indent);
         }
     } else if (!ast->right) { // unary
+        /* If the operation on the left is a binary op then we need brackets */
         aoStrCatPrintf(buf, "%s",op);
+        if (ast->left && ast->left->right) {
+            needs_brackets = 1;
+            aoStrPutChar(buf, '(');
+        }
         transpileAstInternal(ast->left,ctx, indent);
+        if (needs_brackets) {
+            aoStrPutChar(buf, ')');
+        }
     } else {
+        /* We need to add parenthesis around something like: 
+         * ```
+         * while ((var = funCall()) != NULL) {
+         *   // ... 
+         * }
+         * ```
+         *
+         * Which is where the left hand side is an assignment and the operator 
+         * for the binary expression is a comparison.
+         * */
+        if (astIsAssignment(ast->left->kind) && astIsBinCmp(ast->kind)) {
+            needs_brackets = 1;
+            aoStrPutChar(buf,'(');
+        }
+
         transpileAstInternal(ast->left,ctx, indent);
+        if (needs_brackets) {
+            aoStrPutChar(buf,')');
+        }
         aoStrCatPrintf(buf, " %s ",op);
         transpileAstInternal(ast->right, ctx, indent);
     }
@@ -571,9 +606,11 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
         break;
     
     case AST_ASM_FUNCALL: {
+        Ast *asm_stmt = strMapGet(ctx->cc->asm_functions, ast->fname->data);
         char *substitution_name = transpileGetFunctionSub(ast->fname->data,
                                                           ast->fname->len);
-        char *fname = substitution_name ? substitution_name : ast->fname->data; 
+        aoStr *asm_fname = asm_stmt ? asm_stmt->fname : ast->fname;
+        char *fname = substitution_name ? substitution_name : asm_fname->data;
         aoStr *argv = transpileArgvList(ast->args, ctx);
         aoStrCatPrintf(buf, "%s(%s)", fname, argv->data);
         aoStrRelease(argv);
@@ -600,18 +637,10 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
         break;
     }
 
+    case AST_FUNC:
+    case AST_FUN_PROTO:
     case AST_EXTERN_FUNC: {
-        aoStrCatPrintf(buf, "&%s", ast->fname);
-        break;
-    }
-
-    case AST_FUN_PROTO: {
-        aoStrCatPrintf(buf, "&%s", ast->fname);
-        break;
-    }
-
-    case AST_FUNC: {
-        aoStrCatPrintf(buf, "&%s", ast->fname);
+        aoStrCatPrintf(buf, "&%s", ast->fname->data);
         break;
     }
 
@@ -983,11 +1012,9 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
             transpileAstInternal(right,ctx,indent);
             aoStrPutChar(buf, ']');
         } else {
-            if (ast->operand->kind == AST_CLASS_REF) {
-                if (ast->operand->cls->kind == AST_DEREF) {
-                    aoStrCatPrintf(buf, "*");
-                }
-            } else {
+            /* As `->` is a dereference we need to be able to distinguish 
+             * between a class dereference and a general pointer dereference */
+            if (ast->deref_symbol != TK_ARROW) {
                 aoStrCatPrintf(buf, "*");
             }
             transpileAstInternal(ast->operand,ctx,indent);
@@ -1257,7 +1284,8 @@ aoStr *transpileFunctionProto(TranspileCtx *ctx, AstType *type, char *name) {
 
 static void transpileFields(TranspileCtx *ctx,
                             StrMap *fields,
-                            char *clsname, 
+                            StrMap *seen,
+                            char *clsname,
                             aoStr *buf,
                             ssize_t *indent)
 {
@@ -1265,6 +1293,12 @@ static void transpileFields(TranspileCtx *ctx,
     StrMapNode *n = NULL;
     while ((n = strMapNext(it)) != NULL) {
         AstType *field = n->value;
+        /* When transpiling we save the nested flattened class properties on the 
+         * class AND in a separate struct, however when parsing we save the struct 
+         * first so this check ensures we do not double up. It's not _really_ 
+         * needed but makes the code symantically similar */
+        if (strMapGetLen(seen,n->key,n->key_len) != NULL) continue;
+
         aoStrCatRepeat(buf, " ", *indent);
         if (!strncmp(n->key, str_lit("cls_label "))) {
             if (field->kind == AST_TYPE_UNION) {
@@ -1273,7 +1307,7 @@ static void transpileFields(TranspileCtx *ctx,
                 aoStrCatPrintf(buf, "struct {\n");
             }
             *indent += 4;
-            transpileFields(ctx,field->fields,clsname,buf,indent);
+            transpileFields(ctx,field->fields,seen,clsname,buf,indent);
             *indent -= 4;
             aoStrCatRepeat(buf, " ", *indent);
             aoStrCatLen(buf, str_lit("};\n"));
@@ -1290,6 +1324,7 @@ static void transpileFields(TranspileCtx *ctx,
             }
             aoStrRelease(decl);
         }
+        strMapAdd(seen, n->key, n->value);
     }
     strMapIteratorRelease(it);
 }
@@ -1299,6 +1334,8 @@ void transpileClassDefinitions(Cctrl *cc, TranspileCtx *ctx, StrMap *built_in_ty
     StrMapNode *n = NULL;
     aoStr *buf = ctx->buf;
     ssize_t indent = 4;
+    StrMap *seen = strMapNew(32);
+
     while ((n = strMapNext(it)) != NULL) {
         if (!transpileCtxShouldEmitType(ctx, n->key, n->key_len)) {
             continue;
@@ -1317,10 +1354,11 @@ void transpileClassDefinitions(Cctrl *cc, TranspileCtx *ctx, StrMap *built_in_ty
         }
 
         aoStrCatPrintf(buf, "typedef struct %s {\n", n->key);
-        transpileFields(ctx,cls->fields,n->key,buf,&indent);
+        transpileFields(ctx,cls->fields,seen,n->key,buf,&indent);
         aoStrCatPrintf(buf, "} %s;\n\n", n->key);
     }
     strMapIteratorRelease(it);
+    strMapRelease(seen);
 }
 
 void transpileUnionDefinitions(Cctrl *cc, TranspileCtx *ctx) {
@@ -1328,6 +1366,7 @@ void transpileUnionDefinitions(Cctrl *cc, TranspileCtx *ctx) {
     StrMapNode *n = NULL;
     ssize_t indent = 4;
     aoStr *buf = ctx->buf;
+    StrMap *seen = strMapNew(32);
     while ((n = strMapNext(it)) != NULL) {
         if (!transpileCtxShouldEmitType(ctx, n->key, n->key_len)) {
             continue;
@@ -1340,10 +1379,11 @@ void transpileUnionDefinitions(Cctrl *cc, TranspileCtx *ctx) {
         }
 
         aoStrCatPrintf(buf, "typedef union %s {\n", n->key);
-        transpileFields(ctx,cls->fields,n->key,buf,&indent);
+        transpileFields(ctx,cls->fields,seen,n->key,buf,&indent);
         aoStrCatPrintf(buf, "}; %s\n\n", n->key);
     }
     strMapIteratorRelease(it);
+    strMapRelease(seen);
 }
 
 void transpileDefines(Cctrl *cc, TranspileCtx *ctx) {
@@ -1597,7 +1637,7 @@ aoStr *transpileIncludes(TranspileCtx *ctx) {
 }
 
 aoStr *transpileToC(Cctrl *cc, char *file_name) {
-    TranspileCtx *ctx = transpileCtxNew();
+    TranspileCtx *ctx = transpileCtxNew(cc);
     transpileInitMaps();
     
     cc->flags |= (CCTRL_SAVE_ANONYMOUS|CCTRL_PASTE_DEFINES|CCTRL_PRESERVE_SIZEOF|CCTRL_TRANSPILING);

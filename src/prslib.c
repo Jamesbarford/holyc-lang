@@ -973,6 +973,7 @@ Ast *parseExpr(Cctrl *cc, int prec) {
                         astTypeToString(LHS->type), astLValueToString(LHS,0));
             }
             LHS = astUnaryOperator(LHS->type->ptr, AST_DEREF, LHS);
+            LHS->deref_symbol = TK_ARROW;
             LHS = parseGetClassField(cc, LHS);
             continue;
         }
@@ -1126,6 +1127,7 @@ Ast *parsePostFixExpr(Cctrl *cc) {
                                         var_str);
             }
             ast = astUnaryOperator(ast->type->ptr,AST_DEREF,ast);
+            ast->deref_symbol = TK_ARROW;
             ast = parseGetClassField(cc,ast);
             continue;
         }

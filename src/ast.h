@@ -108,9 +108,12 @@ typedef struct Ast {
     unsigned long flags;
     AstType *type;
     int loff;
+    long deref_symbol;
     union {
+        struct {
         /* 8, 16, 32, 64 bit number */
-        long long i64;
+            long long i64;
+        };
 
         /* Float & Double */
         struct {
@@ -191,8 +194,10 @@ typedef struct Ast {
             Ast *declinit;
         };
 
-        /* Array initialiser */
-        List *arrayinit;
+        struct {
+            /* Array initialiser */
+            List *arrayinit;
+        };
 
         /* If statement */
         struct {
@@ -220,8 +225,10 @@ typedef struct Ast {
             aoStr *while_end;
         };
 
-        /* Return statement */
-        Ast *retval;
+        struct {
+            /* Return statement */
+            Ast *retval;
+        };
 
         /* @Typeo
          * Compound statement */
@@ -379,6 +386,7 @@ Ast *astGlobalCmdArgs(void);
 
 aoStr *astNormaliseFunctionName(char *fname);
 int astIsAssignment(long op);
+int astIsBinCmp(long op);
 Ast *astMakeForeverSentinal(void);
 Ast *astMakeLoopSentinal(void);
 char *astAnnonymousLabel(void);

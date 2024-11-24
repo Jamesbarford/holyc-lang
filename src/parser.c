@@ -340,9 +340,8 @@ StrMap *parseClassOffsets(Cctrl *cc,
         offset = base_class->size;
         if (cc->flags & CCTRL_SAVE_ANONYMOUS) {
             strMapAdd(fields_dict,astAnnonymousLabel(),base_class);
-        } else {
-            parseFlattenAnnonymous(base_class,fields_dict,0,1);
         }
+        parseFlattenAnnonymous(base_class,fields_dict,0,1);
     } else {
         offset = 0;
     }
@@ -370,9 +369,8 @@ StrMap *parseClassOffsets(Cctrl *cc,
         if (field_name == NULL && parseIsClassOrUnion(field->kind)) {
             if (cc->flags & CCTRL_SAVE_ANONYMOUS) {
                 strMapAdd(fields_dict,astAnnonymousLabel(),field);
-            } else {
-                parseFlattenAnnonymous(field,fields_dict,offset,0);
             }
+            parseFlattenAnnonymous(field,fields_dict,offset,0);
             offset += field->size;
             free(cls_field);
             continue;
@@ -424,9 +422,8 @@ StrMap *parseUnionOffsets(Cctrl *cc, int *real_size, List *fields) {
         if (field->clsname == NULL && parseIsClassOrUnion(field->kind)) {
             if (cc->flags & CCTRL_SAVE_ANONYMOUS) {
                 strMapAdd(fields_dict,astAnnonymousLabel(),field);
-            } else {
-                parseFlattenAnnonymous(field,fields_dict,0,0);
             }
+            parseFlattenAnnonymous(field,fields_dict,0,0);
             continue;
         }
 

@@ -77,8 +77,8 @@ AstType *astTypeCopy(AstType *type) {
 
 Ast *astUnaryOperator(AstType *type, long kind, Ast *operand) {
     Ast *ast = astNew();
-    ast->type = type;
     ast->kind = kind;
+    ast->type = type;
     ast->operand = operand;
     return ast;
 }
@@ -797,7 +797,7 @@ int astIsAssignment(long op) {
     }
 }
 
-int astIsValidPointerOp(long op, long lineno) {
+int astIsValidPointerOp(long op) {
     switch (op) {
         case '-': case '+':
         case '<': case TK_LESS_EQU:
@@ -807,6 +807,34 @@ int astIsValidPointerOp(long op, long lineno) {
             return 1;
         default:
             return 0;
+    }
+}
+
+int astIsBinCmp(long op) {
+    switch (op) {
+    case TK_AND_AND:
+    case TK_OR_OR:
+    case TK_EQU_EQU:
+    case TK_NOT_EQU:
+    case TK_LESS_EQU:
+    case TK_GREATER_EQU:
+    case '+':
+    case AST_OP_ADD:
+    case '-':
+    case '*':
+    case '~':
+    case '<':
+    case '>':
+    case '/':
+    case '&':
+    case '|':
+    case '=':
+    case '!':
+    case '%':
+    case '^':
+        return 1;
+    default:
+        return 0;
     }
 }
 
@@ -829,7 +857,7 @@ start_routine:
             return ptr1;
         }
 
-        if (!astIsValidPointerOp(op,-1)) {
+        if (!astIsValidPointerOp(op)) {
             goto error;
         }
         if (op != '+' && op != '-'
@@ -1863,6 +1891,7 @@ char *astKindToString(int kind) {
     case AST_CASE:          return "AST_CASE";
     case AST_DEFAULT:       return "AST_DEFAULT";
     case AST_COMMENT:       return "AST_COMMENT";
+    case AST_SIZEOF:        return "AST_SIZEOF";
 
 
     case TK_AND_AND:         return "&&";
