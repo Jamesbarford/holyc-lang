@@ -579,7 +579,10 @@ static void lexSkipCodeComment(lexer *l) {
                 l->lineno++;
             }
             if (*l->ptr == '*' && *(l->ptr + 1) == '/') {
-                while (*l->ptr != '\n') l->ptr++;
+                //while (*l->ptr != '\n') {
+                //    l->ptr++;
+                //}
+                l->ptr += 2;
                 break;
             }
             l->ptr++;
@@ -1712,9 +1715,8 @@ void lexReleaseAllFiles(lexer *l) {
             ((void (*))&lexReleaseLexFile));
 }
 
-const char *lexerReportLine(lexer *l, ssize_t lineno) {
-    static char buffer[4096];
-    char *tmp_ptr = buffer;
+char *lexerReportLine(lexer *l, ssize_t lineno) {
+    aoStr *buf = aoStrAlloc(256);
 
     char *ptr = l->cur_file->src->data;
     ssize_t size = l->cur_file->src->len;
@@ -1725,26 +1727,24 @@ const char *lexerReportLine(lexer *l, ssize_t lineno) {
         if (ptr[i] == '\n') {
             line++;
         }
-    //    if (ptr[i] == '\0') break;
+        if (ptr[i] == '\0') break;
         if (line == lineno) break;
-    }
-    if (ptr[i] == '\0') {
-        memcpy((void*)buffer,str_lit("invalid line number"));
-        return buffer;
     }
 
     i++;
+    if (ptr[i] == '\0') {
+        return aoStrMove(buf);
+    }
 
     while (isspace(ptr[i])) {
         i++;
     }
-    while (ptr[i] && ptr[i] != '\n') {
-        *tmp_ptr++ = ptr[i++];
-    }
-    *tmp_ptr = '\0';
 
-    *ptr = '\0';
-    return buffer;
+    while (ptr[i] && ptr[i] != '\n') {
+        aoStrPutChar(buf, ptr[i++]);
+    }
+    aoStrPutChar(buf, '\0');
+    return aoStrMove(buf);
 }
 
 int lexemeEq(lexeme *l1, lexeme *l2) {
