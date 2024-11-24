@@ -210,7 +210,6 @@ List *parseClassOrUnionFields(Cctrl *cc, aoStr *name,
                 }
                 case KW_CLASS: {
                     AstType *cls = parseClassDef(cc,0);
-                    listAppend(fields_list,cls);
                     listAppend(fields_list, clsFieldNew(cls,cls->clsname));
                     cctrlTokenExpect(cc,';');
                     continue;
@@ -1131,7 +1130,9 @@ Ast *parseCaseLabel(Cctrl *cc, lexeme *tok) {
     /* We're not doing label to label for transpilation */
     if (tokenPunctIs(tok,TK_ELLIPSIS)) {
         cctrlTokenGet(cc);
-        begining = evalIntConstExprOrErr(case_expr, &ok);
+        case_expr = parseExpr(cc,16);
+        ok = 1;
+        end = evalIntConstExprOrErr(case_expr, &ok);
         cctrlTokenExpect(cc,':');
         if (begining > end) {
             cctrlRewindUntilStrMatch(cc,str_lit("case"),NULL);
@@ -1849,7 +1850,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
         } else if (tok->tk_type == TK_I64) {
             cctrlRaiseException(cc,"Floating integer constant '%ld' cannot be used in this context", tok->i64);
         } else if (tok->tk_type == TK_F64) {
-            cctrlRaiseException(cc,"Floating integer constant '%f' cannot be used in this context", tok->f64);
+            cctrlRaiseException(cc,"Floating float constant '%f' cannot be used in this context", tok->f64);
         }
 
         name = cctrlTokenGet(cc);

@@ -60,6 +60,7 @@
 #define TK_PRE_PLUS_PLUS 0x330
 #define TK_PRE_MINUS_MINUS 0x331
 #define TK_KEYWORD      0x332
+#define TK_COMMENT      0x333
 
 #define KW_CLASS       (1<<0) /* Easy to see if struct or union */
 #define KW_UNION       (1<<1)
@@ -130,6 +131,7 @@
 #define CCF_ASM_BLOCK         (1<<4)
 #define CCF_BLOCK             (1<<5)
 #define CCF_ACCEPT_WHITESPACE (1<<6)
+#define CCF_ACCEPT_COMMENTS   (1<<7)
 
 #define LEXEME_RAW_PUNCT              (1<<0)
 #define LEXEME_ENCODE_PUNCT           (1<<1)

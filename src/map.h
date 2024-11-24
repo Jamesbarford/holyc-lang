@@ -114,6 +114,7 @@ typedef struct StrMapIterator {
     long idx;
 } StrMapIterator;
 
+unsigned long roundUpToNextPowerOf2(unsigned long v);
 
 StrMap *strMapNew(unsigned long capacity);
 StrMap *strMapNewWithParent(unsigned long capacity, StrMap *parent);

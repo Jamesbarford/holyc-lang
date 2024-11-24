@@ -59,6 +59,7 @@
 #define AST_SWITCH         292
 #define AST_DEFAULT        293
 #define AST_SIZEOF         294
+#define AST_COMMENT        295
 
 /* @Cleanup
  * Urgently get rid of this, we do not need `n` ways of setting a label on 
@@ -348,6 +349,7 @@ Ast *astAsmFunctionDef(aoStr *asm_fname, aoStr *asm_stmt);
 
 /* Only used when transpiling */
 Ast *astSizeOf(AstType *type);
+Ast *astComment(char *comment, int len);
 
 /* Gotos */
 Ast *astGoto(aoStr *label);

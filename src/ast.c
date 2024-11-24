@@ -753,6 +753,15 @@ static void astFreeCast(Ast *ast) {
     free(ast);
 }
 
+Ast *astComment(char *comment, int len) {
+    Ast *ast = astNew();
+    ast->type = NULL;
+    ast->kind = AST_COMMENT;
+    printf("astComment(): %.*s\n",len,comment);
+    ast->sval = aoStrDupRaw(comment, len);
+    return ast;
+}
+
 aoStr *astNormaliseFunctionName(char *fname) {
     aoStr *newfn = aoStrNew();
 #if IS_BSD
@@ -1787,6 +1796,14 @@ void _astToString(aoStr *str, Ast *ast, int depth) {
             }
             break;
         }
+
+        case AST_COMMENT: {
+            aoStrCatPrintf(str, "<comment>\n");
+            aoStrCatRepeat(str, "  ", depth+1);
+            aoStrCatPrintf(str, "%s\n", ast->sval->data);
+            break;
+        }
+
         case TK_PRE_PLUS_PLUS:
         case TK_PLUS_PLUS:   
         case TK_PRE_MINUS_MINUS:
@@ -1845,6 +1862,7 @@ char *astKindToString(int kind) {
     case AST_SWITCH:        return "AST_SWITCH";
     case AST_CASE:          return "AST_CASE";
     case AST_DEFAULT:       return "AST_DEFAULT";
+    case AST_COMMENT:       return "AST_COMMENT";
 
 
     case TK_AND_AND:         return "&&";
@@ -2158,6 +2176,11 @@ static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
             break;
         }
 
+        case AST_COMMENT: {
+            aoStrCatPrintf(str, "%s\n", ast->sval->data);
+            break;
+        }
+
 
         default: {
             str_op = lexemePunctToStringWithFlags(ast->kind,lexeme_flags);
@@ -2239,7 +2262,12 @@ void astRelease(Ast *ast) {
         case AST_FUN_PROTO:
         case AST_FUNC: astFreeFunction(ast); break;
         case AST_DECL: astFreeDecl(ast); break;
-        case AST_STRING: astFreeString(ast); break;
+
+        case AST_COMMENT:
+        case AST_STRING:
+            astFreeString(ast);
+            break;
+
         case AST_FUNCALL: astFreeFunctionCall(ast); break;
         case AST_ARRAY_INIT: astFreeArrayInit(ast); break;
         case AST_IF: astFreeIf(ast); break;
@@ -2343,6 +2371,7 @@ const char *astKindToHumanReadable(Ast *ast) {
         case AST_CASE: return "case statement";
         case AST_DEFAULT: return "default statement";
         case AST_SIZEOF: return "size of";
+        case AST_COMMENT: return "comment";
         case TK_AND_AND: return "logical AND";
         case TK_OR_OR: return "logical OR";
         case TK_EQU_EQU: return "equality comparison";

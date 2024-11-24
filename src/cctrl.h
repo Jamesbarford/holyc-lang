@@ -31,6 +31,7 @@ typedef struct TokenRingBuffer {
     ssize_t tail;
     ssize_t head;
     ssize_t size;
+    ssize_t capacity;
     lexeme **entries;
 } TokenRingBuffer;
 

@@ -524,6 +524,11 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
         }
     }
 
+    case AST_COMMENT: {
+        aoStrCatPrintf(buf, "%s", ast->sval->data);
+        break;
+    }
+
     /* we are not defining anything ... */
     case AST_LVAR: {
         strMapAdd(ctx->used_defines,ast->lname->data,ast->lname->data);
@@ -989,7 +994,6 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
         }
         break;
     }
-
 
     default: {
         transpileBinaryOp(ctx,buf,lexemePunctToString(ast->kind),ast,indent);
@@ -1571,6 +1575,9 @@ void transpileAstList(Cctrl *cc, TranspileCtx *ctx) {
                 aoStrRelease(asm_func);
                 strMapAdd(seen, ast->asmfname->data, ast);
             }
+        } else if (ast->kind == AST_COMMENT) {
+            ssize_t indent = 0;
+            transpileAstInternal(ast, ctx, &indent);
         }
     }
 }
@@ -1597,22 +1604,19 @@ aoStr *transpileToC(Cctrl *cc, char *file_name) {
     StrMap *built_in_types = strMapNew(32);
     StrMap *clsdefs = cc->clsdefs;
 
-    
-
     aoStr *builtin_path = aoStrDupRaw(str_lit("/usr/local/include/tos.HH")); 
 
     lexer *l = malloc(sizeof(lexer));
     l->lineno = 1;
     
-    lexInit(l,NULL,CCF_PRE_PROC);
+    lexInit(l,NULL,(CCF_PRE_PROC));
     lexSetBuiltinRoot(l,"/usr/local/include/");
     lexPushFile(l,builtin_path);
-    
+
     cctrlInitParse(cc,l);
     // we are parsing the built in types
     cc->clsdefs = built_in_types;
     parseToAst(cc);
-
 
     lexPushFile(l,aoStrDupRaw(file_name,strlen(file_name)));
     cctrlInitParse(cc,l);

@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <ctype.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -137,6 +138,7 @@ Cctrl *ccMacroProcessor(StrMap *macro_defs) {
     Cctrl *cc = malloc(sizeof(Cctrl));
     cc->macro_defs = macro_defs;
     cc->strs = strMapNew(32);
+    cc->ast_list = NULL;
     return cc;
 }
 
@@ -171,6 +173,8 @@ Cctrl *cctrlNew(void) {
     cc->tmp_params = NULL;
     cc->tmp_loop_begin = NULL;
     cc->tmp_loop_end = NULL;
+    cc->tmp_func = NULL;
+    cc->token_buffer = NULL;
 
     str_array = aoStrSplit(x86_registers,',',&len);
     for (int i = 0; i < len; ++i) {
@@ -214,6 +218,7 @@ TokenRingBuffer *tokenRingBufferStaticNew(void) {
     ring_buffer->head = 0;
     ring_buffer->size = 0;
     ring_buffer->entries = token_ring_buffer;
+    ring_buffer->capacity = CCTRL_TOKEN_BUFFER_SIZE;
     for (ssize_t i = 0; i < CCTRL_TOKEN_BUFFER_SIZE; ++i) {
         ring_buffer->entries[i] = NULL;
     }
@@ -228,13 +233,14 @@ TokenRingBuffer *tokenRingBufferNew(void) {
     return ring_buffer;
 }
 
-ssize_t tokenRingBufferGetIdx(ssize_t idx) {
-    return (idx + 1) & CCTRL_TOKEN_BUFFER_MASK;
+/* This always moves forward by one so is more of a get next */
+ssize_t tokenRingBufferGetIdx(ssize_t idx, size_t capacity) {
+    return (idx + 1) & (capacity - 1);
 }
 
 void tokenBufferPrint(TokenRingBuffer *ring_buffer) {
     for (int i = 0, idx = ring_buffer->tail; i < ring_buffer->size;
-            i++, idx = tokenRingBufferGetIdx(idx)) {
+            i++, idx = tokenRingBufferGetIdx(idx, ring_buffer->capacity)) {
         printf(">> %s\n", lexemeToString(ring_buffer->entries[idx]));
     }
     printf("\n");
@@ -249,9 +255,11 @@ int tokenRingBufferEmpty(TokenRingBuffer *ring_buffer) {
 /* Add a token to the ring buffer and remove the oldest element */
 void tokenRingBufferPush(TokenRingBuffer *ring_buffer, lexeme *token) {
     ring_buffer->entries[ring_buffer->head] = token;
-    ring_buffer->head = tokenRingBufferGetIdx(ring_buffer->head);
-    if (ring_buffer->size == CCTRL_TOKEN_BUFFER_SIZE) {
-        ring_buffer->tail = tokenRingBufferGetIdx(ring_buffer->tail);
+    ring_buffer->head = tokenRingBufferGetIdx(ring_buffer->head,
+                                              ring_buffer->capacity);
+    if (ring_buffer->size == ring_buffer->capacity) {
+        ring_buffer->tail = tokenRingBufferGetIdx(ring_buffer->tail,
+                                                  ring_buffer->capacity);
     } else {
         ring_buffer->size++;
     }
@@ -263,9 +271,20 @@ lexeme *tokenRingBufferPop(TokenRingBuffer *ring_buffer) {
         return NULL;
     }
     lexeme *token = ring_buffer->entries[ring_buffer->tail];
-    ring_buffer->tail = tokenRingBufferGetIdx(ring_buffer->tail);
+    ring_buffer->tail = tokenRingBufferGetIdx(ring_buffer->tail,
+                                              ring_buffer->capacity);
     ring_buffer->size--;
     return token;
+}
+
+lexeme *tokenRingBufferPeekBy(TokenRingBuffer *ring_buffer, ssize_t offset) {
+    /* we are out of tokens */
+    if (tokenRingBufferEmpty(ring_buffer)) {
+        return NULL;
+    }
+    ssize_t idx = tokenRingBufferGetIdx(ring_buffer->tail + offset,
+                                        ring_buffer->capacity);
+    return ring_buffer->entries[idx];
 }
 
 lexeme *tokenRingBufferPeek(TokenRingBuffer *ring_buffer) {
@@ -280,19 +299,33 @@ int tokenRingBufferRewind(TokenRingBuffer *ring_buffer) {
     //if (tokenRingBufferEmpty(ring_buffer)) { //|| ring_buffer->tail == ring_buffer->head) {
     //    return 0;
     //}
-    ring_buffer->tail = (ring_buffer->tail - 1 + CCTRL_TOKEN_BUFFER_SIZE) & CCTRL_TOKEN_BUFFER_MASK;
+
+    lexeme *token = ring_buffer->entries[ring_buffer->tail];
+    size_t capacity = ring_buffer->capacity;
+    ssize_t offset = 1;
+    do {
+        ring_buffer->tail = ((ring_buffer->tail - offset) + capacity) & (capacity-1);
+        token = ring_buffer->entries[ring_buffer->tail];
+        offset++;
+    } while (token && token->tk_type == TK_COMMENT);
     ring_buffer->size++;
     return 1;
 }
 
+void cctrLoadNextTokens(Cctrl *cc, ssize_t token_count) {
+    for (ssize_t i = 0; i < token_count; ++i) {
+        lexeme *token = lexToken(cc->macro_defs,cc->lexer_);
+        if (!token) break;
+        tokenRingBufferPush(cc->token_buffer, token);
+    }
+}
+
 void cctrlInitParse(Cctrl *cc, lexer *lexer_) {
     cc->lexer_ = lexer_;
-    cc->token_buffer = tokenRingBufferStaticNew();
-    for (int i = 0; i < CCTRL_TOKEN_BUFFER_SIZE; ++i) {
-        lexeme *token = lexToken(cc->macro_defs, cc->lexer_);
-        if (!token) break;
-        tokenRingBufferPush(cc->token_buffer,token);
+    if (cc->token_buffer == NULL) {
+        cc->token_buffer = tokenRingBufferStaticNew();
     }
+    cctrLoadNextTokens(cc, cc->token_buffer->capacity);
 }
 
 void cctrlInitMacroProcessor(Cctrl *cc) {
@@ -303,6 +336,9 @@ void cctrlInitMacroProcessor(Cctrl *cc) {
     ring_buffer->head = 0;
     ring_buffer->size = 0;
     cc->token_buffer = ring_buffer;
+    cc->ast_list = NULL;
+    cc->tmp_locals = NULL;
+    cc->tmp_func = NULL;
 }
 
 lexeme *cctrlMaybeExpandToken(Cctrl *cc, lexeme *token) {
@@ -320,9 +356,19 @@ lexeme *cctrlMaybeExpandToken(Cctrl *cc, lexeme *token) {
     return token; 
 }
 
+lexeme *cctrlTokenPeekBy(Cctrl *cc, int idx) {
+    return tokenRingBufferPeekBy(cc->token_buffer, idx);
+}
+
 lexeme *cctrlTokenPeek(Cctrl *cc) {
     lexeme *token = tokenRingBufferPeek(cc->token_buffer);
-    if (token) {
+    ssize_t offset = 0;
+    while (token) {
+        if (token->tk_type == TK_COMMENT) {
+            token = tokenRingBufferPeekBy(cc->token_buffer, offset);
+            offset++;
+            continue;
+        }
         cc->lineno = token->line;
         return cctrlMaybeExpandToken(cc,token);
     }
@@ -337,19 +383,20 @@ void cctrlTokenRewind(Cctrl *cc) {
 }
 
 lexeme *cctrlTokenGet(Cctrl *cc) {
-    lexeme *token = cctrlTokenPeek(cc);
-    if (token) {
+    lexeme *token = tokenRingBufferPeek(cc->token_buffer);
+    while (token) {
         tokenRingBufferPop(cc->token_buffer);
-        if (cc->token_buffer->size < 3 && cc->lexer_) {
-            for (ssize_t i = 0; i < 10; ++i) {
-                lexeme *new_token = lexToken(cc->macro_defs,cc->lexer_);
-                if (!new_token) {
-                    break;
-                }
-                tokenRingBufferPush(cc->token_buffer, new_token);
-            }
+        if (token->tk_type == TK_COMMENT) {
+            /* XXX: Not really sure what to do with the comments or where they 
+             * should go ??*/
+            token = tokenRingBufferPeek(cc->token_buffer);
+            continue;
         }
-        return token;
+        if (cc->token_buffer->size < 3 && cc->lexer_) {
+            cctrLoadNextTokens(cc,5);
+        }
+        cc->lineno = token->line;
+        return cctrlMaybeExpandToken(cc, token);
     }
     return NULL;
 }
