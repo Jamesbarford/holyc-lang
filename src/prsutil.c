@@ -164,7 +164,7 @@ void assertTokenIsTerminatorWithMsg(Cctrl *cc, lexeme *tok,
 
     va_list ap;
     va_start(ap,fmt);
-    char *msg = mprintVa(fmt, ap);
+    char *msg = mprintVa(fmt, ap, NULL);
     va_end(ap);
 
     if (tok == NULL) {
@@ -481,7 +481,7 @@ void typeCheckWarn(Cctrl *cc, long op, Ast *expected, Ast *actual) {
     cctrlTokenGet(cc);
     count--;
 
-    cctrlWarning(cc, "Incompatible types '%s' is not assignable to type '%s'", 
+    cctrlWarningFromTo(cc,NULL, '=', ';', "Incompatible types '%s' is not assignable to type '%s'", 
             actual_type->data, expected_type->data);
     for (int i = 0; i < count; ++i) {
         cctrlTokenGet(cc);
@@ -512,8 +512,11 @@ void typeCheckReturnTypeWarn(Cctrl *cc, long lineno, Ast *maybe_func,
                         got->data,
                         expected);
 
-    cctrlRewindUntilStrMatch(cc,str_lit("return"),NULL);
-    cctrlRaiseException(cc, msg);
+    int count = 0;
+    cctrlRewindUntilStrMatch(cc,str_lit("return"),&count);
+    cctrlWarning(cc, msg);
+    for (int i = 0; i < count; ++i) {
+        cctrlTokenGet(cc);
+    }
     free(msg);
-    cctrlTokenGet(cc);
 }

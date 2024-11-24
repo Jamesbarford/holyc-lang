@@ -308,6 +308,7 @@ AstType *parseDeclSpec(Cctrl *cc) {
 
 static AstType *parseArrayDimensionsInternal(Cctrl *cc, AstType *base_type) {
     Ast *size;
+    AstType *type = base_type;
     lexeme *tok, *next_tok;
     int dimension;
 
@@ -320,20 +321,66 @@ static AstType *parseArrayDimensionsInternal(Cctrl *cc, AstType *base_type) {
     }
 
     next_tok = cctrlTokenPeek(cc);
+
     if (!tokenPunctIs(next_tok, ']')) {
         size = parseExpr(cc,16);
-        dimension = evalIntConstExpr(size);
+        int ok = 1;
+        dimension = evalIntConstExprOrErr(size, &ok);
+
+        if (!ok && (cc->flags & CCTRL_PASTE_DEFINES)) {
+            if (size->kind == AST_LVAR) {
+                dimension = -3;
+                type->clsname = size->lname;
+            } else if (astIsArithmetic(size->kind,0)) {
+                /* Relent... otherwise this will get far too complicated for a
+                 * feature that likely will never be used */
+                Ast *left = size->left;
+                Ast *right = size->right;
+                aoStr *lname = NULL;
+                int literal;
+
+                astPrint(left);
+                astPrint(right);
+                if (left->kind == AST_LVAR && right->kind == AST_LITERAL) {
+                    literal = right->i64;
+                    lname = left->lname;
+                } else if (right->kind == AST_LVAR && left->kind == AST_LITERAL) {
+                    literal = left->i64;
+                    lname = right->lname;
+                } else {
+                    goto invalid_subscript;
+                }
+                
+                lexeme *le = strMapGet(cc->macro_defs,lname->data);
+                if (le->tk_type != TK_I64) {
+                    goto invalid_subscript;
+                }
+
+                dimension = literal + le->i64;
+            } else {
+                goto invalid_subscript;
+            }
+        } else if (!ok) {
+            goto invalid_subscript;
+        }
     }
+
     cctrlTokenExpect(cc,']');
-    AstType *sub_type = parseArrayDimensionsInternal(cc,base_type);
+    AstType *sub_type = parseArrayDimensionsInternal(cc,type);
     if (sub_type) {
         if (sub_type->len == -1 && dimension == -1) {
             cctrlRaiseException(cc,"Array size not specified");
         }
-        return astMakeArrayType(sub_type,dimension);
+        type = sub_type;
     }
 
-    return astMakeArrayType(base_type,dimension);
+    return astMakeArrayType(type,dimension);
+
+invalid_subscript:
+    cctrlRewindUntilPunctMatch(cc, '[',NULL);
+    cctrlRaiseExceptionFromTo(cc,"Expected constant integer expression",
+            '[',']',"Invalid array subscript");
+    return NULL;
 }
 
 AstType *parseArrayDimensions(Cctrl *cc, AstType *base_type) {
@@ -432,9 +479,14 @@ PtrVec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
                 if ((check = astTypeCheck(param->type,ast,'=')) == NULL) {
                     char *expected = astTypeToColorString(param->type);
                     char *got = astTypeToColorString(ast->type);
-
-                    cctrlWarning(cc,"Incompatible function argument expected '%s' got '%s' function '%.*s'",
+                    int count = 0;
+                    //cctrlRewindUntilStrMatch(cc,tok->start,tok->len,&count);
+                    //cctrlTokenPeek(cc);
+                    cctrlWarning(cc,"Incompatible function argument, expected '%s' got '%s' function '%.*s'",
                             expected,got,len,fname);
+                    //for (int i = 0; i < count; ++i) {
+                    //    cctrlTokenGet(cc);
+                    //}
 
                     free(expected);
                     free(got);
@@ -517,7 +569,7 @@ Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
 
     if (maybe_fn) {
         rettype = maybe_fn->type->rettype;
-        if (maybe_fn->flags & AST_FLAG_INLINE) {
+        if (maybe_fn->flags & AST_FLAG_INLINE && !(cc->flags & CCTRL_TRANSPILING)) {
             return parseInlineFunctionCall(cc, maybe_fn, argv);
         }
     }
@@ -600,7 +652,7 @@ static Ast *parseIdentifierOrFunction(Cctrl *cc,
             if ((tokenPunctIs(tok,';') || tokenPunctIs(tok,',') || 
                 tokenPunctIs(tok,')'))  
                     && parseIsFunction(ast)) {
-                if (ast->flags & AST_FLAG_INLINE) {
+                if (ast->flags & AST_FLAG_INLINE && !(cc->flags & CCTRL_TRANSPILING)) {
                     return parseInlineFunctionCall(cc,ast,ptrVecNew());
                 }
                 if (ast->kind == AST_ASM_FUNC_BIND || ast->kind == AST_ASM_FUNCDEF) {
@@ -832,8 +884,11 @@ static int parseCompoundAssign(lexeme *tok) {
 }
 
 Ast *parseCreateBinaryOp(Cctrl *cc, long operation, Ast *left, Ast *right) {
-    Ast *binop = astBinaryOp(operation,left,right);
-    if (binop == NULL) {
+    int is_err = 0;
+    Ast *binop = astBinaryOp(operation,left,right,&is_err);
+    if (!is_err) {
+        return binop;
+    } else if (is_err && !(cc->flags & CCTRL_TRANSPILING)) {
         char *opstr = lexemePunctToString(operation);
         const char *left_kind = astTypeKindToHumanReadable(left->type);
         const char *right_kind = astKindToHumanReadable(right);
@@ -844,6 +899,8 @@ Ast *parseCreateBinaryOp(Cctrl *cc, long operation, Ast *left, Ast *right) {
                             opstr,
                             astTypeToString(right->type));
         cctrlRaiseSuggestion(cc,msg,"The `%s` operator cannot be applied to a %s with a %s of %s", opstr, left_kind, right_kind, right_type_kind);
+    } else if (cc->flags & CCTRL_TRANSPILING) {
+        binop->type = ast_int_type;
     }
     return binop;
     
@@ -1007,6 +1064,9 @@ static AstType *parseSizeOfType(Cctrl *cc) {
 
 static Ast *parseSizeof(Cctrl *cc) {
     AstType *type = parseSizeOfType(cc);
+    if (cc->flags & CCTRL_PRESERVE_SIZEOF) {
+        return astSizeOf(type);
+    }
     long size = type->size;
     assert(size >= 0);
     return astI64Type(size);

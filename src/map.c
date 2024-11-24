@@ -568,6 +568,24 @@ void strMapRelease(StrMap *map) { // free the entire hashtable
     }
 }
 
+void strMapMerge(StrMap *map1, StrMap *map2) {
+    StrMapIterator *it = strMapIteratorNew(map2);
+    StrMapNode *n = NULL;
+    while ((n = strMapNext(it)) != NULL) {
+        strMapAddOrErr(map1, n->key, n->value);
+    }
+    strMapIteratorRelease(it);
+}
+
+void strMapRemoveKeys(StrMap *map1, StrMap *map2) {
+    StrMapIterator *it = strMapIteratorNew(map2);
+    StrMapNode *n = NULL;
+    while ((n = strMapNext(it)) != NULL) {
+        strMapRemove(map1, n->key);
+    }
+    strMapIteratorRelease(it);
+}
+
 // Resize the hashtable, will return false if OMM
 int strMapResize(StrMap *map) {
     unsigned long new_capacity, new_mask;

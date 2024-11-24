@@ -184,12 +184,15 @@ void lexInit(lexer *l, char *source, int flags) {
     l->all_source = listNew();
     l->symbol_table = strMapNew(32);
     l->symbol_table->_free_key = NULL;
+    l->seen_files = strMapNew(32);
     l->collecting = 1;
     l->skip_else = 1;
     if (macro_proccessor == NULL) {
         macro_proccessor = ccMacroProcessor(NULL);
     }
-    lexeme_pool = memPoolNew(sizeof(lexeme),64);
+    if (lexeme_pool == NULL) {
+        lexeme_pool = memPoolNew(sizeof(lexeme),64);
+    }
     /* XXX: create one symbol table for the whole application ;
      * hoist to 'compile.c'*/
     for (int i = 0; i < static_size(lexer_types); ++i) {
@@ -311,6 +314,7 @@ char *lexemePunctToString(long op) {
     case '\r':               return "\\r";
     case '\"':               return "\\\"";
     case '\'':               return "\\\'";
+    case '\0':               return "\\0'";
     case TK_AND_AND:         return "&&";
     case TK_OR_OR:           return "||";
     case TK_EQU_EQU:         return "==";
@@ -1663,10 +1667,10 @@ lexeme *lexToken(StrMap *macro_defs, lexer *l) {
         }
         
         if (le.tk_type == TK_IDENT) {
-            if ((macro = strMapGetLen(macro_defs,le.start,le.len)) != NULL) {
-                copy = lexemePoolCpy(macro);
-                return copy;
-            }
+            //if ((macro = strMapGetLen(macro_defs,le.start,le.len)) != NULL) {
+            //    copy = lexemePoolCpy(macro);
+            //    return copy;
+            //}
             copy = lexemePoolCpy(&le);
             return copy;
         }
@@ -1704,18 +1708,19 @@ const char *lexerReportLine(lexer *l, ssize_t lineno) {
     ssize_t line = 1;
     ssize_t i = 0;
     
-    for (; i < size; ++i) {
+    for (; i < size-1; ++i) {
         if (ptr[i] == '\n') {
             line++;
         }
+    //    if (ptr[i] == '\0') break;
         if (line == lineno) break;
     }
-    i++;
-
     if (ptr[i] == '\0') {
         memcpy((void*)buffer,str_lit("invalid line number"));
         return buffer;
     }
+
+    i++;
 
     while (isspace(ptr[i])) {
         i++;

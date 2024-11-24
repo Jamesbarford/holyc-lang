@@ -148,6 +148,7 @@ Cctrl *cctrlNew(void) {
     aoStr **str_array;
     int len;
 
+    cc->flags = 0;
     cc->global_env = strMapNew(32);
     cc->clsdefs = strMapNew(32);
     cc->uniondefs = strMapNew(32);
@@ -158,6 +159,7 @@ Cctrl *cctrlNew(void) {
     cc->libc_functions = strMapNew(32);
     cc->strs = strMapNew(32);
     cc->asm_blocks = listNew();
+    cc->asm_functions = strMapNew(32);
     cc->ast_list = listNew();
     cc->initalisers = listNew();
     cc->initaliser_locals = listNew();
@@ -310,6 +312,9 @@ lexeme *cctrlMaybeExpandToken(Cctrl *cc, lexeme *token) {
 
     lexeme *maybe_define = strMapGetLen(cc->macro_defs, token->start, token->len);
     if (maybe_define) {
+        if (cc->flags & CCTRL_PASTE_DEFINES) {
+            return token;
+        }
         return maybe_define;
     }
     return token; 
@@ -524,11 +529,9 @@ void cctrlCreateColoredLine(Cctrl *cc,
     aoStr *colored_buffer = aoStrNew();
     long offset = -1;
     long tok_len = -1;
-    char *ptr = (char *)line_buffer;
     lexeme tok;
     lexer l;
     lexInit(&l, (char *)line_buffer, CCF_ACCEPT_WHITESPACE);
-    int collect_whitespace = 0;
     ssize_t current_offset = 0;
 
     /* This assumes we want the last match of an error as opposed to the first */
@@ -550,7 +553,6 @@ void cctrlCreateColoredLine(Cctrl *cc,
         colored_lexeme = lexemeToColor(cc,&tok, is_err && should_color_err);
         aoStrCat(colored_buffer, colored_lexeme);
         free(colored_lexeme);
-        ptr += tok.len;
         current_offset += tok.len;
     }
 
@@ -634,7 +636,7 @@ aoStr *cctrlCreateErrorLine(Cctrl *cc,
 }
 
 aoStr *cctrlMessagVnsPrintF(Cctrl *cc, char *fmt, va_list ap, int severity) {
-    char *msg = mprintVa(fmt, ap);
+    char *msg = mprintVa(fmt, ap, NULL);
     aoStr *bold_msg = aoStrNew();
     aoStrCatPrintf(bold_msg, ESC_BOLD"%s"ESC_CLEAR_BOLD, msg);
     lexeme *cur_tok = cctrlTokenPeek(cc);
@@ -647,7 +649,7 @@ aoStr *cctrlMessagVnsPrintF(Cctrl *cc, char *fmt, va_list ap, int severity) {
 aoStr *cctrlMessagVnsPrintFWithSuggestion(Cctrl *cc, char *fmt, va_list ap, 
                                           int severity, char *suggestion)
 {
-    char *msg = mprintVa(fmt, ap);
+    char *msg = mprintVa(fmt, ap, NULL);
     aoStr *bold_msg = aoStrNew();
     aoStrCatPrintf(bold_msg, ESC_BOLD"%s"ESC_CLEAR_BOLD, msg);
     lexeme *cur_tok = cctrlTokenPeek(cc);
@@ -721,7 +723,7 @@ void cctrlRewindUntilPunctMatch(Cctrl *cc, long ch, int *_count) {
         cctrlTokenRewind(cc);
         peek = cctrlTokenPeek(cc);
         count++;
-        if (count > 8) break; // has to be some limit
+        if (count > 5) break; // has to be some limit
     }
     if (_count) *_count = count;
 }
@@ -733,6 +735,7 @@ void cctrlRewindUntilStrMatch(Cctrl *cc, char *str, int len, int *_count) {
         cctrlTokenRewind(cc);
         peek = cctrlTokenPeek(cc);
         count++;
+        if (count > 5) break; // has to be some limit
     }
     if (_count) *_count = count;
 }
@@ -765,10 +768,10 @@ void cctrlTokenExpect(Cctrl *cc, long expected) {
     }
 }
 
-void cctrlRaiseExceptionFromTo(Cctrl *cc, char *suggestion, char from, char to, char *fmt, ...) {
-    va_list ap;
-    va_start(ap,fmt);
-    char *msg = mprintVa(fmt, ap);
+aoStr *cctrlRaiseFromTo(Cctrl *cc, int severity, char *suggestion, char from, 
+                        char to, char *fmt, va_list ap)
+{
+    char *msg = mprintVa(fmt, ap, NULL);
     aoStr *bold_msg = aoStrNew();
     aoStrCatPrintf(bold_msg, ESC_BOLD"%s"ESC_CLEAR_BOLD, msg);
     lexeme *cur_tok = cctrlTokenPeek(cc);
@@ -783,7 +786,7 @@ void cctrlRaiseExceptionFromTo(Cctrl *cc, char *suggestion, char from, char to, 
     long tok_len = -1;
     long line_len = -1;
 
-    cctrlFileAndLine(cc,buf,cur_tok->line,char_pos,bold_msg->data,CCTRL_ERROR);
+    cctrlFileAndLine(cc,buf,cur_tok->line,char_pos,bold_msg->data,severity);
     cctrlCreateColoredLine(cc, buf, cur_tok->line, 0, NULL, char_pos, &offset, &tok_len, &line_len);
 
     if (from_idx != -1 && to_idx != -1) {
@@ -795,20 +798,38 @@ void cctrlRaiseExceptionFromTo(Cctrl *cc, char *suggestion, char from, char to, 
             aoStrCat(buf,ESC_BOLD_RED"^"ESC_RESET);
         }
         if (suggestion) {
-            aoStrCatPrintf(buf, ESC_BOLD_RED" %s"ESC_RESET, suggestion);
+            if (isatty(STDOUT_FILENO)) {
+                aoStrCatPrintf(buf, ESC_BOLD_RED" %s"ESC_RESET, suggestion);
+            } else {
+                aoStrCatPrintf(buf, " %s", suggestion);
+            }
         }
     } else {
         aoStrCat(buf, ESC_CYAN"     |"ESC_RESET);
     }
 
-    fprintf(stderr,"%s\n",buf->data);
-    aoStrRelease(buf);
     aoStrRelease(bold_msg);
+    return buf;
+}
+
+void cctrlRaiseExceptionFromTo(Cctrl *cc, char *suggestion, char from, char to, char *fmt, ...) {
+    va_list ap;
+    va_start(ap,fmt);
+    aoStr *buf = cctrlRaiseFromTo(cc,CCTRL_ERROR,suggestion,from,to,fmt,ap);
+    fprintf(stderr,"%s\n",buf->data);
     va_end(ap);
+    aoStrRelease(buf);
     exit(EXIT_FAILURE);
 }
 
-
+void cctrlWarningFromTo(Cctrl *cc, char *suggestion, char from, char to, char *fmt, ...) {
+    va_list ap;
+    va_start(ap,fmt);
+    aoStr *buf = cctrlRaiseFromTo(cc,CCTRL_WARN,suggestion,from,to,fmt,ap);
+    fprintf(stderr,"%s\n",buf->data);
+    va_end(ap);
+    aoStrRelease(buf);
+}
 
 /* Get variable either from the local or global scope */
 Ast *cctrlGetVar(Cctrl *cc, char *varname, int len) {
@@ -831,11 +852,21 @@ Ast *cctrlGetVar(Cctrl *cc, char *varname, int len) {
     if ((tok = strMapGetLen(cc->macro_defs, varname, len)) != NULL) {
         switch (tok->tk_type) {
         case TK_I64:
+            if (cc->flags & CCTRL_PASTE_DEFINES) {
+                return astLVar(ast_int_type, varname, len);
+            }
             return astI64Type(tok->i64);
         case TK_F64:
+            if (cc->flags & CCTRL_PASTE_DEFINES) {
+                return astLVar(ast_float_type, varname, len);
+            }
             return astF64Type(tok->f64);
-        case TK_STR:
+        case TK_STR: {
+            if (cc->flags & CCTRL_PASTE_DEFINES) {
+                return astLVar(astMakePointerType(ast_u8_type), varname, len);
+            }
             return cctrlGetOrSetString(cc, tok->start, tok->len);
+        }
         default:
             return NULL;
         }

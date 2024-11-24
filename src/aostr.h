@@ -9,12 +9,12 @@
 
 #include <stdarg.h>
 #include <stddef.h>
+#include <sys/types.h>
 
 typedef struct aoStr aoStr;
 
 typedef struct aoStr {
     char *data;
-    size_t offset;
     size_t len;
     size_t capacity;
 } aoStr;
@@ -38,13 +38,14 @@ void aoStrCatAoStr(aoStr *buf, aoStr *s2);
 void aoStrCat(aoStr *buf, const void *d);
 void aoStrCatRepeat(aoStr *buf, char *str, int times);
 void aoStrCatPrintf(aoStr *b, const char *fmt, ...);
+aoStr *aoStrPrintf(const char *fmt, ...);
 aoStr *aoStrEscapeString(aoStr *buf);
 aoStr *aoStrEncode(aoStr *buf);
 
 void aoStrArrayRelease(aoStr **arr, int count);
 aoStr **aoStrSplit(char *to_split, char delimiter, int *count);
 char *mprintf(const char *fmt, ...);
-char *mprintVa(const char *fmt, va_list ap);
+char *mprintVa(const char *fmt, va_list ap, ssize_t *_len);
 aoStr *aoStrError(void);
 
 #endif

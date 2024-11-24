@@ -88,12 +88,12 @@ static void astFreeUnaryOperator(Ast *ast) {
     free(ast);
 }
 
-Ast *astBinaryOp(long operation, Ast *left, Ast *right) {
+Ast *astBinaryOp(long operation, Ast *left, Ast *right, int *_is_err) {
     Ast *ast = astNew();
     ast->type = astGetResultType(operation,left->type,right->type);  
 
     if (ast->type == NULL) {
-        return NULL;
+        *_is_err = 1;
     }
 
     ast->kind = operation;
@@ -155,6 +155,13 @@ aoStr *astMakeTmpName(void) {
     aoStr *s = aoStrNew();
     aoStrCatPrintf(s, ".T%d", tmp_name_sequence++);
     return s;
+}
+
+static int tmp_anonymous_label = 0;
+char *astAnnonymousLabel(void) {
+    /* Adding a space makes this an invalid name for other classes as no 
+     * identifier can have spaces. */
+    return mprintf("cls_label %d",tmp_anonymous_label++);
 }
 
 Ast *astLVar(AstType *type, char *name, int len) {
@@ -552,6 +559,13 @@ AstType *astConvertArray(AstType *ast_type) {
         return ast_type;
     }
     return astMakePointerType(ast_type->ptr);
+}
+
+Ast *astSizeOf(AstType *type) {
+    Ast *ast = astNew();
+    ast->kind = AST_SIZEOF;
+    ast->type = type;
+    return ast;
 }
 
 Ast *astGoto(aoStr *label) {
@@ -1071,7 +1085,11 @@ static aoStr *astTypeToAoStrInternal(AstType *type) {
     }
 
     case AST_TYPE_ARRAY: {
-        aoStrCatPrintf(str, "%s[%d]", astTypeToString(type->ptr), type->size);
+        if (type->size == -1 && type->ptr->clsname != NULL) {
+            aoStrCatPrintf(str, "%s[%s]", astTypeToString(type->ptr), type->ptr->clsname->data);
+        } else {
+            aoStrCatPrintf(str, "%s[%d]", astTypeToString(type->ptr), type->size);
+        }
         return str;
     }
 
@@ -2108,6 +2126,14 @@ static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
             break;
         }
 
+
+        case AST_SIZEOF: {
+            char *type_str = astTypeToString(ast->type);
+            aoStrCatPrintf(str, "sizeof(%s)",type_str);
+            free(type_str);
+            break;
+        }
+
         case AST_BREAK:
             aoStrCatPrintf(str, "break;");
             break;
@@ -2316,6 +2342,7 @@ const char *astKindToHumanReadable(Ast *ast) {
         case AST_SWITCH: return "switch statement";
         case AST_CASE: return "case statement";
         case AST_DEFAULT: return "default statement";
+        case AST_SIZEOF: return "size of";
         case TK_AND_AND: return "logical AND";
         case TK_OR_OR: return "logical OR";
         case TK_EQU_EQU: return "equality comparison";

@@ -156,6 +156,17 @@ void parseFlattenAnnonymous(AstType *anon, StrMap *fields_dict,
     strMapIteratorRelease(it);
 }
 
+typedef struct ClsField {
+    AstType *type;
+    aoStr *field_name;
+} ClsField;
+ClsField *clsFieldNew(AstType *type, aoStr *field_name) {
+    ClsField *f = malloc(sizeof(ClsField));
+    f->type = type;
+    f->field_name = field_name;
+    return f;
+}
+
 List *parseClassOrUnionFields(Cctrl *cc, aoStr *name,
         unsigned int (*computeSize)(List *), unsigned int *_size)
 {
@@ -163,8 +174,8 @@ List *parseClassOrUnionFields(Cctrl *cc, aoStr *name,
     char *fnptr_name;
     int fnptr_name_len;
     lexeme *tok, *tok_name;
-    AstType *next_type, *base_type, *field_type;
-    aoStr  *field_name;
+    AstType *next_type = NULL, *base_type = NULL, *field_type = NULL;
+    aoStr  *field_name = NULL;
     List *fields_list;
 
     tok = cctrlTokenGet(cc);
@@ -192,13 +203,15 @@ List *parseClassOrUnionFields(Cctrl *cc, aoStr *name,
             switch (tok_name->i64) {
                 case KW_UNION: {
                     AstType *_union = parseUnionDef(cc);
-                    listAppend(fields_list,_union);
+                    _union->kind = AST_TYPE_UNION;
+                    listAppend(fields_list, clsFieldNew(_union,_union->clsname));
                     cctrlTokenExpect(cc,';');
                     continue;
                 }
                 case KW_CLASS: {
                     AstType *cls = parseClassDef(cc,0);
                     listAppend(fields_list,cls);
+                    listAppend(fields_list, clsFieldNew(cls,cls->clsname));
                     cctrlTokenExpect(cc,';');
                     continue;
                 }
@@ -234,16 +247,20 @@ List *parseClassOrUnionFields(Cctrl *cc, aoStr *name,
                 next_type = parseFunctionPointerType(cc,&fnptr_name,&fnptr_name_len,next_type);
                 field_name = aoStrDupRaw(fnptr_name,fnptr_name_len);
             } else  {
+                /* XXX: this does not work properly for classes which are not 
+                 * pointers as we miss one of the strings */
                 next_type = parseArrayDimensions(cc,next_type);
                 field_name = aoStrDupRaw(tok_name->start,tok_name->len);
             }
 
             field_type = astMakeClassField(next_type, 0);
-            field_type->clsname = field_name;
+            if (next_type && next_type->clsname) {
+                field_type->clsname = next_type->clsname;
+            }
             /* The list is here to ease calculating the offset of the class 
              * fields as they have been defined by the programmer... Hashing 
              * loses the ordering.*/
-            listAppend(fields_list,field_type);
+            listAppend(fields_list,clsFieldNew(field_type,field_name));
 
             tok = cctrlTokenGet(cc);
             if (tokenPunctIs(tok, ',')) {
@@ -271,7 +288,8 @@ unsigned int CalcUnionSize(List *fields) {
     unsigned int max = 0;
     AstType *type;
     listForEach(fields) {
-        type = it->value;
+        ClsField *cls_field = it->value;
+        type = cls_field->type;
         if (max < type->size) {
             max = type->size;
         }
@@ -284,7 +302,8 @@ unsigned int CalcClassSize(List *fields) {
     unsigned int size = 0;
     AstType *type;
     listForEach(fields) {
-        type = it->value;
+        ClsField *cls_field = it->value;
+        type = cls_field->type;
         if (type->size < MAX_ALIGN) size = type->size;
         else                        size = MAX_ALIGN;
 
@@ -302,8 +321,12 @@ int CalcPadding(int offset, int size) {
     return offset % size == 0 ? 0 : size - offset % size;
 }
 
-StrMap *parseClassOffsets(int *real_size, List *fields, AstType *base_class,
-        aoStr *clsname, int is_intrinsic)
+StrMap *parseClassOffsets(Cctrl *cc,
+                          int *real_size, 
+                          List *fields, 
+                          AstType *base_class,
+                          aoStr *clsname,
+                          int is_intrinsic)
 {
     int offset,size,padding;
     AstType *field;
@@ -316,7 +339,11 @@ StrMap *parseClassOffsets(int *real_size, List *fields, AstType *base_class,
     
     if (base_class) {
         offset = base_class->size;
-        parseFlattenAnnonymous(base_class,fields_dict,0,1);
+        if (cc->flags & CCTRL_SAVE_ANONYMOUS) {
+            strMapAdd(fields_dict,astAnnonymousLabel(),base_class);
+        } else {
+            parseFlattenAnnonymous(base_class,fields_dict,0,1);
+        }
     } else {
         offset = 0;
     }
@@ -324,11 +351,12 @@ StrMap *parseClassOffsets(int *real_size, List *fields, AstType *base_class,
     if (is_intrinsic) {
         *real_size = 16;
         listForEach(fields) {
-            field = it->value;
+            ClsField *cls_field = it->value;
+            field = cls_field->type;
             field->offset = offset;
             offset+=field->size;
-            if (field->clsname) {
-                strMapAdd(fields_dict,field->clsname->data,field);
+            if (cls_field->field_name) {
+                strMapAdd(fields_dict,cls_field->field_name->data,field);
             }
         }
 
@@ -336,19 +364,29 @@ StrMap *parseClassOffsets(int *real_size, List *fields, AstType *base_class,
     }
 
     listForEach(fields) {
-        field = it->value;
-        if (field->clsname == NULL && parseIsClassOrUnion(field->kind)) {
-            parseFlattenAnnonymous(field,fields_dict,offset,0);
+        ClsField *cls_field = it->value;
+        field = cls_field->type;
+        aoStr *field_name = cls_field->field_name;
+
+        if (field_name == NULL && parseIsClassOrUnion(field->kind)) {
+            if (cc->flags & CCTRL_SAVE_ANONYMOUS) {
+                strMapAdd(fields_dict,astAnnonymousLabel(),field);
+            } else {
+                parseFlattenAnnonymous(field,fields_dict,offset,0);
+            }
             offset += field->size;
+            free(cls_field);
             continue;
         } else {
-            if (field->kind == AST_TYPE_POINTER && field->ptr->kind == AST_TYPE_CLASS) {
+            if (field->kind == AST_TYPE_POINTER && 
+                    (field->ptr->kind == AST_TYPE_CLASS || field->ptr->kind == AST_TYPE_UNION)) {
                 if (clsname && field->ptr->clsname) {
                     if (aoStrCmp(field->ptr->clsname, clsname)) {
                         field->fields = fields_dict;
                     }
                 }
             }
+
             /* Align to the type not the size of the array */
             if (field->kind == AST_TYPE_ARRAY) {
                 size = field->ptr->size;
@@ -361,34 +399,41 @@ StrMap *parseClassOffsets(int *real_size, List *fields, AstType *base_class,
             offset += (field->size);
         }
 
-        if (field->clsname) {
-            strMapAdd(fields_dict,field->clsname->data,field);
+        if (field_name) {
+            strMapAdd(fields_dict,field_name->data,field);
         }
+        free(cls_field);
     }
 
     *real_size = offset + CalcPadding(offset, 8);
     return fields_dict;
 }
 
-StrMap *parseUnionOffsets(int *real_size, List *fields) {
+StrMap *parseUnionOffsets(Cctrl *cc, int *real_size, List *fields) {
     int max_size;
     AstType *field;
     StrMap *fields_dict = strMapNew(32);
 
     max_size = 0;
     listForEach(fields) {
-        field = it->value;
+        ClsField *cls_field = it->value;
+        field = cls_field->type;
+        aoStr *field_name = cls_field->field_name;
         if (max_size < field->size) {
             max_size = field->size;
         }
         if (field->clsname == NULL && parseIsClassOrUnion(field->kind)) {
-            parseFlattenAnnonymous(field,fields_dict,0,0);
+            if (cc->flags & CCTRL_SAVE_ANONYMOUS) {
+                strMapAdd(fields_dict,astAnnonymousLabel(),field);
+            } else {
+                parseFlattenAnnonymous(field,fields_dict,0,0);
+            }
             continue;
         }
 
         field->offset = 0;
-        if (field->clsname) {
-            strMapAdd(fields_dict,field->clsname->data, field);
+        if (field_name) {
+            strMapAdd(fields_dict,field_name->data,field);
         }
     }
     *real_size = max_size;
@@ -446,9 +491,9 @@ AstType *parseClassOrUnion(Cctrl *cc, StrMap *env,
     }
 
     if (is_class) {
-        fields_dict = parseClassOffsets(&real_size,fields,base_class,tag,is_intrinsic);
+        fields_dict = parseClassOffsets(cc,&real_size,fields,base_class,tag,is_intrinsic);
     } else {
-        fields_dict = parseUnionOffsets(&real_size,fields);
+        fields_dict = parseUnionOffsets(cc,&real_size,fields);
     }
     listRelease(fields,NULL);
 
@@ -466,6 +511,7 @@ AstType *parseClassOrUnion(Cctrl *cc, StrMap *env,
     } else {
         ref = astClassType(NULL,tag,0,is_intrinsic); 
     }
+    if (!is_class) ref->kind = AST_TYPE_UNION;
     if (tag) {
         strMapAdd(env,tag->data,ref);
     }
@@ -1020,7 +1066,7 @@ Ast *parseReturnStatement(Cctrl *cc) {
     else        check = ast_void_type;
 
     if (check->kind == AST_TYPE_VOID && maybe_fn->type->rettype->kind == AST_TYPE_VOID) {
-        if (maybe_fn->flags & AST_FLAG_INLINE) {
+        if (maybe_fn->flags & AST_FLAG_INLINE && !(cc->flags & CCTRL_TRANSPILING)) {
             return astDecl(maybe_fn->inline_ret,NULL);
         }
         return astReturn(retval,cc->tmp_rettype);
@@ -1031,20 +1077,32 @@ Ast *parseReturnStatement(Cctrl *cc) {
         Ast *func = strMapGet(cc->global_env,cc->tmp_fname->data);
         typeCheckReturnTypeWarn(cc,lineno,func,check,retval);
     }
-    if (maybe_fn->flags & AST_FLAG_INLINE) {
+    if (maybe_fn->flags & AST_FLAG_INLINE && !(cc->flags & CCTRL_TRANSPILING)) {
         return astDecl(maybe_fn->inline_ret,retval);
     }
     return astReturn(retval,cc->tmp_rettype);
+}
+
+void parseRaiseCaseException(Cctrl *cc, Ast *case_expr) {
+    cctrlRewindUntilStrMatch(cc,str_lit("case"),NULL);
+    char *exp = astLValueToString(case_expr,0);
+    char *type = astTypeToString(case_expr->type);
+    char *suggestion = mprintf("Invalid use of type %s", type);
+    cctrlRaiseExceptionFromTo(cc, suggestion, 'c', ':', "`case` must be followed by an integer constant got - %s", exp);
+    free(exp);
+    free(type);
+    free(suggestion);
 }
 
 Ast *parseCaseLabel(Cctrl *cc, lexeme *tok) {
     if (cc->tmp_case_list == NULL) {
         cctrlRaiseException(cc,"unexpected 'case' found");
     }
-    Ast *case_, *prev;
+    Ast *case_, *prev, *case_expr = NULL;
     lexeme *peek;
     aoStr *label;
     int begining,end;
+    int ok = 1;
 
     peek = cctrlTokenPeek(cc);
     if (tokenPunctIs(peek,':')) {
@@ -1055,14 +1113,25 @@ Ast *parseCaseLabel(Cctrl *cc, lexeme *tok) {
             begining = prev->case_end+1;
         }
     } else {
-        begining = evalIntConstExpr(parseExpr(cc,16));
+        case_expr = parseExpr(cc,16);
+        begining = evalIntConstExprOrErr(case_expr, &ok);
+        if (!ok) {
+            if (cc->flags & CCTRL_PASTE_DEFINES && case_expr->kind == AST_LVAR) {
+                label = case_expr->lname;
+            } else {
+                parseRaiseCaseException(cc,case_expr);
+            }
+        } else {
+            label = astMakeLabel();
+        }
     }
-    label = astMakeLabel();
+
     tok = cctrlTokenPeek(cc);
 
+    /* We're not doing label to label for transpilation */
     if (tokenPunctIs(tok,TK_ELLIPSIS)) {
         cctrlTokenGet(cc);
-        end = evalIntConstExpr(parseExpr(cc,16));
+        begining = evalIntConstExprOrErr(case_expr, &ok);
         cctrlTokenExpect(cc,':');
         if (begining > end) {
             cctrlRewindUntilStrMatch(cc,str_lit("case"),NULL);
@@ -1077,9 +1146,15 @@ Ast *parseCaseLabel(Cctrl *cc, lexeme *tok) {
 
     List *stmts = listNew();
     peek = cctrlTokenPeek(cc);
-    case_ = astCase(label,begining,end,stmts);
 
-    assertUniqueSwitchCaseLabels(cc->tmp_case_list,case_);
+    if (!ok && cc->flags & CCTRL_PASTE_DEFINES) {
+        case_ = astCase(label,begining,end,stmts);
+        case_->type = ast_void_type;
+    } else {
+        case_ = astCase(label,begining,end,stmts);
+        assertUniqueSwitchCaseLabels(cc->tmp_case_list,case_);
+    }
+
     ptrVecPush(cc->tmp_case_list,case_);
 
     do {
@@ -1481,7 +1556,7 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
             case AST_FUN_PROTO:
                 /* upgrade prototype to a function */
                 func->locals = cc->tmp_locals;
-                astVectorRelease(func->params);
+                // astVectorRelease(func->params);
                 func->params = params;
                 cc->tmp_params = func->params;
                 cc->tmp_rettype = func->type->rettype;
@@ -1581,6 +1656,8 @@ Ast *parseAsmFunctionBinding(Cctrl *cc) {
     }
 
     asm_fname = aoStrDupRaw(tok->start,tok->len);
+    Ast *asm_blk = strMapGetLen(cc->asm_functions, asm_fname->data, asm_fname->len);
+
     rettype = parseDeclSpec(cc);
 
     if (rettype->kind == AST_TYPE_AUTO) {
@@ -1601,6 +1678,11 @@ Ast *parseAsmFunctionBinding(Cctrl *cc) {
     asm_func = astAsmFunctionBind(
             astMakeFunctionType(rettype, params),
             asm_fname,c_fname,params);
+
+    /* update the assembly block so it knows the HC function name */
+    if (asm_blk && asm_blk->fname == NULL) {
+        asm_blk->fname = c_fname;
+    }
 
     cc->localenv = NULL;
     /* Map a c function to an ASM function */

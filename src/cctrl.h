@@ -12,6 +12,11 @@
 #define CCTRL_TOKEN_BUFFER_SIZE 16
 #define CCTRL_TOKEN_BUFFER_MASK CCTRL_TOKEN_BUFFER_SIZE-1
 
+#define CCTRL_TRANSPILING     (1<<0)
+#define CCTRL_SAVE_ANONYMOUS  (1<<1)
+#define CCTRL_PASTE_DEFINES   (1<<2)
+#define CCTRL_PRESERVE_SIZEOF (1<<3)
+
 /* For messages */
 #define CCTRL_ICE   0
 #define CCTRL_INFO  1
@@ -39,6 +44,7 @@ lexeme *tokenRingBufferPeek(TokenRingBuffer *ring_buffer);
 int tokenRingBufferRewind(TokenRingBuffer *ring_buffer);
 
 typedef struct Cctrl {
+    unsigned long flags;
     /* The global environment for user defined types, functions and global
      * variables */
     StrMap *global_env;
@@ -55,7 +61,8 @@ typedef struct Cctrl {
     /* Local environment for a function */
     StrMap *localenv;
 
-    /* assembly functions that have been bound to HC */
+    /* assembly functions that have been bound to HC, this is the HC 
+     * name, not the assembly name */
     StrMap *asm_funcs;
 
     /* Macro definitions */
@@ -66,6 +73,9 @@ typedef struct Cctrl {
 
     /* libc function names */
     StrMap *libc_functions;
+
+    /* Assembly function name to assembly block mapping */
+    StrMap *asm_functions;
 
     /* asm blocks */
     List *asm_blocks;
@@ -143,6 +153,7 @@ int cctrlIsKeyword(Cctrl *cc, char *name, int len);
 AstType *cctrlGetKeyWord(Cctrl *cc, char *name, int len);
 void cctrlInfo(Cctrl *cc, char *fmt, ...);
 void cctrlWarning(Cctrl *cc, char *fmt, ...);
+void cctrlWarningFromTo(Cctrl *cc, char *suggestion, char from, char to, char *fmt, ...);
 [[noreturn]] void cctrlRaiseExceptionFromTo(Cctrl *cc, char *suggestion, char from, char to, char *fmt, ...);
 [[noreturn]] void cctrlRaiseException(Cctrl *cc, char *fmt, ...);
 [[noreturn]]void cctrlRaiseSuggestion(Cctrl *cc, char *suggestion, char *fmt, ...);

@@ -130,46 +130,6 @@ void aoStrCatRepeat(aoStr *buf, char *str, int times) {
     }
 }
 
-void aoStrCatPrintf(aoStr *b, const char *fmt, ...) {
-    va_list ap, copy;
-    va_start(ap, fmt);
-
-    /* Probably big enough */
-    size_t fmt_len = strlen(fmt);
-    size_t bufferlen = 1024;
-    if (fmt_len > bufferlen) {
-        bufferlen = fmt_len;
-    }
-    int len = 0;
-    char *buf = (char *)malloc(sizeof(char) * bufferlen+1);
-
-    while (1) {
-        va_copy(copy, ap);
-        len = vsnprintf(buf, bufferlen, fmt, copy);
-        va_end(copy);
-
-        if (len < 0) {
-            free(buf);
-            return;
-        }
-
-        if (((size_t)len) >= bufferlen) {
-            free(buf);
-            bufferlen = ((size_t)len) + 2;
-            buf = malloc(bufferlen);
-            if (buf == NULL) {
-                return;
-            }
-            continue;
-        }
-        break;
-    }
-
-    aoStrCatLen(b, buf, len);
-    free(buf);
-    va_end(ap);
-}
-
 char *aoStrEncodeChar(long op) {
     static char buf[4];
     switch(op) {
@@ -284,10 +244,10 @@ aoStr *aoStrEscapeString(aoStr *buf) {
             switch (*ptr) {
             case '$': aoStrCat(outstr,"\\$"); break;
             case '`': aoStrCat(outstr,"\\`"); break;
-            default: aoStrPutChar(outstr, *ptr); break;
+            default:  aoStrPutChar(outstr, *ptr); break;
             }
         } else {
-            aoStrPutChar(outstr, '\\');
+            //aoStrPutChar(outstr, '\\');
             switch (*ptr) {
             case '\'': aoStrPutChar(outstr,'\''); break;
             case '\\': aoStrPutChar(outstr, '\\'); break;
@@ -372,9 +332,8 @@ error:
     return NULL;
 }
 
-char *mprintVa(const char *fmt, va_list ap) {
+static char *mprintVaImpl(const char *fmt, va_list ap, size_t *_len, size_t *_allocated) {
     va_list copy;
-
     int allocated = 256;
     int len = 0;
     char *buffer = (char *)malloc(sizeof(char)*allocated+1);
@@ -391,24 +350,86 @@ char *mprintVa(const char *fmt, va_list ap) {
 
         if (len >= allocated) {
             free(buffer);
-            allocated = len + 2;
+            allocated = (len + 2);
             buffer = (char *)malloc(sizeof(char)*allocated);
             if (buffer == NULL) return NULL;
             continue;
         }
         break;
     }
+    if (_len) *_len = len;
+    if (_allocated) *_allocated = allocated;
     buffer[len] = '\0';
     return buffer;
+}
+
+
+char *mprintVa(const char *fmt, va_list ap, ssize_t *_len) {
+    return mprintVaImpl(fmt,ap,(size_t *)_len,NULL);
 }
 
 /* Allocating printf */
 char *mprintf(const char *fmt, ...) {
     va_list ap;
     va_start(ap,fmt);
-    char *buf = mprintVa(fmt, ap);
+    char *buf = mprintVa(fmt, ap, NULL);
     va_end(ap);
     return buf;
+}
+
+void aoStrCatPrintf(aoStr *b, const char *fmt, ...) {
+    va_list ap, copy;
+    va_start(ap, fmt);
+
+    /* Probably big enough */
+    size_t fmt_len = strlen(fmt);
+    size_t bufferlen = 1024;
+    if (fmt_len > bufferlen) {
+        bufferlen = fmt_len;
+    }
+    int len = 0;
+    char *buf = (char *)malloc(sizeof(char) * bufferlen+1);
+
+    while (1) {
+        va_copy(copy, ap);
+        len = vsnprintf(buf, bufferlen, fmt, copy);
+        va_end(copy);
+
+        if (len < 0) {
+            free(buf);
+            return;
+        }
+
+        if (((size_t)len) >= bufferlen) {
+            free(buf);
+            bufferlen = ((size_t)len) + 2;
+            buf = malloc(bufferlen);
+            if (buf == NULL) {
+                return;
+            }
+            continue;
+        }
+        break;
+    }
+
+    aoStrCatLen(b, buf, len);
+    free(buf);
+    va_end(ap);
+}
+
+
+aoStr *aoStrPrintf(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    size_t len = 0;
+    size_t capacity = 0;
+    char *new_buf = mprintVaImpl(fmt,ap,&len,&capacity);
+    aoStr *buffer = (aoStr *)malloc(sizeof(aoStr));
+    buffer->data = new_buf;
+    buffer->len = len;
+    buffer->capacity = capacity;
+    va_end(ap);
+    return buffer;
 }
 
 aoStr *aoStrError(void) {
@@ -416,3 +437,5 @@ aoStr *aoStrError(void) {
     aoStr *str = aoStrDupRaw(err,strlen(err));
     return str;
 }
+
+

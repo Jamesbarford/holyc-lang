@@ -1,12 +1,13 @@
 #include <string.h>
+#include <stdio.h>
 
 #include "aostr.h"
 #include "ast.h"
 #include "cctrl.h"
 #include "lexer.h"
 #include "list.h"
+#include "map.h"
 #include "prsasm.h"
-#include "util.h"
 
 
 /* format the assembly based on how many characters there are for the 
@@ -205,6 +206,9 @@ Ast *prsAsmToATT(Cctrl *cc) {
                         /* Create an ast */
                         asm_function = astAsmFunctionDef(curfunc,curblock);
                         listAppend(asm_functions,asm_function);
+                        if (!strMapAddOrErr(cc->asm_functions, curfunc->data, asm_function)) {
+                            cctrlIce(cc, "Already defined assembly function: %s", curfunc->data);
+                        }
                         curblock = aoStrNew();
                     }
 
@@ -338,6 +342,9 @@ Ast *prsAsmToATT(Cctrl *cc) {
     aoStrCatLen(asm_code,curblock->data,curblock->len);
     asm_function = astAsmFunctionDef(curfunc,curblock);
     listAppend(asm_functions,asm_function);
+    if (!strMapAddOrErr(cc->asm_functions, curfunc->data, asm_function)) {
+        cctrlIce(cc, "Already defined assembly function: %s", curfunc->data);
+    }
     asm_block = astAsmBlock(asm_code,asm_functions);
     return asm_block;
 }
