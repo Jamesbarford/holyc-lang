@@ -196,7 +196,7 @@ void lexReleaseAllFiles(lexer *l);
 int tokenPunctIs(lexeme *tok, long ch);
 int tokenIdentIs(lexeme *tok, char *ident, int len);
 void lexemeFree(void *_le);
-const char *lexerReportLine(lexer *l, ssize_t lineno);
+char *lexerReportLine(lexer *l, ssize_t lineno);
 void lexerPoolRelease(void);
 int lexemeEq(lexeme *l1, lexeme *l2);
 char *lexReadfile(char *path, ssize_t *_len);
