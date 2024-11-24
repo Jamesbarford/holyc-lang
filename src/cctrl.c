@@ -403,7 +403,7 @@ lexeme *cctrlTokenGet(Cctrl *cc) {
 
 aoStr *cctrlSeverityMessage(int severity) {
     aoStr *buf = aoStrNew();
-    int is_terminal = isatty(STDOUT_FILENO);
+    int is_terminal = isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
     if (is_terminal) {
         switch (severity) {
             case CCTRL_ERROR:
@@ -449,7 +449,7 @@ aoStr *cctrlSeverityMessage(int severity) {
 
 void cctrlFileAndLine(Cctrl *cc, aoStr *buf, ssize_t lineno, ssize_t char_pos, char *msg, int severity) {
     aoStr *severity_msg = cctrlSeverityMessage(severity);
-    int is_terminal = isatty(STDOUT_FILENO);
+    int is_terminal = isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
 
     aoStrCatPrintf(buf,"%s%s", severity_msg->data, msg);
     if (buf->data[buf->len - 1] != '\n') {
@@ -477,7 +477,7 @@ void cctrlFileAndLine(Cctrl *cc, aoStr *buf, ssize_t lineno, ssize_t char_pos, c
 }
 
 char *lexemeToColor(Cctrl *cc, lexeme *tok, int is_err) {
-    int is_terminal = isatty(STDOUT_FILENO);
+    int is_terminal = isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
     if (!is_terminal) {
         switch (tok->tk_type) {
             case TK_KEYWORD: return mprintf("%.*s", tok->len,tok->start);
@@ -487,7 +487,7 @@ char *lexemeToColor(Cctrl *cc, lexeme *tok, int is_err) {
             case TK_IDENT: return mprintf("%.*s", tok->len,tok->start);
             default: return mprintf("%.*s",tok->len, tok->start);
         }
-    } else if (is_err) {
+    } else if (is_terminal && is_err) {
         aoStr *buf = aoStrNew();
         aoStrCat(buf,ESC_BOLD_RED);
         switch (tok->tk_type) {
@@ -518,8 +518,7 @@ char *lexemeToColor(Cctrl *cc, lexeme *tok, int is_err) {
     }
 }
 
-ssize_t cctrlGetCharErrorIdx(Cctrl *cc, lexeme *cur_tok) {
-    const char *line_buffer = lexerReportLine(cc->lexer_,cur_tok->line);
+ssize_t cctrlGetCharErrorIdx(Cctrl *cc, lexeme *cur_tok, const char *line_buffer) {
     ssize_t offset = 0;
     lexeme tok;
     lexer l;
@@ -542,8 +541,7 @@ ssize_t cctrlGetCharErrorIdx(Cctrl *cc, lexeme *cur_tok) {
     return latest_offset;
 }
 
-ssize_t cctrlGetErrorIdx(Cctrl *cc, ssize_t line, char ch) {
-    const char *line_buffer = lexerReportLine(cc->lexer_,line);
+ssize_t cctrlGetErrorIdx(Cctrl *cc, ssize_t line, char ch, const char *line_buffer) {
     char *ptr = (char *)line_buffer;
     while (*ptr) {
         if (*ptr == ch) {
@@ -562,16 +560,15 @@ void cctrlCreateColoredLine(Cctrl *cc,
                             ssize_t char_pos,
                             ssize_t *_offset,
                             ssize_t *_tok_len,
-                            ssize_t *_line_len)
+                            const char *line_buffer)
 {
-    int is_terminal = isatty(STDOUT_FILENO);
+    int is_terminal = isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
     if (is_terminal) {
         aoStrCat(buf, ESC_CYAN"     |\n"ESC_RESET);
     } else {
         aoStrCat(buf, "     |\n");
     }
     lexeme *cur_tok = cctrlTokenPeek(cc);
-    const char *line_buffer = lexerReportLine(cc->lexer_,lineno);
 
     aoStr *colored_buffer = aoStrNew();
     long offset = -1;
@@ -610,7 +607,6 @@ void cctrlCreateColoredLine(Cctrl *cc,
     }
     if (_offset) *_offset = offset;
     if (_tok_len) *_tok_len = tok_len;
-    if (_line_len) *_line_len = strlen(line_buffer);
     aoStrRelease(colored_buffer);
 }
 
@@ -620,7 +616,7 @@ aoStr *cctrlCreateErrorLine(Cctrl *cc,
                             int severity,
                             char *suggestion)
 {
-    int is_terminal = isatty(STDOUT_FILENO);
+    int is_terminal = isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
     if (!cc->lexer_) {
         aoStr *buf = aoStrNew();
         cctrlFileAndLine(cc,buf,lineno,-1,msg,severity);
@@ -632,17 +628,17 @@ aoStr *cctrlCreateErrorLine(Cctrl *cc,
         return buf;
     }
 
+    const char *line_buffer = lexerReportLine(cc->lexer_,lineno);
     lexeme *cur_tok = cctrlTokenPeek(cc);
     aoStr *buf = aoStrNew();
-    long char_pos = cctrlGetCharErrorIdx(cc,cur_tok);
+    long char_pos = cctrlGetCharErrorIdx(cc,cur_tok, line_buffer);
 
     long offset = -1;
     long tok_len = -1;
-    long line_len = -1;
 
     cctrlFileAndLine(cc,buf,cur_tok->line,char_pos,msg,severity);
     cctrlCreateColoredLine(cc, buf, lineno, 1, suggestion,
-            char_pos, &offset, &tok_len, &line_len);
+            char_pos, &offset, &tok_len, line_buffer);
 
     if (char_pos != -1 && tok_len != -1) {
         if (is_terminal) {
@@ -684,8 +680,13 @@ aoStr *cctrlCreateErrorLine(Cctrl *cc,
 
 aoStr *cctrlMessagVnsPrintF(Cctrl *cc, char *fmt, va_list ap, int severity) {
     char *msg = mprintVa(fmt, ap, NULL);
+    int is_terminal = isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
     aoStr *bold_msg = aoStrNew();
-    aoStrCatPrintf(bold_msg, ESC_BOLD"%s"ESC_CLEAR_BOLD, msg);
+    if (is_terminal) {
+        aoStrCatPrintf(bold_msg, ESC_BOLD"%s"ESC_CLEAR_BOLD, msg);
+    } else {
+        aoStrCatPrintf(bold_msg, "%s", msg);
+    }
     lexeme *cur_tok = cctrlTokenPeek(cc);
     aoStr *buf = cctrlCreateErrorLine(cc,cur_tok->line,bold_msg->data,severity,NULL);
     aoStrRelease(bold_msg);
@@ -696,9 +697,14 @@ aoStr *cctrlMessagVnsPrintF(Cctrl *cc, char *fmt, va_list ap, int severity) {
 aoStr *cctrlMessagVnsPrintFWithSuggestion(Cctrl *cc, char *fmt, va_list ap, 
                                           int severity, char *suggestion)
 {
+    int is_terminal = isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
     char *msg = mprintVa(fmt, ap, NULL);
     aoStr *bold_msg = aoStrNew();
-    aoStrCatPrintf(bold_msg, ESC_BOLD"%s"ESC_CLEAR_BOLD, msg);
+    if (is_terminal) {
+        aoStrCatPrintf(bold_msg, ESC_BOLD"%s"ESC_CLEAR_BOLD, msg);
+    } else {
+        aoStrCatPrintf(bold_msg, "%s", msg);
+    }
     lexeme *cur_tok = cctrlTokenPeek(cc);
     aoStr *buf = cctrlCreateErrorLine(cc,cur_tok->line,bold_msg->data,severity,suggestion);
     aoStrRelease(bold_msg);
@@ -823,18 +829,19 @@ aoStr *cctrlRaiseFromTo(Cctrl *cc, int severity, char *suggestion, char from,
     aoStrCatPrintf(bold_msg, ESC_BOLD"%s"ESC_CLEAR_BOLD, msg);
     lexeme *cur_tok = cctrlTokenPeek(cc);
 
+    char *line_buffer = lexerReportLine(cc->lexer_, cur_tok->line);
     aoStr *buf = aoStrNew();
     /* This is not a terribly efficient way of getting an error message */
-    long char_pos = cctrlGetCharErrorIdx(cc,cur_tok);
-    long from_idx = cctrlGetErrorIdx(cc,cur_tok->line,from);
-    long to_idx = cctrlGetErrorIdx(cc,cur_tok->line,to);
+    long char_pos = cctrlGetCharErrorIdx(cc,cur_tok, line_buffer);
+    long from_idx = cctrlGetErrorIdx(cc,cur_tok->line,from, line_buffer);
+    long to_idx = cctrlGetErrorIdx(cc,cur_tok->line,to, line_buffer);
 
     long offset = -1;
     long tok_len = -1;
-    long line_len = -1;
 
     cctrlFileAndLine(cc,buf,cur_tok->line,char_pos,bold_msg->data,severity);
-    cctrlCreateColoredLine(cc, buf, cur_tok->line, 0, NULL, char_pos, &offset, &tok_len, &line_len);
+    cctrlCreateColoredLine(cc, buf, cur_tok->line, 0, NULL, char_pos, &offset, &tok_len, 
+            line_buffer);
 
     if (from_idx != -1 && to_idx != -1) {
         aoStrCat(buf, ESC_CYAN"     |    "ESC_RESET);
@@ -856,6 +863,7 @@ aoStr *cctrlRaiseFromTo(Cctrl *cc, int severity, char *suggestion, char from,
     }
 
     aoStrRelease(bold_msg);
+    free(line_buffer);
     return buf;
 }
 
