@@ -618,6 +618,9 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
     }
 
     case AST_FUNPTR_CALL:
+        /* For when a function pointer exists on a class, interestingly 
+         * due to maintaining a reference to the class this we be trivial 
+         * to create class methods */
         if (ast->ref && ast->ref->kind == AST_CLASS_REF) {
             Ast *ref = ast->ref;
             transpileAstInternal(ref->cls, ctx, indent);
