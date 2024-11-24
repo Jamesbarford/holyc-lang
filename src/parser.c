@@ -1111,6 +1111,7 @@ Ast *parseCaseLabel(Cctrl *cc, lexeme *tok) {
             prev = cc->tmp_case_list->entries[cc->tmp_case_list->size - 1];
             begining = prev->case_end+1;
         }
+        label = astMakeLabel();
     } else {
         case_expr = parseExpr(cc,16);
         begining = evalIntConstExprOrErr(case_expr, &ok);
