@@ -25,7 +25,8 @@ Full documentation for the language can be found here: https://holyc-lang.com/
 A holyc compiler built from scratch in C. Currently it is non optimising,
 walking the AST and compiling it directly to x86_64 assembly code as text which 
 is fed into gcc to assemble. Floating point arithmetic is supported as are most
-of the major language features.
+of the major language features. There is experimental support for transpiling 
+HolyC to C.
 
 ## Example
 Below is a snippet of code showing some of the features supported by this holyc
