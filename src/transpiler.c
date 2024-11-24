@@ -533,7 +533,7 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
                     default: *tmp_ptr++ = ch2; break;
                 }
             }
-            tmp_buf[i] = '\0';
+            tmp_buf[i+1] = '\0';
             char *defn = transpileHighlightStringAsCharacter(ctx, tmp_buf);
             aoStrCat(buf,defn);
             free(defn);
