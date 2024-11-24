@@ -617,9 +617,21 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
         break;
     }
 
+    case AST_FUNPTR_CALL:
+        /* For when a function pointer exists on a class, interestingly 
+         * due to maintaining a reference to the class this we be trivial 
+         * to create class methods */
+        if (ast->ref && ast->ref->kind == AST_CLASS_REF) {
+            Ast *ref = ast->ref;
+            transpileAstInternal(ref->cls, ctx, indent);
+            if (ref->cls->deref_symbol == TK_ARROW) {
+                aoStrCat(buf, "->");
+            } else {
+                aoStrCat(buf, ".");
+            }
+        }
     case AST_FUNPTR:
-    case AST_FUNCALL:
-    case AST_FUNPTR_CALL: {
+    case AST_FUNCALL: {
         aoStr *formatted = transpileFormatFunction(ast->fname);
         char *fname = formatted->data;
         // this is not a function call!
@@ -634,13 +646,16 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
             aoStrCatPrintf(buf, "%s()", fname);
         }
         aoStrRelease(argv);
+        aoStrRelease(formatted);
         break;
     }
 
     case AST_FUNC:
     case AST_FUN_PROTO:
     case AST_EXTERN_FUNC: {
-        aoStrCatPrintf(buf, "&%s", ast->fname->data);
+        aoStr *formatted = transpileFormatFunction(ast->fname);
+        aoStrCatPrintf(buf, "&%s", formatted->data);
+        aoStrRelease(formatted);
         break;
     }
 
@@ -832,7 +847,7 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
 
     case AST_CLASS_REF: {
         transpileAstInternal(ast->cls, ctx, indent);
-        if (ast->cls->kind == AST_DEREF) {
+        if (ast->cls->deref_symbol == TK_ARROW) {
             aoStrCatPrintf(buf, "->%s", ast->field);
         } else {
             aoStrCatPrintf(buf, ".%s", ast->field);

@@ -13,6 +13,7 @@
 #include "map.h"
 #include "prsutil.h"
 #include "prslib.h"
+#include "util.h"
 
 static AstType *parseArrayDimensionsInternal(Cctrl *cc, AstType *base_type);
 Ast *parseSubscriptExpr(Cctrl *cc, Ast *ast);
@@ -829,8 +830,10 @@ Ast *parseGetClassField(Cctrl *cc, Ast *cls) {
     if (!parseIsClassOrUnion(cls->type->kind)) {
         char *type_str = astTypeToString(cls->type);
         char *var_str = astLValueToString(cls,0);
-        cctrlRewindUntilPunctMatch(cc, TK_ARROW, NULL);
-        char *msg = mprintf("Using `->` is an invalid operand for `%s %s`",type_str,var_str);
+        cctrlTokenRewind(cc);
+        lexeme *peek = cctrlTokenPeek(cc);
+        char *msg = mprintf("Using `%c` is an invalid operand for `%s %s`",peek->i64,
+                type_str,var_str);
         cctrlRaiseSuggestion(cc, msg,
                                 "Expected as class however got %s `%s %s`",
                                 astTypeKindToHumanReadable(cls->type),
