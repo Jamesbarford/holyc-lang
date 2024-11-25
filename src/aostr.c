@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ast.h"
 #include "aostr.h"
 #include "lexer.h"
 
@@ -417,6 +418,101 @@ void aoStrCatPrintf(aoStr *b, const char *fmt, ...) {
     va_end(ap);
 }
 
+
+/* For the happy path of strings this is very fast */
+void aoStrCatFmt(aoStr *buf, const char *fmt, ...) {
+    va_list ap;
+    const char *ptr = fmt;
+    va_start(ap,fmt);
+
+    while (*ptr) {
+        switch (*ptr) {
+            case '%': {
+                ptr++;
+                if (*ptr == '\0') return;
+                switch (*ptr) {
+                    case 's': {
+                        char *str = va_arg(ap,char*);
+                        aoStrCat(buf, str);
+                        break;
+                    }
+
+                    case 'S': {
+                        aoStr *str = va_arg(ap, aoStr*);
+                        aoStrCatLen(buf, str->data, str->len);
+                        break;
+                    }
+
+                    case '.': {
+                        if (*(ptr+1) == '*' && *(ptr+2) == 's') {
+                            ssize_t len = va_arg(ap,ssize_t);
+                            char *str = va_arg(ap,char*);
+                            aoStrCatLen(buf,str,len);
+                            ptr += 2;
+                        } else {
+                            aoStrPutChar(buf,'.');
+                        }
+                        break;
+                    }
+
+                    case 'U': {
+                        size_t uint_ = va_arg(ap, size_t);
+                        aoStrCatPrintf(buf,"%zu",uint_);
+                        break;
+                    }
+
+                    case 'u': {
+                        unsigned int uint_ = va_arg(ap, unsigned int);
+                        aoStrCatPrintf(buf,"%u",uint_);
+                        break;
+                    }
+
+                    case 'I': {
+                        ssize_t int_ = va_arg(ap, ssize_t);
+                        aoStrCatPrintf(buf,"%lld",int_);
+                        break;
+                    }
+
+                    case 'i': {
+                        int int_ = va_arg(ap, int);
+                        aoStrCatPrintf(buf,"%d",int_);
+                        break;
+                    }
+
+                    case 'f': {
+                        double float_ = va_arg(ap, double);
+                        aoStrCatPrintf(buf,"%g",float_);
+                        break;
+                    }
+
+                    case 'c': {
+                        char ch = (char)va_arg(ap, int);
+                        aoStrPutChar(buf,ch);
+                        break;
+                    }
+
+                    case 'A': {
+                        Ast *ast = va_arg(ap, Ast*);
+                        aoStr *ast_str = astLValueToAoStr(ast,0);
+                        aoStrCatAoStr(buf,ast_str);
+                        break;
+                    }
+                    default: {
+                        /* Put the character, probably a %% */
+                        aoStrPutChar(buf,*ptr);
+                        break;
+                    }
+                }
+                break;
+            }
+            default: {
+                aoStrPutChar(buf,*ptr);
+                break;
+            }
+        }
+        ptr++;
+    }
+}
 
 aoStr *aoStrPrintf(const char *fmt, ...) {
     va_list ap;
