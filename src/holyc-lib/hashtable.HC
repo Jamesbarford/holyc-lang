@@ -83,7 +83,7 @@ IntMap *IntMapNew(U64 capacity)
   map->mask = capacity-1;
   map->size = 0;
   map->indexes = IntVecNew();
-  map->threashold = (new_capacity * HT_LOAD)/100;
+  map->threashold = (capacity * HT_LOAD)/100;
   map->_free_value = NULL;
   map->entries = CAlloc(capacity * sizeof(IntMapNode *));
   return map;
@@ -363,7 +363,7 @@ StrMap *StrMapNew(U64 capacity)
   map->mask = capacity-1;
   map->size = 0;
   map->indexes = IntVecNew();
-  map->threashold = (new_capacity * HT_LOAD)/100;
+  map->threashold = (capacity * HT_LOAD)/100;
   map->_free_value = NULL;
   map->_free_key = NULL;
   map->entries = CAlloc(capacity * sizeof(StrMapNode *));
