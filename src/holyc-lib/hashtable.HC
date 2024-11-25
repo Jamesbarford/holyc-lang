@@ -464,7 +464,6 @@ public Bool StrMapResize(StrMap *map, U64 size)
   new_capacity = map->capacity << 1;
   new_mask = new_capacity - 1;
 
-  "map->size = %d\n",map->size;
   /* OOM */
   if ((new_indexes = CAlloc(indexes_capacity * sizeof(I64))) == NULL) {
     return FALSE;
