@@ -124,6 +124,7 @@ OPTIONS:
   -lib       Emit a dynamic and static library
   -clibs     Link c libraries like: -clibs=`-lSDL2 -lxml2 -lcurl...`
   -o         Output filename: hcc -o <name> ./<file>.HC
+  -o-        Output assembly to stdout, only for use with -S
   -run       Immediately run the file (not JIT)
   -transpile Transpile the code to C, this is best effort
   -g         Not implemented
