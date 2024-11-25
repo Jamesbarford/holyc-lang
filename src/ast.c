@@ -2081,43 +2081,11 @@ static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
             break;
 
         case AST_CLASS_REF: {
-            Ast *ast_tmp;
-            char *field_names[30];
-            int field_name_count = 0;
-            AstType *field_type = strMapGet(ast->cls->type->fields, ast->field);
-
-            /* We only really want to print at the data type we are looking 
-             * at, not the whole class */
-            if (field_type && ast->cls->kind == AST_DEREF) {
-                /* Find the name of the variable that contains this reference */
-                ast_tmp = ast;
-                while (ast_tmp->kind == AST_DEREF ||
-                        ast_tmp->kind == AST_CLASS_REF) {
-                    field_names[field_name_count++] = ast_tmp->field;
-                    if (ast_tmp->kind != AST_DEREF &&
-                            ast_tmp->kind != AST_CLASS_REF) {
-                        break;
-                    }
-                    ast_tmp = ast_tmp->cls->operand;
-                }
-
-                char *arrow = (lexeme_flags & LEXEME_GRAPH_VIZ_ENCODE_PUNCT) ? "-\\>" : "->"; 
-
-                if (ast_tmp->kind == AST_LVAR) {
-                    aoStrCatPrintf(str, "%s%s",ast_tmp->lname->data,arrow);
-                }
-                for (int i = 0; i < field_name_count; ++i) {
-                    if (i + 1 == field_name_count) {
-                        aoStrCatPrintf(str, "%s",field_names[i]);
-                    } else {
-                        aoStrCatPrintf(str, "%s%s",field_names[i],arrow);
-                    }
-                }
-            } else if (ast->cls->kind == AST_LVAR) {
-                if (ast->cls->kind == AST_LVAR) {
-                    aoStrCatPrintf(str,"%s",ast->cls->lname->data);
-                }
-                aoStrCatPrintf(str, ".%s", ast->field, ast->type->offset);
+            _astLValueToString(str, ast->cls, lexeme_flags);
+            if (ast->cls->deref_symbol == TK_ARROW) {
+                aoStrCatFmt(str, "->%s",ast->field);
+            } else {
+                aoStrCatFmt(str, ".%s",ast->field);
             }
             break;
         }
@@ -2139,10 +2107,24 @@ static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
             _astLValueToString(str,ast->operand,lexeme_flags);
             break;
 
-        case AST_DEREF:
-            aoStrCatPrintf(str, "*");
-            _astLValueToString(str,ast->operand,lexeme_flags);
+        case AST_DEREF: {
+            if (ast->operand->kind == '+') {
+                Ast *left = ast->operand->left;
+                Ast *right = ast->operand->right;
+                _astLValueToString(str, left, lexeme_flags);
+                aoStrPutChar(str, '[');
+                _astLValueToString(str, right, lexeme_flags);
+                aoStrPutChar(str, ']');
+            } else {
+                /* As `->` is a dereference we need to be able to distinguish 
+                 * between a class dereference and a general pointer dereference */
+                if (ast->deref_symbol != TK_ARROW) {
+                    aoStrCatFmt(str, "*");
+                }
+                _astLValueToString(str, ast->operand, lexeme_flags);
+            }
             break;
+        }
 
         case AST_CAST: {
             _astLValueToString(str,ast->operand,lexeme_flags);

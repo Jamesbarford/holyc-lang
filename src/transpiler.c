@@ -713,19 +713,34 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
         *indent -= 4;
         aoStrRepeatChar(buf, ' ', *indent);
         aoStrCatFmt(buf, "}");
+
         if (ast->els) {
-            aoStrCatFmt(buf, " %s {\n", _else);
-            *indent += 4;
-            if (ast->els->kind != AST_COMPOUND_STMT) {
-                aoStrRepeatChar(buf,' ',*indent);
+            /* Handle if else constructs */
+            int has_cond = ast->els->cond != NULL;
+            if (has_cond) {
+                aoStrCatFmt(buf, " %s ", _else);
+            } else {
+                aoStrCatFmt(buf, " %s {\n", _else);
+                *indent += 4;
             }
-            transpileAstInternal(ast->els,ctx, indent);
-            if (ast->els->kind != AST_COMPOUND_STMT) {
+
+            Ast *els_body = ast->els;
+
+            if (els_body->kind != AST_COMPOUND_STMT) {
+                if (!has_cond) {
+                    aoStrRepeatChar(buf,' ',*indent);
+                }
+            }
+            transpileAstInternal(els_body,ctx, indent);
+            if (els_body->kind != AST_COMPOUND_STMT) {
                 transpileEndStmt(buf); 
             }
-            *indent -= 4;
-            aoStrRepeatChar(buf, ' ', *indent);
-            aoStrCatFmt(buf, "}\n");
+
+            if (!has_cond) {
+                *indent -= 4;
+                aoStrRepeatChar(buf, ' ', *indent);
+                aoStrCatFmt(buf, "}\n");
+            }
         } else {
             aoStrPutChar(buf,'\n');
         }
