@@ -4,7 +4,7 @@
 #include "./strings.HC"
 #include "./vector.HC"
 
-#define HT_LOAD 0.60
+#define HT_LOAD 60
 #define HT_DELETED 0x7fffffffffffffff
 #define HT_PROBE_1 1
 #define HT_PROBE_3 3
@@ -83,7 +83,7 @@ IntMap *IntMapNew(U64 capacity)
   map->mask = capacity-1;
   map->size = 0;
   map->indexes = IntVecNew();
-  map->threashold = (HT_LOAD * capacity)(U64);
+  map->threashold = (new_capacity * HT_LOAD)/100;
   map->_free_value = NULL;
   map->entries = CAlloc(capacity * sizeof(IntMapNode *));
   return map;
@@ -209,7 +209,7 @@ public Bool IntMapResize(IntMap *map, U64 size)
   map->indexes->size = new_size;
   map->indexes->entries = new_indexes;
 
-  map->threashold = (new_capacity * HT_LOAD)(U64);
+  map->threashold = (new_capacity * HT_LOAD)/100;
   map->entries = new_entries;
   map->size = new_size;
   return TRUE;
@@ -363,7 +363,7 @@ StrMap *StrMapNew(U64 capacity)
   map->mask = capacity-1;
   map->size = 0;
   map->indexes = IntVecNew();
-  map->threashold = (HT_LOAD * capacity)(U64);
+  map->threashold = (new_capacity * HT_LOAD)/100;
   map->_free_value = NULL;
   map->_free_key = NULL;
   map->entries = CAlloc(capacity * sizeof(StrMapNode *));
@@ -501,7 +501,7 @@ public Bool StrMapResize(StrMap *map, U64 size)
 
   map->size = new_size;
   map->entries = new_entries;
-  map->threashold = (map->capacity * HT_LOAD)(U64);
+  map->threashold = (new_capacity * HT_LOAD)/100;
   return TRUE;
 }
 

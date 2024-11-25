@@ -241,8 +241,10 @@ I64 PtrVecRelease(PtrVec *vec, U0 (*_free_value)(U0 *_val) = NULL)
 { // Optionally pass a callback to free each item in the vector 
   if (vec) {
     if (_free_value) {
-      for (U0 *it : vec) {
-        _free_value(it);
+      U0 **entries = vec->entries;
+      I64 size = vec->size;
+      for (I64 i = 0; i < size; ++i) {
+        _free_value(entries[i]);
       }
     }
     Free(vec->entries);

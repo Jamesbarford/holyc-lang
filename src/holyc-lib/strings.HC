@@ -289,7 +289,8 @@ public _extern _ATOI I64 Atoi(U8 *str);
 
 public U8 *StrNCpy(U8 *buf, I64 len)
 {
-  U8 *str = MAlloc(sizeof(U8)*len+1);
+  U8 *str = MAlloc(sizeof(U8)*(len+1));
+  if (len == 0) return str;
   MemCpy(str,buf,len);
   str[len] = '\0';
   return str;
