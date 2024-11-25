@@ -15,7 +15,7 @@
 #include "util.h"
 
 #define TRANSPILE_FLAG_SWITCH_CHAR (1<<0)
-#define TRANSPILE_FLAG_ISATTY           (1<<1)
+#define TRANSPILE_FLAG_ISATTY      (1<<1)
 
 typedef struct TranspilationMapping {
     char *name;
@@ -441,13 +441,13 @@ void transpileBinaryOp(TranspileCtx *ctx, aoStr *buf, char *op, Ast *ast, ssize_
         } else {
             transpileAstInternal(ast,ctx, indent);
         }
-        aoStrCatPrintf(buf, " %s ", op);
+        aoStrCatFmt(buf, " %s ", op);
         if (ast->right) {
             transpileAstInternal(ast->right,ctx, indent);
         }
     } else if (!ast->right) { // unary
         /* If the operation on the left is a binary op then we need brackets */
-        aoStrCatPrintf(buf, "%s",op);
+        aoStrCatFmt(buf, "%s",op);
         if (ast->left && ast->left->right) {
             needs_brackets = 1;
             aoStrPutChar(buf, '(');
@@ -476,7 +476,7 @@ void transpileBinaryOp(TranspileCtx *ctx, aoStr *buf, char *op, Ast *ast, ssize_
         if (needs_brackets) {
             aoStrPutChar(buf,')');
         }
-        aoStrCatPrintf(buf, " %s ",op);
+        aoStrCatFmt(buf, " %s ",op);
         transpileAstInternal(ast->right, ctx, indent);
     }
     *indent = saved_indent;
@@ -519,7 +519,7 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
             for (; i < 8; ++i) {
                 unsigned long idx = i * 8;
                 char ch2 = ((unsigned long)ch) >> idx & 0xFF;
-                if (idx > 0 && !ch2) break;
+                if ((idx > 0 && !ch2) || (ch2 < 0)) break;
                 switch (ch2) {
                     case '\'': { *tmp_ptr++ = '\\'; *tmp_ptr++ = '\''; break; }
                     case '\\': { *tmp_ptr++ = '\\'; *tmp_ptr++ = '\\'; break; }
@@ -533,7 +533,11 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
                     default: *tmp_ptr++ = ch2; break;
                 }
             }
-            tmp_buf[i+1] = '\0';
+            if (tmp_ptr - tmp_buf == 1) {
+                tmp_buf[i] = '\0';
+            } else {
+                tmp_buf[i+1] = '\0';
+            }
             char *defn = transpileHighlightStringAsCharacter(ctx, tmp_buf);
             aoStrCat(buf,defn);
             free(defn);
@@ -560,7 +564,7 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
     }
 
     case AST_COMMENT: {
-        aoStrCatPrintf(buf, "%s", ast->sval->data);
+        aoStrCatFmt(buf, "%S", ast->sval);
         break;
     }
 
@@ -586,12 +590,12 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
 
         aoStr *decl = transpileVarDecl(ctx, ast->declvar->type, name);
         if (ast->declvar->kind == AST_GVAR && ast->declvar->is_static) {
-            aoStrCatPrintf(buf,  "%s ", transpileKeyWordHighlight(ctx,KW_STATIC));
+            aoStrCatFmt(buf,  "%s ", transpileKeyWordHighlight(ctx,KW_STATIC));
         }
 
         aoStrCatAoStr(buf, decl);
         if (ast->declinit) {
-            aoStrCatPrintf(buf, " = ");
+            aoStrCatFmt(buf, " = ");
             saved_indent = *indent;
             *indent = 0;
             transpileAstInternal(ast->declinit,ctx,indent);
@@ -602,7 +606,7 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
     }
 
     case AST_GVAR:
-        aoStrCatPrintf(buf, "%s", ast->gname->data);
+        aoStrCatFmt(buf, "%S", ast->gname);
         break;
     
     case AST_ASM_FUNCALL: {
@@ -612,7 +616,7 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
         aoStr *asm_fname = asm_stmt ? asm_stmt->fname : ast->fname;
         char *fname = substitution_name ? substitution_name : asm_fname->data;
         aoStr *argv = transpileArgvList(ast->args, ctx);
-        aoStrCatPrintf(buf, "%s(%s)", fname, argv->data);
+        aoStrCatFmt(buf, "%s(%S)", fname, argv);
         aoStrRelease(argv);
         break;
     }
@@ -633,17 +637,16 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
     case AST_FUNPTR:
     case AST_FUNCALL: {
         aoStr *formatted = transpileFormatFunction(ast->fname);
-        char *fname = formatted->data;
         // this is not a function call!
         if (!ast->args) {
-            aoStrCatPrintf(buf, "%s", fname);
+            aoStrCatFmt(buf, "%S", formatted);
             break;
         }
         aoStr *argv = transpileArgvList(ast->args, ctx);
         if (argv->len) {
-            aoStrCatPrintf(buf, "%s(%s)", fname, argv->data);
+            aoStrCatFmt(buf, "%S(%S)", formatted, argv);
         } else {
-            aoStrCatPrintf(buf, "%s()", fname);
+            aoStrCatFmt(buf, "%S()", formatted);
         }
         aoStrRelease(argv);
         aoStrRelease(formatted);
@@ -654,24 +657,24 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
     case AST_FUN_PROTO:
     case AST_EXTERN_FUNC: {
         aoStr *formatted = transpileFormatFunction(ast->fname);
-        aoStrCatPrintf(buf, "&%s", formatted->data);
+        aoStrCatFmt(buf, "&%S", formatted);
         aoStrRelease(formatted);
         break;
     }
 
     case AST_ASM_FUNC_BIND: {
-        aoStrCatPrintf(buf, "// unsupported x86 function bind %s\n",ast->asmfname->data);
+        aoStrCatFmt(buf, "// unsupported x86 function bind %S\n",ast->asmfname);
         break;
     }
 
     case AST_ASM_STMT: {
-        aoStrCatPrintf(buf, "<asm_block>\n");
+        aoStrCatFmt(buf, "<asm_block>\n");
         break;
     }
 
     case AST_ARRAY_INIT: {
         node = ast->arrayinit->next;
-        aoStrCatPrintf(buf, "{");
+        aoStrCatFmt(buf, "{");
         saved_indent = *indent;
         *indent = 0;
         while (node != ast->arrayinit) {
@@ -682,21 +685,21 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
             node = node->next;
         }
         *indent = saved_indent;
-        aoStrCatPrintf(buf, "}");
+        aoStrCatFmt(buf, "}");
         break;
     }
 
     case AST_IF: {
         char *_if = transpileKeyWordHighlight(ctx,KW_IF);
         char *_else = transpileKeyWordHighlight(ctx,KW_ELSE);
-        aoStrCatPrintf(buf, "%s (", _if);
+        aoStrCatFmt(buf, "%s (", _if);
 
         saved_indent = *indent;
         *indent = 0;
         transpileAstInternal(ast->cond,ctx, indent);
         *indent = saved_indent;
 
-        aoStrCatPrintf(buf, ") {\n");
+        aoStrCatFmt(buf, ") {\n");
         *indent += 4;
         if (ast->then) {
             if (ast->then->kind != AST_COMPOUND_STMT) {
@@ -709,9 +712,9 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
         }
         *indent -= 4;
         aoStrRepeatChar(buf, ' ', *indent);
-        aoStrCatPrintf(buf, "}");
+        aoStrCatFmt(buf, "}");
         if (ast->els) {
-            aoStrCatPrintf(buf, " %s {\n", _else);
+            aoStrCatFmt(buf, " %s {\n", _else);
             *indent += 4;
             if (ast->els->kind != AST_COMPOUND_STMT) {
                 aoStrRepeatChar(buf,' ',*indent);
@@ -722,7 +725,7 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
             }
             *indent -= 4;
             aoStrRepeatChar(buf, ' ', *indent);
-            aoStrCatPrintf(buf, "}\n");
+            aoStrCatFmt(buf, "}\n");
         } else {
             aoStrPutChar(buf,'\n');
         }
@@ -732,7 +735,7 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
     case AST_DO_WHILE: {
         char *_do = transpileKeyWordHighlight(ctx,KW_DO);
         char *_while = transpileKeyWordHighlight(ctx,KW_WHILE);
-        aoStrCatPrintf(buf, "%s {\n", _do);
+        aoStrCatFmt(buf, "%s {\n", _do);
         *indent += 4;
         if (ast->whilebody && ast->whilebody->kind != AST_COMPOUND_STMT) {
             aoStrRepeatChar(buf, ' ', *indent);
@@ -744,21 +747,21 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
         *indent -= 4;
         saved_indent = *indent;
         aoStrRepeatChar(buf, ' ', *indent);
-        aoStrCatPrintf(buf, "} %s (", _while);
+        aoStrCatFmt(buf, "} %s (", _while);
         *indent = 0;
         transpileAstInternal(ast->whilecond,ctx, indent);
         *indent = saved_indent;
-        aoStrCatPrintf(buf, ");\n");
+        aoStrCatFmt(buf, ");\n");
         break;
     }
 
     case AST_WHILE: {
         char *_while = transpileKeyWordHighlight(ctx,KW_WHILE);
-        aoStrCatPrintf(buf, "%s (", _while); 
+        aoStrCatFmt(buf, "%s (", _while); 
         saved_indent = *indent;
         *indent = 0;
         transpileAstInternal(ast->whilecond,ctx, indent);
-        aoStrCatPrintf(buf, ")");
+        aoStrCatFmt(buf, ")");
         *indent = saved_indent;
         *indent += 4;
         if (!ast->whilebody) {
@@ -776,14 +779,14 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
             }
             *indent -= 4;
             aoStrRepeatChar(buf,' ', *indent);
-            aoStrCatPrintf(buf,"}\n");
+            aoStrCatFmt(buf,"}\n");
         }
         break;
     }
 
     case AST_FOR: {
         char *_for = transpileKeyWordHighlight(ctx, KW_FOR);
-        aoStrCatPrintf(buf, "%s (", _for);
+        aoStrCatFmt(buf, "%s (", _for);
 
         saved_indent = *indent;
         if (ast->forinit) {
@@ -806,7 +809,7 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
             *indent = saved_indent;
         }
 
-        aoStrCatPrintf(buf,") {\n");
+        aoStrCatFmt(buf,") {\n");
         *indent += 4;
         if (ast->forbody && ast->forbody->kind != AST_COMPOUND_STMT) {
             aoStrRepeatChar(buf, ' ', *indent);
@@ -817,19 +820,19 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
         }
         *indent -= 4;
         aoStrRepeatChar(buf, ' ', *indent);
-        aoStrCatPrintf(buf,"}\n");
+        aoStrCatFmt(buf,"}\n");
         break;
     }
 
     case AST_RETURN: {
         char *_return = transpileKeyWordHighlight(ctx,KW_RETURN);
-        aoStrCatPrintf(buf, "%s ", _return);
+        aoStrCatFmt(buf, "%s ", _return);
         transpileAstInternal(ast->retval,ctx,indent);
         break;
     }
 
     case AST_VAR_ARGS:
-        aoStrCatPrintf(buf, "...");
+        aoStrCatFmt(buf, "...");
         break;
 
     case AST_COMPOUND_STMT: {
@@ -848,9 +851,9 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
     case AST_CLASS_REF: {
         transpileAstInternal(ast->cls, ctx, indent);
         if (ast->cls->deref_symbol == TK_ARROW) {
-            aoStrCatPrintf(buf, "->%s", ast->field);
+            aoStrCatFmt(buf, "->%s", ast->field);
         } else {
-            aoStrCatPrintf(buf, ".%s", ast->field);
+            aoStrCatFmt(buf, ".%s", ast->field);
         }
         break;
     }
@@ -859,7 +862,7 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
         char *label = ast->jump_label->data;
         if (*label == '.') label++;
         char *_goto = transpileKeyWordHighlight(ctx, KW_GOTO);
-        aoStrCatPrintf(buf, "%s %s;\n", _goto, label);
+        aoStrCatFmt(buf, "%s %s;\n", _goto, label);
         break;
     }
 
@@ -867,7 +870,7 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
         char *label = ast->slabel->data;
         if (*label == '.') label++;
         char *_goto = transpileKeyWordHighlight(ctx, KW_GOTO);
-        aoStrCatPrintf(buf, "%s %s;\n", _goto, label);
+        aoStrCatFmt(buf, "%s %s;\n", _goto, label);
         break;
     }
 
@@ -878,14 +881,14 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
             buf->len--;
         }
         if (*label == '.') label++;
-        aoStrCatPrintf(buf, "\n%s:\n", label);
+        aoStrCatFmt(buf, "\n%s:\n", label);
         break;
     }
 
     case AST_CAST: {
         aoStr *type_cast = transpileVarDecl(ctx, ast->type,NULL);
         aoStr *lvalue = transpileLValue(ast->operand, ctx);
-        aoStrCatPrintf(buf, "(%s)%s", type_cast->data, lvalue->data);
+        aoStrCatFmt(buf, "(%S)%S", type_cast, lvalue);
         aoStrRelease(type_cast);
         aoStrRelease(lvalue);
         break;
@@ -893,11 +896,11 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
 
     case AST_SWITCH: {
         char *_switch = transpileKeyWordHighlight(ctx, KW_SWITCH);
-        aoStrCatPrintf(buf, "%s (", _switch);
+        aoStrCatFmt(buf, "%s (", _switch);
         saved_indent = *indent;
         *indent = 0;
         transpileAstInternal(ast->switch_cond, ctx, indent);
-        aoStrCatPrintf(buf, ") {\n");
+        aoStrCatFmt(buf, ") {\n");
         *indent = saved_indent;
 
         if (ast->switch_cond->type->size == 1) {
@@ -916,35 +919,35 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
         }
         *indent -= 4;
         aoStrRepeatChar(buf,' ', *indent);
-        aoStrCatPrintf(buf,"}\n");
+        aoStrCatFmt(buf,"}\n");
         break;
     }
 
     case AST_CASE: {
         char *_case = transpileKeyWordHighlight(ctx,KW_CASE);
-        aoStrCatPrintf(buf, "%s ", _case);
+        aoStrCatFmt(buf, "%s ", _case);
         if (ast->type->kind == AST_TYPE_VOID) {
-            aoStrCatPrintf(buf, "%s:", transpileHighlightStringAsInt(ctx, ast->case_label->data));
+            aoStrCatFmt(buf, "%s:", transpileHighlightStringAsInt(ctx, ast->case_label->data));
         } else if (ctx->flags & TRANSPILE_FLAG_SWITCH_CHAR) {
             if (ast->case_begin == ast->case_end) {
-                aoStrCatPrintf(buf, "%s:",transpileHighlightChar(ctx, ast->case_begin));
+                aoStrCatFmt(buf, "%s:",transpileHighlightChar(ctx, ast->case_begin));
             } else {
-                aoStrCatPrintf(buf, "%s ... %s:",
+                aoStrCatFmt(buf, "%s ... %s:",
                         transpileHighlightChar(ctx,(char)ast->case_begin),
                         transpileHighlightChar(ctx,(char)ast->case_end));
             }
         } else {
             if (ast->case_begin == ast->case_end) {
-                aoStrCatPrintf(buf, "%s:", transpileHighlightInt(ctx, ast->case_begin));
+                aoStrCatFmt(buf, "%s:", transpileHighlightInt(ctx, ast->case_begin));
             } else {
-                aoStrCatPrintf(buf, "%s ... %s:",
+                aoStrCatFmt(buf, "%s ... %s:",
                         transpileHighlightInt(ctx, ast->case_begin),
                         transpileHighlightInt(ctx, ast->case_end));
             }
         }
 
         if (!listEmpty(ast->case_asts)) {
-            aoStrCatPrintf(buf," {\n");
+            aoStrCatFmt(buf," {\n");
             *indent += 4;
             listForEach(ast->case_asts) {
                 Ast *case_ast = (Ast *)it->value;
@@ -958,7 +961,7 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
             }
             *indent -= 4;
             aoStrRepeatChar(buf,' ', *indent);
-            aoStrCatPrintf(buf,"}\n\n");
+            aoStrCatFmt(buf,"}\n\n");
         } else {
             aoStrPutChar(buf,'\n');
         }
@@ -967,7 +970,7 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
 
     case AST_DEFAULT: {
         char *_default = transpileKeyWordHighlight(ctx, KW_DEFAULT);
-        aoStrCatPrintf(buf, "%s: {\n", _default);
+        aoStrCatFmt(buf, "%s: {\n", _default);
         if (!listEmpty(ast->case_asts)) {
             *indent += 4;
             listForEach(ast->case_asts) {
@@ -978,26 +981,26 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
             *indent -= 4;
             aoStrRepeatChar(buf,' ', *indent);
         }
-        aoStrCatPrintf(buf,"}\n");
+        aoStrCatFmt(buf,"}\n");
         break;
     }
 
     case AST_BREAK:
-        aoStrCatPrintf(buf, "%s;\n", transpileKeyWordHighlight(ctx,KW_BREAK));
+        aoStrCatFmt(buf, "%s;\n", transpileKeyWordHighlight(ctx,KW_BREAK));
         break;
 
     case AST_CONTINUE:
-        aoStrCatPrintf(buf, "%s;\n", transpileKeyWordHighlight(ctx,KW_CONTINUE));
+        aoStrCatFmt(buf, "%s;\n", transpileKeyWordHighlight(ctx,KW_CONTINUE));
         break;
 
     case AST_DEFAULT_PARAM: {
-        aoStrCatPrintf(buf, "%s", ast->declvar->lname->data);
+        aoStrCatFmt(buf, "%S", ast->declvar->lname);
         break;
     }
 
     case AST_SIZEOF: {
         aoStr *type_str = transpileVarDecl(ctx, ast->type, NULL);
-        aoStrCatPrintf(buf, "%s(%s)", transpileKeyWordHighlight(ctx,KW_SIZEOF), type_str->data);
+        aoStrCatFmt(buf, "%s(%S)", transpileKeyWordHighlight(ctx,KW_SIZEOF), type_str);
         aoStrRelease(type_str);
         break;
     }
@@ -1006,12 +1009,12 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
     case TK_MINUS_MINUS: {
         char *op = lexemePunctToString(ast->kind);
         transpileAstInternal(ast->left,ctx, indent);
-        aoStrCatPrintf(buf, "%s",op);
+        aoStrCatFmt(buf, "%s",op);
         break;
     }
 
     case AST_ADDR:
-        aoStrCatPrintf(buf, "&");
+        aoStrCatFmt(buf, "&");
         saved_indent = *indent;
         *indent = 0;
         transpileAstInternal(ast->operand, ctx, indent);
@@ -1030,7 +1033,7 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
             /* As `->` is a dereference we need to be able to distinguish 
              * between a class dereference and a general pointer dereference */
             if (ast->deref_symbol != TK_ARROW) {
-                aoStrCatPrintf(buf, "*");
+                aoStrCatFmt(buf, "*");
             }
             transpileAstInternal(ast->operand,ctx,indent);
         }
@@ -1070,7 +1073,7 @@ aoStr *transpileParamsList(PtrVec *params, TranspileCtx *ctx) {
         } else  {
             decl = transpileVarDecl(ctx, param->type, param->lname->data);
         } 
-        aoStrCatPrintf(buf, "%s", decl->data);
+        aoStrCatFmt(buf, "%S", decl);
         if (i + 1 != params->size) {
             aoStrCatLen(buf, str_lit(", "));
         }
@@ -1086,7 +1089,7 @@ aoStr *transpileArgvList(PtrVec *argv, TranspileCtx *ctx) {
     for (int i = 0; i < argv->size; ++i) {
         Ast *arg = argv->entries[i];
         aoStr *var = transpileLValue(arg, ctx);
-        aoStrCatPrintf(buf, "%s", var->data);
+        aoStrCatFmt(buf, "%S", var);
         if (i + 1 != argv->size) {
             aoStrCatLen(buf, str_lit(", "));
         }
@@ -1115,23 +1118,23 @@ static void transpileTypeInternal(TranspileCtx *ctx, AstType *type, TypeInfo *in
         aoStr *type_str= aoStrNew();
         switch (type->size) {
             case 0:
-                aoStrCatPrintf(type_str, "void");
+                aoStrCatFmt(type_str, "void");
                 break;
             case 1:
-                if (type->issigned) aoStrCatPrintf(type_str, "char");
-                else                aoStrCatPrintf(type_str, "unsigned char");
+                if (type->issigned) aoStrCatFmt(type_str, "char");
+                else                aoStrCatFmt(type_str, "unsigned char");
                 break;
             case 2:
-                if (type->issigned) aoStrCatPrintf(type_str, "short");
-                else                aoStrCatPrintf(type_str, "unsigned short");
+                if (type->issigned) aoStrCatFmt(type_str, "short");
+                else                aoStrCatFmt(type_str, "unsigned short");
                 break;
             case 4:
-                if (type->issigned) aoStrCatPrintf(type_str, "int");
-                else                aoStrCatPrintf(type_str, "unsigned int");
+                if (type->issigned) aoStrCatFmt(type_str, "int");
+                else                aoStrCatFmt(type_str, "unsigned int");
                 break;
             case 8:
-                if (type->issigned) aoStrCatPrintf(type_str, "long");
-                else                aoStrCatPrintf(type_str, "unsigned long");
+                if (type->issigned) aoStrCatFmt(type_str, "long");
+                else                aoStrCatFmt(type_str, "unsigned long");
                 break;
             default: loggerPanic("Unknown integer size: %d\n", type->size);
         }
@@ -1141,8 +1144,8 @@ static void transpileTypeInternal(TranspileCtx *ctx, AstType *type, TypeInfo *in
     
     case AST_TYPE_CHAR: {
         aoStr *type_str= aoStrNew();
-        if (type->issigned) aoStrCatPrintf(type_str, "char");
-        else                aoStrCatPrintf(type_str, "unsigned char");
+        if (type->issigned) aoStrCatFmt(type_str, "char");
+        else                aoStrCatFmt(type_str, "unsigned char");
         info->base_name = type_str;
         break;
     }
@@ -1200,9 +1203,9 @@ static void transpileTypeInternal(TranspileCtx *ctx, AstType *type, TypeInfo *in
 aoStr *transpileVarDeclInfo(TranspileCtx *ctx, TypeInfo *info, char *name) {
     aoStr *str = aoStrNew();
     if (ctx->flags & TRANSPILE_FLAG_ISATTY) {
-        aoStrCatPrintf(str,ESC_WHITE"%s"ESC_RESET,info->base_name->data);
+        aoStrCatFmt(str,ESC_WHITE"%S"ESC_RESET,info->base_name);
     } else {
-        aoStrCatPrintf(str, "%s",info->base_name->data);
+        aoStrCatFmt(str, "%S",info->base_name);
     }
     strMapAdd(ctx->used_types,info->base_name->data,info->base_name);
 
@@ -1219,22 +1222,22 @@ aoStr *transpileVarDeclInfo(TranspileCtx *ctx, TypeInfo *info, char *name) {
     /* a function pointer */
     if (info->params) {
         if (name) {
-            aoStrCatPrintf(str, "(*%s)",name);
+            aoStrCatFmt(str, "(*%s)",name);
         }
-        aoStrCatPrintf(str, "(%s)", info->params->data);
+        aoStrCatFmt(str, "(%S)", info->params);
     } else if (info->array_dimensions) {
         if (name) {
-            aoStrCatPrintf(str, "%s",name);
+            aoStrCatFmt(str, "%s",name);
         }
-        aoStrCatPrintf(str, "[%d]",info->array_dimensions);
+        aoStrCatFmt(str, "[%i]",info->array_dimensions);
     } else if (info->array_init_label) {
         if (name) {
-            aoStrCatPrintf(str, "%s",name);
+            aoStrCatFmt(str, "%s",name);
         }
-        aoStrCatPrintf(str, "[%s]",info->array_init_label->data);
+        aoStrCatFmt(str, "[%S]",info->array_init_label);
     } else {
         if (name) {
-            aoStrCatPrintf(str, "%s",name);
+            aoStrCatFmt(str, "%s",name);
         }
     }
     
@@ -1259,9 +1262,9 @@ aoStr *transpileFunctionProto(TranspileCtx *ctx, AstType *type, char *name) {
     transpileTypeInternal(ctx,type,&info);
     aoStr *str = aoStrNew();
     if (ctx->flags & TRANSPILE_FLAG_ISATTY) {
-        aoStrCatPrintf(str,ESC_WHITE"%s"ESC_RESET,info.base_name->data);
+        aoStrCatFmt(str,ESC_WHITE"%S"ESC_RESET,info.base_name);
     } else {
-        aoStrCatPrintf(str, "%s",info.base_name->data);
+        aoStrCatFmt(str, "%S",info.base_name);
     }
 
     if (info.stars) {
@@ -1274,21 +1277,21 @@ aoStr *transpileFunctionProto(TranspileCtx *ctx, AstType *type, char *name) {
 
     /* a function pointer */
     if (info.params) {
-        aoStrCatPrintf(str, "%s",name);
+        aoStrCatFmt(str, "%s",name);
         if (info.params->len > 0) {
-            aoStrCatPrintf(str, "(%s)", info.params->data);
+            aoStrCatFmt(str, "(%S)", info.params);
         } else {
             if (ctx->flags & TRANSPILE_FLAG_ISATTY) {
-                aoStrCatPrintf(str, "("ESC_WHITE"void"ESC_RESET")");
+                aoStrCatFmt(str, "("ESC_WHITE"void"ESC_RESET")");
             } else {
-                aoStrCatPrintf(str, "(void)");
+                aoStrCatFmt(str, "(void)");
             }
         }
     } else if (info.array_dimensions) {
-        aoStrCatPrintf(str, "%s",name);
-        aoStrCatPrintf(str, "[%d]",info.array_dimensions);
+        aoStrCatFmt(str, "%s",name);
+        aoStrCatFmt(str, "[%i]",info.array_dimensions);
     } else {
-        aoStrCatPrintf(str, "%s",name);
+        aoStrCatFmt(str, "%s",name);
     }
     
     if (info.base_name) aoStrRelease(info.base_name);
@@ -1317,9 +1320,9 @@ static void transpileFields(TranspileCtx *ctx,
         aoStrCatRepeat(buf, " ", *indent);
         if (!strncmp(n->key, str_lit("cls_label "))) {
             if (field->kind == AST_TYPE_UNION) {
-                aoStrCatPrintf(buf, "union {\n");
+                aoStrCatFmt(buf, "union {\n");
             } else if (field->kind == AST_TYPE_CLASS) {
-                aoStrCatPrintf(buf, "struct {\n");
+                aoStrCatFmt(buf, "struct {\n");
             }
             *indent += 4;
             transpileFields(ctx,field->fields,seen,clsname,buf,indent);
@@ -1333,9 +1336,9 @@ static void transpileFields(TranspileCtx *ctx,
             aoStr *decl = transpileVarDeclInfo(ctx,&info,n->key);
 
             if (!strncmp(clsname,info.base_name->data,info.base_name->len)) {
-                aoStrCatPrintf(buf,"struct %s;\n", decl->data);
+                aoStrCatFmt(buf,"struct %S;\n", decl);
             } else {
-                aoStrCatPrintf(buf,"%s;\n", decl->data);
+                aoStrCatFmt(buf,"%S;\n", decl);
             }
             aoStrRelease(decl);
         }
@@ -1368,9 +1371,9 @@ void transpileClassDefinitions(Cctrl *cc, TranspileCtx *ctx, StrMap *built_in_ty
             loggerPanic("Should not be here\n"); 
         }
 
-        aoStrCatPrintf(buf, "typedef struct %s {\n", n->key);
+        aoStrCatFmt(buf, "typedef struct %s {\n", n->key);
         transpileFields(ctx,cls->fields,seen,n->key,buf,&indent);
-        aoStrCatPrintf(buf, "} %s;\n\n", n->key);
+        aoStrCatFmt(buf, "} %s;\n\n", n->key);
     }
     strMapIteratorRelease(it);
     strMapRelease(seen);
@@ -1393,9 +1396,9 @@ void transpileUnionDefinitions(Cctrl *cc, TranspileCtx *ctx) {
             loggerPanic("Should not be here\n"); 
         }
 
-        aoStrCatPrintf(buf, "typedef union %s {\n", n->key);
+        aoStrCatFmt(buf, "typedef union %s {\n", n->key);
         transpileFields(ctx,cls->fields,seen,n->key,buf,&indent);
-        aoStrCatPrintf(buf, "}; %s\n\n", n->key);
+        aoStrCatFmt(buf, "} %s;\n\n", n->key);
     }
     strMapIteratorRelease(it);
     strMapRelease(seen);
@@ -1412,20 +1415,20 @@ void transpileDefines(Cctrl *cc, TranspileCtx *ctx) {
         }
 
         if (ctx->flags & TRANSPILE_FLAG_ISATTY) {
-            aoStrCatPrintf(buf,ESC_WHITE"#define %s "ESC_RESET,n->key);
+            aoStrCatFmt(buf,ESC_WHITE"#define %s "ESC_RESET,n->key);
             switch (tok->tk_type) {
-                case TK_I64: aoStrCatPrintf(buf, ESC_PURPLE"%lld\n"ESC_RESET,tok->i64); break;
-                case TK_F64: aoStrCatPrintf(buf, ESC_PURPLE"%f\n"ESC_RESET,tok->f64); break;
-                case TK_STR: aoStrCatPrintf(buf, ESC_GREEN"\"%s\"\n"ESC_RESET,tok->start); break;
-                default:     aoStrCatPrintf(buf, "\n"); break;
+                case TK_I64: aoStrCatFmt(buf, ESC_PURPLE"%I\n"ESC_RESET,tok->i64); break;
+                case TK_F64: aoStrCatFmt(buf, ESC_PURPLE"%f\n"ESC_RESET,tok->f64); break;
+                case TK_STR: aoStrCatFmt(buf, ESC_GREEN"\"%s\"\n"ESC_RESET,tok->start); break;
+                default:     aoStrCatFmt(buf, "\n"); break;
             }
         } else {
-            aoStrCatPrintf(buf,"#define %s ",n->key);
+            aoStrCatFmt(buf,"#define %s ",n->key);
             switch (tok->tk_type) {
-                case TK_I64: aoStrCatPrintf(buf, "%lld\n",tok->i64); break;
-                case TK_F64: aoStrCatPrintf(buf, "%f\n",tok->f64); break;
-                case TK_STR: aoStrCatPrintf(buf, "\"%s\"\n",tok->start); break;
-                default:     aoStrCatPrintf(buf, "\n"); break;
+                case TK_I64: aoStrCatFmt(buf, "%I\n",tok->i64); break;
+                case TK_F64: aoStrCatFmt(buf, "%f\n",tok->f64); break;
+                case TK_STR: aoStrCatFmt(buf, "\"%s\"\n",tok->start); break;
+                default:     aoStrCatFmt(buf, "\n"); break;
             }
         }
 
@@ -1451,11 +1454,11 @@ aoStr *transpileFunction(Ast *fn, TranspileCtx *ctx) {
 
     /* Add inline modifier if the function is inline */
     if (fn->flags & AST_FLAG_INLINE) {
-        aoStrCatPrintf(function, "%s ",
+        aoStrCatFmt(function, "%s ",
                        transpileKeyWordHighlight(ctx,KW_INLINE));
     }
 
-    aoStrCatPrintf(function, "%s\n{\n%s}",fn_proto->data, body->data);
+    aoStrCatFmt(function, "%S\n{\n%S}",fn_proto, body);
     return function;
 }
 
@@ -1539,11 +1542,11 @@ aoStr *transpileAsmFunction(Cctrl *cc, Ast *asmfn, Ast *asm_stmt, TranspileCtx *
      *     <type> retval;
      *     __asm__ volatile (\n
      * */
-    aoStrCatPrintf(c_asm_blk, "%s\n{\n", fn_proto->data);
+    aoStrCatFmt(c_asm_blk, "%S\n{\n", fn_proto);
     aoStrRepeatChar(c_asm_blk,' ', indent);
-    aoStrCatPrintf(c_asm_blk, "%s;\n", var_type->data);
+    aoStrCatFmt(c_asm_blk, "%S;\n", var_type);
     aoStrRepeatChar(c_asm_blk,' ', indent);
-    aoStrCatPrintf(c_asm_blk, "__asm__ %s (\n", transpileKeyWordHighlight(ctx,KW_VOLATILE));
+    aoStrCatFmt(c_asm_blk, "__asm__ %s (\n", transpileKeyWordHighlight(ctx,KW_VOLATILE));
 
     indent += 4;
     /* we need to remove `pushq %rbp\n movq %rsp, %rbp` as the function we are 
@@ -1576,12 +1579,12 @@ aoStr *transpileAsmFunction(Cctrl *cc, Ast *asmfn, Ast *asm_stmt, TranspileCtx *
         }
         if (!*ptr) continue;
         aoStrRepeatChar(c_asm_blk,' ', indent);
-        aoStrCatPrintf(c_asm_blk, "\"%s\\n\\t\"\n",transpileFormatAsmLine(cc, ptr));
+        aoStrCatFmt(c_asm_blk, "\"%s\\n\\t\"\n",transpileFormatAsmLine(cc, ptr));
     }
 
     /* Prepare the registers needed for the function */
     aoStrRepeatChar(c_asm_blk,' ', indent);
-    aoStrCatPrintf(c_asm_blk, ": \"=a\"(retval)\n");
+    aoStrCatFmt(c_asm_blk, ": \"=a\"(retval)\n");
     int params_count = asmfn->params->size;
     if (params_count) {
         aoStrRepeatChar(c_asm_blk,' ', indent);
@@ -1591,7 +1594,7 @@ aoStr *transpileAsmFunction(Cctrl *cc, Ast *asmfn, Ast *asm_stmt, TranspileCtx *
             Ast *ast_param = asmfn->params->entries[i];
             char reg = c_regs[i];
             char *param = astLValueToString(ast_param,0);
-            aoStrCatPrintf(c_asm_blk, "\"%c\"(%s)",reg,param);
+            aoStrCatFmt(c_asm_blk, "\"%c\"(%s)",reg,param);
             if (i + 1 != params_count) {
                 aoStrCat(c_asm_blk, ", ");
             }
@@ -1604,7 +1607,7 @@ aoStr *transpileAsmFunction(Cctrl *cc, Ast *asmfn, Ast *asm_stmt, TranspileCtx *
     if (!is_void) {
         aoStrPutChar(c_asm_blk, '\n');
         aoStrRepeatChar(c_asm_blk,' ', indent);
-        aoStrCatPrintf(c_asm_blk, "%s retval;", transpileKeyWordHighlight(ctx,KW_RETURN));
+        aoStrCatFmt(c_asm_blk, "%s retval;", transpileKeyWordHighlight(ctx,KW_RETURN));
     }
     aoStrCat(c_asm_blk, "\n}");
 
@@ -1650,10 +1653,10 @@ aoStr *transpileIncludes(TranspileCtx *ctx) {
     aoStr *buf = aoStrNew();
     for (ssize_t i = 0; i < len; ++i) {
         if (ctx->flags & TRANSPILE_FLAG_ISATTY) {
-            aoStrCatPrintf(buf,ESC_GREEN"#include"ESC_RESET);
-            aoStrCatPrintf(buf,ESC_RED" <%s>\n"ESC_RESET,transpile_used_c_headers[i]);
+            aoStrCatFmt(buf,ESC_GREEN"#include"ESC_RESET);
+            aoStrCatFmt(buf,ESC_RED" <%s>\n"ESC_RESET,transpile_used_c_headers[i]);
         } else {
-            aoStrCatPrintf(buf,"#include <%s>\n",transpile_used_c_headers[i]);
+            aoStrCatFmt(buf,"#include <%s>\n",transpile_used_c_headers[i]);
         }
     }
     return buf;

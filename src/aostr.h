@@ -38,6 +38,7 @@ void aoStrCatAoStr(aoStr *buf, aoStr *s2);
 void aoStrCat(aoStr *buf, const void *d);
 void aoStrCatRepeat(aoStr *buf, char *str, int times);
 void aoStrCatPrintf(aoStr *b, const char *fmt, ...);
+void aoStrCatFmt(aoStr *buf, const char *fmt, ...);
 aoStr *aoStrPrintf(const char *fmt, ...);
 aoStr *aoStrEscapeString(aoStr *buf);
 aoStr *aoStrEncode(aoStr *buf);

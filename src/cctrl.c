@@ -451,7 +451,7 @@ void cctrlFileAndLine(Cctrl *cc, aoStr *buf, ssize_t lineno, ssize_t char_pos, c
     aoStr *severity_msg = cctrlSeverityMessage(severity);
     int is_terminal = isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
 
-    aoStrCatPrintf(buf,"%s%s", severity_msg->data, msg);
+    aoStrCatFmt(buf,"%S%s", severity_msg, msg);
     if (buf->data[buf->len - 1] != '\n') {
         aoStrPutChar(buf,'\n');
     }
@@ -460,18 +460,18 @@ void cctrlFileAndLine(Cctrl *cc, aoStr *buf, ssize_t lineno, ssize_t char_pos, c
         lexFile *file = cc->lexer_->cur_file;
         char *file_name = file->filename->data;
         if (is_terminal) {
-            aoStrCatPrintf(buf, " "ESC_CYAN"-->"ESC_RESET" %s:%ld",
+            aoStrCatFmt(buf, " "ESC_CYAN"-->"ESC_RESET" %s:%I",
                     file_name,
                     lineno);
         } else {
-            aoStrCatPrintf(buf, " --> %s:%ld", file_name, lineno);
+            aoStrCatFmt(buf, " --> %s:%I", file_name, lineno);
         }
         if (char_pos > -1) {
-            aoStrCatPrintf(buf,":%ld",char_pos+1);
+            aoStrCatFmt(buf,":%I",char_pos+1);
         }
         aoStrPutChar(buf,'\n');
     } else {
-        aoStrCatPrintf(buf, "Parsing macro:%d ", lineno);
+        aoStrCatFmt(buf, "Parsing macro:%I ", lineno);
     }
     aoStrRelease(severity_msg);
 }
@@ -491,12 +491,12 @@ char *lexemeToColor(Cctrl *cc, lexeme *tok, int is_err) {
         aoStr *buf = aoStrNew();
         aoStrCat(buf,ESC_BOLD_RED);
         switch (tok->tk_type) {
-            case TK_KEYWORD: aoStrCatPrintf(buf, "%.*s", tok->len,tok->start); break;
-            case TK_STR: aoStrCatPrintf(buf,"\"%.*s\"", tok->len,tok->start); break;
-            case TK_I64: aoStrCatPrintf(buf,"%ld",tok->i64); break;
-            case TK_F64: aoStrCatPrintf(buf,"%f",tok->f64); break;
-            case TK_IDENT: aoStrCatPrintf(buf,"%.*s", tok->len,tok->start); break;
-            default: aoStrCatPrintf(buf,"%.*s",tok->len, tok->start); break;
+            case TK_KEYWORD: aoStrCatFmt(buf, "%.*s", tok->len,tok->start); break;
+            case TK_STR: aoStrCatFmt(buf,"\"%.*s\"", tok->len,tok->start); break;
+            case TK_I64: aoStrCatFmt(buf,"%I",tok->i64); break;
+            case TK_F64: aoStrCatFmt(buf,"%f",tok->f64); break;
+            case TK_IDENT: aoStrCatFmt(buf,"%.*s", tok->len,tok->start); break;
+            default: aoStrCatFmt(buf,"%.*s",tok->len, tok->start); break;
         }
         aoStrCat(buf,ESC_RESET);
         return aoStrMove(buf);
@@ -601,7 +601,8 @@ void cctrlCreateColoredLine(Cctrl *cc,
     }
 
     if (is_terminal) {
-        aoStrCatPrintf(buf, ESC_CYAN"%4ld |"ESC_RESET"    %s\n", lineno, colored_buffer->data);
+        aoStrCatPrintf(buf, ESC_CYAN"%4ld |"ESC_RESET"    ", lineno);
+        aoStrCatFmt(buf, "%S\n", colored_buffer);
     } else {
         aoStrCatPrintf(buf, "%4ld |    %s\n", lineno, colored_buffer->data);
     }
@@ -663,9 +664,9 @@ aoStr *cctrlCreateErrorLine(Cctrl *cc,
 
         if (suggestion) {
             if (is_terminal) {
-                aoStrCatPrintf(buf, ESC_BOLD_RED" %s"ESC_RESET, suggestion);
+                aoStrCatFmt(buf, ESC_BOLD_RED" %s"ESC_RESET, suggestion);
             } else {
-                aoStrCatPrintf(buf, " %s", suggestion);
+                aoStrCatFmt(buf, " %s", suggestion);
             }
         }
     } else {
@@ -683,9 +684,9 @@ aoStr *cctrlMessagVnsPrintF(Cctrl *cc, char *fmt, va_list ap, int severity) {
     int is_terminal = isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
     aoStr *bold_msg = aoStrNew();
     if (is_terminal) {
-        aoStrCatPrintf(bold_msg, ESC_BOLD"%s"ESC_CLEAR_BOLD, msg);
+        aoStrCatFmt(bold_msg, ESC_BOLD"%s"ESC_CLEAR_BOLD, msg);
     } else {
-        aoStrCatPrintf(bold_msg, "%s", msg);
+        aoStrCatFmt(bold_msg, "%s", msg);
     }
     lexeme *cur_tok = cctrlTokenPeek(cc);
     aoStr *buf = cctrlCreateErrorLine(cc,cur_tok->line,bold_msg->data,severity,NULL);
@@ -701,9 +702,9 @@ aoStr *cctrlMessagVnsPrintFWithSuggestion(Cctrl *cc, char *fmt, va_list ap,
     char *msg = mprintVa(fmt, ap, NULL);
     aoStr *bold_msg = aoStrNew();
     if (is_terminal) {
-        aoStrCatPrintf(bold_msg, ESC_BOLD"%s"ESC_CLEAR_BOLD, msg);
+        aoStrCatFmt(bold_msg, ESC_BOLD"%s"ESC_CLEAR_BOLD, msg);
     } else {
-        aoStrCatPrintf(bold_msg, "%s", msg);
+        aoStrCatFmt(bold_msg, "%s", msg);
     }
     lexeme *cur_tok = cctrlTokenPeek(cc);
     aoStr *buf = cctrlCreateErrorLine(cc,cur_tok->line,bold_msg->data,severity,suggestion);
@@ -826,7 +827,7 @@ aoStr *cctrlRaiseFromTo(Cctrl *cc, int severity, char *suggestion, char from,
 {
     char *msg = mprintVa(fmt, ap, NULL);
     aoStr *bold_msg = aoStrNew();
-    aoStrCatPrintf(bold_msg, ESC_BOLD"%s"ESC_CLEAR_BOLD, msg);
+    aoStrCatFmt(bold_msg, ESC_BOLD"%s"ESC_CLEAR_BOLD, msg);
     lexeme *cur_tok = cctrlTokenPeek(cc);
 
     char *line_buffer = lexerReportLine(cc->lexer_, cur_tok->line);
@@ -853,9 +854,9 @@ aoStr *cctrlRaiseFromTo(Cctrl *cc, int severity, char *suggestion, char from,
         }
         if (suggestion) {
             if (isatty(STDOUT_FILENO)) {
-                aoStrCatPrintf(buf, ESC_BOLD_RED" %s"ESC_RESET, suggestion);
+                aoStrCatFmt(buf, ESC_BOLD_RED" %s"ESC_RESET, suggestion);
             } else {
-                aoStrCatPrintf(buf, " %s", suggestion);
+                aoStrCatFmt(buf, " %s", suggestion);
             }
         }
     } else {
