@@ -1446,7 +1446,15 @@ aoStr *transpileFunction(Ast *fn, TranspileCtx *ctx) {
         fn_proto = transpileFunctionProto(ctx, fn->type,fname->data);
     }
 
+    /* Parse out the function body */
     aoStr *body = transpileAst(fn->body, ctx);
+
+    /* Add inline modifier if the function is inline */
+    if (fn->flags & AST_FLAG_INLINE) {
+        aoStrCatPrintf(function, "%s ",
+                       transpileKeyWordHighlight(ctx,KW_INLINE));
+    }
+
     aoStrCatPrintf(function, "%s\n{\n%s}",fn_proto->data, body->data);
     return function;
 }

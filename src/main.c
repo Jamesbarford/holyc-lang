@@ -44,6 +44,7 @@ typedef struct hccOpts {
     int run;
     int assemble;
     int transpile;
+    int to_stdout;
     char *infile;
     char *infile_no_ext;
     char *asm_outfile;
@@ -214,7 +215,14 @@ void emitFile(aoStr *asmbuf, hccOpts *opts) {
                 ASM_TMP_FILE,opts->clibs,opts->obj_outfile);
         system(cmd->data);
     } else if (opts->asm_outfile && opts->assemble_only) {
-        int fd = open(opts->asm_outfile, O_CREAT|O_RDWR|O_TRUNC, 0666);
+        int fd;
+        if (opts->to_stdout) {
+            fd = STDOUT_FILENO;
+        } else if (opts->output_filename != NULL) {
+            fd = open(opts->output_filename, O_CREAT|O_RDWR|O_TRUNC, 0666);
+        } else {
+            fd = open(opts->asm_outfile, O_CREAT|O_RDWR|O_TRUNC, 0666);
+        }
         write(fd,asmbuf->data,asmbuf->len);
         close(fd);
     } else if (opts->emit_dylib) {
@@ -259,7 +267,6 @@ void emitFile(aoStr *asmbuf, hccOpts *opts) {
                     ASM_TMP_FILE, opts->output_filename);
         }
         system(cmd->data);
-
     }
     if (strnlen(opts->clibs,10) > 1) {
         free(opts->clibs);
@@ -312,6 +319,7 @@ void usage(void) {
             "  -lib       Emit a dynamic and static library\n"
             "  -clibs     Link c libraries like: -clibs=`-lSDL2 -lxml2 -lcurl...`\n"
             "  -o         Output filename: hcc -o <name> ./<file>.HC\n"
+            "  -o-        Output assembly to stdout, only for use with -S\n"
             "  -run       Immediately run the file (not JIT)\n"
             "  -transpile Transpile the code to C, this is best effort\n"
             "  -g         Not implemented\n"
@@ -369,6 +377,8 @@ void parseCliOptions(hccOpts *opts, int argc, char **argv) {
             i++;
         } else if (!strncmp(argv[i],"-obj",4)) {
             opts->emit_object = 1;
+        } else if (!strncmp(argv[i],"-o-",3)) {
+            opts->to_stdout = 1;
         } else if (!strncmp(argv[i],"-o",2)) {
             opts->output_filename = argv[i+1];
             i++;
