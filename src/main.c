@@ -289,7 +289,6 @@ void assemble(hccOpts *opts) {
         aoStr asm_buf = {
             .data = buffer,
             .len = len,
-            .offset = 0,
             .capacity = len,
         };
         writeAsmToTmp(&asm_buf);
