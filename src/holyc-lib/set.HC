@@ -35,7 +35,6 @@ RBTree *RBTreeNew(U0 (*free_key)(U0 *), U0 (*free_value)(U0 *),
     has_init = 1;
     RB_SENTINAL = MAlloc(sizeof(RBNode));
   }
-  has_init = 1;
   RBTree *tree = MAlloc(sizeof(RBTree));
   tree->free_key = free_key;
   tree->free_value = free_value;
