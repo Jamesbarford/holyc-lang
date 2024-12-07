@@ -221,7 +221,7 @@ public class StrMap
                  * quickly at the cost of memory */
   U64 threashold; /* rebuild threashold */
   U0 (*_free_value)(U0 *_value); /* User defined callback for freeing values */
-  U0 (*_free_key)(U0 *_key); /* User defined callback for freeing keys */
+U0 (*_free_key)(U0 *_key); /* User defined callback for freeing keys */
   StrMapNode **entries; /* All of the entries, XXX: could this be IntMapNode *entries? */
 };
 
@@ -1419,3 +1419,54 @@ public Bool NetAccept(I32 socket, Bool non_blocking=FALSE);
 public Bool NetGetIpv4AddressFromAcceptedSocket(I32 sockfd, U8 *ipbuf, I32 outlen);
 public I32 NetCreateUnixServerSocket(U8 *name, I32 backlog);
 public I32 NetCreateUnixClientSocket(U8 *name);
+
+
+class RBNode;
+public class RBNode
+{
+  U0 *key;
+  U0 *value;
+  I64 color;
+  RBNode *left;
+  RBNode *right;
+  RBNode *parent;
+};
+
+public class RBTree
+{
+  RBNode *root;
+  I64 size;
+  U0 (*free_key)(U0 *);
+  U0 (*free_value)(U0 *);
+  I64 (*key_cmp)(U0 *, U0 *);
+};
+
+public RBTree *RBTreeNew(U0 (*free_key)(U0 *),
+                         U0 (*free_value)(U0 *), 
+                         U0 (*key_cmp)(U0 *, U0 *));
+public U0 RBTreeInsert(RBTree *tree, U0 *key, U0 *value);
+public U0 *RBTreeGet(RBTree *tree, U0 *key);
+public U0 RBTreeDelete(RBTree *tree, U0 *key);
+public U0 RBTreeForEach(RBTree *tree,
+                        U0 *user_data,
+                        U0 (*callback)(U0 *user_data,
+                                       U0 *key, 
+                                       U0 *value));
+public U0 RBTreeRelease(RBTree *tree);
+
+public class IntSet
+{
+  RBTree *tree;
+};
+
+public IntSet *IntSetNew(U0);
+public Bool IntSetHas(IntSet *set, I64 key);
+public U0 IntSetAdd(IntSet *set, I64 key);
+public U0 IntSetDelete(IntSet *set, I64 key);
+public IntSet *IntSetUnion(IntSet *s1, IntSet *s2);
+public IntSet *IntSetDiff(IntSet *s1, IntSet *s2);
+public IntSet *IntSetSymDiff(IntSet *s1, IntSet *s2);
+public Bool IntSetEq(IntSet *s1, IntSet *s2);
+public IntVec *IntSetToVec(IntSet *set);
+public U8 *IntSetToString(IntSet *set);
+public U0 IntSetRelease(IntSet *set);

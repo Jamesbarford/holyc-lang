@@ -10,6 +10,7 @@
 #include "./threads.HC"
 #include "./csv.HC"
 #include "./hashtable.HC"
+#include "./set.HC"
 #include "./stat.HC"
 #include "./dir.HC"
 #include "./fzf.HC"
