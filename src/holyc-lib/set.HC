@@ -116,7 +116,7 @@ static RBNode *RBGrandParent(RBNode *n)
   return n->parent->parent;
 }
 
-U0 RBInsertFixUp(RBTree *tree, RBNode *z)
+static U0 RBInsertFixUp(RBTree *tree, RBNode *z)
 {
   while (z->parent->color == __RB_RED__) {
     RBNode *y;
