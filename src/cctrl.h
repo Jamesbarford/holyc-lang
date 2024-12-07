@@ -129,6 +129,8 @@ typedef struct Cctrl {
     int is_static;
     TokenRingBuffer *token_buffer;
     Lexer *lexer_;
+
+    PtrVec *ir_modules;
 } Cctrl;
 
 /* Instantiate a new compiler control struct */

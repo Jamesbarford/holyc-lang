@@ -8,6 +8,7 @@
 #define HT_VACANT  LONG_MAX-1
 #define HT_PROBE_1 1
 #define HT_PROBE_3 3
+#define HT_SMALL_SIZE 32
 
 /* This is very similar to the MapIndex struct, maybe we can repurpose it 
  * or repurpose this to be the index */

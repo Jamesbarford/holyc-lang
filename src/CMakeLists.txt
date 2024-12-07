@@ -38,6 +38,7 @@ set(SOURCES
     cfg-print.c
     cfg.c
     compile.c
+    ir.c
     lexer.c
     list.c
     main.c
@@ -49,6 +50,7 @@ set(SOURCES
     prsutil.c
     transpiler.c
     x86.c
+    x86_64.c
 )
 
 set(HEADERS 
@@ -58,6 +60,7 @@ set(HEADERS
     cfg-print.h
     cfg.h
     compile.h
+    ir.h
     config.h
     lexer.h
     list.h
@@ -71,6 +74,7 @@ set(HEADERS
     transpiler.h
     version.h
     x86.h
+    x86_64.h
 )
 
 add_executable(hcc ${SOURCES} ${HEADERS})
