@@ -105,10 +105,12 @@ typedef struct AstType {
 typedef struct Ast Ast;
 typedef struct Ast {
     long kind;
-    unsigned long flags;
     AstType *type;
+    unsigned long flags;
     int loff;
     long deref_symbol;
+    int tmp_reg;
+
     union {
         struct {
         /* 8, 16, 32, 64 bit number */
