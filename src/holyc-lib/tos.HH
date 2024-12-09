@@ -1454,9 +1454,30 @@ public U0 RBTreeForEach(RBTree *tree,
                                        U0 *value));
 public U0 RBTreeRelease(RBTree *tree);
 
+public class RBIter
+{
+  I64 sp;
+  RBNode **stack;
+  RBNode *cur;
+  RBNode *node;
+};
+
+public RBIter *RBIterNew(RBTree *tree);
+public U0 RBIterRelease(RBIter *it);
+public RBNode *RBIterNext(RBIter *it);
+
 public class IntSet
 {
   RBTree *tree;
+};
+public class IntSetEntry
+{
+  I64 key;
+};
+public class IntSetIter
+{
+  RBIter *it;
+  IntSetEntry *entry;
 };
 
 public IntSet *IntSetNew(U0);
@@ -1470,3 +1491,7 @@ public Bool IntSetEq(IntSet *s1, IntSet *s2);
 public IntVec *IntSetToVec(IntSet *set);
 public U8 *IntSetToString(IntSet *set);
 public U0 IntSetRelease(IntSet *set);
+public IntSetEntry *IntSetIterNext(IntSetIter *iter);
+public U0 IntSetIterRelease(IntSetIter *iter);
+public IntSetIter *IntSetIterNew(IntSet *set);
+public I64 IntSetSize(IntSet *set);

@@ -424,6 +424,49 @@ U0 RBTreeRelease(RBTree *tree)
   }
 }
 
+class RBIter
+{
+  I64 sp;
+  RBNode **stack;
+  RBNode *cur;
+};
+
+RBIter *RBIterNew(RBTree *tree)
+{
+  RBIter *it = MAlloc(sizeof(RBIter));
+  it->sp = 0;
+  it->stack = MAlloc(sizeof(RBNode*)*tree->size);
+  RBNode *node = tree->root;
+  while (node != NULL && node != RB_SENTINAL) {
+    it->stack[it->sp++] = node;
+    node = node->left;
+  }
+  it->cur = tree->root;
+  return it;
+}
+
+U0 RBIterRelease(RBIter *it)
+{
+  Free(it->stack);
+  Free(it);
+}
+
+RBNode *RBIterNext(RBIter *it)
+{
+  if (it->sp == 0) {
+    return NULL;
+  }
+
+  RBNode *node = it->stack[--it->sp];
+  auto right_tree = node->right;
+
+  while (right_tree != NULL && right_tree != RB_SENTINAL) {
+    it->stack[it->sp++] = right_tree;
+    right_tree = right_tree->left;
+  }
+  return node;
+}
+
 class IntSet
 {
   RBTree *tree; 
@@ -614,8 +657,63 @@ U8 *IntSetToString(IntSet *set)
   return buf;
 }
 
+I64 IntSetSize(IntSet *set)
+{
+  return set->tree->size;
+}
+
 U0 IntSetRelease(IntSet *set)
 {
   RBTreeRelease(set->tree);
   Free(set);
+}
+
+class IntSetEntry
+{
+  I64 key;
+};
+
+class IntSetIter
+{
+  I64 sp;
+  RBNode **stack;
+  IntSetEntry *entry; 
+};
+
+IntSetIter *IntSetIterNew(IntSet *set)
+{
+  IntSetIter *it = MAlloc(sizeof(IntSetIter));
+  it->entry = MAlloc(sizeof(IntSetEntry));
+  it->stack = MAlloc(sizeof(RBNode *) * set->tree->size);
+  RBNode *node = set->tree->root;
+  while (node != NULL && node != RB_SENTINAL) {
+    it->stack[it->sp++] = node;
+    node = node->left;
+  }
+  return it;
+}
+
+U0 IntSetIterRelease(IntSetIter *iter)
+{
+  Free(iter->entry);
+  Free(iter->stack);
+  Free(iter);
+}
+
+IntSetEntry *IntSetIterNext(IntSetIter *it)
+{
+  if (it->sp == 0) {
+    return NULL;
+  }
+
+  RBNode *node = it->stack[--it->sp];
+  it->entry->key = node->key(I64);
+  auto right_tree = node->right;
+
+  while (right_tree != NULL && right_tree != RB_SENTINAL) {
+    it->stack[it->sp++] = right_tree;
+    right_tree = right_tree->left;
+  }
+
+  return it->entry;
 }
