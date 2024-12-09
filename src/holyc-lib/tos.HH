@@ -1494,3 +1494,4 @@ public U0 IntSetRelease(IntSet *set);
 public IntSetEntry *IntSetIterNext(IntSetIter *iter);
 public U0 IntSetIterRelease(IntSetIter *iter);
 public IntSetIter *IntSetIterNew(IntSet *set);
+public I64 IntSetSize(IntSet *set);

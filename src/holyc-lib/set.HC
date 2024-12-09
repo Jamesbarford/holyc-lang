@@ -429,7 +429,6 @@ class RBIter
   I64 sp;
   RBNode **stack;
   RBNode *cur;
-  RBNode *node;
 };
 
 RBIter *RBIterNew(RBTree *tree)
@@ -437,8 +436,12 @@ RBIter *RBIterNew(RBTree *tree)
   RBIter *it = MAlloc(sizeof(RBIter));
   it->sp = 0;
   it->stack = MAlloc(sizeof(RBNode*)*tree->size);
+  RBNode *node = tree->root;
+  while (node != NULL && node != RB_SENTINAL) {
+    it->stack[it->sp++] = node;
+    node = node->left;
+  }
   it->cur = tree->root;
-  it->node = tree->root;
   return it;
 }
 
@@ -450,18 +453,18 @@ U0 RBIterRelease(RBIter *it)
 
 RBNode *RBIterNext(RBIter *it)
 {
-  while (it->node) {
-    while (it->node != NULL && it->node != RB_SENTINAL) {
-      it->stack[it->sp++] = it->node;
-      it->node = it->node->left;
-    }
-    if (it->sp == 0) return NULL;
-    it->node = it->stack[--it->sp];
-    it->cur = it->node;
-    it->node = it->node->right;
-    return it->cur;
+  if (it->sp == 0) {
+    return NULL;
   }
-  return NULL;
+
+  RBNode *node = it->stack[--it->sp];
+  auto right_tree = node->right;
+
+  while (right_tree != NULL && right_tree != RB_SENTINAL) {
+    it->stack[it->sp++] = right_tree;
+    right_tree = right_tree->left;
+  }
+  return node;
 }
 
 class IntSet
@@ -652,6 +655,11 @@ U8 *IntSetToString(IntSet *set)
   Free(stack);
   SPutChar(&dst,'}',&buf);
   return buf;
+}
+
+I64 IntSetSize(IntSet *set)
+{
+  return set->tree->size;
 }
 
 U0 IntSetRelease(IntSet *set)
