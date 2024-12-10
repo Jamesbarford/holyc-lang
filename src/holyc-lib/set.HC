@@ -66,7 +66,7 @@ static U0 RBNodeRelease(RBTree *tree, RBNode *n)
   if (n && n != RB_SENTINAL) {
     if (tree->free_key) tree->free_key(n);
     if (tree->free_value) tree->free_value(n);
-    free(n);
+    Free(n);
   }
 }
 
@@ -396,34 +396,6 @@ U0 RBTreeForEach(RBTree *tree,
   Free(stack);
 }
 
-U0 RBTreeRelease(RBTree *tree)
-{
-  if (tree) {
-    RBNode **stack = MAlloc(sizeof(RBNode*)*tree->size);
-    I64 sp = 0;
-    RBNode *cur = tree->root;
-    RBNode *next;
-
-    while (cur) {
-      while (cur != NULL && cur != RB_SENTINAL) {
-        stack[sp++] = cur;
-        cur = cur->left;
-      }
-
-      if (sp == 0) break;
-      cur = stack[--sp];
-      if (tree->free_key) tree->free_key(cur->key);
-      if (tree->free_value) tree->free_value(cur->value);
-      next = cur->right;
-      Free(cur);
-      cur = next;
-    }
-
-    Free(stack);
-    Free(tree);
-  }
-}
-
 class RBIter
 {
   I64 sp;
@@ -467,6 +439,16 @@ RBNode *RBIterNext(RBIter *it)
   return node;
 }
 
+U0 RBTreeRelease(RBTree *tree)
+{
+  RBIter *it = RBIterNew(tree);
+  RBNode *node = NULL;
+  while ((node = RBIterNext(it)) != NULL) {
+    Free(node);
+  }
+  RBIterRelease(it);
+}
+
 class IntSet
 {
   RBTree *tree; 
@@ -488,184 +470,9 @@ IntSet *IntSetNew()
   return set;
 }
 
-Bool IntSetHas(IntSet *set, I64 key)
-{
-  return RBTreeHas(set->tree,key(U0*));
-}
-
-U0 IntSetAdd(IntSet *set, I64 key)
-{
-  return RBTreeInsert(set->tree,key(U0*),NULL);
-}
-
-U0 IntSetDelete(IntSet *set, I64 key)
-{
-  RBTreeDelete(set->tree,key(U0*));
-}
-
-U0 __IntSetAddToSet(U0 *user_data, U0 *key, U0 *value)
-{
-  IntSetAdd(user_data(IntSet *),key(I64));
-}
-
-IntSet *IntSetUnion(IntSet *s1, IntSet *s2)
-{
-  IntSet *union_set = IntSetNew;
-  RBTreeForEach(s1->tree, union_set, &__IntSetAddToSet);
-  RBTreeForEach(s2->tree, union_set, &__IntSetAddToSet);
-  return union_set;
-}
-
-IntSet *IntSetDiff(IntSet *s1, IntSet *s2)
-{
-  IntSet *diff_set = IntSetNew;
-  I64 sp = 0;
-  RBNode **stack = MAlloc(sizeof(RBNode*)*s1->tree->size);
-  RBNode *cur = s1->tree->root;
-
-  while (cur != NULL) {
-    while (cur != NULL && cur != RB_SENTINAL) {
-      stack[sp++] = cur;
-      cur = cur->left;
-    }
-
-    if (sp == 0) break;
-    cur = stack[--sp];
-    if (!IntSetHas(s2,cur->key(I64))) {
-      IntSetAdd(diff_set,cur->key(I64));
-    }
-    cur = cur->right;
-  }
-
-  Free(stack);
-  return diff_set;
-}
-
-U0 __IntSetIsEq(U0 *user_data, U0 *key, U0 *value)
-{
-  if (!IntSetHas(user_data(IntSet *),key(I64))) {
-    Bool *has = user_data(Bool *);
-    *has = FALSE;
-  }
-}
-
-Bool IntSetEq(IntSet *s1, IntSet *s2)
-{
-  if (s1->tree->size != s2->tree->size) return FALSE;
-  Bool retval = TRUE;
-  RBTreeForEach(s1->tree,s2,&__IntSetIsEq);
-  return retval;
-}
-
-
-U0 __IntSetAddToVec(U0 *user_data, U0 *key, U0 *value)
-{
-  IntVecPush(user_data(IntVec *),key(I64));
-}
-
-IntVec *IntSetToVec(IntSet *set)
-{
-  IntVec *vec = IntVecNew;
-  RBTreeForEach(set->tree,vec,&__IntSetAddToVec);
-  return vec;
-}
-
-IntSet *IntSetSymDiff(IntSet *s1, IntSet *s2)
-{
-  IntSet *sym_diff_set = IntSetNew();
-  I64 max_size = 0;
-
-  if (s2->tree->size > s1->tree->size) {
-    max_size = s2->tree->size;
-  } else {
-    max_size = s1->tree->size;
-  }
-  if (max_size == 0) return sym_diff_set;
-
-  RBNode **stack = MAlloc(sizeof(RBNode*)*max_size);
-  I64 sp = 0;
-  RBNode *cur = s1->tree->root;
-
-  /* Add elements from s1 that are not in s2 */
-  while (cur != NULL) {
-    while (cur != NULL && cur != RB_SENTINAL) {
-      stack[sp++] = cur;
-      cur = cur->left;
-    }
-
-    if (sp == 0) break;
-    cur = stack[--sp];
-    if (!IntSetHas(s2(IntSet *), cur->key(I64))) {
-      IntSetAdd(sym_diff_set, cur->key(I64));
-    }
-    cur = cur->right;
-  }
-
-  sp = 0;
-  cur = s2->tree->root;
-  /* Add elements from s2 that are not in s1 */
-  while (cur != NULL) {
-    while (cur != NULL && cur != RB_SENTINAL) {
-      stack[sp++] = cur;
-      cur = cur->left;
-    }
-
-    if (sp == 0) break;
-    cur = stack[--sp];
-    if (!IntSetHas(s1, cur->key(I64))) {
-      IntSetAdd(sym_diff_set, cur->key(I64));
-    }
-    cur = cur->right;
-  }
-
-  Free(stack);
-  return sym_diff_set;
-}
-
-U8 *IntSetToString(IntSet *set)
-{
-  U8 *buf = MAlloc(sizeof(U8)*128);
-  U8 *dst = buf;
-  U8 tmp[64];
-  RBNode **stack = MAlloc(sizeof(RBNode*)*set->tree->size);
-  I64 sp = 0;
-
-  SPutChar(&dst,'{',&buf);
-  RBNode *cur = set->tree->root;
-
-  /* Add elements from s1 that are not in s2 */
-  while (cur != NULL) {
-    while (cur != NULL && cur != RB_SENTINAL) {
-      stack[sp++] = cur;
-      cur = cur->left;
-    }
-
-    if (sp == 0) break;
-    cur = stack[--sp];
-    snprintf(tmp,sizeof(tmp),"%lld, ",cur->key(I64));
-    OutStr(tmp,&buf,&dst,0,0);
-
-    cur = cur->right;
-  }
-
-  if (*dst != '{') {
-    dst -= 2;
-  }
-
-  Free(stack);
-  SPutChar(&dst,'}',&buf);
-  return buf;
-}
-
 I64 IntSetSize(IntSet *set)
 {
   return set->tree->size;
-}
-
-U0 IntSetRelease(IntSet *set)
-{
-  RBTreeRelease(set->tree);
-  Free(set);
 }
 
 class IntSetEntry
@@ -693,13 +500,6 @@ IntSetIter *IntSetIterNew(IntSet *set)
   return it;
 }
 
-U0 IntSetIterRelease(IntSetIter *iter)
-{
-  Free(iter->entry);
-  Free(iter->stack);
-  Free(iter);
-}
-
 IntSetEntry *IntSetIterNext(IntSetIter *it)
 {
   if (it->sp == 0) {
@@ -717,3 +517,186 @@ IntSetEntry *IntSetIterNext(IntSetIter *it)
 
   return it->entry;
 }
+
+U0 IntSetIterRelease(IntSetIter *iter)
+{
+  Free(iter->entry);
+  Free(iter->stack);
+  Free(iter);
+}
+
+Bool IntSetHas(IntSet *set, I64 key)
+{
+  return RBTreeHas(set->tree,key(U0*));
+}
+
+U0 IntSetAdd(IntSet *set, I64 key)
+{
+  return RBTreeInsert(set->tree,key(U0*),NULL);
+}
+
+U0 IntSetDelete(IntSet *set, I64 key)
+{
+  RBTreeDelete(set->tree,key(U0*));
+}
+
+IntSet *IntSetUnion(IntSet *s1, IntSet *s2)
+{
+  IntSet *union_set = IntSetNew;
+  IntSetIter *i1 = IntSetIterNew(s1);
+  IntSetIter *i2 = IntSetIterNew(s2);
+  IntSetEntry *entry = NULL;
+
+  while ((entry = IntSetIterNext(i1))) {
+    IntSetAdd(union_set,entry->key);
+  }
+  
+  while ((entry = IntSetIterNext(i2))) {
+    IntSetAdd(union_set,entry->key);
+  }
+
+  IntSetIterRelease(i1);
+  IntSetIterRelease(i2);
+  return union_set;
+}
+
+IntSet *IntSetDiff(IntSet *s1, IntSet *s2)
+{
+  IntSet *diff_set = IntSetNew;
+  IntSetIter *i1 = IntSetIterNew(s1);
+  IntSetEntry *entry = NULL;
+
+  while ((entry = IntSetIterNext(i1))) {
+    if (!IntSetHas(s2, entry->key(I64))) {
+      IntSetAdd(diff_set,entry->key(I64));
+    }
+  }
+  
+  IntSetIterRelease(i1);
+  return diff_set;
+}
+
+IntSet *IntSetIntersection(IntSet *s1, IntSet *s2)
+{
+  IntSet *intersection_set = IntSetNew;
+  IntSetIter *i1 = IntSetIterNew(s1);
+  IntSetIter *i2 = IntSetIterNew(s2);
+  IntSetEntry *entry = NULL;
+
+  while ((entry = IntSetIterNext(i1))) {
+    if (IntSetHas(s2,entry->key)) {
+      IntSetAdd(intersection_set,entry->key);
+    }
+  }
+
+  while ((entry = IntSetIterNext(i2))) {
+    if (IntSetHas(s1,entry->key)) {
+      IntSetAdd(intersection_set,entry->key);
+    }
+  }
+
+  IntSetIterRelease(i1);
+  IntSetIterRelease(i2);
+  return intersection_set;
+}
+
+Bool IntSetEq(IntSet *s1, IntSet *s2)
+{
+  if (IntSetSize(s1) != IntSetSize(s2)) return FALSE;
+
+  IntSetIter *i1 = IntSetIterNew(s1);
+  IntSetIter *i2 = IntSetIterNew(s2);
+  IntSetEntry *entry = NULL;
+  Bool retval = TRUE;
+
+  while ((entry = IntSetIterNext(i1))) {
+    if (!IntSetHas(s2,entry->key)) {
+      retval = FALSE;
+      goto out;
+    }
+  }
+
+  while ((entry = IntSetIterNext(i2))) {
+    if (!IntSetHas(s1,entry->key)) {
+      retval = FALSE;
+      goto out;
+    }
+  }
+
+out:
+  IntSetIterRelease(i1);
+  IntSetIterRelease(i2);
+  return retval;
+}
+
+IntVec *IntSetToVec(IntSet *set)
+{
+  IntVec *vec = IntVecNew;
+  IntSetIter *i1 = IntSetIterNew(set);
+  IntSetEntry *entry = NULL;
+  while ((entry = IntSetIterNext(i1))) {
+    IntVecPush(vec,entry->key);
+  }
+  IntSetIterRelease(i1);
+  return vec;
+}
+
+IntSet *IntSetSymDiff(IntSet *s1, IntSet *s2)
+{
+  IntSet *sym_diff_set = IntSetNew();
+  IntSetIter *i1 = IntSetIterNew(s1);
+  IntSetIter *i2 = IntSetIterNew(s2);
+  IntSetEntry *entry = NULL;
+
+  /* Add elements from s1 that are not in s2 */
+  while ((entry = IntSetIterNext(i1))) {
+    if (!IntSetHas(s2,entry->key)) {
+      IntSetAdd(sym_diff_set,entry->key);
+    }
+  }
+
+  /* Add elements from s2 that are not in s1 */
+  while ((entry = IntSetIterNext(i2))) {
+    if (!IntSetHas(s1,entry->key)) {
+      IntSetAdd(sym_diff_set,entry->key);
+    }
+  }
+
+  IntSetRelease(i1);
+  IntSetRelease(i2);
+  return sym_diff_set;
+}
+
+U8 *IntSetToString(IntSet *set)
+{
+  U8 *buf = MAlloc(sizeof(U8)*128);
+  U8 *dst = buf;
+  U8 tmp[64];
+
+  IntSetIter *i1 = IntSetIterNew(set);
+  IntSetEntry *entry = NULL;
+  SPutChar(&dst,'{',&buf);
+
+  while ((entry = IntSetIterNext(i1))) {
+    snprintf(tmp,sizeof(tmp),"%lld, ",entry->key(I64));
+    OutStr(tmp,&buf,&dst,0,0);
+  }
+
+  SPutChar(&dst,'{',&buf);
+  RBNode *cur = set->tree->root;
+
+  if (*dst != '{') {
+    dst -= 2;
+  }
+
+  SPutChar(&dst,'}',&buf);
+  return buf;
+}
+
+
+U0 IntSetRelease(IntSet *set)
+{
+  RBTreeRelease(set->tree);
+  Free(set);
+}
+
