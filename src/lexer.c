@@ -846,7 +846,6 @@ unsigned long lexCharConst(lexer *l) {
                 case 'd':  char_const |= (unsigned long)'$'  << ((unsigned long)idx); break;
                 case 'n':  {
                     char_const |= (unsigned long)'\n' << ((unsigned long)idx);
-                    l->lineno++;
                     break;
                 }
                 case 'r':  char_const |= (unsigned long)'\r' << ((unsigned long)idx); break;
