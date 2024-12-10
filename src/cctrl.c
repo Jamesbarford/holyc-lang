@@ -617,6 +617,7 @@ aoStr *cctrlCreateErrorLine(Cctrl *cc,
                             int severity,
                             char *suggestion)
 {
+    char *color = severity == CCTRL_ERROR || CCTRL_ICE ? ESC_BOLD_RED : CCTRL_WARN ? ESC_BOLD_YELLOW : ESC_CYAN;
     int is_terminal = isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
     if (!cc->lexer_) {
         aoStr *buf = aoStrNew();
@@ -654,7 +655,7 @@ aoStr *cctrlCreateErrorLine(Cctrl *cc,
 
         if (is_terminal) {
             for (int i = 0; i < tok_len; ++i) {
-                aoStrCat(buf,ESC_BOLD_RED"^"ESC_RESET);
+                aoStrCatFmt(buf,"%s^%s",color,ESC_RESET);
             }
         } else {
             for (int i = 0; i < tok_len; ++i) {
@@ -664,7 +665,7 @@ aoStr *cctrlCreateErrorLine(Cctrl *cc,
 
         if (suggestion) {
             if (is_terminal) {
-                aoStrCatFmt(buf, ESC_BOLD_RED" %s"ESC_RESET, suggestion);
+                aoStrCatFmt(buf, "%s %s%s",color,suggestion,ESC_RESET);
             } else {
                 aoStrCatFmt(buf, " %s", suggestion);
             }
@@ -825,6 +826,7 @@ void cctrlTokenExpect(Cctrl *cc, long expected) {
 aoStr *cctrlRaiseFromTo(Cctrl *cc, int severity, char *suggestion, char from, 
                         char to, char *fmt, va_list ap)
 {
+    char *color = severity == CCTRL_ERROR || CCTRL_ICE ? ESC_BOLD_RED : CCTRL_WARN ? ESC_BOLD_YELLOW : ESC_CYAN;
     char *msg = mprintVa(fmt, ap, NULL);
     aoStr *bold_msg = aoStrNew();
     aoStrCatFmt(bold_msg, ESC_BOLD"%s"ESC_CLEAR_BOLD, msg);
@@ -850,11 +852,11 @@ aoStr *cctrlRaiseFromTo(Cctrl *cc, int severity, char *suggestion, char from,
             aoStrPutChar(buf,' ');
         }
         for (int i = 0; i < (to_idx+1)-from_idx; ++i) {
-            aoStrCat(buf,ESC_BOLD_RED"^"ESC_RESET);
+            aoStrCatFmt(buf,"%s^%s",color,ESC_RESET);
         }
         if (suggestion) {
             if (isatty(STDOUT_FILENO)) {
-                aoStrCatFmt(buf, ESC_BOLD_RED" %s"ESC_RESET, suggestion);
+                aoStrCatFmt(buf,"%s %s%s",color,suggestion,ESC_RESET);
             } else {
                 aoStrCatFmt(buf, " %s", suggestion);
             }
