@@ -12,6 +12,7 @@
 #define M_SQRT2     1.41421356237309504880168872420969808   /* sqrt(2)        */
 #define M_SQRT1_2   0.707106781186547524400844362104849039  /* 1/sqrt(2)      */
 
+
 /* Libc's maths functions */
 extern "c" F64 acos(F64 f1);
 extern "c" F64 asin(F64 f1);
@@ -68,6 +69,37 @@ extern "c" F64 fmax(F64 f1, F64 f2);
 extern "c" F64 fmin(F64 f1, F64 f2);
 extern "c" F64 fma(F64 f1, F64 f2, F64 f3);
 
+asm {
+_ABS::
+    MOV     RAX, RDI
+    NEG     RAX
+    CMOVL   RAX, RDI /* will discard the negate if the value was greater than 0 */
+    RET
+
+/* Non recursive greatest common divisor function */
+_GCD::
+    TEST    RSI, RSI
+    MOV     RAX, RDI
+    JNE     @@02
+    JMP     @@01
+@@03:
+    MOV     RDX, RSI
+@@02:
+    CQTO
+    IDIV    RSI
+    TEST    RDX, RDX
+    MOV     RAX, RSI
+    JNE     @@03
+    MOVQ    RAX, RSI
+    RET
+@@01:
+    MOV RAX, RDI
+    RET
+}
+
+public _extern _ABS U64 Abs(I64 num);
+public _extern _GCD U64 Gcd(I64 a, I64 b);
+
 F64 Pow(F64 a, I64 b)
 {
   if (b == 0) return 1.0;
@@ -90,3 +122,4 @@ U64 ModU64(U64 *k, U64 m)
 {
   return *k % m;
 }
+
