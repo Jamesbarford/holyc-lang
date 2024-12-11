@@ -633,7 +633,10 @@ void asmAssign(Cctrl *cc, aoStr *buf, Ast *variable) {
         asmCast(buf,variable->operand->type,variable->type);
         tmp = variable->operand->type;
         variable->operand->type = astTypeCopy(variable->type);
-        free(tmp);
+        /**
+         * XXX: Not sure what this is doing
+         * free(tmp);
+         */
         asmAssign(cc,buf,variable->operand);
         break;
 
