@@ -176,7 +176,8 @@ U0 RBTreeInsert(RBTree *tree, U0 *key, U0 *value)
     } else if (cmp > 0) {
       x = x->right;
     } else {
-      /* XXX: Should duplicates be allowed? */
+      /* XXX: Should duplicates be allowed? Should we free the old value? */
+      x->value = value;
       return;
     }
   }

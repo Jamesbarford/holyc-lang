@@ -1448,6 +1448,7 @@ public RBTree *RBTreeNew(U0 (*free_key)(U0 *),
                          U0 (*key_cmp)(U0 *, U0 *));
 public U0 RBTreeInsert(RBTree *tree, U0 *key, U0 *value);
 public U0 *RBTreeGet(RBTree *tree, U0 *key);
+public Bool RBTreeHas(RBTree *tree, U0 *key);
 public U0 RBTreeDelete(RBTree *tree, U0 *key);
 public U0 RBTreeForEach(RBTree *tree,
                         U0 *user_data,
