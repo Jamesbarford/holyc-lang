@@ -65,7 +65,20 @@ typedef enum {
     IR_CAST,
 } IrOp;
 
-void irCreate(Cctrl *cc);
+typedef struct IrInstruction {
+    IrOp op;
+    int dest;
+    int s1;
+    int s2;
+    int size;
+    double f64;
+    aoStr *label;
+    aoStr *fname;
+    int offset;
+} IrInstruction;
 
+
+void irFromAst(Cctrl *cc);
+aoStr *irInstructionToString(IrInstruction *inst);
 
 #endif

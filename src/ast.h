@@ -109,6 +109,7 @@ typedef struct Ast {
     unsigned long flags;
     int loff;
     long deref_symbol;
+    /* Used when converting to IR, is effectively a variable ID */
     int tmp_reg;
 
     union {
