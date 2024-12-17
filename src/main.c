@@ -13,6 +13,7 @@
 #include "cfg.h"
 #include "compile.h"
 #include "config.h"
+#include "ir.h"
 #include "lexer.h"
 #include "list.h"
 #include "transpiler.h"
@@ -477,6 +478,7 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+    irFromAst(cc);
     asmbuf = compileToAsm(cc);
 
     emitFile(asmbuf, &opts);

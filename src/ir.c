@@ -13,18 +13,6 @@
 #include "map.h"
 #include "util.h"
 
-typedef struct IrInstruction {
-    IrOp op;
-    int dest;
-    int s1;
-    int s2;
-    int size;
-    double f64;
-    aoStr *label;
-    aoStr *fname;
-    int offset;
-} IrInstruction;
-
 typedef struct IrModule {
     PtrVec *instructions;
     PtrVec *vars;
@@ -32,7 +20,7 @@ typedef struct IrModule {
 
 typedef struct IrCtx {
     Cctrl *cc;
-    StrMap *var_mapping;
+    IntMap *var_mapping;
     int next_var_id;
     int next_temp_reg;
     IrModule *ir_module;
@@ -54,8 +42,8 @@ IrCtx *irCtxNew(Cctrl *cc) {
     ctx->next_temp_reg = 1;
     ctx->next_var_id = 1;
     ctx->stack_size = 0;
-    ctx->ir_module = NULL;
-    ctx->var_mapping = strMapNew(HT_SMALL_SIZE);
+    ctx->ir_module = irModuleNew();
+    ctx->var_mapping = intMapNew(HT_SMALL_SIZE);
     return ctx;
 }
 
@@ -74,7 +62,7 @@ int irCtxNextRegId(IrCtx *ctx) {
 void irCtxReset(IrCtx *ctx) {
     ctx->next_temp_reg = 1;
     ctx->next_var_id = 1;
-    strMapRelease(ctx->var_mapping);
+    intMapRelease(ctx->var_mapping);
 }
 
 /* Add an instruction to the current module */
@@ -89,6 +77,7 @@ void irInstructionAdd(IrCtx *ctx,
 {
     IrInstruction *inst = (IrInstruction*)malloc(sizeof(IrInstruction));
     inst->op = op;
+    inst->dest = dest;
     inst->s1 = s1;
     inst->s2 = s2;
     inst->label = label;
@@ -97,6 +86,97 @@ void irInstructionAdd(IrCtx *ctx,
     inst->f64 = 0;
     inst->offset = 0;
     ptrVecPush(ctx->ir_module->instructions, inst);
+}
+
+aoStr *irInstructionToString(IrInstruction *inst) {
+    aoStr *str = aoStrNew();
+    switch (inst->op) {
+        case IR_LOAD:            aoStrCatFmt(str,"LOAD           @%i, @%i", inst->dest, inst->s1); break;
+        case IR_LOAD_IMM:        aoStrCatFmt(str,"LOAD_IMM       @%i, $%i", inst->dest, inst->s1); break;
+        case IR_LOAD_IMM_F64:    aoStrCatFmt(str,"LOAD_IMM_F64   @%i, $%f", inst->dest, inst->f64); break;
+        case IR_LOAD_IMM_STR:    aoStrCatFmt(str,"LOAD_IMM_STR    "); break;
+        case IR_LOAD_FN:         aoStrCatFmt(str,"LOAD_FN         "); break;
+        case IR_LOAD_F64:        aoStrCatFmt(str,"LOAD_F64        "); break;
+        case IR_LOAD_GLOBAL:     aoStrCatFmt(str,"LOAD_GLOBAL     "); break;
+        case IR_LOAD_ARRAY:      aoStrCatFmt(str,"LOAD_ARRAY      "); break;
+        case IR_SAVE:            aoStrCatFmt(str,"SAVE           @%i, @%i",
+                                         inst->dest, inst->s1); break;
+        case IR_SAVE_IMM:        aoStrCatFmt(str,"SAVE_IMM        "); break;
+        case IR_SAVE_IMM_F64:    aoStrCatFmt(str,"SAVE_IMM_F64    "); break;
+        case IR_SAVE_IMM_STR:    aoStrCatFmt(str,"SAVE_IMM_STR    "); break;
+        case IR_SAVE_FN:         aoStrCatFmt(str,"SAVE_FN         "); break;
+        case IR_SAVE_F64:        aoStrCatFmt(str,"SAVE_F64        "); break;
+        case IR_SAVE_GLOBAL:     aoStrCatFmt(str,"SAVE_GLOBAL     "); break;
+        case IR_SAVE_ARRAY:      aoStrCatFmt(str,"SAVE_ARRAY      "); break;
+        case IR_JMP:             aoStrCatFmt(str,"JMP             "); break;
+        case IR_LABEL:           aoStrCatFmt(str,"LABEL           "); break;
+        case IR_LT:              aoStrCatFmt(str,"LT              "); break;
+        case IR_LTE:             aoStrCatFmt(str,"LTE             "); break;
+        case IR_GT:              aoStrCatFmt(str,"GT              "); break;
+        case IR_GTE:             aoStrCatFmt(str,"GTE             "); break;
+        case IR_EQ:              aoStrCatFmt(str,"EQ              "); break;
+        case IR_NOT_EQ:          aoStrCatFmt(str,"NOT_EQ          "); break;
+        case IR_ADD:             aoStrCatFmt(str,"ADD            @%i, @%i, @%i",
+                                         inst->dest, inst->s1, inst->s2); break;
+        case IR_SUB:             aoStrCatFmt(str,"SUB            @%i, @%i, @%i",
+                                         inst->dest, inst->s1, inst->s2); break;
+        case IR_MUL:             aoStrCatFmt(str,"MUL            @%i, @%i, @%i",
+                                         inst->dest, inst->s1, inst->s2); break;
+        case IR_DIV:             aoStrCatFmt(str,"DIV            @%i, @%i, @%i",
+                                         inst->dest, inst->s1, inst->s2); break;
+        case IR_MOD:             aoStrCatFmt(str,"MOD            @%i, @%i, @%i",
+                                         inst->dest, inst->s1, inst->s2); break;
+        case IR_SHL:             aoStrCatFmt(str,"SHL             "); break;
+        case IR_SHR:             aoStrCatFmt(str,"SHR             "); break;
+        case IR_RET:             aoStrCatFmt(str,"RET             "); break;
+        case IR_CALL:            aoStrCatFmt(str,"CALL            "); break;
+        case IR_PUSH:            aoStrCatFmt(str,"PUSH            "); break;
+        case IR_POP:             aoStrCatFmt(str,"POP             "); break;
+        case IR_JMP_LT:          aoStrCatFmt(str,"JMP_LT          "); break;
+        case IR_JMP_LTE:         aoStrCatFmt(str,"JMP_LTE         "); break;
+        case IR_JMP_GT:          aoStrCatFmt(str,"JMP_GT          "); break;
+        case IR_JMP_GTE:         aoStrCatFmt(str,"JMP_GTE         "); break;
+        case IR_JMP_EQ:          aoStrCatFmt(str,"JMP_EQ          "); break;
+        case IR_JMP_NOT_EQ:      aoStrCatFmt(str,"JMP_NOT_EQ      "); break;
+        case IR_LOGICAL_OR:      aoStrCatFmt(str,"LOGICAL_OR      "); break;
+        case IR_LOGICAL_AND:     aoStrCatFmt(str,"LOGICAL_AND     "); break;
+        case IR_AND:             aoStrCatFmt(str,"AND             "); break;
+        case IR_OR:              aoStrCatFmt(str,"OR              "); break;
+        case IR_NOT:             aoStrCatFmt(str,"NOT             "); break;
+        case IR_XOR:             aoStrCatFmt(str,"XOR             "); break;
+        case IR_NEG:             aoStrCatFmt(str,"NEG             "); break;
+        case IR_POS:             aoStrCatFmt(str,"POS             "); break;
+        case IR_PRE_PLUS_PLUS:   aoStrCatFmt(str,"PRE_PLUS_PLUS   "); break;
+        case IR_PRE_MINUS_MINUS: aoStrCatFmt(str,"PRE_MINUS_MINUS "); break;
+        case IR_PLUS_PLUS:       aoStrCatFmt(str,"PLUS_PLUS       "); break;
+        case IR_MINUS_MINUS:     aoStrCatFmt(str,"MINUS_MINUS     "); break;
+        case IR_ADDR:            aoStrCatFmt(str,"ADDR            "); break;
+        case IR_DEREF:           aoStrCatFmt(str,"DEREF           "); break;
+        case IR_CAST:            aoStrCatFmt(str,"CAST            "); break;
+        default:
+            loggerPanic("Unhandled op: %d\n", inst->op);
+            break;
+
+    }
+    return str;
+}
+
+IrOp irOpFromKind(int kind) {
+    switch (kind) {
+        case '+': return IR_ADD;
+        case '-': return IR_SUB;
+        case '*': return IR_MUL;
+        case '/': return IR_DIV;
+        case '&': return IR_AND;
+        case '^': return IR_XOR;
+        case '|': return IR_OR;
+        case TK_SHL: return IR_SHL;
+        case TK_SHR: return IR_SHR;
+        default: {
+            loggerWarning("Ast Kind %s not handled defaulting to IR_MUL\n", astKindToString(kind));
+            return IR_MUL;
+        }
+    }
 }
 
 void irInstructionFloat(IrCtx *ctx,
@@ -184,7 +264,7 @@ void irArrayInit(IrCtx *ctx, Ast *ast, AstType *type) {
     }
 }
 
-void irBinaryOp(IrCtx *ctx, char *op, Ast *ast) {
+void irBinaryOp(IrCtx *ctx, int kind, Ast *ast) {
     if (ast->left && ast->left->kind == AST_DEREF) {
         if (ast->left) {
             irFromAstInternal(ast->left,ctx);
@@ -196,21 +276,42 @@ void irBinaryOp(IrCtx *ctx, char *op, Ast *ast) {
             irFromAstInternal(ast->right,ctx);
         }
     } else if (!ast->right) { // unary
-        /* If the operation on the left is a binary op then we need brackets */
         irFromAstInternal(ast->left,ctx);
     } else {
-        /* We need to add parenthesis around something like: 
-         * ```
-         * while ((var = funCall()) != NULL) {
-         *   // ... 
-         * }
-         * ```
-         *
-         * Which is where the left hand side is an assignment and the operator 
-         * for the binary expression is a comparison.
-         * */
+        /* eval left */
+        if (ast->left->tmp_reg == -1) {
+            ast->left->tmp_reg = ctx->next_temp_reg;
+        }
+        int save_reg = ast->left->tmp_reg;
+
+
         irFromAstInternal(ast->left,ctx);
-        irFromAstInternal(ast->right, ctx);
+        /* eval right */
+        if (ast->right->tmp_reg == -1) {
+            ast->right->tmp_reg = ctx->next_temp_reg;
+        }
+        irFromAstInternal(ast->right,ctx);
+        /* Well we've lost track of the variables, in assembly land we'd stash 
+         * them in RAX and RCX */
+        IrOp op = irOpFromKind(kind);
+
+        int dest_reg = ctx->next_temp_reg;
+        irCtxNextRegId(ctx);
+
+        irInstructionAdd(ctx, op,
+                dest_reg,
+                ast->left->tmp_reg,
+                ast->right->tmp_reg,
+                ast->type->size,
+                NULL,NULL);
+        irInstructionAdd(ctx, IR_SAVE,
+                save_reg,
+                //ctx->next_temp_reg,
+                dest_reg,
+                0,
+                ast->type->size,
+                NULL,NULL);
+       //ast->left->tmp_reg = ctx->next_temp_reg;
     }
 }
 
@@ -224,6 +325,8 @@ void irFromAstInternal(Ast *ast, IrCtx *ctx) {
 
     switch(ast->kind) {
     case AST_LITERAL: {
+        irCtxNextRegId(ctx);
+        ast->tmp_reg = ctx->next_temp_reg;
         switch (ast->type->kind) {
         case AST_TYPE_VOID: break;
         case AST_TYPE_INT: {
@@ -257,11 +360,11 @@ void irFromAstInternal(Ast *ast, IrCtx *ctx) {
 
     /* we are not defining anything ... */
     case AST_LVAR: {
-        int var_id = (long)strMapGet(ctx->var_mapping, ast->lname->data);
+        int var_id = ast->tmp_reg;
         int reg_id = irCtxNextRegId(ctx);
         IrOp load_op = irGetLVarLoad(ast->type);
         irInstructionAdd(ctx,load_op,reg_id,var_id,0,ast->type->size,NULL,NULL);
-        ast->tmp_reg = reg_id;
+        //ast->tmp_reg = reg_id;
         break;
     }    
 
@@ -281,7 +384,7 @@ void irFromAstInternal(Ast *ast, IrCtx *ctx) {
             loggerPanic("Unhandled declaration\n");
         }
 
-        int var_id = irCtxNextVarId(ctx);
+        int var_id = ast->declvar->tmp_reg; //irCtxNextVarId(ctx);
         int reg_id = irCtxNextRegId(ctx);
 
         if (ast->declinit) {
@@ -485,22 +588,44 @@ void irFromAstInternal(Ast *ast, IrCtx *ctx) {
     }
 
     default: {
-        irBinaryOp(ctx,lexemePunctToString(ast->kind),ast);
+        irBinaryOp(ctx,ast->kind,ast);
         break;
     }
     }
 }
 
-void irModuleAdd(Cctrl *cc) {
+void irFunc(Cctrl *cc, Ast *func) {
     IrCtx *ctx = irCtxNew(cc);
+    /* Need all vars to be id'd */
+
+    listForEach(func->locals) {
+        Ast *local = (Ast *)it->value;
+        intMapAdd(ctx->var_mapping,ctx->next_temp_reg,local);
+        func->tmp_reg = ctx->next_temp_reg;
+        irCtxNextRegId(ctx);
+        astPrint(local);
+    }
+
+
+    irFromAstInternal(func->body, ctx);
+    printf("%d\n",ctx->ir_module->instructions->size);
+    for (int i = 0; i < ctx->ir_module->instructions->size; ++i) {
+        IrInstruction *inst = ctx->ir_module->instructions->entries[i];
+        aoStr *str = irInstructionToString(inst);
+        printf("%s\n",str->data);
+        aoStrRelease(str);
+    }
+}
+
+void irModuleAdd(Cctrl *cc) {
     listForEach(cc->ast_list) {
         Ast *ast = (Ast *)it->value;
         if (ast->kind == AST_FUNC) {
-
+            irFunc(cc,ast);
         } else if (ast->kind == AST_DECL || ast->kind == AST_GVAR) {
-            loggerWarning("Cannot yet handle: AST_DECL or AST_GVAR");
+            loggerWarning("Cannot yet handle: AST_DECL or AST_GVAR\n");
         } else if (ast->kind == AST_ASM_STMT) {
-            loggerWarning("Cannot yet handle: AST_ASM_STMT");
+            loggerWarning("Cannot yet handle: AST_ASM_STMT\n");
         }
     }
 }
@@ -508,4 +633,5 @@ void irModuleAdd(Cctrl *cc) {
 void irFromAst(Cctrl *cc) {
     PtrVec *ir_modules = ptrVecNew();
     cc->ir_modules = ir_modules;
+    irModuleAdd(cc);
 }

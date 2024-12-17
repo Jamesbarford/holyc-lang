@@ -41,6 +41,7 @@ Ast *astNew(void) {
     if ((ast = (Ast *)calloc(1,sizeof(Ast))) == NULL) {
         loggerPanic("OOM when allocating AST\n");
     }
+    ast->tmp_reg = -1;
     return ast;
 }
 
