@@ -174,8 +174,13 @@ public class addrinfo
   I32 ai_socktype;	/* SOCK_xxx */
   I32 ai_protocol;	/* 0 or IPPROTO_xxx for IPv4 and IPv6 */
   U32 ai_addrlen;	/* length of ai_addr */
+#ifdef IS_LINUX
+  sockaddr *ai_addr;	/* binary address */
+  U8  *ai_canonname;	/* canonical name for hostname */
+#else
   U8  *ai_canonname;	/* canonical name for hostname */
   sockaddr *ai_addr;	/* binary address */
+#endif
   addrinfo *ai_next;	/* next structure in linked list */
 };
 
