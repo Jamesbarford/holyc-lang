@@ -1,5 +1,33 @@
 /* Socket capabilities, a bit stripped down */
-#define SOL_SOCKET      0xffff          /* options for socket level */
+#ifdef IS_LINUX
+  #define SOL_SOCKET      1   /* options for socket level */
+  #define SO_DEBUG        1   /* turn on debugging info recording */
+  #define SO_ACCEPTCONN   30  /* socket has had listen() */
+  #define SO_REUSEADDR    2   /* allow local address reuse */
+  #define SO_KEEPALIVE    9   /* keep connections alive */
+  #define SO_DONTROUTE    5   /* just use interface addresses */
+  #define SO_BROADCAST    6   /* permit sending of broadcast msgs */
+  #define SO_LINGER       13  /* linger on close if data present (in seconds) */
+  #define SO_OOBINLINE    9   /* leave received OOB data in line */
+  #define SO_REUSEPORT    15  /* allow local address & port reuse */
+  #define SO_TIMESTAMP    29  /* timestamp received dgram traffic */
+#else
+/*
+ * Option flags per-socket.
+ */
+  #define SOL_SOCKET      0xffff          /* options for socket level */
+  #define SO_DEBUG        0x0001          /* turn on debugging info recording */
+  #define SO_ACCEPTCONN   0x0002          /* socket has had listen() */
+  #define SO_REUSEADDR    0x0004          /* allow local address reuse */
+  #define SO_KEEPALIVE    0x0008          /* keep connections alive */
+  #define SO_DONTROUTE    0x0010          /* just use interface addresses */
+  #define SO_BROADCAST    0x0020          /* permit sending of broadcast msgs */
+  #define SO_LINGER       0x1080          /* linger on close if data present (in seconds) */
+  #define SO_OOBINLINE    0x0100          /* leave received OOB data in line */
+  #define SO_REUSEPORT    0x0200          /* allow local address & port reuse */
+  #define SO_TIMESTAMP    0x0400          /* timestamp received dgram traffic */
+  #define SO_TIMESTAMP_MONOTONIC  0x0800  /* Monotonically increasing timestamp on rcvd dgram */
+#endif
 
 /*
  * Address families.
@@ -7,27 +35,17 @@
 #define AF_UNSPEC       0               /* unspecified */
 #define AF_UNIX         1               /* local to host (pipes) */
 #define AF_INET         2               /* internetwork: UDP, TCP, etc. */
-#define AF_INET6        30              /* IPv6 */
+
+#ifdef IS_LINUX
+  #define AF_INET6        10              /* IPv6 */
+#else
+  #define AF_INET6        30              /* IPv6 */
+#endif
 
 #define SOCK_STREAM     1               /* stream socket */
 #define SOCK_DGRAM      2               /* datagram socket */
 #define SOCK_RAW        3               /* raw-protocol interface */
 #define SOCK_SEQPACKET  5               /* sequenced packet stream */
-
-/*
- * Option flags per-socket.
- */
-#define SO_DEBUG        0x0001          /* turn on debugging info recording */
-#define SO_ACCEPTCONN   0x0002          /* socket has had listen() */
-#define SO_REUSEADDR    0x0004          /* allow local address reuse */
-#define SO_KEEPALIVE    0x0008          /* keep connections alive */
-#define SO_DONTROUTE    0x0010          /* just use interface addresses */
-#define SO_BROADCAST    0x0020          /* permit sending of broadcast msgs */
-#define SO_LINGER       0x1080          /* linger on close if data present (in seconds) */
-#define SO_OOBINLINE    0x0100          /* leave received OOB data in line */
-#define SO_REUSEPORT    0x0200          /* allow local address & port reuse */
-#define SO_TIMESTAMP    0x0400          /* timestamp received dgram traffic */
-#define SO_TIMESTAMP_MONOTONIC  0x0800  /* Monotonically increasing timestamp on rcvd dgram */
 
 
 #define IPPROTO_IP              0               /* dummy for IP */
@@ -156,8 +174,13 @@ public class addrinfo
   I32 ai_socktype;	/* SOCK_xxx */
   I32 ai_protocol;	/* 0 or IPPROTO_xxx for IPv4 and IPv6 */
   U32 ai_addrlen;	/* length of ai_addr */
+#ifdef IS_LINUX
+  sockaddr *ai_addr;	/* binary address */
+  U8  *ai_canonname;	/* canonical name for hostname */
+#else
   U8  *ai_canonname;	/* canonical name for hostname */
   sockaddr *ai_addr;	/* binary address */
+#endif
   addrinfo *ai_next;	/* next structure in linked list */
 };
 
