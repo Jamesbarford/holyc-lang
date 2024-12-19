@@ -76,6 +76,13 @@ You should be able to follow the steps below to build and install the compiler.
 Please install [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) and 
 then follow the steps below:
 
+### Requirements
+- A C compiler, gcc or clang.
+- Linux or MacOS x86_64.
+
+**Notes:**
+- `ld` version 2.42 will report an error however does link successfully.
+
 ### Build Steps
 There is a Makefile at the root of the repository that wraps CMake, it provides:
 - `make`, will build the compiler
