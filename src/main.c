@@ -30,31 +30,6 @@
 #define CLIBS CLIBS_BASE
 #endif
 
-typedef struct hccOpts {
-    int print_ast;
-    int print_tokens;
-    int print_help;
-    int cfg_create;
-    int cfg_create_png;
-    int cfg_create_svg;
-    int asm_debug_comments;
-    int assemble_only;
-    int emit_dylib;
-    int emit_object;
-    int run;
-    int assemble;
-    int transpile;
-    int to_stdout;
-    char *infile;
-    char *infile_no_ext;
-    char *asm_outfile;
-    char *obj_outfile;
-    char *lib_name;
-    char *output_filename;
-    char *clibs;
-    List *defines_list;
-} hccOpts;
-
 typedef struct hccLib {
     char *name;
     char *version;
@@ -69,7 +44,7 @@ typedef struct hccLib {
     char *install_cmd;
 } hccLib;
 
-int hccLibInit(hccLib *lib, hccOpts *opts, char *name) { 
+int hccLibInit(hccLib *lib, HccOpts *opts, char *name) { 
     aoStr *dylibcmd = aoStrNew();
     aoStr *stylibcmd = aoStrNew();
     aoStr *installcmd = aoStrNew();
@@ -110,7 +85,7 @@ int hccLibInit(hccLib *lib, hccOpts *opts, char *name) {
     return 1;
 }
 
-void getASMFileName(hccOpts *opts, char *file_name) {
+void getASMFileName(HccOpts *opts, char *file_name) {
     int len = strlen(file_name);
     int no_ext_len = 0;
     int i;
@@ -206,7 +181,7 @@ int writeAsmToTmp(aoStr *asmbuf) {
     return 1;
 } 
 
-void emitFile(aoStr *asmbuf, hccOpts *opts) {
+void emitFile(aoStr *asmbuf, HccOpts *opts) {
     aoStr *cmd = aoStrNew();
     hccLib lib;
     if (opts->emit_object) {
@@ -276,7 +251,7 @@ void emitFile(aoStr *asmbuf, hccOpts *opts) {
     aoStrRelease(asmbuf);
 }
 
-void assemble(hccOpts *opts) {
+void assemble(HccOpts *opts) {
     aoStr *run_cmd = aoStrNew();
 
     if (opts->run) {
@@ -328,7 +303,7 @@ void usage(void) {
     exit(1);
 }
 
-void parseCliOptions(hccOpts *opts, int argc, char **argv) {
+void parseCliOptions(HccOpts *opts, int argc, char **argv) {
     if (!strncmp(argv[argc-1], "--help",6)) {
         usage();
     }
@@ -428,7 +403,7 @@ int main(int argc, char **argv) {
                 "compilation terminated.\n");
         exit(EXIT_FAILURE);
     }
-    hccOpts opts;
+    HccOpts opts;
     int lexer_flags = CCF_PRE_PROC;
     aoStr *asmbuf;
     Cctrl *cc;
@@ -452,7 +427,7 @@ int main(int argc, char **argv) {
     }
 
     if (opts.print_tokens) {
-        compileToTokens(cc,opts.infile,lexer_flags);
+        compileToTokens(cc,&opts,lexer_flags);
         return 0;
     }
 
@@ -466,8 +441,7 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    compileToAst(cc,opts.infile,lexer_flags);
-
+    compileToAst(cc,&opts,lexer_flags);
 
     if (opts.print_ast) {
         compilePrintAst(cc);

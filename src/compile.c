@@ -48,14 +48,14 @@ aoStr *compileToAsm(Cctrl *cc) {
     return asmbuf;
 }
 
-void compileToTokens(Cctrl *cc, char *entrypath, int lexer_flags) {
+void compileToTokens(Cctrl *cc, HccOpts *opts, int lexer_flags) {
     lexer *l = malloc(sizeof(lexer));
     aoStr *builtin_path;
     StrMap *seen_files;
 
     seen_files = strMapNew(32);
     
-    builtin_path = aoStrDupRaw("/usr/local/include/tos.HH",25); //aoStrNew();
+    builtin_path = aoStrDupRaw("/usr/local/include/tos.HH",25);
 
     lexInit(l,NULL,CCF_PRE_PROC);
     l->seen_files = seen_files;
@@ -63,7 +63,7 @@ void compileToTokens(Cctrl *cc, char *entrypath, int lexer_flags) {
     lexSetBuiltinRoot(l,"/usr/local/include/");
 
     /* library files */
-    lexPushFile(l,aoStrDupRaw(entrypath,strlen(entrypath)));
+    lexPushFile(l,aoStrDupRaw(opts->infile,strlen(opts->infile)));
     /* the structure is a stack so this will get popped first */
     lexPushFile(l,builtin_path);
 
@@ -78,7 +78,7 @@ void compileToTokens(Cctrl *cc, char *entrypath, int lexer_flags) {
     free(l);
 }
 
-int compileToAst(Cctrl *cc, char *entrypath, int lexer_flags) {
+int compileToAst(Cctrl *cc, HccOpts *opts, int lexer_flags) {
     lexer *l = malloc(sizeof(lexer));
     aoStr *builtin_path = aoStrDupRaw(str_lit("/usr/local/include/tos.HH")); 
 
@@ -86,7 +86,7 @@ int compileToAst(Cctrl *cc, char *entrypath, int lexer_flags) {
     l->lineno = 1;
     lexSetBuiltinRoot(l,"/usr/local/include/");
 
-    lexPushFile(l,aoStrDupRaw(entrypath,strlen(entrypath)));
+    lexPushFile(l,aoStrDupRaw(opts->infile,strlen(opts->infile)));
     /* library files */
     /* the structure is a so this will get popped first */
     lexPushFile(l,builtin_path);
