@@ -1,5 +1,6 @@
 _C_COMPILER := gcc
 _BUILD_TYPE := Release
+INSTALL_PREFIX ?= /usr/local
 
 default: all
 
@@ -16,9 +17,12 @@ default: all
 #```
 
 all:
-	cmake -S ./src -B ./build -G 'Unix Makefiles' \
+	cmake -S ./src \
+		-B ./build \
+		-G 'Unix Makefiles' \
 		-DCMAKE_C_COMPILER=$(_C_COMPILER) \
 		-DCMAKE_BUILD_TYPE=$(_BUILD_TYPE) \
+		-DCMAKE_INSTALL_PREFIX=$(INSTALL_PREFIX) \
 		&& $(MAKE) -C ./build -j2
 
 install:

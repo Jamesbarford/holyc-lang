@@ -55,12 +55,13 @@ void compileToTokens(Cctrl *cc, HccOpts *opts, int lexer_flags) {
 
     seen_files = strMapNew(32);
     
-    builtin_path = aoStrDupRaw("/usr/local/include/tos.HH",25);
+    builtin_path = aoStrPrintf("%s/include/tos.HH", opts->install_dir);
+    char *root_dir = mprintf("%s/include/", opts->install_dir);
 
     lexInit(l,NULL,CCF_PRE_PROC);
     l->seen_files = seen_files;
     l->lineno = 1;
-    lexSetBuiltinRoot(l,"/usr/local/include/");
+    lexSetBuiltinRoot(l,root_dir);
 
     /* library files */
     lexPushFile(l,aoStrDupRaw(opts->infile,strlen(opts->infile)));
@@ -76,15 +77,17 @@ void compileToTokens(Cctrl *cc, HccOpts *opts, int lexer_flags) {
 
     strMapRelease(seen_files);
     free(l);
+    free(root_dir);
 }
 
 int compileToAst(Cctrl *cc, HccOpts *opts, int lexer_flags) {
     lexer *l = malloc(sizeof(lexer));
-    aoStr *builtin_path = aoStrDupRaw(str_lit("/usr/local/include/tos.HH")); 
+    aoStr *builtin_path = aoStrPrintf("%s/include/tos.HH", opts->install_dir);
+    char *root_dir = mprintf("%s/include/", opts->install_dir);
 
     lexInit(l,NULL,CCF_PRE_PROC);
     l->lineno = 1;
-    lexSetBuiltinRoot(l,"/usr/local/include/");
+    lexSetBuiltinRoot(l,root_dir);
 
     lexPushFile(l,aoStrDupRaw(opts->infile,strlen(opts->infile)));
     /* library files */
@@ -101,5 +104,6 @@ int compileToAst(Cctrl *cc, HccOpts *opts, int lexer_flags) {
     aoStrRelease(builtin_path);
     listRelease(l->files,NULL);
     free(l);
+    free(root_dir);
     return 1;
 }

@@ -4,6 +4,6 @@
 #include "aostr.h"
 #include "cctrl.h"
 
-aoStr *transpileToC(Cctrl *cc, char *file_name);
+aoStr *transpileToC(Cctrl *cc, HccOpts *opts);
 
 #endif // TRANSPILER_H
