@@ -107,6 +107,8 @@ make -C ./build
 ```
 make -C ./build install
 ```
+You can set the install prefix with `make INSTALL_PREFIX=<prefix>`
+
 This will install the compiler and holyc libraries for strings, hashtables, 
 I/O, maths, networking, JSON parsing etc... see ./src/holyc-lib/.
 

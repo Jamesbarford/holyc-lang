@@ -26,6 +26,7 @@ typedef struct HccOpts {
     char *lib_name;
     char *output_filename;
     char *clibs;
+    char *install_dir;
     List *defines_list;
 } HccOpts;
 

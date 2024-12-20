@@ -7,6 +7,7 @@
 #include "aostr.h"
 #include "ast.h"
 #include "cctrl.h"
+#include "compile.h"
 #include "lexer.h"
 #include "list.h"
 #include "map.h"
@@ -1677,7 +1678,7 @@ aoStr *transpileIncludes(TranspileCtx *ctx) {
     return buf;
 }
 
-aoStr *transpileToC(Cctrl *cc, char *file_name) {
+aoStr *transpileToC(Cctrl *cc, HccOpts *opts) {
     TranspileCtx *ctx = transpileCtxNew(cc);
     transpileInitMaps();
     
@@ -1685,13 +1686,14 @@ aoStr *transpileToC(Cctrl *cc, char *file_name) {
     StrMap *built_in_types = strMapNew(32);
     StrMap *clsdefs = cc->clsdefs;
 
-    aoStr *builtin_path = aoStrDupRaw(str_lit("/usr/local/include/tos.HH")); 
+    aoStr *builtin_path = aoStrPrintf("%s/include/tos.HH", opts->install_dir);
+    char *root = mprintf("%s/include",opts->install_dir);
 
     lexer *l = malloc(sizeof(lexer));
     l->lineno = 1;
     
     lexInit(l,NULL,(CCF_PRE_PROC));
-    lexSetBuiltinRoot(l,"/usr/local/include/");
+    lexSetBuiltinRoot(l,root);
     lexPushFile(l,builtin_path);
 
     cctrlInitParse(cc,l);
@@ -1699,7 +1701,7 @@ aoStr *transpileToC(Cctrl *cc, char *file_name) {
     cc->clsdefs = built_in_types;
     parseToAst(cc);
 
-    lexPushFile(l,aoStrDupRaw(file_name,strlen(file_name)));
+    lexPushFile(l,aoStrDupRaw(opts->infile,strlen(opts->infile)));
     cctrlInitParse(cc,l);
     cc->clsdefs = clsdefs;
     strMapMerge(clsdefs, built_in_types);
@@ -1708,7 +1710,7 @@ aoStr *transpileToC(Cctrl *cc, char *file_name) {
     lexReleaseAllFiles(l);
     listRelease(l->files,NULL);
     free(l);
-
+    free(root);
     
     aoStr *include_buf = transpileIncludes(ctx);
 

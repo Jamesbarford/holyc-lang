@@ -12,6 +12,8 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose the type of build (Debug or Release)" FORCE)
 endif()
 
+add_definitions(-DINSTALL_PREFIX="${CMAKE_INSTALL_PREFIX}")
+
 # Add debugging symbols for Debug builds
 set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g")
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -23,6 +25,7 @@ endif()
 if (HCC_LINK_SQLITE3)
     add_compile_definitions(HCC_LINK_SQLITE3)
 endif()
+
 
 # Optionally, add more flags or options depending on the build type
 # For example, optimization flags for Release builds:
@@ -71,10 +74,12 @@ set(HEADERS
 
 add_executable(hcc ${SOURCES} ${HEADERS})
 
+set(HCC_PATH "${CMAKE_INSTALL_PREFIX}/bin/hcc")
+
 # Command for unit tests
 add_custom_target(unit-test
     COMMAND ${CMAKE_COMMAND} -E echo "Running unit tests..."
-    COMMAND hcc -o test-runner ${CMAKE_SOURCE_DIR}/tests/run.HC
+    COMMAND ${HCC_PATH} -o test-runner ${CMAKE_SOURCE_DIR}/tests/run.HC
     COMMAND ${CMAKE_SOURCE_DIR}/tests/test-runner
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/tests
     COMMENT "Building and running unit tests"
@@ -86,12 +91,13 @@ target_link_libraries(hcc m)
 # Install the executable
 install(TARGETS hcc DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
 
+
 # Install the header file
 install(FILES ${CMAKE_SOURCE_DIR}/holyc-lib/tos.HH DESTINATION ${CMAKE_INSTALL_PREFIX}/include)
 
 # Custom installation step to run `hcc` during install
 if (DEFINED HCC_LINK_SQLITE3)
-    install(CODE "execute_process(COMMAND hcc -DHCC_LINK_SQLITE3 -lib tos ${CMAKE_SOURCE_DIR}/holyc-lib/all.HC WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/holyc-lib)")
+    install(CODE "execute_process(COMMAND \"${HCC_PATH}\" -DHCC_LINK_SQLITE3 -lib tos ${CMAKE_SOURCE_DIR}/holyc-lib/all.HC WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/holyc-lib)")
 else()
-    install(CODE "execute_process(COMMAND hcc -lib tos ${CMAKE_SOURCE_DIR}/holyc-lib/all.HC WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/holyc-lib)")
+    install(CODE "execute_process(COMMAND \"${HCC_PATH}\" -lib tos ${CMAKE_SOURCE_DIR}/holyc-lib/all.HC WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/holyc-lib)")
 endif()

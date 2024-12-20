@@ -19,8 +19,11 @@
 #include "util.h"
 
 #define ASM_TMP_FILE "/tmp/holyc-asm.s"
-#define LIB_PATH "/usr/local/lib"
 #define LIB_BUFSIZ 256
+
+#ifndef INSTALL_PREFIX
+    #define INSTALL_PREFIX "/usr/local"
+#endif
 
 #define CLIBS_BASE "-ltos -lpthread  -lc -lm"
 
@@ -45,42 +48,54 @@ typedef struct hccLib {
 } hccLib;
 
 int hccLibInit(hccLib *lib, HccOpts *opts, char *name) { 
-    aoStr *dylibcmd = aoStrNew();
-    aoStr *stylibcmd = aoStrNew();
+    aoStr *dylib_cmd = aoStrNew();
+    aoStr *stylib_cmd = aoStrNew();
     aoStr *installcmd = aoStrNew();
     
 #if IS_BSD
     snprintf(lib->stylib_name,LIB_BUFSIZ,"%s.a",name);
     snprintf(lib->dylib_name,LIB_BUFSIZ,"%s.dylib",name);
     snprintf(lib->dylib_version_name,LIB_BUFSIZ,"%s.0.0.1.dylib",name);
-    aoStrCatPrintf(
-            dylibcmd, "cc -dynamiclib -Wl,-install_name,%s/%s -o %s "CLIBS,
-            LIB_PATH, name, lib->dylib_version_name,lib->dylib_name);
+
+    aoStrCatFmt(dylib_cmd,
+            "cp -pPR ./%s "INSTALL_PREFIX"/lib/lib%s && "
+            "cc -dynamiclib -Wl,-install_name,"INSTALL_PREFIX"/lib/%s -o %s "CLIBS" -o %s %s",
+            lib->stylib_name,
+            lib->stylib_name,
+            name,
+            lib->dylib_version_name,
+            lib->dylib_name,
+            opts->obj_outfile);
+
     aoStrCatPrintf(installcmd,
-            "cp -pPR ./%s /usr/local/lib/lib%s && "
-            "cp -pPR ./%s /usr/local/lib/lib%s && "
-            "ln -sf /usr/local/lib/%s /usr/local/lib/%s",
-            lib->dylib_name,lib->dylib_version_name,
-            lib->stylib_name,lib->stylib_name,
-            lib->dylib_version_name,lib->dylib_name);
+            "cp -pPR ./%s "INSTALL_PREFIX"/lib/lib%s && "
+            "ln -sf "INSTALL_PREFIX"/lib/%s "INSTALL_PREFIX"/lib/%s",
+            lib->dylib_name,
+            lib->dylib_version_name,
+
+            lib->dylib_version_name,
+            lib->dylib_name);
+
 #elif IS_LINUX
     snprintf(lib->stylib_name,LIB_BUFSIZ,"%s.a",name);
     snprintf(lib->dylib_name,LIB_BUFSIZ,"%s.so",name);
     snprintf(lib->dylib_version_name,LIB_BUFSIZ,"%s.so.0.0.1",name);
-    aoStrCatPrintf(
-            dylibcmd, "gcc -fPIC -shared -Wl,-soname,%s/%s -o %s "CLIBS,
-            LIB_PATH,name,lib->dylib_name,lib->dylib_name);
+    aoStrCatPrintf(dylib_cmd,
+            "gcc -fPIC -shared -Wl,-soname,"INSTALL_PREFIX"/lib/%s -o %s "CLIBS,
+            name,
+            lib->dylib_name,
+            lib->dylib_name);
+    aoStrCatPrintf(dylib_cmd," -o %s %s",lib->dylib_name,opts->obj_outfile);
     aoStrCatPrintf(installcmd,
-            "cp -pPR ./%s /usr/local/lib/lib%s",
+            "cp -pPR ./%s "INSTALL_PREFIX"/lib/lib%s",
             lib->stylib_name,lib->stylib_name);
 #else
 #error "System not supported"
 #endif
-    aoStrCatPrintf(stylibcmd,"ar rcs %s %s",lib->stylib_name,opts->obj_outfile);
-    aoStrCatPrintf(dylibcmd," -o %s %s",lib->dylib_name,opts->obj_outfile);
+    aoStrCatPrintf(stylib_cmd,"ar rcs %s %s",lib->stylib_name,opts->obj_outfile);
     lib->install_cmd = aoStrMove(installcmd);
-    lib->dylib_cmd = aoStrMove(dylibcmd);
-    lib->stylib_cmd = aoStrMove(stylibcmd);
+    lib->dylib_cmd = aoStrMove(dylib_cmd);
+    lib->stylib_cmd = aoStrMove(stylib_cmd);
     
     return 1;
 }
@@ -221,11 +236,11 @@ void emitFile(aoStr *asmbuf, HccOpts *opts) {
         if (opts->run) {
             aoStr *run_cmd = aoStrNew();
 #if IS_MACOS
-            aoStrCatPrintf(run_cmd,"echo '%s' | gcc -x assembler - "CLIBS" -L/usr/local/lib && ./a.out && rm ./a.out",
+            aoStrCatPrintf(run_cmd,"echo '%s' | gcc -x assembler - "CLIBS" -L"INSTALL_PREFIX"/lib && ./a.out && rm ./a.out",
                     asmbuf->data);
 #else
             writeAsmToTmp(asmbuf);
-            aoStrCatPrintf(run_cmd,"gcc -L/usr/local/lib %s "CLIBS" && ./a.out && rm ./a.out",
+            aoStrCatPrintf(run_cmd,"gcc -L"INSTALL_PREFIX"/lib %s "CLIBS" && ./a.out && rm ./a.out",
                     ASM_TMP_FILE);
 #endif
             system(run_cmd->data);
@@ -235,10 +250,10 @@ void emitFile(aoStr *asmbuf, HccOpts *opts) {
 
         writeAsmToTmp(asmbuf);
         if (opts->clibs) {
-            aoStrCatPrintf(cmd, "gcc -L/usr/local/lib %s %s "CLIBS" -o %s", 
+            aoStrCatPrintf(cmd, "gcc -L"INSTALL_PREFIX"/lib %s %s "CLIBS" -o %s", 
                     ASM_TMP_FILE,opts->clibs,opts->output_filename);
         } else {
-            aoStrCatPrintf(cmd, "gcc -L/usr/local/lib %s "CLIBS" -o %s", 
+            aoStrCatPrintf(cmd, "gcc -L"INSTALL_PREFIX"/lib %s "CLIBS" -o %s", 
                     ASM_TMP_FILE, opts->output_filename);
         }
         system(cmd->data);
@@ -258,7 +273,7 @@ void assemble(HccOpts *opts) {
         ssize_t len = 0;
         char *buffer = lexReadfile(opts->infile,&len);
 #if IS_MACOS
-        aoStrCatPrintf(run_cmd,"echo '%s' | gcc -x assembler - "CLIBS" -L/usr/local/lib && ./a.out && rm ./a.out",
+        aoStrCatPrintf(run_cmd,"echo '%s' | gcc -x assembler - "CLIBS" -L"INSTALL_PREFIX"/lib && ./a.out && rm ./a.out",
                 buffer);
 #else
         aoStr asm_buf = {
@@ -267,12 +282,12 @@ void assemble(HccOpts *opts) {
             .capacity = len,
         };
         writeAsmToTmp(&asm_buf);
-        aoStrCatPrintf(run_cmd,"gcc -L/usr/local/lib %s "CLIBS" && ./a.out && rm ./a.out",
+        aoStrCatPrintf(run_cmd,"gcc -L"INSTALL_PREFIX"/lib %s "CLIBS" && ./a.out && rm ./a.out",
                 ASM_TMP_FILE);
 #endif
         free(buffer);
     } else {
-        aoStrCatPrintf(run_cmd, "gcc %s -L/usr/local/lib "CLIBS, opts->infile);
+        aoStrCatPrintf(run_cmd, "gcc %s -L"INSTALL_PREFIX"/lib "CLIBS, opts->infile);
     }
     system(run_cmd->data);
     aoStrRelease(run_cmd);
@@ -416,6 +431,8 @@ int main(int argc, char **argv) {
     /* now parse cli options */
     parseCliOptions(&opts,argc,argv);
 
+    opts.install_dir = INSTALL_PREFIX;
+
     if (opts.assemble) {
         assemble(&opts);
         return 0;
@@ -432,7 +449,7 @@ int main(int argc, char **argv) {
     }
 
     if (opts.transpile) {
-        aoStr *buf = transpileToC(cc,opts.infile);
+        aoStr *buf = transpileToC(cc,&opts);
         printf("/* This code has been automatically generated by running: \n"
                " * `hcc -transpile %s`\n"
                " * please check for errors! */\n\n"
