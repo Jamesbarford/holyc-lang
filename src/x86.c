@@ -2023,6 +2023,22 @@ void asmDataInternal(aoStr *buf, Ast *data) {
         return;
     }
 
+    /* If we have something like:
+     * ```
+     * I64 arr[][2] = {
+     *   {1,2},
+     *   {3,4},
+     * };
+     * ```
+     * We need to call this function again.
+     * */
+    if (data->kind == AST_ARRAY_INIT) {
+        listForEach(data->arrayinit) {
+            asmDataInternal(buf,it->value);
+        }
+        return;
+    }
+
     if (data->type->kind == AST_TYPE_FLOAT) {
         aoStrCatPrintf(buf,".quad 0x%lX #%.9f\n\t",
                 ieee754(data->f64),
