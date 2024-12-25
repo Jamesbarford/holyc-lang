@@ -106,57 +106,38 @@ void getASMFileName(HccOpts *opts, char *file_name) {
     int i;
     char *slashptr = NULL, *asm_outfile, *obj_outfile, *end, *infile_no_ext; 
 
-    if ((file_name[0] != '.' && file_name[1] != '/') && 
-         file_name[0] != '/' && file_name[0] != '~') {
-        end = 0;
-        slashptr = 0;
-    } else {
-        end = &file_name[len-1];
-        for (i = len -1; i >= 0; --i) {
-            if (file_name[i] == '/') {
-                slashptr = &file_name[i];
-                slashptr += 1;
-                break;
-            }
-        }
-
-        if (tolower(*end) == 'c' && tolower(*(end-1)) == 'h' && 
-                *(end-2) == '.') {
-            end -= 2;
-        } else if (tolower(*end) == 'c' && tolower(*(end-1)) == 'h' && 
-                *(end-2) == '.') {
-            end -= 2;
-        } else if (tolower(*end) == 's' && *(end-1) == '.'){
-            opts->assemble = 1;
-            end -= 1;
-        } else {
-            loggerPanic("Unknown file extension, file must end with .HC or .HH case insensitive. Got: %s\n", file_name);
-        }
-
-        if (slashptr == NULL) {
-            loggerPanic("Failed to extract filename\n");
-        }
+    end = &file_name[len-1];
+    for (i = len -1; i >= 0; --i) {
+      if (file_name[i] == '/') {
+        slashptr = &file_name[i];
+        slashptr += 1;
+        break;
+      }
     }
 
-    asm_outfile = malloc(sizeof(char) * len+1);
-    obj_outfile = malloc(sizeof(char) * len+1);
-    infile_no_ext = malloc(sizeof(char) * len);
-    no_ext_len = end-slashptr;
+    if (tolower(*end) == 'c' && tolower(*(end-1)) == 'h' && *(end-2) == '.') {
+      end -= 2;
+    } else if (tolower(*end) == 'c' && tolower(*(end-1)) == 'h' && *(end-2) == '.') {
+      end -= 2;
+    } else if (tolower(*end) == 's' && *(end-1) == '.') {
+      opts->assemble = 1;
+      end -= 1;
+    } else {
+      loggerPanic("Unknown file extension, file must end with .HC or .HH case insensitive. Got: %s\n", file_name);
+    }
 
-    memcpy(asm_outfile,   slashptr, no_ext_len);
-    memcpy(obj_outfile,   slashptr, no_ext_len);
-    memcpy(infile_no_ext, slashptr, no_ext_len);
+    if (slashptr == NULL) {
+        if (len == 0) {
+            loggerPanic("Failed to extract filename\n");
+        }
+        slashptr = file_name;
+    }
 
-    memcpy(asm_outfile+(no_ext_len), ".s", 2);
-    memcpy(obj_outfile+(no_ext_len), ".o", 2);
+    no_ext_len = strlen(slashptr) - (end-slashptr);
 
-    asm_outfile[no_ext_len+2] = '\0';
-    obj_outfile[no_ext_len+2] = '\0';
-    infile_no_ext[no_ext_len] = '\0';
-
-    opts->asm_outfile = asm_outfile;
-    opts->obj_outfile = obj_outfile;
-    opts->infile_no_ext = infile_no_ext;
+    opts->infile_no_ext = mprintf("%.*s", no_ext_len, slashptr);
+    opts->asm_outfile = mprintf("%s.s", opts->infile_no_ext);
+    opts->obj_outfile =  mprintf("%s.o", opts->infile_no_ext);
 }
 
 void execGcc(char *filename, aoStr *asmbuf, aoStr *cmd) {
@@ -206,12 +187,18 @@ void emitFile(aoStr *asmbuf, HccOpts *opts) {
         system(cmd->data);
     } else if (opts->asm_outfile && opts->assemble_only) {
         int fd;
+        unsigned long flags = O_CREAT|O_RDWR|O_TRUNC;
+
         if (opts->to_stdout) {
             fd = STDOUT_FILENO;
         } else if (opts->output_filename != NULL) {
-            fd = open(opts->output_filename, O_CREAT|O_RDWR|O_TRUNC, 0666);
+            fd = open(opts->output_filename, flags, 0644);
         } else {
-            fd = open(opts->asm_outfile, O_CREAT|O_RDWR|O_TRUNC, 0666);
+            fd = open(opts->asm_outfile, flags, 0644);
+        }
+        if (fd == -1) {
+            loggerPanic("Failed to open '%s' - %s\n",
+                opts->asm_outfile, strerror(errno));
         }
         write(fd,asmbuf->data,asmbuf->len);
         close(fd);
@@ -249,6 +236,11 @@ void emitFile(aoStr *asmbuf, HccOpts *opts) {
         }
 
         writeAsmToTmp(asmbuf);
+
+        if (opts->output_filename == NULL) {
+            opts->output_filename = "a.out";
+        }
+
         if (opts->clibs) {
             aoStrCatPrintf(cmd, "gcc -L"INSTALL_PREFIX"/lib %s %s "CLIBS" -o %s", 
                     ASM_TMP_FILE,opts->clibs,opts->output_filename);
@@ -427,7 +419,6 @@ int main(int argc, char **argv) {
     memset(&opts,0,sizeof(opts));
     opts.clibs = "";
     opts.defines_list = NULL;
-    opts.output_filename = "a.out";
     /* now parse cli options */
     parseCliOptions(&opts,argc,argv);
 
