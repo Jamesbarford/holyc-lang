@@ -340,8 +340,6 @@ static AstType *parseArrayDimensionsInternal(Cctrl *cc, AstType *base_type) {
                 aoStr *lname = NULL;
                 int literal;
 
-                astPrint(left);
-                astPrint(right);
                 if (left->kind == AST_LVAR && right->kind == AST_LITERAL) {
                     literal = right->i64;
                     lname = left->lname;
@@ -1227,7 +1225,6 @@ Ast *parseUnaryExpr(Cctrl *cc) {
             operand = parseUnaryExpr(cc);
             peek = cctrlTokenPeek(cc);
             if (tokenPunctIs(peek, '[') && (operand->kind == AST_CLASS_REF || operand->type->kind == AST_TYPE_ARRAY)) {
-                astPrint(operand);
                 cctrlTokenGet(cc);
                 operand = parseSubscriptExpr(cc, operand);
             }

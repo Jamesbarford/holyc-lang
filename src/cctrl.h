@@ -8,7 +8,7 @@
 #include "map.h"
 #include "lexer.h"
 
-#define HCC_VERSION "beta-v0.0.7"
+#define HCC_VERSION "beta-v0.0.8"
 #define CCTRL_TOKEN_BUFFER_SIZE 16
 #define CCTRL_TOKEN_BUFFER_MASK CCTRL_TOKEN_BUFFER_SIZE-1
 
@@ -158,7 +158,7 @@ void cctrlWarning(Cctrl *cc, char *fmt, ...);
 void cctrlWarningFromTo(Cctrl *cc, char *suggestion, char from, char to, char *fmt, ...);
 [[noreturn]] void cctrlRaiseExceptionFromTo(Cctrl *cc, char *suggestion, char from, char to, char *fmt, ...);
 [[noreturn]] void cctrlRaiseException(Cctrl *cc, char *fmt, ...);
-[[noreturn]]void cctrlRaiseSuggestion(Cctrl *cc, char *suggestion, char *fmt, ...);
+[[noreturn]] void cctrlRaiseSuggestion(Cctrl *cc, char *suggestion, char *fmt, ...);
 [[noreturn]] void cctrlIce(Cctrl *cc, char *fmt, ...);
 Ast *cctrlGetOrSetString(Cctrl *cc, char *str, int len);
 void cctrlRewindUntilPunctMatch(Cctrl *cc, long ch, int *_count);
