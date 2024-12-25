@@ -437,12 +437,21 @@ void transpileBinaryOp(TranspileCtx *ctx, aoStr *buf, char *op, Ast *ast, ssize_
 
     *indent = 0;
     if (ast->left && ast->left->kind == AST_DEREF) {
+        int is_bang = !strncmp(op,"!",1);
+        if (is_bang) {
+            aoStrCatFmt(buf, "%s", op);
+        }
+
         if (ast->left) {
             transpileAstInternal(ast->left,ctx, indent);
         } else {
             transpileAstInternal(ast,ctx, indent);
         }
-        aoStrCatFmt(buf, " %s ", op);
+
+        if (!is_bang) {
+            aoStrCatFmt(buf, " %s ", op);
+        }
+
         if (ast->right) {
             transpileAstInternal(ast->right,ctx, indent);
         }

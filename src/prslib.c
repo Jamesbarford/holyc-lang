@@ -750,10 +750,14 @@ static int parseGetPriority(lexeme *tok) {
     switch (tok->i64) {
     case TK_ARROW: 
     case '.':
-    case '[':
     case '(':
         return 1;
-    case '!': case '~': 
+
+    case '[':
+        return 2;
+
+    case '!':
+    case '~':
     case TK_PLUS_PLUS: 
     case TK_MINUS_MINUS: 
     case TK_PRE_PLUS_PLUS:
@@ -1210,24 +1214,29 @@ Ast *parseUnaryExpr(Cctrl *cc) {
                 return parsePostFixExpr(cc);
             }
         }
-        Ast *operand = parseUnaryExpr(cc);
+
+        lexeme *peek = cctrlTokenPeekBy(cc,1);
+        Ast *operand = NULL;
         AstType *type = NULL;
-        lexeme *peek = cctrlTokenPeek(cc);
 
-        if (!operand) {
-            cctrlRewindUntilPunctMatch(cc,tok->i64,NULL);
-            cctrlRaiseException(cc,"Cannot use unary operator `%c` in this context", tok->i64);
+        /* XXX: This feels wrong but allows things like:
+         * !arr[0][1][2] to work properly */
+        if (tokenPunctIs(peek, '[') && !(unary_op == AST_ADDR || unary_op == AST_DEREF)) {
+            operand = parseExpr(cc,16);
+        } else {
+            operand = parseUnaryExpr(cc);
+            peek = cctrlTokenPeek(cc);
+            if (tokenPunctIs(peek, '[') && (operand->kind == AST_CLASS_REF || operand->type->kind == AST_TYPE_ARRAY)) {
+                astPrint(operand);
+                cctrlTokenGet(cc);
+                operand = parseSubscriptExpr(cc, operand);
+            }
         }
 
-        if (tokenPunctIs(peek, '[') && (operand->kind == AST_CLASS_REF || operand->type->kind == AST_TYPE_ARRAY)) {
-            cctrlTokenGet(cc);
-            operand = parseSubscriptExpr(cc, operand);
-        }
 
         if (unary_op == AST_ADDR && parseIsFunction(operand)) {
             return operand;
         }
-
 
         switch (unary_op) {
             case AST_ADDR:  type = astMakePointerType(operand->type); break;

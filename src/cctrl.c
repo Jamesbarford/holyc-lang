@@ -356,8 +356,11 @@ lexeme *cctrlMaybeExpandToken(Cctrl *cc, lexeme *token) {
     return token; 
 }
 
-lexeme *cctrlTokenPeekBy(Cctrl *cc, int idx) {
-    return tokenRingBufferPeekBy(cc->token_buffer, idx);
+lexeme *cctrlTokenPeekBy(Cctrl *cc, int cnt) {
+    assert(cnt > 0);
+    /* The -1 is bizzare, however as an argument peeking by `1` you'd
+     * expect to see the next token, which is infact `0` */
+    return tokenRingBufferPeekBy(cc->token_buffer, cnt-1);
 }
 
 lexeme *cctrlTokenPeek(Cctrl *cc) {
