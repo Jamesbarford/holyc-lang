@@ -10,6 +10,7 @@
 #include "lexer.h"
 #include "list.h"
 #include "map.h"
+#include "transpiler.h"
 #include "util.h"
 
 static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast);
@@ -1027,6 +1028,7 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
             break;
         /* Start of a variable being alive (possibly?) */
         case AST_DECL:
+            printf("%s\n", transpileOneAst(builder->cc, ast));
         default:
             /* Need to look at this for binary operators */
             ptrVecPush(bb->ast_array,ast);

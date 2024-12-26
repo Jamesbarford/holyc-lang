@@ -11,6 +11,7 @@
 #include "lexer.h"
 #include "list.h"
 #include "map.h"
+#include "transpiler.h"
 #include "util.h"
 
 void irFromAstInternal(Ast *ast, IrCtx *ctx);
@@ -90,7 +91,7 @@ aoStr *irInstructionToString(IrInstruction *inst) {
         case IR_LOAD_FN:         aoStrCatFmt(str,"LOAD_FN         "); break;
         case IR_LOAD_F64:        aoStrCatFmt(str,"LOAD_F64        "); break;
         case IR_LOAD_GLOBAL:     aoStrCatFmt(str,"LOAD_GLOBAL     "); break;
-        case IR_LOAD_ARRAY:      aoStrCatFmt(str,"LOAD_ARRAY      "); break;
+        case IR_LOAD_ARRAY:      aoStrCatFmt(str,"LOAD_ARRAY     @%i, @%i", inst->dest, inst->s1); break;
         case IR_SAVE:            aoStrCatFmt(str,"SAVE           @%i, @%i",
                                          inst->dest, inst->s1); break;
         case IR_SAVE_IMM:        aoStrCatFmt(str,"SAVE_IMM        "); break;
@@ -580,11 +581,43 @@ void irFromAstInternal(Ast *ast, IrCtx *ctx) {
 
     case AST_DEREF: {
         if (ast->operand->kind == '+') {
-            Ast *left = ast->operand->left;
-            Ast *right = ast->operand->right;
-            irFromAstInternal(left,ctx);
-            /* thoe offset into the array */
-            irFromAstInternal(right,ctx);
+            //irFromAstInternal(ast->operand,ctx);
+    
+            /* the offset into the array */
+            irFromAstInternal(ast->operand,ctx);
+            AstType *op_type = ast->operand->type;
+            AstType *result = ast->type;
+            int var_id = ast->tmp_reg;
+            printf("%s\n",astKindToString(ast->operand->left->type->kind));
+            int reg_id = irCtxNextRegId(ctx);
+            IrOp load_op = irGetLVarLoad(result);
+            irInstructionAddNoFlags(ctx,load_op,reg_id,var_id,0,result->size,NULL,NULL);
+
+           // if (result->kind == AST_ADDR) {
+           //     irInstructionAdd();
+
+           // } else if (result->kind == AST_TYPE_CLASS) {
+
+           // } else if (result->kind != AST_TYPE_POINTER) {
+
+           // } else if (result->kind == AST_TYPE_POINTER) {
+
+           // }
+
+        
+            
+            astTypePrint(op_type);
+            astTypePrint(result);
+            
+
+
+            //printf("%s\n", transpileOneAst(ctx->cc, ast));
+            //Ast *left = ast->operand->left;
+            //Ast *right = ast->operand->right;
+            //irFromAstInternal(left,ctx);
+    
+            ///* the offset into the array */
+            //irFromAstInternal(right,ctx);
         } else {
             /* As `->` is a dereference we need to be able to distinguish 
              * between a class dereference and a general pointer dereference */
@@ -600,6 +633,11 @@ void irFromAstInternal(Ast *ast, IrCtx *ctx) {
     }
 }
 
+/* Lowers an Ast to IR */
+void irLowerAst(IrCtx *ctx, Ast *ast) {
+    irFromAstInternal(ast, ctx);
+}
+
 void irFunc(Cctrl *cc, Ast *func) {
     IrCtx *ctx = irCtxNew(cc);
     /* Need all vars to be id'd */
@@ -607,9 +645,9 @@ void irFunc(Cctrl *cc, Ast *func) {
     listForEach(func->locals) {
         Ast *local = (Ast *)it->value;
         intMapAdd(ctx->var_mapping,ctx->next_temp_reg,local);
-        func->tmp_reg = ctx->next_temp_reg;
+        local->tmp_reg = ctx->next_temp_reg;
         irCtxNextRegId(ctx);
-        astPrint(local);
+        printf("%s;\n", transpileOneAst(cc,local));
     }
 
 

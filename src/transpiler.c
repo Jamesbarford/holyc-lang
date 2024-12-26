@@ -286,6 +286,11 @@ TranspileCtx *transpileCtxNew(Cctrl *cc) {
     return ctx;
 }
 
+void transpileCtxRelease(TranspileCtx *ctx) {
+    strMapRelease(ctx->used_types);
+    strMapRelease(ctx->used_defines);
+}
+
 void transpileCtxAddType(TranspileCtx *ctx, char *type_name) {
     strMapAdd(ctx->used_types,type_name,type_name);
 }
@@ -1079,6 +1084,18 @@ aoStr *transpileAst(Ast *ast, TranspileCtx *ctx) {
     return body_buf;
 }
 
+char *transpileOneAst(Cctrl *cc, Ast *ast) {
+    ssize_t indent = 0;
+    TranspileCtx *ctx = transpileCtxNew(cc);
+    aoStr *body_buf = aoStrNew();
+    aoStr *saved = ctx->buf;
+    transpileCtxSetBuffer(ctx, body_buf);
+    transpileAstInternal(ast,ctx,&indent);
+    transpileCtxSetBuffer(ctx, saved);
+    transpileCtxRelease(ctx);
+    return aoStrMove(body_buf);
+}
+
 aoStr *transpileParamsList(PtrVec *params, TranspileCtx *ctx) {
     aoStr *buf = aoStrNew();
     aoStr *decl = NULL;
@@ -1757,5 +1774,6 @@ aoStr *transpileToC(Cctrl *cc, HccOpts *opts) {
         }
     }
 
+    transpileCtxRelease(ctx);
     return code;
 }
