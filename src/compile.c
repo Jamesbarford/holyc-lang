@@ -49,7 +49,7 @@ aoStr *compileToAsm(Cctrl *cc) {
 }
 
 void compileToTokens(Cctrl *cc, HccOpts *opts, int lexer_flags) {
-    lexer *l = malloc(sizeof(lexer));
+    Lexer *l = (Lexer *)malloc(sizeof(Lexer));
     aoStr *builtin_path;
     StrMap *seen_files;
 
@@ -58,7 +58,7 @@ void compileToTokens(Cctrl *cc, HccOpts *opts, int lexer_flags) {
     builtin_path = aoStrPrintf("%s/include/tos.HH", opts->install_dir);
     char *root_dir = mprintf("%s/include/", opts->install_dir);
 
-    lexInit(l,NULL,CCF_PRE_PROC);
+    lexInit(l,NULL,CCF_PRE_PROC|lexer_flags);
     l->seen_files = seen_files;
     l->lineno = 1;
     lexSetBuiltinRoot(l,root_dir);
@@ -68,7 +68,7 @@ void compileToTokens(Cctrl *cc, HccOpts *opts, int lexer_flags) {
     /* the structure is a stack so this will get popped first */
     lexPushFile(l,builtin_path);
 
-    lexeme *token = NULL;
+    Lexeme *token = NULL;
 
     while ((token = lexToken(cc->macro_defs,l))) {
         lexemePrint(token);
@@ -81,11 +81,11 @@ void compileToTokens(Cctrl *cc, HccOpts *opts, int lexer_flags) {
 }
 
 int compileToAst(Cctrl *cc, HccOpts *opts, int lexer_flags) {
-    lexer *l = malloc(sizeof(lexer));
+    Lexer *l = (Lexer *)malloc(sizeof(Lexer));
     aoStr *builtin_path = aoStrPrintf("%s/include/tos.HH", opts->install_dir);
     char *root_dir = mprintf("%s/include/", opts->install_dir);
 
-    lexInit(l,NULL,CCF_PRE_PROC);
+    lexInit(l,NULL,CCF_PRE_PROC|lexer_flags);
     l->lineno = 1;
     lexSetBuiltinRoot(l,root_dir);
 

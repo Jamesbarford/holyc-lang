@@ -22,3 +22,4 @@ test-runner
 .idea
 .gdb_history
 build
+compile.sh

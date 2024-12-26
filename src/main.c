@@ -8,15 +8,16 @@
 #include <unistd.h>
 
 #include "aostr.h"
-#include "cfg.h"
-#include "cfg-print.h"
-#include "config.h"
-#include "compile.h"
 #include "cctrl.h"
+#include "cfg-print.h"
+#include "cfg.h"
+#include "compile.h"
+#include "config.h"
 #include "lexer.h"
 #include "list.h"
 #include "transpiler.h"
 #include "util.h"
+#include "version.h"
 
 #define ASM_TMP_FILE "/tmp/holyc-asm.s"
 #define LIB_BUFSIZ 256
@@ -32,6 +33,13 @@
 #else
 #define CLIBS CLIBS_BASE
 #endif
+
+void safeSystem(const char *cmd) {
+    int ok = system(cmd);
+    if (ok != 0) {
+        loggerPanic("Failed to execute command: '%s'\n", cmd);
+    }
+}
 
 typedef struct hccLib {
     char *name;
@@ -102,12 +110,9 @@ int hccLibInit(hccLib *lib, HccOpts *opts, char *name) {
 
 void getASMFileName(HccOpts *opts, char *file_name) {
     int len = strlen(file_name);
-    int no_ext_len = 0;
-    int i;
-    char *slashptr = NULL, *asm_outfile, *obj_outfile, *end, *infile_no_ext; 
+    char *slashptr = NULL, *end = &file_name[len-1];
 
-    end = &file_name[len-1];
-    for (i = len -1; i >= 0; --i) {
+    for (int i = len -1; i >= 0; --i) {
       if (file_name[i] == '/') {
         slashptr = &file_name[i];
         slashptr += 1;
@@ -133,16 +138,11 @@ void getASMFileName(HccOpts *opts, char *file_name) {
         slashptr = file_name;
     }
 
-    no_ext_len = strlen(slashptr) - (end-slashptr);
+    int no_ext_len = strlen(slashptr) - (end-slashptr);
 
     opts->infile_no_ext = mprintf("%.*s", no_ext_len, slashptr);
     opts->asm_outfile = mprintf("%s.s", opts->infile_no_ext);
     opts->obj_outfile =  mprintf("%s.o", opts->infile_no_ext);
-}
-
-void execGcc(char *filename, aoStr *asmbuf, aoStr *cmd) {
-    printf("%s\n", cmd->data);
-    system(cmd->data);
 }
 
 int writeAsmToTmp(aoStr *asmbuf) {
@@ -184,7 +184,7 @@ void emitFile(aoStr *asmbuf, HccOpts *opts) {
         writeAsmToTmp(asmbuf);
         aoStrCatPrintf(cmd, "gcc -c %s "CLIBS" %s -o ./%s",
                 ASM_TMP_FILE,opts->clibs,opts->obj_outfile);
-        system(cmd->data);
+        safeSystem(cmd->data);
     } else if (opts->asm_outfile && opts->assemble_only) {
         int fd;
         unsigned long flags = O_CREAT|O_RDWR|O_TRUNC;
@@ -200,7 +200,11 @@ void emitFile(aoStr *asmbuf, HccOpts *opts) {
             loggerPanic("Failed to open '%s' - %s\n",
                 opts->asm_outfile, strerror(errno));
         }
-        write(fd,asmbuf->data,asmbuf->len);
+        ssize_t written = write(fd,asmbuf->data,asmbuf->len);
+        if (written != (ssize_t)asmbuf->len) {
+            loggerPanic("Failed to write data expected %ld got %ld\n",
+                    (ssize_t)asmbuf->len, written);
+        }
         close(fd);
     } else if (opts->emit_dylib) {
         writeAsmToTmp(asmbuf);
@@ -208,17 +212,17 @@ void emitFile(aoStr *asmbuf, HccOpts *opts) {
         aoStrCatPrintf(cmd, "gcc -fPIC -c %s -o ./%s",
                 ASM_TMP_FILE,opts->obj_outfile);
         fprintf(stderr,"%s\n",cmd->data);
-        system(cmd->data);
+        safeSystem(cmd->data);
         fprintf(stderr,"%s\n",lib.stylib_cmd);
-        system(lib.stylib_cmd);
+        safeSystem(lib.stylib_cmd);
 
 #if IS_MACOS
         fprintf(stderr,"%s\n",lib.dylib_cmd);
-        system(lib.dylib_cmd);
+        safeSystem(lib.dylib_cmd);
 #endif /* ifdef  IS_MACOS */
 
         fprintf(stderr,"%s\n",lib.install_cmd);
-        system(lib.install_cmd);
+        safeSystem(lib.install_cmd);
     } else {
         if (opts->run) {
             aoStr *run_cmd = aoStrNew();
@@ -230,7 +234,7 @@ void emitFile(aoStr *asmbuf, HccOpts *opts) {
             aoStrCatPrintf(run_cmd,"gcc -L"INSTALL_PREFIX"/lib %s "CLIBS" && ./a.out && rm ./a.out",
                     ASM_TMP_FILE);
 #endif
-            system(run_cmd->data);
+            safeSystem(run_cmd->data);
             aoStrRelease(run_cmd);
             exit(0);
         }
@@ -248,7 +252,7 @@ void emitFile(aoStr *asmbuf, HccOpts *opts) {
             aoStrCatPrintf(cmd, "gcc -L"INSTALL_PREFIX"/lib %s "CLIBS" -o %s", 
                     ASM_TMP_FILE, opts->output_filename);
         }
-        system(cmd->data);
+        safeSystem(cmd->data);
     }
     if (strnlen(opts->clibs,10) > 1) {
         free(opts->clibs);
@@ -281,7 +285,7 @@ void assemble(HccOpts *opts) {
     } else {
         aoStrCatPrintf(run_cmd, "gcc %s -L"INSTALL_PREFIX"/lib "CLIBS, opts->infile);
     }
-    system(run_cmd->data);
+    safeSystem(run_cmd->data);
     aoStrRelease(run_cmd);
 }
 
@@ -465,7 +469,7 @@ int main(int argc, char **argv) {
             char *dot_cmd = mprintf("dot -T%s %s -o ./%s.%s",
                     ext,dot_outfile,opts.infile_no_ext,ext);
             printf("Creating %s: %s\n",ext,dot_cmd);
-            system(dot_cmd);
+            safeSystem(dot_cmd);
             free(dot_cmd);
             unlink(dot_outfile);
         }

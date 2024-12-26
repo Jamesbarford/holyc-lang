@@ -19,7 +19,7 @@
 #include "util.h"
 
 /* prototypes */
-int lexPreProcIf(StrMap *macro_defs, lexer *l);
+int lexPreProcIf(StrMap *macro_defs, Lexer *l);
 
 typedef struct {
     char *name;
@@ -106,8 +106,8 @@ static LexerTypes lexer_types[] = {
 #define isNumTerminator(ch) (!isNum(ch) && !isHex(ch) && ch != '.' && ch != 'x' \
         && ch != 'X' && ch != '\\')
 
-lexeme *lexemeNew(char *start, int len) {
-    lexeme *le = malloc(sizeof(lexeme));
+Lexeme *lexemeNew(char *start, int len) {
+    Lexeme *le = (Lexeme *)malloc(sizeof(Lexeme));
     le->start = start;
     le->len = len;
     le->line = -1;
@@ -115,8 +115,8 @@ lexeme *lexemeNew(char *start, int len) {
     return le;
 }
 
-lexeme *lexemeSentinal(void) {
-    lexeme *le = malloc(sizeof(lexeme));
+Lexeme *lexemeSentinal(void) {
+    Lexeme *le = (Lexeme *)malloc(sizeof(Lexeme));
     le->start = "(-sentinal-)";
     le->len = 12;
     le->line = 1;
@@ -124,7 +124,7 @@ lexeme *lexemeSentinal(void) {
     return le;
 }
 
-void lexemeAssignOp(lexeme *le, char *start, int len, long op, int line) {
+void lexemeAssignOp(Lexeme *le, char *start, int len, long op, int line) {
     le->tk_type = TK_PUNCT;
     le->line = line;
     le->start = start;
@@ -132,8 +132,8 @@ void lexemeAssignOp(lexeme *le, char *start, int len, long op, int line) {
     le->i64 = op; /* instead of 'char'*/
 }
 
-lexeme *lexemeTokNew(char *start, int len, int line, long ch) {
-    lexeme *copy = malloc(sizeof(lexeme));
+Lexeme *lexemeTokNew(char *start, int len, int line, long ch) {
+    Lexeme *copy = (Lexeme *)malloc(sizeof(Lexeme));
     copy->tk_type = TK_PUNCT;
     copy->start = start;
     copy->len = len;
@@ -150,27 +150,27 @@ void lexerPoolRelease(void) {
 }
 
 /* Copy the lexeme with memory allocated from the pool */
-lexeme *lexemePoolCpy(lexeme *le) {
-    lexeme *cpy = memPoolAlloc(lexeme_pool);
-    memcpy(cpy,le,sizeof(lexeme));
+Lexeme *lexemePoolCpy(Lexeme *le) {
+    Lexeme *cpy = (Lexeme *)memPoolAlloc(lexeme_pool);
+    memcpy(cpy,le,sizeof(Lexeme));
     return cpy;
 }
 
-lexeme *lexemeCopy(lexeme *le) {
-    lexeme *copy = malloc(sizeof(lexeme));
-    memcpy(copy,le,sizeof(lexeme));
+Lexeme *lexemeCopy(Lexeme *le) {
+    Lexeme *copy = (Lexeme *)malloc(sizeof(Lexeme));
+    memcpy(copy,le,sizeof(Lexeme));
     return copy;
 }
 
-lexeme *lexemeNewOp(char *start, int len, long op, int line) {
-    lexeme *le = lexemeNew(start,len);
+Lexeme *lexemeNewOp(char *start, int len, long op, int line) {
+    Lexeme *le = lexemeNew(start,len);
     lexemeAssignOp(le,start,len,op,line);
     return le;
 }
 
 static Cctrl *macro_proccessor = NULL;
 
-void lexInit(lexer *l, char *source, int flags) {
+void lexInit(Lexer *l, char *source, int flags) {
     l->ptr = source;
     l->cur_ch = -1;
     l->lineno = 1;
@@ -192,27 +192,27 @@ void lexInit(lexer *l, char *source, int flags) {
         macro_proccessor = ccMacroProcessor(NULL);
     }
     if (lexeme_pool == NULL) {
-        lexeme_pool = memPoolNew(sizeof(lexeme),64);
+        lexeme_pool = memPoolNew(sizeof(Lexeme),64);
     }
     /* XXX: create one symbol table for the whole application ;
      * hoist to 'compile.c'*/
-    for (int i = 0; i < static_size(lexer_types); ++i) {
+    for (int i = 0; i < (int)static_size(lexer_types); ++i) {
         LexerTypes *bilt = &lexer_types[i]; 
         strMapAdd(l->symbol_table, bilt->name, bilt);
     }
 }
 
-void lexSetBuiltinRoot(lexer *l, char *root) {
+void lexSetBuiltinRoot(Lexer *l, char *root) {
     l->builtin_root = root;
 }
 
 /* Is the lexeme both of type TK_PUNCT and does 'ch' match */
-int tokenPunctIs(lexeme *tok, long ch) {
+int tokenPunctIs(Lexeme *tok, long ch) {
     return tok && (tok->tk_type == TK_PUNCT || tok->tk_type == TK_EOF) && tok->i64 == ch;
 }
 
 /* Is the token an identifier and does the string match */
-int tokenIdentIs(lexeme *tok, char *ident, int len) {
+int tokenIdentIs(Lexeme *tok, char *ident, int len) {
     return tok && tok->tk_type == TK_IDENT 
                && tok->len == len 
                && !memcmp(tok->start,ident,len);
@@ -354,7 +354,7 @@ char *lexemePunctToStringWithFlags(long op, unsigned long flags) {
     else                             return lexemePunctToString(op);
 }
 
-char *lexemeToString(lexeme *tok) {
+char *lexemeToString(Lexeme *tok) {
     if (!tok) {
         return "(null)";
     }
@@ -462,7 +462,7 @@ char *lexemeToString(lexeme *tok) {
 }
 
 /* Print one lexeme */
-void lexemePrint(lexeme *le) {
+void lexemePrint(Lexeme *le) {
     if (le) {
         char *str = lexemeToString(le);
         printf("%s\n", str);
@@ -470,9 +470,9 @@ void lexemePrint(lexeme *le) {
     }
 }
 
-static char lexNextChar(lexer *l) {
+static char lexNextChar(Lexer *l) {
     l->start = l->ptr;
-    lexFile *lex_file;
+    LexFile *lex_file;
     char ch = '\0';
     if (l->ptr) {
         ch = *l->ptr;
@@ -498,34 +498,32 @@ static char lexNextChar(lexer *l) {
     return ch;
 }
 
-static void lexRewindChar(lexer *l) {
+static void lexRewindChar(Lexer *l) {
     l->ptr--;
 }
 
 /* Doese the next character match the expected character */
-static int lexPeekMatch(lexer *l, char expected) {
+static int lexPeekMatch(Lexer *l, char expected) {
     return *l->ptr == expected;
 }
 
-static char lexPeek(lexer *l) {
+static char lexPeek(Lexer *l) {
     return *l->ptr;
 }
 
 /* Read an entire file to a mallocated buffer */
 char *lexReadfile(char *path, ssize_t *_len) {
-    char *buf;
-    int fd,rbytes,len,size;
-
+    int fd;
     if ((fd = open(path, O_RDONLY, 0644)) == -1) {
         loggerPanic("Failed to open file: %s\n", path);
     }
  
-    len = lseek(fd, 0, SEEK_END);
+    int len = lseek(fd, 0, SEEK_END);
     lseek(fd, 0, SEEK_SET);
 
-    buf = malloc(sizeof(char) * len);
-    size = 0;
-
+    char *buf = (char *)malloc(sizeof(char) * len);
+    int size = 0;
+    int rbytes = 0;
     while ((rbytes = read(fd,buf,len)) != 0) {
         size += rbytes;
     }
@@ -540,13 +538,13 @@ char *lexReadfile(char *path, ssize_t *_len) {
     return buf;
 }
 
-void lexPushFile(lexer *l, aoStr *filename) {
+void lexPushFile(Lexer *l, aoStr *filename) {
     /* We need to save what we are currently lexing and 
      * make the file we've just seen the file we want to lex */
-    lexFile *f = malloc(sizeof(lexFile));
+    LexFile *f = (LexFile *)malloc(sizeof(LexFile));
     ssize_t file_len = 0;
     char *src = lexReadfile(filename->data, &file_len);
-    aoStr *src_code = malloc(sizeof(aoStr));
+    aoStr *src_code = (aoStr *)malloc(sizeof(aoStr));
     src_code->data = src;
     src_code->len = file_len;
     src_code->capacity = 0;
@@ -565,7 +563,7 @@ void lexPushFile(lexer *l, aoStr *filename) {
     l->start = f->ptr;
 }
 
-static void lexSkipCodeComment(lexer *l) {
+static void lexSkipCodeComment(Lexer *l) {
     if (*l->ptr == '/') {
         while (*l->ptr != '\0') {
             if (*l->ptr == '\n') {
@@ -590,7 +588,7 @@ static void lexSkipCodeComment(lexer *l) {
     }
 }
 
-static int countNumberLen(lexer *l, char *ptr, int *isfloat, int *ishex,
+static int countNumberLen(Lexer *l, char *ptr, int *isfloat, int *ishex,
                           int *err) {
     char *start = ptr;
     int seen_e = 0;
@@ -657,7 +655,7 @@ static int countNumberLen(lexer *l, char *ptr, int *isfloat, int *ishex,
     return ptr - start;
 }
 
-int lexIdentifier(lexer *l, char ch) {
+int lexIdentifier(Lexer *l, char ch) {
     int i = 0;
     while (1) {
         switch (ch) {
@@ -682,7 +680,7 @@ finish:
     return TK_IDENT;
 }
 
-long lexInStr(lexer *l, unsigned char *buf, long size, int *done,
+long lexInStr(Lexer *l, unsigned char *buf, long size, int *done,
         char terminator, int escape_quotes)
 {
     long i = 0, j = 0, k = 0, ch = 0;
@@ -790,18 +788,18 @@ out:
     return i;
 }
 
-long lexString(lexer *l, char terminator, int escape_quotes) {
-    char *buf2, *buf3, buf[128];
+long lexString(Lexer *l, char terminator, int escape_quotes) {
+    char *buf2, buf[128];
     int str_done = 0;
     long len, char_count;
 
     len = char_count = 0;
-    buf2 = buf3 = NULL;
+    buf2 = NULL;
     
     do {
         char_count = lexInStr(l, (unsigned char *)buf, sizeof(buf),
                 &str_done,terminator,escape_quotes);
-        buf3 = malloc(len+char_count);
+        char *buf3 = (char *)malloc(len+char_count);
         if (buf2) {
             memcpy(buf3,buf2,len);
             free(buf2);
@@ -815,7 +813,7 @@ long lexString(lexer *l, char terminator, int escape_quotes) {
     } while(!str_done);
 
     free(l->cur_str);
-    l->cur_str = malloc(len);
+    l->cur_str = (char *)malloc(len);
     memcpy(l->cur_str,buf2,len);
     free(buf2);
     l->cur_strlen = len;
@@ -824,7 +822,7 @@ long lexString(lexer *l, char terminator, int escape_quotes) {
 
 /* Length of the char const is returned, it OR's in at max 8 characters. 
  * A long being 64 bits and 64/8 = 8. */
-unsigned long lexCharConst(lexer *l) {
+unsigned long lexCharConst(Lexer *l) {
     unsigned long char_const = 0, idx;
     long hex_num = 0;
     long len;
@@ -890,7 +888,7 @@ unsigned long lexCharConst(lexer *l) {
     return TK_CHAR_CONST;
 }
 
-int lexNumeric(lexer *l, int _isfloat) {
+int lexNumeric(Lexer *l, int _isfloat) {
     int ishex, isfloat, err, numlen;
     char *endptr;
 
@@ -918,8 +916,8 @@ int lexNumeric(lexer *l, int _isfloat) {
     }
 }
 
-LexerTypes *lexPreProcDirective(lexer *l) {
-    lexeme le;
+LexerTypes *lexPreProcDirective(Lexer *l) {
+    Lexeme le;
     if (!lex(l,&le)) return 0;
     char buffer[32];
     ssize_t len = snprintf(buffer,sizeof(buffer),"#%.*s",le.len,le.start);
@@ -930,7 +928,7 @@ LexerTypes *lexPreProcDirective(lexer *l) {
     return type;
 }
 
-int lex(lexer *l, lexeme *le) {
+int lex(Lexer *l, Lexeme *le) {
     char ch, *start;
     int tk_type;
     LexerTypes *type;
@@ -1256,13 +1254,13 @@ error:
     return 0;
 }
 
-int lexHasFile(lexer *l, aoStr *file) {
+int lexHasFile(Lexer *l, aoStr *file) {
     return strMapGet(l->seen_files,file->data) != NULL;
 }
 
-void lexInclude(lexer *l) {
+void lexInclude(Lexer *l) {
     aoStr *ident, *include_path;
-    lexeme next;
+    Lexeme next;
 
     lex(l, &next);
     if (tokenPunctIs(&next, '<')) {
@@ -1292,9 +1290,9 @@ void lexInclude(lexer *l) {
     }
 }
 
-lexeme *lexDefine(StrMap *macro_defs, lexer *l) {
+Lexeme *lexDefine(StrMap *macro_defs, Lexer *l) {
     int tk_type,iters;
-    lexeme next,*start,*end,*expanded,*macro;
+    Lexeme next,*start,*end,*expanded,*macro;
     aoStr *ident;
     PtrVec *tokens = ptrVecNew();
 
@@ -1361,7 +1359,7 @@ lexeme *lexDefine(StrMap *macro_defs, lexer *l) {
          * will exceed what is allowed in our ring buffer. Conveniently PtrVec 
          * has some fields we can use. */
         cctrlInitMacroProcessor(macro_proccessor);
-        macro_proccessor->token_buffer->entries = (lexeme **)tokens->entries;
+        macro_proccessor->token_buffer->entries = (Lexeme **)tokens->entries;
         macro_proccessor->token_buffer->size = tokens->size;
         macro_proccessor->token_buffer->capacity = roundUpToNextPowerOf2(tokens->size);
 
@@ -1405,8 +1403,8 @@ lexeme *lexDefine(StrMap *macro_defs, lexer *l) {
     return expanded;
 }
 
-void lexUndef(StrMap *macro_defs, lexer *l) {
-    lexeme next;
+void lexUndef(StrMap *macro_defs, Lexer *l) {
+    Lexeme next;
     char tmp[256];
     int tmp_len = 0;
 
@@ -1420,10 +1418,10 @@ void lexUndef(StrMap *macro_defs, lexer *l) {
     strMapRemove(macro_defs,tmp);
 }
 
-int lexPreProcIf(StrMap *macro_defs, lexer *l) {
+int lexPreProcIf(StrMap *macro_defs, Lexer *l) {
     int tk_type,iters,should_collect;
     PtrVec *macro_tokens;
-    lexeme next,*start,*end,*expanded,*macro;
+    Lexeme next,*start,*end,*expanded,*macro;
 
     tk_type = -1;
     should_collect = 0;
@@ -1482,7 +1480,7 @@ int lexPreProcIf(StrMap *macro_defs, lexer *l) {
         return 0;
     }
     cctrlInitMacroProcessor(macro_proccessor);
-    macro_proccessor->token_buffer->entries = (lexeme **)macro_tokens->entries;
+    macro_proccessor->token_buffer->entries = (Lexeme **)macro_tokens->entries;
     macro_proccessor->token_buffer->size = macro_tokens->size;
     macro_proccessor->token_buffer->capacity = roundUpToNextPowerOf2(macro_tokens->size);
 
@@ -1515,8 +1513,8 @@ int lexPreProcIf(StrMap *macro_defs, lexer *l) {
 }
 
 /* Decide if we should collect tokens or not */
-int lexPreProcBoolean(lexer *l, StrMap *macro_defs, lexeme *le, int can_collect) {
-    lexeme next,*macro;
+int lexPreProcBoolean(Lexer *l, StrMap *macro_defs, Lexeme *le) {
+    Lexeme next,*macro;
 
     switch (le->i64) {
         case KW_PP_IF: {
@@ -1597,8 +1595,8 @@ int lexPreProcBoolean(lexer *l, StrMap *macro_defs, lexeme *le, int can_collect)
     }
 }
 
-lexeme *lexToken(StrMap *macro_defs, lexer *l) {
-    lexeme le,next,*copy;
+Lexeme *lexToken(StrMap *macro_defs, Lexer *l) {
+    Lexeme le,next,*copy;
 
     macro_proccessor->macro_defs = macro_defs;
 
@@ -1645,9 +1643,8 @@ lexeme *lexToken(StrMap *macro_defs, lexer *l) {
                         }
                         l->skip_else = 0;
                     } else {
-                        int should_collect = 0;
                         int line = le.line;
-                        while ((should_collect = lexPreProcBoolean(l,macro_defs,&le, should_collect)) != 1) {
+                        while ((lexPreProcBoolean(l,macro_defs,&le)) != 1) {
                             int ok = lex(l,&le);
                             if (!ok) {
                                 loggerPanic("line %d: Unterminated #if\n", line);
@@ -1660,9 +1657,8 @@ lexeme *lexToken(StrMap *macro_defs, lexer *l) {
                 case KW_PP_IF_DEF:
                 case KW_PP_IF_NDEF:
                 case KW_PP_IF: {
-                    int should_collect = 0;
                     int line = le.line;
-                    while ((should_collect = lexPreProcBoolean(l,macro_defs,&le,should_collect)) != 1) {
+                    while ((lexPreProcBoolean(l,macro_defs,&le)) != 1) {
                         int ok = lex(l,&le);
                         if (!ok) {
                             loggerPanic("line %d: Unterminated #if\n", line);
@@ -1698,23 +1694,23 @@ lexeme *lexToken(StrMap *macro_defs, lexer *l) {
 
 void lexemeFree(void *_le) {
     if (_le) {
-        lexeme *le = (lexeme *)_le;
+        Lexeme *le = (Lexeme *)_le;
         free(le);
     }
 }
 
-static void lexReleaseLexFile(lexFile *lex_file) {
+static void lexReleaseLexFile(LexFile *lex_file) {
     aoStrRelease(lex_file->filename);
     aoStrRelease(lex_file->src);
     free(lex_file);
 }
 
-void lexReleaseAllFiles(lexer *l) {
+void lexReleaseAllFiles(Lexer *l) {
     listRelease(l->all_source,
-            ((void (*))&lexReleaseLexFile));
+            ((void (*)(void *))&lexReleaseLexFile));
 }
 
-char *lexerReportLine(lexer *l, ssize_t lineno) {
+char *lexerReportLine(Lexer *l, ssize_t lineno) {
     aoStr *buf = aoStrAlloc(256);
 
     char *ptr = l->cur_file->src->data;
@@ -1746,7 +1742,7 @@ char *lexerReportLine(lexer *l, ssize_t lineno) {
     return aoStrMove(buf);
 }
 
-int lexemeEq(lexeme *l1, lexeme *l2) {
+int lexemeEq(Lexeme *l1, Lexeme *l2) {
     if (l1->tk_type  != l2->tk_type) {
         return 0;
     }

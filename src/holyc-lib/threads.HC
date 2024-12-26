@@ -89,7 +89,10 @@ union pthread_attr_t
 
 
 /* this is the spiritual equivilent of typedef  */ 
-public U64 class pthread_t {};
+public class pthread_t
+{
+  U64 __padding;
+};
 
 class __pthread_list_t;
 class __pthread_list_t

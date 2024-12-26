@@ -37,7 +37,6 @@ void parseAssignAuto(Cctrl *cc, Ast *ast) {
 }
 
 AstType *parseReturnAuto(Cctrl *cc, Ast *retval) {
-    AstType *copy;
     switch (retval->kind) {
         case AST_LVAR:
         case AST_STRING:
@@ -73,10 +72,9 @@ AstType *parseReturnAuto(Cctrl *cc, Ast *retval) {
         case TK_PLUS_PLUS:
         case TK_MINUS_MINUS:
         case TK_SHL:
-        case TK_SHR:
-            copy = malloc(sizeof(AstType));
-            memcpy(copy,retval->type,sizeof(AstType));
-            return copy;
+        case TK_SHR: {
+            return astTypeCopy(retval->type);
+        }
         default:
             cctrlRaiseException(cc,"Could not determine return type for %s()",
                     cc->tmp_fname->data);
@@ -85,7 +83,7 @@ AstType *parseReturnAuto(Cctrl *cc, Ast *retval) {
 }
 
 AstType *parsePointerType(Cctrl *cc, AstType *type) {
-    lexeme *tok;
+    Lexeme *tok;
     while (1) {
         tok = cctrlTokenGet(cc);
         if (!tokenPunctIs(tok, '*')) {
@@ -101,7 +99,7 @@ AstType *parseFunctionPointerType(Cctrl *cc,
         char **fnptr_name, int *fnptr_name_len, AstType *rettype)
 {
     int has_var_args;
-    lexeme *fname;
+    Lexeme *fname;
     cctrlTokenExpect(cc,'*');
     fname = cctrlTokenGet(cc);
     if (fname->tk_type != TK_IDENT) {
@@ -146,7 +144,7 @@ Ast *parseDefaultFunctionParam(Cctrl *cc, Ast *var) {
 PtrVec *parseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
     PtrVec *params = ptrVecNew();
 
-    lexeme *tok, *pname;
+    Lexeme *tok, *pname;
     AstType *type;
     Ast *var;
     int arg_count = 0;
@@ -281,7 +279,7 @@ PtrVec *parseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
 
 /* Does not parse pointer types, only the base type */
 AstType *parseBaseDeclSpec(Cctrl *cc) {
-    lexeme *tok = cctrlTokenGet(cc);
+    Lexeme *tok = cctrlTokenGet(cc);
     AstType *type;
 
     if (!tok) {
@@ -310,7 +308,7 @@ AstType *parseDeclSpec(Cctrl *cc) {
 static AstType *parseArrayDimensionsInternal(Cctrl *cc, AstType *base_type) {
     Ast *size;
     AstType *type = base_type;
-    lexeme *tok, *next_tok;
+    Lexeme *tok, *next_tok;
     int dimension;
 
     tok = cctrlTokenGet(cc);
@@ -350,7 +348,7 @@ static AstType *parseArrayDimensionsInternal(Cctrl *cc, AstType *base_type) {
                     goto invalid_subscript;
                 }
                 
-                lexeme *le = strMapGet(cc->macro_defs,lname->data);
+                Lexeme *le = strMapGet(cc->macro_defs,lname->data);
                 if (le->tk_type != TK_I64) {
                     goto invalid_subscript;
                 }
@@ -396,9 +394,9 @@ AstType *parseFullType(Cctrl *cc) {
     return parseArrayDimensions(cc,type);
 }
 
-void parseDeclInternal(Cctrl *cc, lexeme **tok, AstType **type) {
+void parseDeclInternal(Cctrl *cc, Lexeme **tok, AstType **type) {
     AstType *_type = parseDeclSpec(cc);
-    lexeme *_tok = cctrlTokenGet(cc);
+    Lexeme *_tok = cctrlTokenGet(cc);
     if (tokenPunctIs(_tok,';')) {
         cctrlTokenRewind(cc);
         *tok = NULL;
@@ -437,13 +435,12 @@ Ast *findFunctionDecl(Cctrl *cc, char *fname, int len) {
 PtrVec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
     List *var_args = NULL, *parameter = NULL;
     Ast *ast, *param = NULL;
-    AstType *check, *rettype;
-    lexeme *tok;
+    AstType *check;
+    Lexeme *tok;
     PtrVec *params = NULL;
-    size_t param_idx = 0;
+    int param_idx = 0;
 
     if (decl) {
-        rettype = decl->type->rettype;
         params = decl->params;
     }
 
@@ -478,7 +475,6 @@ PtrVec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
                 if ((check = astTypeCheck(param->type,ast,'=')) == NULL) {
                     char *expected = astTypeToColorString(param->type);
                     char *got = astTypeToColorString(ast->type);
-                    int count = 0;
                     //cctrlRewindUntilStrMatch(cc,tok->start,tok->len,&count);
                     //cctrlTokenPeek(cc);
                     cctrlWarning(cc,"Incompatible function argument, expected '%s' got '%s' function '%.*s'",
@@ -579,7 +575,7 @@ Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
             return astFunctionCall(rettype,fname,len,argv);
         }
         /* Walk back untill we fin the missing function */
-        lexeme *peek = cctrlTokenPeek(cc);
+        Lexeme *peek = cctrlTokenPeek(cc);
         while (peek->len != len && memcmp(fname,peek->start,len) != 0) {
             cctrlTokenRewind(cc);
             peek = cctrlTokenPeek(cc);
@@ -616,8 +612,8 @@ static Ast *parseIdentifierOrFunction(Cctrl *cc,
 {
     Ast *ast = NULL;
 
-    lexeme *tok = cctrlTokenGet(cc);
-    lexeme *peek = cctrlTokenPeek(cc);
+    Lexeme *tok = cctrlTokenGet(cc);
+    Lexeme *peek = cctrlTokenPeek(cc);
     int is_lparen = tokenPunctIs(tok,'(');
 
     if ((ast = cctrlGetVar(cc, name, len)) == NULL) {
@@ -678,7 +674,7 @@ static Ast *parseIdentifierOrFunction(Cctrl *cc,
 
 static Ast *parsePrimary(Cctrl *cc) {
     Ast *ast;
-    lexeme *prev,*tok;
+    Lexeme *prev,*tok;
     int can_call_function = 1;
     cctrlTokenRewind(cc);
 
@@ -699,7 +695,7 @@ static Ast *parsePrimary(Cctrl *cc) {
                 can_call_function);
         if (tokenPunctIs(prev, '&')) {
             if (ast->flags & AST_FLAG_INLINE) {
-                lexeme *peek = cctrlTokenPeek(cc);
+                Lexeme *peek = cctrlTokenPeek(cc);
                 while (peek->tk_type != TK_PUNCT && peek->i64 != '&') {
                     cctrlTokenRewind(cc);
                     peek = cctrlTokenPeek(cc);
@@ -744,7 +740,7 @@ static Ast *parsePrimary(Cctrl *cc) {
     }
 }
 
-static int parseGetPriority(lexeme *tok) {
+static int parseGetPriority(Lexeme *tok) {
     switch (tok->i64) {
     case TK_ARROW: 
     case '.':
@@ -818,7 +814,7 @@ Ast *parseSubscriptExpr(Cctrl *cc, Ast *ast) {
     Ast *subscript = parseExpr(cc,16);
     if (subscript == NULL) {
         cctrlRewindUntilPunctMatch(cc,'[',NULL);
-        lexeme *tok = cctrlTokenPeek(cc);
+        Lexeme *tok = cctrlTokenPeek(cc);
         cctrlRaiseException(cc,"Failed to parse subscript value last valid %s was `%.*s`",
                 lexemeTypeToString(tok->tk_type),tok->len,tok->start);
     }
@@ -833,7 +829,7 @@ Ast *parseGetClassField(Cctrl *cc, Ast *cls) {
         char *type_str = astTypeToString(cls->type);
         char *var_str = astLValueToString(cls,0);
         cctrlTokenRewind(cc);
-        lexeme *peek = cctrlTokenPeek(cc);
+        Lexeme *peek = cctrlTokenPeek(cc);
         char *msg = mprintf("Using `%c` is an invalid operand for `%s %s`",peek->i64,
                 type_str,var_str);
         cctrlRaiseSuggestion(cc, msg,
@@ -846,7 +842,7 @@ Ast *parseGetClassField(Cctrl *cc, Ast *cls) {
 
     type = cls->type;
 
-    lexeme *tok = cctrlTokenGet(cc);
+    Lexeme *tok = cctrlTokenGet(cc);
     if (tok->tk_type != TK_IDENT) {
         cctrlRaiseExceptionFromTo(cc,NULL,'-',*tok->start,"Expected class member got %s `%.*s`",
                             lexemeTypeToString(tok->tk_type),
@@ -868,7 +864,7 @@ Ast *parseGetClassField(Cctrl *cc, Ast *cls) {
     return astClassRef(field, cls, aoStrMove(field_name));
 }
 
-static int parseCompoundAssign(lexeme *tok) {
+static int parseCompoundAssign(Lexeme *tok) {
     if (tok->tk_type != TK_PUNCT) {
         return 0;
     }
@@ -913,7 +909,7 @@ Ast *parseCreateBinaryOp(Cctrl *cc, long operation, Ast *left, Ast *right) {
 
 Ast *parseExpr(Cctrl *cc, int prec) {
     Ast *LHS, *RHS;
-    lexeme *tok;
+    Lexeme *tok;
     int prec2, next_prec, compound_assign;
 
     if ((LHS = parseUnaryExpr(cc)) == NULL) {
@@ -999,7 +995,7 @@ Ast *parseExpr(Cctrl *cc, int prec) {
 
         RHS = parseExpr(cc,next_prec);
         if (!RHS) {
-            lexeme *peek = cctrlTokenPeek(cc);
+            Lexeme *peek = cctrlTokenPeek(cc);
             cctrlTokenRewind(cc);
             char *err_lvar = astLValueToString(LHS,0);
             char *punct_str = lexemePunctToStringWithFlags(tok->i64,0);
@@ -1049,7 +1045,7 @@ static Ast *parseCast(Cctrl *cc) {
 }
 
 static AstType *parseSizeOfType(Cctrl *cc) {
-    lexeme *tok,*peek;
+    Lexeme *tok,*peek;
     AstType *type;
     Ast *ast;
 
@@ -1081,7 +1077,7 @@ static Ast *parseSizeof(Cctrl *cc) {
 Ast *parsePostFixExpr(Cctrl *cc) {
     Ast *ast;
     AstType *type;
-    lexeme *tok,*peek;
+    Lexeme *tok,*peek;
 
     /* parse primary rightly or wrongly, amongst other things, either gets a 
      * variable or parses a function call. */
@@ -1158,7 +1154,7 @@ Ast *parsePostFixExpr(Cctrl *cc) {
 }
 
 Ast *parseUnaryExpr(Cctrl *cc) {
-    lexeme *tok;
+    Lexeme *tok;
     Ast *ast;
 
     if ((tok = cctrlTokenGet(cc)) == NULL) {
@@ -1213,7 +1209,7 @@ Ast *parseUnaryExpr(Cctrl *cc) {
             }
         }
 
-        lexeme *peek = cctrlTokenPeekBy(cc,1);
+        Lexeme *peek = cctrlTokenPeekBy(cc,1);
         Ast *operand = NULL;
         AstType *type = NULL;
 

@@ -312,9 +312,9 @@ static void cfgContinuePrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
 }
 
 /* Side-effect of mutating the loop counter on the builder */
-static void cfgLoopHeadPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
+static void cfgLoopHeadPrintf(CfgGraphVizBuilder *builder) {
     int color = builder->loop_nesting;
-    int cnt = ++builder->loop_cnt;
+    int count = ++builder->loop_cnt;
     const char *loop_color = cfgPrintGetLoopColor(color);
     aoStrCatPrintf(builder->viz,
             "subgraph cluster1_%d {\nstyle=\"filled\";\n"
@@ -323,7 +323,9 @@ static void cfgLoopHeadPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
             "label=\"loop %d\";\n"
             "labeljust=l;\n"
             "penwidth=2;\n",
-            cnt,loop_color,cnt);
+            count,
+            loop_color,
+            count);
 }
 
 static void bbPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
@@ -361,9 +363,7 @@ static void cfgPrintBreaks(CfgGraphVizBuilder *builder, BasicBlock *bb) {
  * nodes outside of the loop prematurely. 
  *
  * Adding it to the seen set means it will never get explored. */
-static BasicBlock *cfgGetHandleDoWhileHead(CfgGraphVizBuilder *builder, 
-        IntSet *seen, BasicBlock *bb)
-{
+static BasicBlock *cfgGetHandleDoWhileHead(IntSet *seen, BasicBlock *bb) {
     BasicBlock *while_cond = NULL;
     if (bb->flags & BB_FLAG_LOOP_HEAD) {
         IntMapIterator *it = intMapIteratorNew(bb->prev_blocks);
@@ -398,16 +398,17 @@ char *cfgGraphVizError(CfgGraphVizBuilder *builder, BasicBlock *bb, int error_co
 }
 
 static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
-        BasicBlock *bb, IntSet *seen)
+                                 BasicBlock *bb,
+                                 IntSet *seen)
 {
-    BasicBlock *while_cond = cfgGetHandleDoWhileHead(builder,seen,bb);
+    BasicBlock *while_cond = cfgGetHandleDoWhileHead(seen,bb);
 
     if (intSetHas(seen,bb->block_no)) return;
     else intSetAdd(seen,bb->block_no);
 
     if (bb->flags & BB_FLAG_LOOP_HEAD) {
         builder->loop_nesting++;
-        cfgLoopHeadPrintf(builder,bb);
+        cfgLoopHeadPrintf(builder);
     }
 
     switch (bb->type) {
@@ -572,9 +573,8 @@ static void cfgCreatePicture(CfgGraphVizBuilder *builder, CFG *cfg) {
 }
 
 static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
-    IntMap *map = cfg->no_to_block;
     loggerDebug("Creating mappings for: %s, size: %lu\n",
-            cfg->ref_fname->data,map->size);
+            cfg->ref_fname->data,cfg->no_to_block->size);
     IntMapIterator *it = intMapIteratorNew(cfg->no_to_block);
     IntMapNode *entry;
 
@@ -714,8 +714,10 @@ void cfgBuilderWriteToFile(CfgGraphVizBuilder *builder, char *filename) {
                 filename,strerror(errno));
     }
 
-    int written = write(fd, cfg_string->data, cfg_string->len);
-    assert(written == cfg_string->len);
+    ssize_t written = write(fd, cfg_string->data, cfg_string->len);
+    if (written != (ssize_t)cfg_string->len) {
+        loggerPanic("Failed to write CFG '%s'\n", filename);
+    }
     fsync(fd);
     close(fd);
     aoStrRelease(cfg_string);

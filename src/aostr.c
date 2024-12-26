@@ -12,11 +12,11 @@
 #include "lexer.h"
 
 aoStr *aoStrAlloc(size_t capacity) {
-    aoStr *buf = malloc(sizeof(aoStr));
+    aoStr *buf = (aoStr *)malloc(sizeof(aoStr));
     capacity += 10;
     buf->capacity = capacity;
     buf->len = 0;
-    buf->data = malloc(sizeof(char) * capacity);
+    buf->data = (char *)malloc(sizeof(char) * capacity);
     return buf;
 }
 
@@ -281,31 +281,29 @@ void aoStrArrayRelease(aoStr **arr, int count) {
 /**
  * Split into strings on delimiter
  */
-aoStr **aoStrSplit(char *to_split, char delimiter, int *count) {
-    aoStr **outArr, **tmp;
-    char *ptr;
-    int arrsize, memslot;
+aoStr **aoStrSplit(char *to_split, char delimiter, int *_count) {
+    aoStr **outArr;
     long start, end;
+    char *ptr = to_split;
 
-    if (*to_split == delimiter) {
-        to_split++;
+    if (*ptr == delimiter) {
+        ptr++;
     }
 
-    memslot = 5;
-    ptr = to_split;
-    *count = 0;
+    int memslot = 5;
     start = end = 0;
-    arrsize = 0;
+    int arrsize = 0;
 
-    if ((outArr = malloc(sizeof(aoStr *) * memslot)) == NULL)
+    if ((outArr = (aoStr **)malloc(sizeof(aoStr *) * memslot)) == NULL)
         return NULL;
 
     while (*ptr != '\0') {
         if (arrsize + 1 >= memslot) {
             memslot *= 5;
-            if ((tmp = (aoStr **)realloc(outArr, sizeof(aoStr) * memslot)) ==
-                NULL)
+            aoStr **tmp = (aoStr **)realloc(outArr, sizeof(aoStr) * memslot);
+            if (tmp == NULL) {
                 goto error;
+            }
             outArr = tmp;
         }
 
@@ -324,12 +322,13 @@ aoStr **aoStrSplit(char *to_split, char delimiter, int *count) {
 
     outArr[arrsize] = aoStrDupRaw(to_split + start, end - start);
     arrsize++;
-    *count = arrsize;
+    *_count = arrsize;
 
     return outArr;
 
 error:
     aoStrArrayRelease(outArr, arrsize);
+    *_count = 0;
     return NULL;
 }
 
@@ -404,7 +403,7 @@ void aoStrCatPrintf(aoStr *b, const char *fmt, ...) {
         if (((size_t)len) >= bufferlen) {
             free(buf);
             bufferlen = ((size_t)len) + 2;
-            buf = malloc(bufferlen);
+            buf = (char *)malloc(bufferlen);
             if (buf == NULL) {
                 return;
             }
@@ -533,5 +532,3 @@ aoStr *aoStrError(void) {
     aoStr *str = aoStrDupRaw(err,strlen(err));
     return str;
 }
-
-

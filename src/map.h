@@ -65,7 +65,7 @@ typedef struct IntMap {
 
 typedef struct IntMapIterator {
     IntMap *map;
-    long idx;
+    unsigned long idx;
 } IntMapIterator;
 
 int intMapAdd(IntMap *map, long key, void *value);
@@ -136,7 +136,6 @@ void strMapIteratorRelease(StrMapIterator *it);
 StrMapNode *strMapNext(StrMapIterator *it);
 
 
-
 typedef struct IntSet {
     unsigned long size;
     unsigned long capacity;
@@ -148,7 +147,7 @@ typedef struct IntSet {
 
 typedef struct IntSetIterator {
     IntSet *iset;
-    long idx;
+    unsigned long idx;
 } IntSetIterator;
 
 IntSet *intSetNew(unsigned long capacity);

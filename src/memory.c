@@ -45,7 +45,8 @@ static void *memPoolEntriesNew(MemoryPool *pool) {
 }
 
 MemoryPool *memPoolNewAndInitialise(unsigned int member_size,
-        long slab_size, void (*init_memory)(void *))
+                                    long slab_size,
+                                    void (*init_memory)(void *))
 {
     MemoryPool *pool = (MemoryPool *)xmalloc(sizeof(MemoryPool));
     pool->member_size = member_size;
@@ -69,8 +70,9 @@ static long memPoolGetEntryVecIdx(MemoryPool *pool, long entry_no) {
 }
 
 /* Get the position in the entries array */
-static long memPoolGetEntryIdx(MemoryPool *pool, long entry_no,
-        long mem_pool_entries_idx)
+static long memPoolGetEntryIdx(MemoryPool *pool,
+                               long entry_no,
+                               long mem_pool_entries_idx)
 {
     return entry_no - (pool->slab_size * mem_pool_entries_idx);
 }
@@ -94,10 +96,10 @@ static void memPoolResize(MemoryPool *pool) {
 }
 
 void *memPoolAlloc(MemoryPool *pool) {
-    int ok;
+    int ok = 0;
     long entry_no = intVecPop(pool->free_indexes,&ok);
-    void *ptr;
 
+    void *ptr;
     if (ok) {
         ptr = memPoolGetMemory(pool,entry_no);
     } else {
