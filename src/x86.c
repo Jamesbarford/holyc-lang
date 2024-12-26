@@ -2423,8 +2423,10 @@ aoStr *asmGenerate(Cctrl *cc) {
     if (!listEmpty(cc->initalisers)) {
         asmInitaliser(cc,asmbuf);
     }
+#if IS_LINUX
     aoStrCatFmt(asmbuf,".LFE0:\n\t"
                        ".section    .note.GNU-stack,\"\",@progbits\n\t");
+#endif
     aoStrCatFmt(asmbuf,".ident      \"hcc: %s %s %s\"\n", OS_STR, ARCH_STR, cctrlGetVersion());
     return asmbuf;
 }
