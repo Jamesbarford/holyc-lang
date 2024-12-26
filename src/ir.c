@@ -13,20 +13,6 @@
 #include "map.h"
 #include "util.h"
 
-typedef struct IrModule {
-    PtrVec *instructions;
-    PtrVec *vars;
-} IrModule;
-
-typedef struct IrCtx {
-    Cctrl *cc;
-    IntMap *var_mapping;
-    int next_var_id;
-    int next_temp_reg;
-    IrModule *ir_module;
-    int stack_size;
-} IrCtx;
-
 void irFromAstInternal(Ast *ast, IrCtx *ctx);
 
 IrModule *irModuleNew(void) {
@@ -39,6 +25,7 @@ IrModule *irModuleNew(void) {
 IrCtx *irCtxNew(Cctrl *cc) {
     IrCtx *ctx = (IrCtx *)malloc(sizeof(IrCtx));
     ctx->cc = cc;
+    ctx->flags = 0;
     ctx->next_temp_reg = 1;
     ctx->next_var_id = 1;
     ctx->stack_size = 0;
@@ -73,7 +60,8 @@ void irInstructionAdd(IrCtx *ctx,
                       int s2,
                       int size,
                       aoStr *label,
-                      aoStr *fname)
+                      aoStr *fname,
+                      unsigned long flags)
 {
     IrInstruction *inst = (IrInstruction*)malloc(sizeof(IrInstruction));
     inst->op = op;
@@ -85,8 +73,12 @@ void irInstructionAdd(IrCtx *ctx,
     inst->size = size;
     inst->f64 = 0;
     inst->offset = 0;
+    inst->flags = flags;
     ptrVecPush(ctx->ir_module->instructions, inst);
 }
+
+#define irInstructionAddNoFlags(ctx, op, dest, s1, s2, size, label, fname) \
+    irInstructionAdd(ctx, op, dest, s1, s2, size, label, fname, 0)
 
 aoStr *irInstructionToString(IrInstruction *inst) {
     aoStr *str = aoStrNew();
@@ -129,7 +121,7 @@ aoStr *irInstructionToString(IrInstruction *inst) {
         case IR_SHL:             aoStrCatFmt(str,"SHL             "); break;
         case IR_SHR:             aoStrCatFmt(str,"SHR             "); break;
         case IR_RET:             aoStrCatFmt(str,"RET             "); break;
-        case IR_CALL:            aoStrCatFmt(str,"CALL            "); break;
+        case IR_CALL:            aoStrCatFmt(str,"CALL           %S", inst->fname); break;
         case IR_PUSH:            aoStrCatFmt(str,"PUSH            "); break;
         case IR_POP:             aoStrCatFmt(str,"POP             "); break;
         case IR_JMP_LT:          aoStrCatFmt(str,"JMP_LT          "); break;
@@ -182,12 +174,14 @@ IrOp irOpFromKind(int kind) {
 void irInstructionFloat(IrCtx *ctx,
                         IrOp op,
                         int dest,
-                        double f64)
+                        double f64,
+                        unsigned long flags)
 {
     IrInstruction *inst = (IrInstruction*)malloc(sizeof(IrInstruction));
     inst->f64 = f64;
     inst->op = op;
     inst->size = 8;
+    inst->flags = flags;
     ptrVecPush(ctx->ir_module->instructions, inst);
 }
 
@@ -237,7 +231,7 @@ void irArrayInit(IrCtx *ctx, Ast *ast, AstType *type) {
          * know the size upfront? Not sure as if it is nested we probably need 
          * to recuse through it to find the total size */
         if (tmp->kind == AST_STRING) {
-            irInstructionAdd(ctx,
+            irInstructionAddNoFlags(ctx,
                              IR_SAVE_IMM_STR,
                              0,0,0,
                              tmp->sval->len,
@@ -246,14 +240,14 @@ void irArrayInit(IrCtx *ctx, Ast *ast, AstType *type) {
         } else {
             irFromAstInternal(ast, ctx);
             if (type->ptr) {
-                irInstructionAdd(ctx,
+                irInstructionAddNoFlags(ctx,
                                  irGetLVarSave(type->ptr),
                                  0,0,0,
                                  tmp->sval->len,
                                  ast->sval,
                                  NULL);
             } else {
-                irInstructionAdd(ctx,
+                irInstructionAddNoFlags(ctx,
                                  irGetLVarSave(type),
                                  0,0,0,
                                  tmp->sval->len,
@@ -298,13 +292,13 @@ void irBinaryOp(IrCtx *ctx, int kind, Ast *ast) {
         int dest_reg = ctx->next_temp_reg;
         irCtxNextRegId(ctx);
 
-        irInstructionAdd(ctx, op,
+        irInstructionAddNoFlags(ctx, op,
                 dest_reg,
                 ast->left->tmp_reg,
                 ast->right->tmp_reg,
                 ast->type->size,
                 NULL,NULL);
-        irInstructionAdd(ctx, IR_SAVE,
+        irInstructionAddNoFlags(ctx, IR_SAVE,
                 save_reg,
                 //ctx->next_temp_reg,
                 dest_reg,
@@ -320,6 +314,7 @@ void irFromAstInternal(Ast *ast, IrCtx *ctx) {
         return;
     }
 
+    unsigned long prev_flags;
     List *node;
     aoStr *escaped;
 
@@ -330,16 +325,16 @@ void irFromAstInternal(Ast *ast, IrCtx *ctx) {
         switch (ast->type->kind) {
         case AST_TYPE_VOID: break;
         case AST_TYPE_INT: {
-            irInstructionAdd(ctx, IR_LOAD_IMM, ctx->next_temp_reg,ast->i64,0,ast->type->size,NULL,NULL);
+            irInstructionAdd(ctx, IR_LOAD_IMM, ctx->next_temp_reg,ast->i64,0,ast->type->size,NULL,NULL,ctx->flags);
             break;
         }
         case AST_TYPE_CHAR:  {
-            irInstructionAdd(ctx, IR_LOAD_IMM, ctx->next_temp_reg,ast->i64,0,ast->type->size,NULL,NULL);
+            irInstructionAdd(ctx, IR_LOAD_IMM, ctx->next_temp_reg,ast->i64,0,ast->type->size,NULL,NULL,ctx->flags);
             break;
         }
         
         case AST_TYPE_FLOAT: {
-            irInstructionFloat(ctx,IR_LOAD_IMM_F64, ctx->next_temp_reg,ast->f64);
+            irInstructionFloat(ctx,IR_LOAD_IMM_F64, ctx->next_temp_reg,ast->f64,ctx->flags);
             break;
         }
         default:
@@ -349,7 +344,7 @@ void irFromAstInternal(Ast *ast, IrCtx *ctx) {
 
         case AST_STRING: {
             escaped = aoStrEscapeString(ast->sval);
-            irInstructionAdd(ctx, IR_LOAD_IMM_STR, ctx->next_temp_reg,0,0,ast->type->size,escaped,NULL);
+            irInstructionAdd(ctx, IR_LOAD_IMM_STR, ctx->next_temp_reg,0,0,ast->type->size,escaped,NULL,ctx->flags);
             break;
         }
     }
@@ -363,7 +358,7 @@ void irFromAstInternal(Ast *ast, IrCtx *ctx) {
         int var_id = ast->tmp_reg;
         int reg_id = irCtxNextRegId(ctx);
         IrOp load_op = irGetLVarLoad(ast->type);
-        irInstructionAdd(ctx,load_op,reg_id,var_id,0,ast->type->size,NULL,NULL);
+        irInstructionAddNoFlags(ctx,load_op,reg_id,var_id,0,ast->type->size,NULL,NULL);
         //ast->tmp_reg = reg_id;
         break;
     }    
@@ -389,7 +384,7 @@ void irFromAstInternal(Ast *ast, IrCtx *ctx) {
 
         if (ast->declinit) {
             irFromAstInternal(ast->declinit,ctx);
-            irInstructionAdd(ctx,save_op,reg_id,var_id,0,ast->declvar->type->size,NULL,NULL);
+            irInstructionAdd(ctx,save_op,reg_id,var_id,0,ast->declvar->type->size,NULL,NULL,ctx->flags);
             ast->tmp_reg = reg_id;
         }
         break;
@@ -415,7 +410,18 @@ void irFromAstInternal(Ast *ast, IrCtx *ctx) {
             } else {
             }
         }
+
     case AST_FUNCALL: {
+        PtrVec *argv = ast->args;
+        prev_flags = ctx->flags;
+        ctx->flags |= IR_FLAG_FUNC_ARG;
+        for (int i = 0; i < argv->size; ++i) {
+            Ast *arg = (Ast *)argv->entries[i];
+            irFromAstInternal(arg,ctx);
+        }
+        ctx->flags &= ~IR_FLAG_FUNC_ARG;
+        ctx->flags = prev_flags;
+        irInstructionAddNoFlags(ctx,IR_CALL,0,0,0,0,NULL,ast->fname);
         break;
     }
 
@@ -608,7 +614,7 @@ void irFunc(Cctrl *cc, Ast *func) {
 
 
     irFromAstInternal(func->body, ctx);
-    printf("%d\n",ctx->ir_module->instructions->size);
+
     for (int i = 0; i < ctx->ir_module->instructions->size; ++i) {
         IrInstruction *inst = ctx->ir_module->instructions->entries[i];
         aoStr *str = irInstructionToString(inst);

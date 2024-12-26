@@ -3,6 +3,8 @@
 
 #include "cctrl.h"
 
+#define IR_FLAG_FUNC_ARG (1<<0)
+
 typedef enum {
     /* loads */
     IR_LOAD = 1,
@@ -67,6 +69,7 @@ typedef enum {
 
 typedef struct IrInstruction {
     IrOp op;
+    unsigned long flags;
     int dest;
     int s1;
     int s2;
@@ -77,8 +80,23 @@ typedef struct IrInstruction {
     int offset;
 } IrInstruction;
 
+typedef struct IrModule {
+    PtrVec *instructions;
+    PtrVec *vars;
+} IrModule;
+
+typedef struct IrCtx {
+    Cctrl *cc;
+    unsigned long flags;
+    IntMap *var_mapping;
+    int next_var_id;
+    int next_temp_reg;
+    IrModule *ir_module;
+    int stack_size;
+} IrCtx;
 
 void irFromAst(Cctrl *cc);
+IrCtx *irCtxNew(Cctrl *cc);
 aoStr *irInstructionToString(IrInstruction *inst);
 
 #endif

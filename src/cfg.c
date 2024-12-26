@@ -1668,7 +1668,6 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
         builder->ast_list = stmts;
         listForEach(stmts) {
             Ast *ast = cast(Ast *,it->value);
-            builder->ast_iter = it;
             cfgHandleAstNode(builder,ast);
         }
     }

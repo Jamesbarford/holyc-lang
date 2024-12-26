@@ -109,7 +109,6 @@ typedef struct CFGBuilder {
     IntMap *leaf_cache;
 
     List *ast_list;
-    List *ast_iter;
     List *unresolved_gotos;
     StrMap *resolved_labels;
 } CFGBuilder;
