@@ -1,4 +1,4 @@
-# The HolyC Programming Language - BETA
+# HolyC Programming Language Implimentation - BETA
 
 <p align="center">
   <img 
@@ -19,7 +19,8 @@ U0 Main()
 Main;
 ```
 
-Full documentation for the language can be found here: https://holyc-lang.com/
+Full documentation for the language and this compiler can be found here: 
+https://holyc-lang.com/
 
 ## Introduction
 A holyc compiler built from scratch in C. Currently it is non optimising,
@@ -64,8 +65,7 @@ ExampleFunction;
 ## Compatibility
 Currently this holyc compiler will compile holyc source code to an x86_64 
 compatible binary which has been tested on amd linux and an intel mac.
-Thus most `x86_64` architectures should be supported. Creating an `IR` with 
-some optimisations and compiling to `ARM` is high on the TODO list.
+Thus most `x86_64` architectures should be supported.
 
 ## Building
 ### Operating Systems:
@@ -79,18 +79,26 @@ then follow the steps below:
 ### Requirements
 - A C compiler, gcc or clang.
 - Linux or MacOS x86_64.
-
-**Notes:**
-- `ld` version 2.42 will report an error however does link successfully.
+- make
+- cmake
 
 ### Build Steps
 There is a Makefile at the root of the repository that wraps CMake, it provides:
-- `make`, will build the compiler
-- `make install` install the compile
-- `make unit-test` run the unit tests
+You can set the install prefix with `make INSTALL_PREFIX=<prefix>`
 
-However if you wish to use cmake directly, here's an example:
+### Makefile - Simple:
+A Makefile exists at the top of the repo which should simplify building.
+**MacOS:**
+```
+make && make install && make unit-test
+```
 
+**Linux:**
+```
+make && sudo make install && make unit-test
+```
+
+### CMake - Not so simple
 **Create the Makefiles in ./build**
 ```
 cmake -S ./src \
@@ -107,7 +115,6 @@ make -C ./build
 ```
 make -C ./build install
 ```
-You can set the install prefix with `make INSTALL_PREFIX=<prefix>`
 
 This will install the compiler and holyc libraries for strings, hashtables, 
 I/O, maths, networking, JSON parsing etc... see ./src/holyc-lib/.
@@ -141,6 +148,18 @@ OPTIONS:
   --help     Print this message
 ```
 
+## Key Differences between this and TempleOS HolyC
+- `auto` key word for type inference, an addition which makes it easier
+  to write code.
+- Range based for loops can be used with static arrays and structs with 
+  an `entries` field with an accompanying `size` field: `for (auto it : <var>)`
+- `cast<type>` can be used for casting as well as post-fix type casting.
+- `break` and `continue` allowed in loops.
+- You can call any libc code by declaring the prototype with 
+  `extern "c" <type> <function_name>`. Then call the function as you usually
+  would. See [here](https://holyc-lang.com/learn-functions.html) for examples.
+
+
 ## Control Flow Graph Example
 Example code:
 ```hc
@@ -168,17 +187,6 @@ Produces the following control flow graph. Note that in order to use
     title="holyc logo"
     width="400"/>
 </p>
-
-## Differences
-- `auto` key word for type inference, an addition which makes it easier
-  to write code.
-- Range based for loops can be used with static arrays and structs with 
-  an `entries` field with an accompanying `size` field: `for (auto it : <var>)`
-- `cast<type>` can be used for casting as well as post-fix type casting.
-- `break` and `continue` allowed in loops.
-- You can call any libc code by declaring the prototype with 
-  `extern "c" <type> <function_name>`. Then call the function as you usually
-  would. See [here](https://holyc-lang.com/learn-functions.html) for examples.
 
 ## Experimental Transpiler
 A transpiler can be invoked using `hcc -transpile <file>.HC`, it is best effort 

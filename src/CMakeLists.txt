@@ -4,8 +4,8 @@ project(HolyC)
 
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
-set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED True)
+set(CMAKE_C_STANDARD 11)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ../)
 
 if(NOT CMAKE_BUILD_TYPE)
@@ -69,6 +69,7 @@ set(HEADERS
     prsutil.h
     util.h
     transpiler.h
+    version.h
     x86.h
 )
 

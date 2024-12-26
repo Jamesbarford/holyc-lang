@@ -12,7 +12,7 @@
 #define VECTOR_INITIAL_CAPACITY 4
 
 void setAllLongs(long *array, unsigned long len, long value) {
-    for (long i = 0; i < len; ++i) {
+    for (unsigned long i = 0; i < len; ++i) {
         array[i] = value;
     }
 }
@@ -162,7 +162,7 @@ unsigned long roundUpToNextPowerOf2(unsigned long v) {
 
 
 IntMap *intMapNew(unsigned long capacity) {
-    IntMap *map = malloc(sizeof(IntMap));
+    IntMap *map = (IntMap *)malloc(sizeof(IntMap));
     capacity = roundUpToNextPowerOf2(capacity);
     map->capacity = capacity;
     map->mask = capacity - 1;
@@ -179,7 +179,7 @@ void intMapSetFreeValue(IntMap *map, void (*_free_value)(void *value)) {
 }
 
 IntMapNode *intMapNodeNew(long key, void *value) {
-    IntMapNode *n = malloc(sizeof(IntMapNode));
+    IntMapNode *n = (IntMapNode *)malloc(sizeof(IntMapNode));
     n->key = key;
     n->value = value;
     return n;
@@ -216,7 +216,7 @@ void intMapIteratorRelease(IntMapIterator *it) {
 }
 
 IntMapNode *intMapNext(IntMapIterator *it) {
-    while (it->idx < it->map->indexes->size) {
+    while (it->idx < (unsigned long)it->map->indexes->size) {
         long idx = intVecGet(it->map->indexes,it->idx);
         IntMapNode *n = it->map->entries[idx];
         if (n->key != HT_DELETED) {
@@ -267,7 +267,7 @@ void intMapClear(IntMap *map) {
 void intMapRelease(IntMap *map) { // free the entire hashtable
     if (map) {
         void (*free_value)(void *value) = map->_free_value;
-        for (long i = 0; i < map->capacity; ++i) {
+        for (unsigned long i = 0; i < map->capacity; ++i) {
             IntMapNode *n = map->entries[i];
             if (n) {
                 if (free_value)
@@ -463,7 +463,7 @@ unsigned long strMapHashFunction(char *key, long key_len, unsigned long mask) {
 }
 
 StrMap *strMapNew(unsigned long capacity) {
-    StrMap *map = malloc(sizeof(StrMap));
+    StrMap *map = (StrMap *)malloc(sizeof(StrMap));
     capacity = roundUpToNextPowerOf2(capacity);
     map->capacity = capacity;
     map->mask = capacity - 1;
@@ -492,7 +492,7 @@ void strMapSetFreeKey(StrMap *map, void (*_free_key)(void *key)) {
 }
 
 StrMapNode *strMapNodeNew(char *key, long key_len, void *value) {
-    StrMapNode *n = malloc(sizeof(StrMapNode));
+    StrMapNode *n = (StrMapNode *)malloc(sizeof(StrMapNode));
     n->key = key;
     n->key_len = key_len;
     n->value = value;
@@ -567,7 +567,7 @@ void strMapRelease(StrMap *map) { // free the entire hashtable
     if (map) {
         void (*free_value)(void *_val) = map->_free_value;
         void (*free_key)(void *_key) = map->_free_key;
-        for (long i = 0; i < map->capacity; ++i) {
+        for (unsigned long i = 0; i < map->capacity; ++i) {
             StrMapNode *n = map->entries[i];
             if (n) {
                 if (free_value)
@@ -636,7 +636,7 @@ int strMapResize(StrMap *map) {
      * the hashtable which 'dict.c' has to do on a resize thus this should in
      * theory be faster, but there are more array lookups however they should 
      * have good spatial locality */
-    for (long i = 0; i < map->size; ++i) {
+    for (unsigned long i = 0; i < map->size; ++i) {
         long idx = old_index_entries[i];
         StrMapNode *old = old_entries[idx];
         if (old->key != NULL) {
@@ -950,7 +950,7 @@ IntSetIterator *intSetIteratorNew(IntSet *iset) {
 }
 
 long intSetNext(IntSetIterator *it) {
-    while (it->idx < it->iset->indexes->size) {
+    while ((int)it->idx < it->iset->indexes->size) {
         long idx = intVecGet(it->iset->indexes,it->idx);
         long key = it->iset->entries[idx];
         if (key != HT_DELETED && key != HT_VACANT) {

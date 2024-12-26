@@ -74,29 +74,9 @@ void assertIsPointer(Ast *ast, long lineno) {
     }
 }
 
-static char *getTerminator(long terminator_flags) {
-    static char buffer[64];
-    int cnt = 0;
-    if (terminator_flags & PUNCT_TERM_SEMI) {
-        buffer[cnt++] = ';';
-    } 
-    if (terminator_flags & PUNCT_TERM_RPAREN) {
-        if (cnt > 0) {
-            cnt += snprintf(buffer+cnt,sizeof(buffer)," or ");
-        }
-        buffer[cnt++] = ';';
-    } 
-    if (terminator_flags & PUNCT_TERM_COMMA) {
-        if (cnt > 0) {
-            cnt += snprintf(buffer+cnt,sizeof(buffer)," or ");
-        }
-        buffer[cnt++] = ',';
-    }
-    buffer[cnt] = '\0';
-    return buffer;
-}
-
-char *assertionTerminatorMessage(Cctrl *cc, lexeme *tok, long terminator_flags) {
+char *assertionTerminatorMessage(Cctrl *cc, Lexeme *tok,
+                                 long terminator_flags)
+{
     if ((terminator_flags & PUNCT_TERM_SEMI) &&
         (terminator_flags & PUNCT_TERM_COMMA)) {
         return "perhaps you meant ';' or ','?";
@@ -114,7 +94,7 @@ char *assertionTerminatorMessage(Cctrl *cc, lexeme *tok, long terminator_flags) 
 
 /* Check if one of the characters matches and the flag wants that character to
  * terminate */
-void assertTokenIsTerminator(Cctrl *cc, lexeme *tok, long terminator_flags) {
+void assertTokenIsTerminator(Cctrl *cc, Lexeme *tok, long terminator_flags) {
     if (tok == NULL) {
         cctrlRaiseException(cc,"NULL token passed to assertTokenIsTerminator");
     }
@@ -127,7 +107,7 @@ void assertTokenIsTerminator(Cctrl *cc, lexeme *tok, long terminator_flags) {
 
     cctrlRewindUntilPunctMatch(cc,tok->i64,NULL);
     aoStr *info_msg = NULL;
-    lexeme *next = cctrlTokenPeek(cc);
+    Lexeme *next = cctrlTokenPeek(cc);
     if (tok->line != next->line) {
         ssize_t next = cc->lineno+1;
         while (cc->lineno <= next) {
@@ -152,7 +132,7 @@ void assertTokenIsTerminator(Cctrl *cc, lexeme *tok, long terminator_flags) {
     exit(EXIT_FAILURE);
 }
 
-void assertTokenIsTerminatorWithMsg(Cctrl *cc, lexeme *tok,
+void assertTokenIsTerminatorWithMsg(Cctrl *cc, Lexeme *tok,
                                     long terminator_flags,
                                     const char *fmt, ...)
 {
@@ -181,7 +161,7 @@ void assertTokenIsTerminatorWithMsg(Cctrl *cc, lexeme *tok,
     free(msg);
 }
 
-AstType *parseGetType(Cctrl *cc, lexeme *tok) {
+AstType *parseGetType(Cctrl *cc, Lexeme *tok) {
     if (!tok) {
         return NULL;
     }
@@ -191,7 +171,7 @@ AstType *parseGetType(Cctrl *cc, lexeme *tok) {
     return cctrlGetKeyWord(cc,tok->start,tok->len);
 }
 
-int parseIsKeyword(lexeme *tok, Cctrl *cc) {
+int parseIsKeyword(Lexeme *tok, Cctrl *cc) {
     return cctrlIsKeyword(cc,tok->start,tok->len) || NULL;
 }
 
@@ -478,7 +458,7 @@ void typeCheckWarn(Cctrl *cc, long op, Ast *expected, Ast *actual) {
 
 
     int count = 0;
-    cctrlRewindUntilPunctMatch(cc,'=',&count);
+    cctrlRewindUntilPunctMatch(cc,op,&count);
     cctrlTokenGet(cc);
     count--;
 
@@ -486,7 +466,7 @@ void typeCheckWarn(Cctrl *cc, long op, Ast *expected, Ast *actual) {
             actual_str,
             expected_type->data,
             actual_type->data);
-    cctrlWarningFromTo(cc, suggestion, '=', ';', "Incompatible types '%s' is not assignable to type '%s'",
+    cctrlWarningFromTo(cc, suggestion, op, ';', "Incompatible types '%s' is not assignable to type '%s'",
             actual_type->data, expected_type->data);
     for (int i = 0; i < count; ++i) {
         cctrlTokenGet(cc);
@@ -497,7 +477,7 @@ void typeCheckWarn(Cctrl *cc, long op, Ast *expected, Ast *actual) {
     aoStrRelease(actual_type);
 }
 
-void typeCheckReturnTypeWarn(Cctrl *cc, long lineno, Ast *maybe_func, 
+void typeCheckReturnTypeWarn(Cctrl *cc, Ast *maybe_func, 
                              AstType *check, Ast *retval)
 {
     char *fstring = NULL;

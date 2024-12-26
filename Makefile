@@ -1,5 +1,5 @@
-_C_COMPILER := gcc
-_BUILD_TYPE := Release
+C_COMPILER     ?= gcc
+BUILD_TYPE     ?= Release
 INSTALL_PREFIX ?= /usr/local
 
 default: all
@@ -20,9 +20,10 @@ all:
 	cmake -S ./src \
 		-B ./build \
 		-G 'Unix Makefiles' \
-		-DCMAKE_C_COMPILER=$(_C_COMPILER) \
-		-DCMAKE_BUILD_TYPE=$(_BUILD_TYPE) \
+		-DCMAKE_C_COMPILER=$(C_COMPILER) \
+		-DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
 		-DCMAKE_INSTALL_PREFIX=$(INSTALL_PREFIX) \
+		-DCMAKE_C_FLAGS='-Wextra -Wall -Wno-implicit-fallthrough' \
 		&& $(MAKE) -C ./build -j2
 
 install:

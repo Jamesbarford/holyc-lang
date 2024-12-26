@@ -22,7 +22,7 @@ static inline char *getTabs(aoStr *str) {
 }
 
 void prsAsmMem(Cctrl *cc, aoStr *buf) {
-    lexeme *tok;
+    Lexeme *tok;
     tok = cctrlTokenGet(cc);
     if (tok->tk_type != TK_IDENT) {
         cctrlRaiseException(cc,"[<register>] expected got: %s",lexemeToString(tok));
@@ -31,7 +31,7 @@ void prsAsmMem(Cctrl *cc, aoStr *buf) {
     aoStrCatPrintf(buf,"(%%%.*s)",tok->len,tok->start);
 }
 
-void prsAsmOffset(Cctrl *cc, aoStr *buf, lexeme *tok) {
+void prsAsmOffset(Cctrl *cc, aoStr *buf, Lexeme *tok) {
     if (tok->tk_type != TK_I64) {
         cctrlRaiseException(cc,"Expected TK_I64 type got: %s",lexemeToString(tok));
     }
@@ -46,8 +46,8 @@ void prsAsmOffset(Cctrl *cc, aoStr *buf, lexeme *tok) {
     aoStrCatPrintf(buf, "(%%%.*s)",tok->len,tok->start);
 }
 
-void prsAsmImm(Cctrl *cc, aoStr *buf, lexeme *tok) {
-    lexeme *next;
+void prsAsmImm(Cctrl *cc, aoStr *buf, Lexeme *tok) {
+    Lexeme *next;
     switch (tok->tk_type) {
         case TK_PUNCT:
             if (tok->i64 != '-') {
@@ -97,7 +97,7 @@ void prsAsmImm(Cctrl *cc, aoStr *buf, lexeme *tok) {
 }
 
 void prsAsmLabel(Cctrl *cc, aoStr *buf) {
-    lexeme *tok, *next;
+    Lexeme *tok, *next;
     long label_num;
 
     tok = cctrlTokenGet(cc);
@@ -120,8 +120,8 @@ void prsAsmLabel(Cctrl *cc, aoStr *buf) {
     }
 }
 
-void prsAsmPunct(Cctrl *cc, lexeme *tok, aoStr *buf) {
-    lexeme *next;
+void prsAsmPunct(Cctrl *cc, Lexeme *tok, aoStr *buf) {
+    Lexeme *next;
     switch (tok->i64) {
         case '[':
             prsAsmMem(cc,buf);
@@ -156,10 +156,10 @@ static void maybePutRegister(Cctrl *cc, aoStr *buf, aoStr *maybe_register) {
 
 /* Custom assembly to AT&T */
 Ast *prsAsmToATT(Cctrl *cc) {
-    aoStr *op1, *op2, *op3, *asm_code, *curblock, *stdfunc, *curfunc;
+    aoStr *op1 = NULL, *op2 = NULL, *op3 = NULL, *asm_code = NULL, *curblock = NULL, *stdfunc = NULL, *curfunc = NULL;
     List *asm_functions;
     Ast *asm_function, *asm_block;
-    lexeme *tok, *next;
+    Lexeme *tok, *next;
     int isbol = 0, count = 0;
 
     asm_functions = listNew();
@@ -337,13 +337,15 @@ Ast *prsAsmToATT(Cctrl *cc) {
         tok = cctrlTokenGet(cc);
     }
 
-    aoStrCatLen(asm_code,curfunc->data,curfunc->len);
-    aoStrCatLen(asm_code,":\n",2);
-    aoStrCatLen(asm_code,curblock->data,curblock->len);
-    asm_function = astAsmFunctionDef(curfunc,curblock);
-    listAppend(asm_functions,asm_function);
-    if (!strMapAddOrErr(cc->asm_functions, curfunc->data, asm_function)) {
-        cctrlIce(cc, "Already defined assembly function: %s", curfunc->data);
+    if (curfunc) {
+        aoStrCatLen(asm_code,curfunc->data,curfunc->len);
+        aoStrCatLen(asm_code,":\n",2);
+        aoStrCatLen(asm_code,curblock->data,curblock->len);
+        asm_function = astAsmFunctionDef(curfunc,curblock);
+        listAppend(asm_functions,asm_function);
+        if (!strMapAddOrErr(cc->asm_functions, curfunc->data, asm_function)) {
+            cctrlIce(cc, "Already defined assembly function: %s", curfunc->data);
+        }
     }
     asm_block = astAsmBlock(asm_code,asm_functions);
     return asm_block;
@@ -361,9 +363,7 @@ Ast *prsAsm(Cctrl *cc) {
 #include <stdlib.h>
 #include <unistd.h>
 char *readfile(char *path) {
-    char *buf;
     int fd;
-
     if ((fd = open(path, O_RDONLY, 0644)) == -1) {
         loggerPanic("Failed to open file\n");
     }
@@ -371,7 +371,7 @@ char *readfile(char *path) {
     int len = lseek(fd, 0, SEEK_END);
     lseek(fd, 0, SEEK_SET);
 
-    buf = malloc(sizeof(char) * len);
+    char *buf = (char *)malloc(sizeof(char) * len);
     if (read(fd, buf, len) != len) {
         loggerPanic("Failed to read whole file\n");
     }

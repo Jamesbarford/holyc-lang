@@ -302,15 +302,18 @@ void bbPrint(BasicBlock *bb) {
 }
 
 
-static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder, int type,
-        unsigned int flags) {
-    BasicBlock *bb = memPoolAlloc(builder->block_pool);
+static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder,
+                                             int type,
+                                             unsigned int flags)
+{
+    BasicBlock *bb = (BasicBlock *)memPoolAlloc(builder->block_pool);
 
     bb->type = type;
     bb->flags = 0;
     bb->block_no = builder->bb_block_no++;
     builder->bb_count++;
     bb->prev_blocks = intMapNew(32);
+    bb->flags = flags;
     /* @Leak
      * This should probably be a memory pool as well */
     bb->ast_array = ptrVecNew();
@@ -760,7 +763,7 @@ static void cfgHandleLabel(CFGBuilder *builder, Ast *ast) {
     cfgBuilderSetBlock(builder,bb_label);
 }
 
-static void cfgHandleBreak(CFGBuilder *builder, Ast *ast) {
+static void cfgHandleBreak(CFGBuilder *builder) {
     if (builder->flags & CFG_BUILDER_FLAG_IN_LOOP && 
             !(builder->flags & CFG_BUILDER_FLAG_IN_SWITCH)) {
         bbSetType(builder->bb,BB_BREAK_BLOCK);
@@ -778,7 +781,7 @@ static void cfgHandleCompound(CFGBuilder *builder, Ast *ast) {
     }
 }
 
-static void cfgHandleContinue(CFGBuilder *builder, Ast *ast) {
+static void cfgHandleContinue(CFGBuilder *builder) {
     assert(builder->flags & CFG_BUILDER_FLAG_IN_LOOP);
     BasicBlock *bb_continue = cfgSelectOrCreateBlock(builder,BB_CONTINUE,0);
     bbSetPrevPtr(bb_continue,builder->bb_cur_loop);
@@ -932,9 +935,9 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
      * 
      * A new basic block will start with an `if`, `for`, `while`, `goto` */
     switch (kind) {
-        case AST_BREAK:         cfgHandleBreak(builder,ast);    break;
+        case AST_BREAK:         cfgHandleBreak(builder);        break;
         case AST_COMPOUND_STMT: cfgHandleCompound(builder,ast); break;
-        case AST_CONTINUE:      cfgHandleContinue(builder,ast); break;
+        case AST_CONTINUE:      cfgHandleContinue(builder);     break;
         case AST_DO_WHILE: {
             cfgHandleDoWhileLoop(builder,ast);
             break;
@@ -1032,31 +1035,31 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
 }
 
 /* Remove nodes from the ast array that are before the label */
-static void cfgRemoveNodesBeforeLabel(BasicBlock *bb_dest, aoStr *goto_label) {
-    int collect = 0;
-    int new_size = 0;
-    Ast *ast = bb_dest->ast_array->entries[0];
-    /* If the first node in this block is the goto label we do not need 
-     * to do anything */
-    if (astIsLabelMatch(ast,goto_label)) return;
-
-    for (int i = 1; i < bb_dest->ast_array->size; ++i) {
-        ast = vecGet(Ast *,bb_dest->ast_array,i);
-        if (collect) {
-            bb_dest->ast_array->entries[new_size++] = ast;
-        } else {
-            if (astIsLabelMatch(ast,goto_label)) {
-                /* Start adding nodes now that we have seen the label */
-                collect = 1;
-                bb_dest->ast_array->entries[new_size++] = ast;
-            }
-        }
-    }
-    /* The entries pointer array will have nodes from the previous array and 
-     * possibly doubles, however we won't reach them as we truncate the vectors 
-     * size */
-    bb_dest->ast_array->size = new_size;
-}
+//static void cfgRemoveNodesBeforeLabel(BasicBlock *bb_dest, aoStr *goto_label) {
+//    int collect = 0;
+//    int new_size = 0;
+//    Ast *ast = bb_dest->ast_array->entries[0];
+//    /* If the first node in this block is the goto label we do not need 
+//     * to do anything */
+//    if (astIsLabelMatch(ast,goto_label)) return;
+//
+//    for (int i = 1; i < bb_dest->ast_array->size; ++i) {
+//        ast = vecGet(Ast *,bb_dest->ast_array,i);
+//        if (collect) {
+//            bb_dest->ast_array->entries[new_size++] = ast;
+//        } else {
+//            if (astIsLabelMatch(ast,goto_label)) {
+//                /* Start adding nodes now that we have seen the label */
+//                collect = 1;
+//                bb_dest->ast_array->entries[new_size++] = ast;
+//            }
+//        }
+//    }
+//    /* The entries pointer array will have nodes from the previous array and 
+//     * possibly doubles, however we won't reach them as we truncate the vectors 
+//     * size */
+//    bb_dest->ast_array->size = new_size;
+//}
 
 /* a lot of the code in this function is absolutely ridiculous, as 
  * what you can do with goto is absolutely ridiculous */
@@ -1444,6 +1447,7 @@ static IntSet *cfgCreateControlAdjacencyList(CFG *cfg, BasicBlock *bb) {
 }
 
 static IntSet *cfgCreateGotoAdjacencyList(CFG *cfg, BasicBlock *bb) {
+    (void)cfg;
     IntSet *iset = intSetNew(8);
     if (bb->flags & BB_FLAG_GOTO_LOOP) {
         intSetAdd(iset,bb->prev->block_no);
@@ -1456,6 +1460,7 @@ static IntSet *cfgCreateGotoAdjacencyList(CFG *cfg, BasicBlock *bb) {
 }
 
 static IntSet *cfgCreateBranchAdjacencyList(CFG *cfg, BasicBlock *bb) {
+    (void)cfg;
     IntSet *iset = intSetNew(8);
     intSetAdd(iset,bb->_if->block_no);
     intSetAdd(iset,bb->_else->block_no);
@@ -1465,6 +1470,7 @@ static IntSet *cfgCreateBranchAdjacencyList(CFG *cfg, BasicBlock *bb) {
 }
 
 static IntSet *cfgCreateContinueAdjacencyList(CFG *cfg, BasicBlock *bb) {
+    (void)cfg;
     IntSet *iset = intSetNew(8);
     BasicBlock *loop_head = bb->prev;
 
@@ -1487,6 +1493,7 @@ static IntSet *cfgCreateContinueAdjacencyList(CFG *cfg, BasicBlock *bb) {
 }
 
 static IntSet *cfgCreateLoopAdjacencyList(CFG *cfg, BasicBlock *bb) {
+    (void)cfg;
     IntSet *iset = intSetNew(8);
     BasicBlock *loop_head = bb->prev;
     intSetAdd(iset,loop_head->block_no);
@@ -1495,6 +1502,7 @@ static IntSet *cfgCreateLoopAdjacencyList(CFG *cfg, BasicBlock *bb) {
 }
 
 static IntSet *cfgCreateDoWhileAdjacencyList(CFG *cfg, BasicBlock *bb) {
+    (void)cfg;
     IntSet *iset = intSetNew(16);
     BasicBlock *loop_head = bb->prev;
     bbAddPrev(loop_head,bb);

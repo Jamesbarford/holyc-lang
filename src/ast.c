@@ -38,7 +38,7 @@ void astVectorRelease(PtrVec *vec);
 
 Ast *astNew(void) {
     Ast *ast; 
-    if ((ast = calloc(1,sizeof(Ast))) == NULL) {
+    if ((ast = (Ast *)calloc(1,sizeof(Ast))) == NULL) {
         loggerPanic("OOM when allocating AST\n");
     }
     return ast;
@@ -46,7 +46,7 @@ Ast *astNew(void) {
 
 AstType *astTypeNew(void) {
     AstType *type;
-    if ((type = calloc(1,sizeof(AstType))) == NULL) {
+    if ((type = (AstType *)calloc(1,sizeof(AstType))) == NULL) {
         loggerPanic("OOM when allocating AstType\n");
     }
     return type;
@@ -372,7 +372,7 @@ Ast *astSwitch(Ast *cond, PtrVec *cases, Ast *case_default,
         aoStr *case_end_label, int switch_bounds_checked)
 {
     Ast *ast = astNew();
-    Ast **jump_table_order = malloc(sizeof(Ast **) * cases->size);
+    Ast **jump_table_order = (Ast **)malloc(sizeof(Ast *) * cases->size);
 
     /* Sorting the cases in a separate array allows us to generate assembly
      * code that matches the ordering of how the code was written and 
@@ -1649,14 +1649,11 @@ void _astToString(aoStr *str, Ast *ast, int depth) {
             break;
 
         case AST_COMPOUND_STMT: {
-            List *it = ast->stms->next;
-            Ast *next;
             aoStrCatPrintf(str, "<compound_expr>\n");
-            while (it != ast->stms) {
-                next = it->value;
+            listForEach(ast->stms) {
+                Ast *next = (Ast *)it->value;
                 _astToString(str, next, depth+1);
                 astStringEndStmt(str);
-                it = it->next;
             }
             astStringEndStmt(str);
             break;
@@ -2236,7 +2233,7 @@ void astKindPrint(int kind) {
 }
 
 void astReleaseList(List *ast_list) {
-    listRelease(ast_list,(void(*))astRelease);
+    listRelease(ast_list,(void(*)(void *))astRelease);
 }
 
 void astVectorRelease(PtrVec *vec) {

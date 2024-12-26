@@ -20,8 +20,8 @@ int align(int n, int m);
 
 /* Is the lexeme both of type TK_PUNCT and does 'ch' match */
 int parseIsFunctionCall(Ast *ast);
-AstType *parseGetType(Cctrl *cc, lexeme *tok);
-int parseIsKeyword(lexeme *tok, Cctrl *cc);
+AstType *parseGetType(Cctrl *cc, Lexeme *tok);
+int parseIsKeyword(Lexeme *tok, Cctrl *cc);
 double evalFloatExpr(Ast *ast);
 double evalFloatArithmeticOrErr(Ast *ast, int *_ok);
 double evalFloatExprOrErr(Ast *ast, int *_ok);
@@ -37,8 +37,8 @@ int parseIsClassOrUnion(int kind);
 int parseIsFunction(Ast *ast);
 int astIsArithmetic(long op, int is_float);
 
-void assertTokenIsTerminator(Cctrl *cc, lexeme *tok, long terminator_flags);
-void assertTokenIsTerminatorWithMsg(Cctrl *cc, lexeme *tok,
+void assertTokenIsTerminator(Cctrl *cc, Lexeme *tok, long terminator_flags);
+void assertTokenIsTerminatorWithMsg(Cctrl *cc, Lexeme *tok,
         long terminator_flags, const char *fmt, ...);
 void assertUniqueSwitchCaseLabels(PtrVec *case_vector, Ast *case_);
 void assertIsFloatOrInt(Ast *ast, long lineno);
@@ -47,6 +47,6 @@ void assertIsFloat(Ast *ast, long lineno);
 void assertIsPointer(Ast *ast, long lineno);
 
 void typeCheckWarn(Cctrl *cc, long op, Ast *expected, Ast *actual);
-void typeCheckReturnTypeWarn(Cctrl *cc, long lineno, Ast *maybe_func, 
+void typeCheckReturnTypeWarn(Cctrl *cc, Ast *maybe_func, 
                              AstType *check, Ast *retval);
 #endif // PRS_UTIL

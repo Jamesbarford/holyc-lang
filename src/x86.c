@@ -14,6 +14,7 @@
 #include "map.h"
 #include "prsutil.h"
 #include "util.h"
+#include "version.h"
 
 #define VAR_ARG_MAX 20
 #define ASM_INORDER_ARITHMETIC 0
@@ -271,7 +272,7 @@ void asmGSave(aoStr *buf, char *name, AstType *type, int offset) {
 void asmPlaceString(aoStr *buf, aoStr *str, int offset) {
     int i = 0;
     /* Place string on the stack character by character */
-    for (; i < str->len; ++i) {
+    for (; i < (int)str->len; ++i) {
         aoStrCatPrintf(buf,"movb   $%d, %d(%%rbp)\n\t",
                 (int)str->data[i], 
                 -(offset - i));
@@ -626,17 +627,10 @@ void asmAssign(Cctrl *cc, aoStr *buf, Ast *variable) {
     if (variable->kind == AST_DEFAULT_PARAM) {
         variable = variable->declvar;
     }
-    AstType *tmp;
     switch (variable->kind) {
     case AST_CAST:
-        tmp = variable->operand->type;
         asmCast(buf,variable->operand->type,variable->type);
-        tmp = variable->operand->type;
         variable->operand->type = astTypeCopy(variable->type);
-        /**
-         * XXX: Not sure what this is doing
-         * free(tmp);
-         */
         asmAssign(cc,buf,variable->operand);
         break;
 
@@ -756,7 +750,7 @@ void asmCompare(Cctrl *cc, aoStr *buf, char *instruction, Ast *ast) {
 
 void asmBinaryOpIntArithmetic(Cctrl *cc,aoStr *buf, Ast *ast, int reverse) {
     aoStrCatPrintf(buf, "# INt arithmetic START \n\t");
-    char *op;
+    char *op = NULL;
     Ast *LHS,*RHS;
     LHS = ast->left;
     RHS = ast->right;
@@ -867,6 +861,7 @@ void asmBinaryOpFloatArithmetic(Cctrl *cc, aoStr *buf, Ast *ast, int reverse) {
 }
 
 void asmLoadConvert(aoStr *buf, AstType *to, AstType *from) {
+    (void)from;
     if (to->kind == AST_TYPE_FLOAT) {
         asmToFloat(buf,to);
     } else {
@@ -961,10 +956,10 @@ int asmShouldReverseMaths(Ast *RHS) {
 }
 
 void asmBinOpFunctionAssign(Cctrl *cc, aoStr *buf, Ast *fnptr, Ast *fn) {
-    char *normalised;
+    (void)cc;
     switch (fn->kind) {
-        case AST_FUNC:
-            normalised = asmNormaliseFunctionName(fn->fname->data);
+        case AST_FUNC: {
+            char *normalised = asmNormaliseFunctionName(fn->fname->data);
             aoStrCatPrintf(buf,
                     "leaq   %s(%%rip), %%rax\n\t"
                     "movq    %%rax, %d(%%rbp)\n\t",
@@ -972,6 +967,7 @@ void asmBinOpFunctionAssign(Cctrl *cc, aoStr *buf, Ast *fnptr, Ast *fn) {
                     fnptr->loff);
             free(normalised);
             break;
+        }
 
         case AST_FUNPTR:
             aoStrCatPrintf(buf,
@@ -981,13 +977,15 @@ void asmBinOpFunctionAssign(Cctrl *cc, aoStr *buf, Ast *fnptr, Ast *fn) {
             break;
 
         case AST_ASM_FUNCDEF:
-        case AST_ASM_FUNC_BIND:
+        case AST_ASM_FUNC_BIND: {
             aoStrCatPrintf(buf,
                     "leaq   %s(%%rip), %%rax\n\t"
                     "movq    %%rax, %d(%%rbp)\n\t",
                     fn->asmfname->data,
                     fnptr->loff);
             break;
+        }
+
         default:
             loggerPanic("Cannot assign: %s to a function pointer type\n",
                     astKindToString(fn->kind));
@@ -1170,7 +1168,7 @@ int asmPlaceArgs(Cctrl *cc, aoStr *buf, List *argv, int reverse) {
     Ast *ast;
     if (reverse) {
         for (List *it = argv->prev; it != argv; it = it->prev) {
-            ast = it->value;
+            ast = (Ast *)it->value;
             asmExpression(cc,buf,ast);
             if (astIsFloatType(ast->type)) asmPushXMM(buf,0);
             else asmPush(buf,REG_RAX);
@@ -1178,7 +1176,7 @@ int asmPlaceArgs(Cctrl *cc, aoStr *buf, List *argv, int reverse) {
         }
     } else {
         for (List *it = argv->next; it != argv; it = it->next) {
-            ast = it->value;
+            ast = (Ast *)it->value;
             asmExpression(cc,buf,ast);
             if (astIsFloatType(ast->type)) asmPushXMM(buf,0);
             else asmPush(buf,REG_RAX);
@@ -1395,7 +1393,7 @@ void asmFunCall(Cctrl *cc, aoStr *buf, Ast *ast) {
  * same way as arrays */
 void asmArrayInit(Cctrl *cc, aoStr *buf, Ast *ast, AstType *type, int offset) {
     listForEach(ast->arrayinit) {
-        Ast *tmp = it->value;
+        Ast *tmp = (Ast *)it->value;
         if (tmp->kind == AST_ARRAY_INIT) {
             asmArrayInit(cc,buf,tmp,type->ptr,offset);
             offset += type->ptr->size;
@@ -1820,7 +1818,7 @@ void asmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
 
     case AST_COMPOUND_STMT:
         listForEach(ast->stms) {
-            asmExpression(cc,buf,it->value);
+            asmExpression(cc,buf,(Ast *)it->value);
         }
         break;
 
@@ -2034,7 +2032,7 @@ void asmDataInternal(aoStr *buf, Ast *data) {
      * */
     if (data->kind == AST_ARRAY_INIT) {
         listForEach(data->arrayinit) {
-            asmDataInternal(buf,it->value);
+            asmDataInternal(buf,(Ast *)it->value);
         }
         return;
     }
@@ -2093,7 +2091,7 @@ void asmGlobalVar(StrMap *seen_globals, aoStr *buf, Ast* ast) {
 
         if (declinit->kind == AST_ARRAY_INIT) {
             listForEach(declinit->arrayinit) {
-                asmDataInternal(buf,it->value);
+                asmDataInternal(buf,(Ast *)it->value);
             }
             return;
         } else {
@@ -2176,56 +2174,33 @@ void asmStoreParamFloat(aoStr *buf, int *_freg, int *_arg, int offset) {
 }
 
 void asmGetRegisterCounts(List *params, int *ireg, int *freg) {
-    Ast *param;
     listForEach(params) {
-        param = (Ast*)it->value;
+        Ast *param = (Ast *)it->value;
         if (astIsFloatType(param->type)) (*freg)++;
         else                             (*ireg)++;
     }
 }
 
-int asmSaveRegisters(Cctrl *cc, aoStr *buf) {
-    static const int save_size = 176;
-    aoStrCatPrintf(buf,
-            "subq    $%d, %%rsp\n\t"
-            "movq    %%rdi, (%%rsp)\n\t"
-            "movq    %%rsi, 8(%%rsp)\n\t"
-            "movq    %%rdx, 16(%%rsp)\n\t"
-            "movq    %%rcx, 24(%%rsp)\n\t"
-            "movq    %%r8, 32(%%rsp)\n\t"
-            "movq    %%r9, 40(%%rsp)\n\t"
-            "movaps  %%xmm0, 48(%%rsp)\n\t"
-            "movaps  %%xmm1, 64(%%rsp)\n\t"
-            "movaps  %%xmm2, 80(%%rsp)\n\t"
-            "movaps  %%xmm3, 96(%%rsp)\n\t"
-            "movaps  %%xmm4, 112(%%rsp)\n\t"
-            "movaps  %%xmm5, 128(%%rsp)\n\t"
-            "movaps  %%xmm6, 144(%%rsp)\n\t"
-            "movaps  %%xmm7, 160(%%rsp)\n\t",
-            save_size);
-    return save_size;
-}
-
 int asmFunctionInit(Cctrl *cc, aoStr *buf, Ast *func) {
+    (void)cc;
     int offset = 0;
     int ireg = 0, freg = 0, locals = 0, arg = 2;
     Ast *ast_tmp = NULL;
-    char *fname = NULL;
 
-    fname = asmNormaliseFunctionName(func->fname->data);
+    char *fname = asmNormaliseFunctionName(func->fname->data);
 
     aoStrCatPrintf(buf, ".text"            "\n\t"
                         ".global %s\n"
                         "%s:\n\t"
                         "push   %%rbp"       "\n\t"
                         "movq   %%rsp, %%rbp" "\n\t",
-                        fname, fname);
-
+                        fname,
+                        fname);
 
     int new_offset = 0, alignment = 0;
     /* Now assign offsets */
     listForEach(func->locals) {
-        ast_tmp = it->value;
+        ast_tmp = (Ast *)it->value;
         /* Calculate how much stackspace is required for locals */
         alignment = align(ast_tmp->type->size, 8);
         locals += alignment;
@@ -2345,7 +2320,7 @@ void asmPasteAsmBlocks(aoStr *buf, Cctrl *cc) {
         func_it = asm_block->funcs->next;
 
         while (func_it != asm_block->funcs) {
-            asm_func = func_it->value;
+            asm_func = (Ast *)func_it->value;
                 aoStrCatPrintf(buf, ".global %s\n",
                          asm_func->asmfname->data);
 
@@ -2380,14 +2355,14 @@ void asmInitaliser(Cctrl *cc, aoStr *buf) {
                         fname, fname);
     /* Calculate how much stackspace is required for locals */
     listForEach(cc->initaliser_locals) {
-        Ast *ast_tmp = it->value;
+        Ast *ast_tmp = (Ast *)it->value;
         locals += align(ast_tmp->type->size, 8);
     }
 
     int new_offset = 0;
     /* Now take chunks out of the total size */
     listForEach(cc->initaliser_locals) {
-        Ast *ast_tmp = it->value;
+        Ast *ast_tmp = (Ast *)it->value;
         new_offset -= ast_tmp->type->size;
         switch (ast_tmp->kind) {
         default:
@@ -2407,7 +2382,7 @@ void asmInitaliser(Cctrl *cc, aoStr *buf) {
     stack_pointer = stack_space;
 
     listForEach(cc->initalisers) {
-        asmExpression(cc,buf,it->value);
+        asmExpression(cc,buf,(Ast *)it->value);
     }
     aoStrCatPrintf(buf, "leave\n\tret\n");
 }
@@ -2448,5 +2423,8 @@ aoStr *asmGenerate(Cctrl *cc) {
     if (!listEmpty(cc->initalisers)) {
         asmInitaliser(cc,asmbuf);
     }
+    aoStrCatFmt(asmbuf,".LFE0:\n\t"
+                       ".section    .note.GNU-stack,\"\",@progbits\n\t");
+    aoStrCatFmt(asmbuf,".ident      \"hcc: %s %s %s\"\n", OS_STR, ARCH_STR, cctrlGetVersion());
     return asmbuf;
 }

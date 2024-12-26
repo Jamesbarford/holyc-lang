@@ -269,7 +269,7 @@ void transpileInitMaps(void) {
 }
 
 TranspileCtx *transpileCtxNew(Cctrl *cc) {
-    TranspileCtx *ctx = malloc(sizeof(TranspileCtx));
+    TranspileCtx *ctx = (TranspileCtx *)malloc(sizeof(TranspileCtx));
     ctx->used_types = strMapNew(32);
     ctx->used_defines = strMapNew(32);
 
@@ -421,7 +421,7 @@ char *transpileHighlightFloat(TranspileCtx *ctx, double floatingpoint) {
 }
 
 char *transpileGetFunctionSub(char *name, int len) {
-    return strMapGet(transpile_function_substitutions, name);
+    return strMapGetLen(transpile_function_substitutions, name, len);
 }
 
 static void transpileEndStmt(aoStr *str) {
@@ -861,14 +861,11 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
         break;
 
     case AST_COMPOUND_STMT: {
-        List *it = ast->stms->next;
-        Ast *next;
-        while (it != ast->stms) {
-            next = it->value;
+        listForEach(ast->stms) {
+            Ast *next = (Ast *)it->value;
             aoStrRepeatChar(buf, ' ', *indent);
             transpileAstInternal(next,ctx, indent);
             transpileEndStmt(buf);
-            it = it->next;
         }
         break;
     }
@@ -1000,7 +997,7 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
             *indent += 4;
             listForEach(ast->case_asts) {
                 aoStrRepeatChar(buf,' ', *indent);
-                transpileAstInternal(it->value,ctx,indent);
+                transpileAstInternal((Ast *)it->value,ctx,indent);
                 transpileEndStmt(buf);
             }
             *indent -= 4;
@@ -1434,7 +1431,7 @@ void transpileDefines(Cctrl *cc, TranspileCtx *ctx) {
     StrMapIterator *it = strMapIteratorNew(cc->macro_defs);
     StrMapNode *n = NULL;
     while ((n = strMapNext(it)) != NULL) {
-        lexeme *tok = (lexeme *)n->value;
+        Lexeme *tok = (Lexeme *)n->value;
         if (!transpileCtxShouldEmitDefine(ctx, n->key, n->key_len)) {
             continue;
         }
@@ -1648,7 +1645,7 @@ aoStr *transpileAsmFunction(Cctrl *cc, Ast *asmfn, Ast *asm_stmt, TranspileCtx *
 void transpileAstList(Cctrl *cc, TranspileCtx *ctx) {
     StrMap *seen = strMapNew(32);
     listForEach(cc->ast_list) {
-        Ast *ast = it->value;
+        Ast *ast = (Ast *)it->value;
         if (ast->kind == AST_FUNC) {
             if (strMapGet(seen, ast->fname->data) != NULL) continue;
             aoStr *c_function = transpileFunction(ast, ctx);
@@ -1698,7 +1695,7 @@ aoStr *transpileToC(Cctrl *cc, HccOpts *opts) {
     aoStr *builtin_path = aoStrPrintf("%s/include/tos.HH", opts->install_dir);
     char *root = mprintf("%s/include",opts->install_dir);
 
-    lexer *l = malloc(sizeof(lexer));
+    Lexer *l = (Lexer *)malloc(sizeof(Lexer));
     l->lineno = 1;
     
     lexInit(l,NULL,(CCF_PRE_PROC));

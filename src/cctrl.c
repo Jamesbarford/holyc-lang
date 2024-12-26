@@ -11,11 +11,12 @@
 #include "aostr.h"
 #include "ast.h"
 #include "cctrl.h"
+#include "config.h"
 #include "lexer.h"
 #include "list.h"
 #include "map.h"
 #include "util.h"
-#include "config.h"
+#include "version.h"
 
 static char *x86_registers = "rax,rbx,rcx,rdx,rsi,rdi,rbp,rsp,r8,r9,r10,r11,r12,"
     "r13,r14,r15,cs,ds,es,fs,gs,ss,rip,rflags,st0,st1,st2,st3,st4,st5,st6,st7,"
@@ -62,15 +63,9 @@ static BuiltInType built_in_types[] = {
 };
 
 static void cctrlAddBuiltinMacros(Cctrl *cc) {
-    lexeme *le;
-    struct tm *ptm;
-    struct timeval tm;
-    long milliseconds,len;
-    time_t seconds;
-    char *date,*time,*time_stamp;
     long bufsize = sizeof(char)*128;
 
-    le = lexemeSentinal();
+    Lexeme *le = lexemeSentinal();
     if (IS_BSD)   strMapAdd(cc->macro_defs,"IS_BSD",le);
     if (IS_LINUX) strMapAdd(cc->macro_defs,"IS_LINUX",le);
 
@@ -90,17 +85,18 @@ static void cctrlAddBuiltinMacros(Cctrl *cc) {
         strMapAdd(cc->macro_defs,"__ARCH__",le);
     }
 
+    struct timeval tm;
     gettimeofday(&tm,NULL);
-    milliseconds = (tm.tv_sec*1000) +
+    long milliseconds = (tm.tv_sec*1000) +
         (tm.tv_usec/1000);
-    seconds = milliseconds / 1000;
-    ptm = localtime(&seconds);
+    time_t seconds = milliseconds / 1000;
+    struct tm *ptm = localtime(&seconds);
 
-    time = malloc(bufsize);
-    date = malloc(bufsize);
-    time_stamp = malloc(bufsize);
+    char *time = (char *)malloc(bufsize);
+    char *date = (char *)malloc(bufsize);
+    char *time_stamp = (char *)malloc(bufsize);
 
-    len = snprintf(time,bufsize,"%02d:%02d:%02d",
+    long len = snprintf(time,bufsize,"%02d:%02d:%02d",
             ptm->tm_hour,ptm->tm_min,ptm->tm_sec);
     time[len] = '\0';
     le = lexemeNew(time,len);
@@ -135,7 +131,7 @@ static void cctrlAddBuiltinMacros(Cctrl *cc) {
 }
 
 Cctrl *ccMacroProcessor(StrMap *macro_defs) {
-    Cctrl *cc = malloc(sizeof(Cctrl));
+    Cctrl *cc = (Cctrl *)malloc(sizeof(Cctrl));
     cc->macro_defs = macro_defs;
     cc->strs = strMapNew(32);
     cc->ast_list = NULL;
@@ -144,11 +140,7 @@ Cctrl *ccMacroProcessor(StrMap *macro_defs) {
 
 /* Instantiate a new compiler control struct */
 Cctrl *cctrlNew(void) {
-    Cctrl *cc = malloc(sizeof(Cctrl));
-    AstType *type;
-    BuiltInType *bilt;
-    aoStr **str_array;
-    int len;
+    Cctrl *cc = (Cctrl *)malloc(sizeof(Cctrl));
 
     cc->flags = 0;
     cc->global_env = strMapNew(32);
@@ -176,7 +168,8 @@ Cctrl *cctrlNew(void) {
     cc->tmp_func = NULL;
     cc->token_buffer = NULL;
 
-    str_array = aoStrSplit(x86_registers,',',&len);
+    int len;
+    aoStr **str_array = aoStrSplit(x86_registers,',',&len);
     for (int i = 0; i < len; ++i) {
         char *reg = aoStrMove(str_array[i]);
         strMapAdd(cc->x86_registers,reg,reg);
@@ -190,14 +183,14 @@ Cctrl *cctrlNew(void) {
     }
     free(str_array);
 
-    for (int i = 0; i < static_size(built_in_types); ++i) {
-        type = malloc(sizeof(AstType));
-        bilt = &built_in_types[i]; 
-        type->size = bilt->size;
-        type->issigned = bilt->issigned;
-        type->kind = bilt->kind;
+    for (int i = 0; i < (int)static_size(built_in_types); ++i) {
+        AstType *type = (AstType *)malloc(sizeof(AstType));
+        BuiltInType *built_in = &built_in_types[i]; 
+        type->size = built_in->size;
+        type->issigned = built_in->issigned;
+        type->kind = built_in->kind;
         type->ptr = NULL;
-        strMapAdd(cc->symbol_table, bilt->name, type);
+        strMapAdd(cc->symbol_table, built_in->name, type);
     }
 
     cctrlAddBuiltinMacros(cc);
@@ -210,7 +203,7 @@ Cctrl *cctrlNew(void) {
     return cc;
 }
 
-static lexeme *token_ring_buffer[CCTRL_TOKEN_BUFFER_SIZE];
+static Lexeme *token_ring_buffer[CCTRL_TOKEN_BUFFER_SIZE];
 
 TokenRingBuffer *tokenRingBufferStaticNew(void) {
     TokenRingBuffer *ring_buffer = (TokenRingBuffer *)malloc(sizeof(TokenRingBuffer));
@@ -253,7 +246,7 @@ int tokenRingBufferEmpty(TokenRingBuffer *ring_buffer) {
 
 
 /* Add a token to the ring buffer and remove the oldest element */
-void tokenRingBufferPush(TokenRingBuffer *ring_buffer, lexeme *token) {
+void tokenRingBufferPush(TokenRingBuffer *ring_buffer, Lexeme *token) {
     ring_buffer->entries[ring_buffer->head] = token;
     ring_buffer->head = tokenRingBufferGetIdx(ring_buffer->head,
                                               ring_buffer->capacity);
@@ -266,18 +259,18 @@ void tokenRingBufferPush(TokenRingBuffer *ring_buffer, lexeme *token) {
 }
 
 /* Take one token from the ring buffer */
-lexeme *tokenRingBufferPop(TokenRingBuffer *ring_buffer) {
+Lexeme *tokenRingBufferPop(TokenRingBuffer *ring_buffer) {
     if (tokenRingBufferEmpty(ring_buffer)) {
         return NULL;
     }
-    lexeme *token = ring_buffer->entries[ring_buffer->tail];
+    Lexeme *token = ring_buffer->entries[ring_buffer->tail];
     ring_buffer->tail = tokenRingBufferGetIdx(ring_buffer->tail,
                                               ring_buffer->capacity);
     ring_buffer->size--;
     return token;
 }
 
-lexeme *tokenRingBufferPeekBy(TokenRingBuffer *ring_buffer, ssize_t offset) {
+Lexeme *tokenRingBufferPeekBy(TokenRingBuffer *ring_buffer, ssize_t offset) {
     /* we are out of tokens */
     if (tokenRingBufferEmpty(ring_buffer)) {
         return NULL;
@@ -287,7 +280,7 @@ lexeme *tokenRingBufferPeekBy(TokenRingBuffer *ring_buffer, ssize_t offset) {
     return ring_buffer->entries[idx];
 }
 
-lexeme *tokenRingBufferPeek(TokenRingBuffer *ring_buffer) {
+Lexeme *tokenRingBufferPeek(TokenRingBuffer *ring_buffer) {
     /* we are out of tokens */
     if (tokenRingBufferEmpty(ring_buffer)) {
         return NULL;
@@ -300,7 +293,7 @@ int tokenRingBufferRewind(TokenRingBuffer *ring_buffer) {
     //    return 0;
     //}
 
-    lexeme *token = ring_buffer->entries[ring_buffer->tail];
+    Lexeme *token = ring_buffer->entries[ring_buffer->tail];
     size_t capacity = ring_buffer->capacity;
     ssize_t offset = 1;
     do {
@@ -314,13 +307,13 @@ int tokenRingBufferRewind(TokenRingBuffer *ring_buffer) {
 
 void cctrLoadNextTokens(Cctrl *cc, ssize_t token_count) {
     for (ssize_t i = 0; i < token_count; ++i) {
-        lexeme *token = lexToken(cc->macro_defs,cc->lexer_);
+        Lexeme *token = lexToken(cc->macro_defs,cc->lexer_);
         if (!token) break;
         tokenRingBufferPush(cc->token_buffer, token);
     }
 }
 
-void cctrlInitParse(Cctrl *cc, lexer *lexer_) {
+void cctrlInitParse(Cctrl *cc, Lexer *lexer_) {
     cc->lexer_ = lexer_;
     if (cc->token_buffer == NULL) {
         cc->token_buffer = tokenRingBufferStaticNew();
@@ -341,12 +334,12 @@ void cctrlInitMacroProcessor(Cctrl *cc) {
     cc->tmp_func = NULL;
 }
 
-lexeme *cctrlMaybeExpandToken(Cctrl *cc, lexeme *token) {
+Lexeme *cctrlMaybeExpandToken(Cctrl *cc, Lexeme *token) {
     if (token->tk_type != TK_IDENT) {
         return token;
     }
 
-    lexeme *maybe_define = strMapGetLen(cc->macro_defs, token->start, token->len);
+    Lexeme *maybe_define = strMapGetLen(cc->macro_defs, token->start, token->len);
     if (maybe_define) {
         if (cc->flags & CCTRL_PASTE_DEFINES) {
             return token;
@@ -356,15 +349,15 @@ lexeme *cctrlMaybeExpandToken(Cctrl *cc, lexeme *token) {
     return token; 
 }
 
-lexeme *cctrlTokenPeekBy(Cctrl *cc, int cnt) {
+Lexeme *cctrlTokenPeekBy(Cctrl *cc, int cnt) {
     assert(cnt > 0);
     /* The -1 is bizzare, however as an argument peeking by `1` you'd
      * expect to see the next token, which is infact `0` */
     return tokenRingBufferPeekBy(cc->token_buffer, cnt-1);
 }
 
-lexeme *cctrlTokenPeek(Cctrl *cc) {
-    lexeme *token = tokenRingBufferPeek(cc->token_buffer);
+Lexeme *cctrlTokenPeek(Cctrl *cc) {
+    Lexeme *token = tokenRingBufferPeek(cc->token_buffer);
     ssize_t offset = 0;
     while (token) {
         if (token->tk_type == TK_COMMENT) {
@@ -385,8 +378,8 @@ void cctrlTokenRewind(Cctrl *cc) {
     }
 }
 
-lexeme *cctrlTokenGet(Cctrl *cc) {
-    lexeme *token = tokenRingBufferPeek(cc->token_buffer);
+Lexeme *cctrlTokenGet(Cctrl *cc) {
+    Lexeme *token = tokenRingBufferPeek(cc->token_buffer);
     while (token) {
         tokenRingBufferPop(cc->token_buffer);
         if (token->tk_type == TK_COMMENT) {
@@ -460,7 +453,7 @@ void cctrlFileAndLine(Cctrl *cc, aoStr *buf, ssize_t lineno, ssize_t char_pos, c
     }
 
     if (cc->lexer_) {
-        lexFile *file = cc->lexer_->cur_file;
+        LexFile *file = cc->lexer_->cur_file;
         char *file_name = file->filename->data;
         if (is_terminal) {
             aoStrCatFmt(buf, " "ESC_CYAN"-->"ESC_RESET" %s:%I",
@@ -479,7 +472,7 @@ void cctrlFileAndLine(Cctrl *cc, aoStr *buf, ssize_t lineno, ssize_t char_pos, c
     aoStrRelease(severity_msg);
 }
 
-char *lexemeToColor(Cctrl *cc, lexeme *tok, int is_err) {
+char *lexemeToColor(Cctrl *cc, Lexeme *tok, int is_err) {
     int is_terminal = isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
     if (!is_terminal) {
         switch (tok->tk_type) {
@@ -521,12 +514,16 @@ char *lexemeToColor(Cctrl *cc, lexeme *tok, int is_err) {
     }
 }
 
-ssize_t cctrlGetCharErrorIdx(Cctrl *cc, lexeme *cur_tok, const char *line_buffer) {
-    ssize_t offset = 0;
-    lexeme tok;
-    lexer l;
-    ssize_t latest_offset = 0;
+ssize_t cctrlGetCharErrorIdx(Cctrl *cc, Lexeme *cur_tok,
+                             const char *line_buffer)
+{
+    (void)cc;
+    Lexeme tok;
+    Lexer l;
     lexInit(&l, (char *)line_buffer, CCF_ACCEPT_WHITESPACE);
+
+    ssize_t offset = 0;
+    ssize_t latest_offset = 0;
     int match = 0;
     /* to the beginning of the line */
     while (lex(&l,&tok)) {
@@ -544,7 +541,11 @@ ssize_t cctrlGetCharErrorIdx(Cctrl *cc, lexeme *cur_tok, const char *line_buffer
     return latest_offset;
 }
 
-ssize_t cctrlGetErrorIdx(Cctrl *cc, ssize_t line, char ch, const char *line_buffer) {
+ssize_t cctrlGetErrorIdx(Cctrl *cc, ssize_t line, char ch,
+                         const char *line_buffer)
+{
+    (void)cc;
+    (void)line;
     char *ptr = (char *)line_buffer;
     while (*ptr) {
         if (*ptr == ch) {
@@ -565,19 +566,20 @@ void cctrlCreateColoredLine(Cctrl *cc,
                             ssize_t *_tok_len,
                             const char *line_buffer)
 {
+    (void)suggestion;
     int is_terminal = isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
     if (is_terminal) {
         aoStrCat(buf, ESC_CYAN"     |\n"ESC_RESET);
     } else {
         aoStrCat(buf, "     |\n");
     }
-    lexeme *cur_tok = cctrlTokenPeek(cc);
+    Lexeme *cur_tok = cctrlTokenPeek(cc);
 
     aoStr *colored_buffer = aoStrNew();
     long offset = -1;
     long tok_len = -1;
-    lexeme tok;
-    lexer l;
+    Lexeme tok;
+    Lexer l;
     lexInit(&l, (char *)line_buffer, CCF_ACCEPT_WHITESPACE);
     ssize_t current_offset = 0;
 
@@ -634,7 +636,7 @@ aoStr *cctrlCreateErrorLine(Cctrl *cc,
     }
 
     const char *line_buffer = lexerReportLine(cc->lexer_,lineno);
-    lexeme *cur_tok = cctrlTokenPeek(cc);
+    Lexeme *cur_tok = cctrlTokenPeek(cc);
     aoStr *buf = aoStrNew();
     long char_pos = cctrlGetCharErrorIdx(cc,cur_tok, line_buffer);
 
@@ -692,7 +694,7 @@ aoStr *cctrlMessagVnsPrintF(Cctrl *cc, char *fmt, va_list ap, int severity) {
     } else {
         aoStrCatFmt(bold_msg, "%s", msg);
     }
-    lexeme *cur_tok = cctrlTokenPeek(cc);
+    Lexeme *cur_tok = cctrlTokenPeek(cc);
     aoStr *buf = cctrlCreateErrorLine(cc,cur_tok->line,bold_msg->data,severity,NULL);
     aoStrRelease(bold_msg);
     free(msg);
@@ -710,7 +712,7 @@ aoStr *cctrlMessagVnsPrintFWithSuggestion(Cctrl *cc, char *fmt, va_list ap,
     } else {
         aoStrCatFmt(bold_msg, "%s", msg);
     }
-    lexeme *cur_tok = cctrlTokenPeek(cc);
+    Lexeme *cur_tok = cctrlTokenPeek(cc);
     aoStr *buf = cctrlCreateErrorLine(cc,cur_tok->line,bold_msg->data,severity,suggestion);
     aoStrRelease(bold_msg);
     free(msg);
@@ -776,7 +778,7 @@ void cctrlIce(Cctrl *cc, char *fmt, ...) {
 /* Rewind the token buffer until there is a match */
 void cctrlRewindUntilPunctMatch(Cctrl *cc, long ch, int *_count) {
     int count = 0;
-    lexeme *peek = cctrlTokenPeek(cc);
+    Lexeme *peek = cctrlTokenPeek(cc);
     while (!tokenPunctIs(peek, ch)) {
         cctrlTokenRewind(cc);
         peek = cctrlTokenPeek(cc);
@@ -788,7 +790,7 @@ void cctrlRewindUntilPunctMatch(Cctrl *cc, long ch, int *_count) {
 
 void cctrlRewindUntilStrMatch(Cctrl *cc, char *str, int len, int *_count) {
     int count = 0;
-    lexeme *peek = cctrlTokenPeek(cc);
+    Lexeme *peek = cctrlTokenPeek(cc);
     while (!(peek->len == len && memcmp(peek->start,str,len) == 0)) {
         cctrlTokenRewind(cc);
         peek = cctrlTokenPeek(cc);
@@ -802,7 +804,7 @@ void cctrlRewindUntilStrMatch(Cctrl *cc, char *str, int len, int *_count) {
 /* assert the token we are currently pointing at is a TK_PUNCT and the 'i64'
  * matches 'expected'. Then consume this token else throw an error */
 void cctrlTokenExpect(Cctrl *cc, long expected) {
-    lexeme *tok = cctrlTokenGet(cc);
+    Lexeme *tok = cctrlTokenGet(cc);
     if (!tokenPunctIs(tok, expected)) {
         if (!tok) {
             loggerPanic("line %ld: Ran out of tokens\n",cc->lineno);
@@ -833,7 +835,7 @@ aoStr *cctrlRaiseFromTo(Cctrl *cc, int severity, char *suggestion, char from,
     char *msg = mprintVa(fmt, ap, NULL);
     aoStr *bold_msg = aoStrNew();
     aoStrCatFmt(bold_msg, ESC_BOLD"%s"ESC_CLEAR_BOLD, msg);
-    lexeme *cur_tok = cctrlTokenPeek(cc);
+    Lexeme *cur_tok = cctrlTokenPeek(cc);
 
     char *line_buffer = lexerReportLine(cc->lexer_, cur_tok->line);
     aoStr *buf = aoStrNew();
@@ -895,7 +897,7 @@ void cctrlWarningFromTo(Cctrl *cc, char *suggestion, char from, char to, char *f
 /* Get variable either from the local or global scope */
 Ast *cctrlGetVar(Cctrl *cc, char *varname, int len) {
     Ast *ast_var;
-    lexeme *tok;
+    Lexeme *tok;
 
     if (cc->localenv && (ast_var = strMapGetLen(cc->localenv, varname, len)) != NULL) {
         return ast_var;

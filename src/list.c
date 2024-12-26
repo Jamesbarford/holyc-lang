@@ -10,7 +10,7 @@ void listInit(List *ll) {
 }
 
 List *listNew(void) {
-    List *ll = malloc(sizeof(List));
+    List *ll = (List *)malloc(sizeof(List));
     ll->next = ll->prev = ll;
     ll->value = NULL;
     return ll;
@@ -174,7 +174,7 @@ typedef struct Int {
 } Int;
 
 Int *intNew(int i) {
-    Int *_in = malloc(sizeof(Int));
+    Int *_in = (Int *)malloc(sizeof(Int));
     _in->i = i;
     return _in;
 }

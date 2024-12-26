@@ -31,7 +31,7 @@ AstType *parseClassDef(Cctrl *cc, int is_intrinsic);
 AstType *parseUnionDef(Cctrl *cc);
 
 /* Kinda cheating converting it to a string and calling printf */
-Ast *parseFloatingCharConst(Cctrl *cc, lexeme *tok) {
+Ast *parseFloatingCharConst(Cctrl *cc, Lexeme *tok) {
     unsigned long ch = (unsigned long)tok->i64;
     Ast *ast;
     char str[9];
@@ -67,7 +67,7 @@ void parseTypeCheckClassFieldInitaliser(Cctrl *cc, AstType *cls_field_type, Ast 
 }
 
 Ast *parseDeclArrayInitInt(Cctrl *cc, AstType *type) {
-    lexeme *tok = cctrlTokenGet(cc);
+    Lexeme *tok = cctrlTokenGet(cc);
     List *initlist;
     Ast *init;
 
@@ -161,7 +161,7 @@ typedef struct ClsField {
     aoStr *field_name;
 } ClsField;
 ClsField *clsFieldNew(AstType *type, aoStr *field_name) {
-    ClsField *f = malloc(sizeof(ClsField));
+    ClsField *f = (ClsField *)malloc(sizeof(ClsField));
     f->type = type;
     f->field_name = field_name;
     return f;
@@ -173,7 +173,7 @@ List *parseClassOrUnionFields(Cctrl *cc, aoStr *name,
     unsigned int size;
     char *fnptr_name;
     int fnptr_name_len;
-    lexeme *tok, *tok_name;
+    Lexeme *tok, *tok_name;
     AstType *next_type = NULL, *base_type = NULL, *field_type = NULL;
     aoStr  *field_name = NULL;
     List *fields_list;
@@ -284,10 +284,10 @@ List *parseClassOrUnionFields(Cctrl *cc, aoStr *name,
 }
 
 unsigned int CalcUnionSize(List *fields) {
-    unsigned int max = 0;
+    int max = 0;
     AstType *type;
     listForEach(fields) {
-        ClsField *cls_field = it->value;
+        ClsField *cls_field = (ClsField *)it->value;
         type = cls_field->type;
         if (max < type->size) {
             max = type->size;
@@ -301,7 +301,7 @@ unsigned int CalcClassSize(List *fields) {
     unsigned int size = 0;
     AstType *type;
     listForEach(fields) {
-        ClsField *cls_field = it->value;
+        ClsField *cls_field = (ClsField *)it->value;
         type = cls_field->type;
         if (type->size < MAX_ALIGN) size = type->size;
         else                        size = MAX_ALIGN;
@@ -349,7 +349,7 @@ StrMap *parseClassOffsets(Cctrl *cc,
     if (is_intrinsic) {
         *real_size = 16;
         listForEach(fields) {
-            ClsField *cls_field = it->value;
+            ClsField *cls_field = (ClsField *)it->value;
             field = cls_field->type;
             field->offset = offset;
             offset+=field->size;
@@ -362,7 +362,7 @@ StrMap *parseClassOffsets(Cctrl *cc,
     }
 
     listForEach(fields) {
-        ClsField *cls_field = it->value;
+        ClsField *cls_field = (ClsField *)it->value;
         field = cls_field->type;
         aoStr *field_name = cls_field->field_name;
 
@@ -413,7 +413,7 @@ StrMap *parseUnionOffsets(Cctrl *cc, int *real_size, List *fields) {
 
     max_size = 0;
     listForEach(fields) {
-        ClsField *cls_field = it->value;
+        ClsField *cls_field = (ClsField *)it->value;
         field = cls_field->type;
         aoStr *field_name = cls_field->field_name;
         if (max_size < field->size) {
@@ -444,7 +444,7 @@ AstType *parseClassOrUnion(Cctrl *cc, StrMap *env,
     aoStr *tag = NULL;
     int real_size = 0;
     unsigned int class_size;
-    lexeme *tok = cctrlTokenGet(cc);
+    Lexeme *tok = cctrlTokenGet(cc);
     AstType *prev = NULL, *ref = NULL, *base_class = NULL;
     List *fields = NULL;
     StrMap *fields_dict;
@@ -527,7 +527,7 @@ AstType *parseUnionDef(Cctrl *cc) {
 Ast *parseVariableAssignment(Cctrl *cc, Ast *var, long terminator_flags) {
     Ast *init;
     int len;
-    lexeme *peek = cctrlTokenPeek(cc);
+    Lexeme *peek = cctrlTokenPeek(cc);
 
     if (var->type->kind == AST_TYPE_ARRAY) {
         init = parseDeclArrayInitInt(cc,var->type);
@@ -544,19 +544,19 @@ Ast *parseVariableAssignment(Cctrl *cc, Ast *var, long terminator_flags) {
                                      "Invalid array initializer: expected %d items but got %d",
                                       var->type->len, len);
         }
-        lexeme *tok = cctrlTokenGet(cc);
+        Lexeme *tok = cctrlTokenGet(cc);
         assertTokenIsTerminator(cc,tok,terminator_flags);
         return astDecl(var,init);
     } else if (var->type->kind == AST_TYPE_CLASS && 
                !var->type->is_intrinsic && tokenPunctIs(peek,'{')) {
         init = parseDeclArrayInitInt(cc,var->type);
-        lexeme *tok = cctrlTokenGet(cc);
+        Lexeme *tok = cctrlTokenGet(cc);
         assertTokenIsTerminator(cc,tok,terminator_flags);
         return astDecl(var,init);
     }
 
     init = parseExpr(cc,16);
-    lexeme *tok = cctrlTokenGet(cc);
+    Lexeme *tok = cctrlTokenGet(cc);
     assertTokenIsTerminator(cc,tok,terminator_flags);
     if (var->kind == AST_GVAR && var->type->kind == AST_TYPE_INT) {
         init = astI64Type(evalIntConstExpr(init));
@@ -586,7 +586,7 @@ Ast *parseVariableAssignment(Cctrl *cc, Ast *var, long terminator_flags) {
 }
 
 Ast *parseVariableInitialiser(Cctrl *cc, Ast *var, long terminator_flags) {
-    lexeme *tok = cctrlTokenGet(cc);
+    Lexeme *tok = cctrlTokenGet(cc);
     if (tokenPunctIs(tok,'=')) {
         return parseVariableAssignment(cc,var,terminator_flags);
     }
@@ -602,7 +602,7 @@ Ast *parseVariableInitialiser(Cctrl *cc, Ast *var, long terminator_flags) {
 
 Ast *parseDecl(Cctrl *cc) {
     AstType *type;
-    lexeme *varname;
+    Lexeme *varname;
     Ast *var, *ast;
 
     parseDeclInternal(cc,&varname,&type);
@@ -624,7 +624,7 @@ Ast *parseDecl(Cctrl *cc) {
     return ast;
 }
 
-int parseValidPostControlFlowToken(lexeme *tok) {
+int parseValidPostControlFlowToken(Lexeme *tok) {
     if (tok->tk_type == TK_IDENT) return 1;
     if (tok->tk_type == TK_STR) return 1;
     if (tok->tk_type == TK_PUNCT) {
@@ -659,17 +659,17 @@ Ast *parseIfStatement(Cctrl *cc) {
     Ast *cond = parseExpr(cc,16);
     cctrlTokenExpect(cc,')');
 
-    lexeme *peek = cctrlTokenPeek(cc);
+    Lexeme *peek = cctrlTokenPeek(cc);
     if (!parseValidPostControlFlowToken(peek)) {
         cctrlRaiseException(cc,"Unexpected %s `%.*s` while parsing if body", 
                 lexemeTypeToString(peek->tk_type), peek->len, peek->start);
     }
 
     Ast *then = parseStatement(cc);
-    lexeme *tok = cctrlTokenGet(cc);
+    Lexeme *tok = cctrlTokenGet(cc);
 
     if (tok && tok->tk_type == TK_KEYWORD && tok->i64 == KW_ELSE) {
-        lexeme *peek = cctrlTokenPeek(cc);
+        Lexeme *peek = cctrlTokenPeek(cc);
         if (!parseValidPostControlFlowToken(peek)) {
             cctrlTokenRewind(cc);
             cctrlTokenRewind(cc);
@@ -684,7 +684,7 @@ Ast *parseIfStatement(Cctrl *cc) {
 }
 
 Ast *parseOptDeclOrStmt(Cctrl *cc) {
-    lexeme *tok = cctrlTokenGet(cc);
+    Lexeme *tok = cctrlTokenGet(cc);
     if (tokenPunctIs(tok,';')) {
         return NULL;
     }
@@ -693,7 +693,7 @@ Ast *parseOptDeclOrStmt(Cctrl *cc) {
 }
 
 Ast *parseOptExpr(Cctrl *cc) {
-    lexeme *tok = cctrlTokenGet(cc);
+    Lexeme *tok = cctrlTokenGet(cc);
     if (tokenPunctIs(tok,';')) {
         return NULL;
     }
@@ -766,7 +766,7 @@ void parseAssertContainerHasFields(Cctrl *cc, AstType *size_field,
     }
 }
 
-Ast *parseCreateForRange(Cctrl *cc, Ast *iteratee, Ast *container,
+Ast *parseCreateForRange(Cctrl *cc, Ast *iteratee,
                          Ast *size_ref, Ast *entries_ref)
 {
     Ast *counter_var = astLVar(ast_int_type,str_lit(RANGE_LOOP_IDX));
@@ -792,7 +792,7 @@ Ast *parseCreateForRange(Cctrl *cc, Ast *iteratee, Ast *container,
     return astFor(counter,cond,step,forbody,NULL,NULL,NULL);
 }
 
-Ast *parseRangeLoop(Cctrl *cc, AstType *type, Ast *iteratee) {
+Ast *parseRangeLoop(Cctrl *cc, Ast *iteratee) {
     cctrlTokenGet(cc);
     Ast *container = parseExpr(cc,16);
 
@@ -817,7 +817,7 @@ Ast *parseRangeLoop(Cctrl *cc, AstType *type, Ast *iteratee) {
                 iteratee->type = deref_type;
             }
 
-            return parseCreateForRange(cc, iteratee, container, size_ref, entries_ref);
+            return parseCreateForRange(cc, iteratee, size_ref, entries_ref);
         } else if (container->type->kind == AST_TYPE_ARRAY) {
             return parseDesugarArrayLoop(cc,iteratee,container);
         } else {
@@ -847,7 +847,7 @@ Ast *parseRangeLoop(Cctrl *cc, AstType *type, Ast *iteratee) {
             iteratee->type = deref_type;
         }
 
-        return parseCreateForRange(cc, iteratee, container, size_ref, entries_ref);
+        return parseCreateForRange(cc, iteratee, size_ref, entries_ref);
     }
     cctrlRaiseException(cc,"Can only handle lvars, arrays and class references at this time got: %s %s",
                 astKindToString(container->kind), astToString(container));
@@ -855,7 +855,7 @@ Ast *parseRangeLoop(Cctrl *cc, AstType *type, Ast *iteratee) {
 
 /* Either parse the initialiser or a range loop. Range loop is experimental */
 Ast *parseForLoopInitialiser(Cctrl *cc) {
-    lexeme *tok = cctrlTokenGet(cc);
+    Lexeme *tok = cctrlTokenGet(cc);
     if (tokenPunctIs(tok,';')) {
         return NULL;
     }
@@ -888,7 +888,7 @@ Ast *parseForLoopInitialiser(Cctrl *cc) {
          * 1) a pointer called entries 
          * 2) a size value that must be an integer */
         if (tokenPunctIs(tok,':')) {
-            return parseRangeLoop(cc,type,init_var);
+            return parseRangeLoop(cc,init_var);
         } else if (tokenPunctIs(tok, '=')) {
             if (cc->tmp_locals) {
                 listAppend(cc->tmp_locals, init_var);
@@ -941,7 +941,7 @@ Ast *parseForStatement(Cctrl *cc) {
     }
     cctrlTokenExpect(cc,')');
 
-    lexeme *peek = cctrlTokenPeek(cc);
+    Lexeme *peek = cctrlTokenPeek(cc);
     if (!parseValidPostControlFlowToken(peek)) {
         cctrlRaiseException(cc,"Unexpected %s `%.*s` while parsing for loop body", 
                 lexemeTypeToString(peek->tk_type), peek->len, peek->start);
@@ -972,7 +972,7 @@ Ast *parseWhileStatement(Cctrl *cc) {
     whilecond = parseExpr(cc,16);
     cctrlTokenExpect(cc,')');
 
-    lexeme *peek = cctrlTokenPeek(cc);
+    Lexeme *peek = cctrlTokenPeek(cc);
     if (!parseValidPostControlFlowToken(peek)) {
         cctrlRaiseException(cc,"Unexpected %s `%.*s` while parsing while loop body", 
                 lexemeTypeToString(peek->tk_type), peek->len, peek->start);
@@ -987,7 +987,7 @@ Ast *parseWhileStatement(Cctrl *cc) {
 
 Ast *parseDoWhileStatement(Cctrl *cc) {
     Ast *whilecond, *whilebody;
-    lexeme *tok;
+    Lexeme *tok;
     aoStr *while_begin, *while_end,
           *prev_begin, *prev_end;
     
@@ -1002,7 +1002,7 @@ Ast *parseDoWhileStatement(Cctrl *cc) {
 
     cc->localenv = strMapNewWithParent(32, cc->localenv);
 
-    lexeme *peek = cctrlTokenPeek(cc);
+    Lexeme *peek = cctrlTokenPeek(cc);
     if (!parseValidPostControlFlowToken(peek)) {
         cctrlRewindUntilStrMatch(cc,peek->start,peek->len,NULL);
         cctrlRaiseException(cc,"Unexpected %s `%.*s` while parsing do while loop body", 
@@ -1049,7 +1049,6 @@ Ast *parseContinueStatement(Cctrl *cc) {
 Ast *parseReturnStatement(Cctrl *cc) {
     Ast *retval = parseExpr(cc,16);
     AstType *check;
-    long lineno = cc->lineno;
     cctrlTokenExpect(cc,';');
     /* A best attempt at trying to get the return type of a function */
     if (cc->tmp_rettype->kind == AST_TYPE_AUTO) {
@@ -1071,7 +1070,7 @@ Ast *parseReturnStatement(Cctrl *cc) {
     AstType *ok = astTypeCheck(cc->tmp_rettype,retval,'\0');
     if (!ok) {
         Ast *func = strMapGet(cc->global_env,cc->tmp_fname->data);
-        typeCheckReturnTypeWarn(cc,lineno,func,check,retval);
+        typeCheckReturnTypeWarn(cc,func,check,retval);
     }
     if (maybe_fn->flags & AST_FLAG_INLINE && !(cc->flags & CCTRL_TRANSPILING)) {
         return astDecl(maybe_fn->inline_ret,retval);
@@ -1090,12 +1089,12 @@ void parseRaiseCaseException(Cctrl *cc, Ast *case_expr) {
     free(suggestion);
 }
 
-Ast *parseCaseLabel(Cctrl *cc, lexeme *tok) {
+Ast *parseCaseLabel(Cctrl *cc, Lexeme *tok) {
     if (cc->tmp_case_list == NULL) {
         cctrlRaiseException(cc,"unexpected 'case' found");
     }
     Ast *case_, *prev, *case_expr = NULL;
-    lexeme *peek;
+    Lexeme *peek;
     aoStr *label;
     int begining,end;
     int ok = 1;
@@ -1176,12 +1175,12 @@ Ast *parseCaseLabel(Cctrl *cc, lexeme *tok) {
     return case_;
 }
 
-Ast *parseDefaultStatement(Cctrl *cc, lexeme *tok) {
+Ast *parseDefaultStatement(Cctrl *cc) {
     cctrlTokenExpect(cc,':');
     if (cc->tmp_default_case) {
         cctrlRaiseException(cc,"Duplicate default case");
     }
-    lexeme *peek;
+    Lexeme *peek;
     List *stmts = listNew();
     aoStr *default_label = astMakeLabel();
     /* set here so this is non-null for the next call to parseStatement */
@@ -1203,7 +1202,7 @@ Ast *parseDefaultStatement(Cctrl *cc, lexeme *tok) {
 
 Ast *parseSwitchStatement(Cctrl *cc) {
     Ast *cond, *tmp, *original_default_label;
-    lexeme *peek;
+    Lexeme *peek;
     PtrVec *original_cases;
     aoStr *end_label,*tmp_name,*original_break;
     int switch_bounds_checked = 1;
@@ -1265,14 +1264,14 @@ Ast *parseSwitchStatement(Cctrl *cc) {
 
 /* Concatinate the label of the goto with the name of the function 
  * currently being parsed to be able to have uniqe goto labels  */
-aoStr *createFunctionLevelGotoLabel(Cctrl *cc, lexeme *tok) {
+aoStr *createFunctionLevelGotoLabel(Cctrl *cc, Lexeme *tok) {
     aoStr *label = aoStrNew();
     aoStrCatPrintf(label,".%s_%.*s",cc->tmp_fname->data,tok->len,tok->start);
     return label;
 }
 
 Ast *parseStatement(Cctrl *cc) {
-    lexeme *tok, *peek;
+    Lexeme *tok, *peek;
     aoStr *label;
     Ast *ret, *ast;
     StrMap *env;
@@ -1287,7 +1286,7 @@ Ast *parseStatement(Cctrl *cc) {
             case KW_RETURN:   return parseReturnStatement(cc);
             case KW_SWITCH:   return parseSwitchStatement(cc);
             case KW_CASE:     return parseCaseLabel(cc,tok);
-            case KW_DEFAULT:  return parseDefaultStatement(cc,tok);
+            case KW_DEFAULT:  return parseDefaultStatement(cc);
             case KW_BREAK:    return parseBreakStatement(cc);
             case KW_CONTINUE: return parseContinueStatement(cc);
             case KW_STATIC: {
@@ -1422,7 +1421,7 @@ Ast *parseStatement(Cctrl *cc) {
 }
 
 Ast *parseDeclOrStatement(Cctrl *cc) {
-    lexeme *tok = cctrlTokenPeek(cc);
+    Lexeme *tok = cctrlTokenPeek(cc);
     if (!tok) {
         return NULL;
     }
@@ -1435,7 +1434,7 @@ Ast *parseDeclOrStatement(Cctrl *cc) {
 void parseCompoundStatementInternal(Cctrl *cc, Ast *body) {
     Ast *stmt, *var;
     AstType *base_type, *type, *next_type;
-    lexeme *tok, *varname, *peek;
+    Lexeme *tok, *varname, *peek;
     cc->localenv = strMapNewWithParent(32, cc->localenv);
     tok = NULL;
 
@@ -1526,7 +1525,7 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
     Ast *func = NULL;
     List *body = listNew();
     Ast *func_body = astCompountStatement(body);
-    AstType *fn_type;
+    AstType *fn_type = NULL;
 
     cc->localenv = strMapNewWithParent(32, cc->localenv);
     cc->tmp_locals = locals;
@@ -1600,7 +1599,7 @@ Ast *parseExternFunctionProto(Cctrl *cc, AstType *rettype, char *fname, int len)
     Ast *func;
     int has_var_args = 0;
     PtrVec *params;
-    lexeme *tok;
+    Lexeme *tok;
     cc->localenv = strMapNewWithParent(32, cc->localenv);
     cc->tmp_locals = NULL;
 
@@ -1625,7 +1624,7 @@ Ast *parseFunctionOrDef(Cctrl *cc, AstType *rettype, char *fname, int len, int i
     cc->tmp_locals = listNew();
 
     PtrVec *params = parseParams(cc,')',&has_var_args,1);
-    lexeme *tok = cctrlTokenGet(cc);
+    Lexeme *tok = cctrlTokenGet(cc);
     if (tokenPunctIs(tok, '{')) {
         return parseFunctionDef(cc,rettype,fname,len,params,has_var_args,is_inline);
     } else {
@@ -1642,7 +1641,7 @@ Ast *parseFunctionOrDef(Cctrl *cc, AstType *rettype, char *fname, int len, int i
 }
 
 Ast *parseAsmFunctionBinding(Cctrl *cc) {
-    lexeme *tok;
+    Lexeme *tok;
     aoStr *asm_fname, *c_fname;
     AstType *rettype;
     Ast *asm_func;
@@ -1695,8 +1694,8 @@ Ast *parseAsmFunctionBinding(Cctrl *cc) {
 
 Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
     Ast *variable, *asm_block, *asm_func, *extern_func, *ast;
-    AstType *type;
-    lexeme *tok, *name, *peek;
+    AstType *type = NULL;
+    Lexeme *tok, *name, *peek;
     int is_static = 0;
 
     while (1) {
@@ -1916,7 +1915,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
 
 void parseToAst(Cctrl *cc) {
     Ast *ast;
-    lexeme *tok;
+    Lexeme *tok;
     int is_global = 0;
     while ((ast = parseToplevelDef(cc,&is_global)) != NULL) {
         if (is_global) {
