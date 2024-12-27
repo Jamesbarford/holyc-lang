@@ -331,6 +331,21 @@ static void astFreeIf(Ast *ast) {
     free(ast);
 }
 
+/* Return -1 on failure */
+int astGetPointerSize(Ast *ast) {
+    int size = -1;
+    if (ast->type->ptr->ptr != NULL) {
+        if (ast->type->ptr->kind == AST_TYPE_POINTER) {
+            size = 8;
+        } else {
+            size = ast->type->ptr->size;
+        }
+    } else {
+        size = ast->type->ptr->size;
+    }
+    return size;
+}
+
 /* Sort the cases from low to high */
 static void astJumpTableSort(Ast **cases, int high, int low) {
     if (low < high) {

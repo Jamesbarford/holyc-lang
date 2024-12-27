@@ -474,36 +474,28 @@ void asmLoadDeref(aoStr *buf, AstType *result, AstType *op_type, int off) {
 
 void asmPointerArithmetic(Cctrl *cc, aoStr *buf, long op, Ast *LHS, Ast *RHS) {
     //assert(LHS->type->kind == AST_TYPE_POINTER);
-    int size;
-    char *fn;
 
     aoStrCatPrintf(buf, "# Pointer Arithmetic start: %s %s\n\t",
             astKindToString(LHS->kind), astKindToString(RHS->kind));
+
     asmExpression(cc,buf,LHS);
+
     aoStrCatPrintf(buf, "# Pointer Arithmetic MID\n\t");
+
     asmPush(buf,REG_RAX);
     asmExpression(cc,buf,RHS);
 
-    /* XXX: What is going on */
-    if (LHS->type->ptr->ptr != NULL) {
-        if (LHS->type->ptr->kind == AST_TYPE_POINTER) {
-            size = 8;
-        } else {
-            size = LHS->type->ptr->size; 
-        }
-    } else {
-        size = LHS->type->ptr->size; 
-    }
-
+    int size = astGetPointerSize(LHS);
+    char *fn = NULL;
     switch (op) {
-        case '+': fn = "addq"; break;
-        case '-': fn = "subq"; break;
-        case '>': fn = "setg"; break;
-        case '<': fn = "setl"; break;
+        case '+':            fn = "addq"; break;
+        case '-':            fn = "subq"; break;
+        case '>':            fn = "setg"; break;
+        case '<':            fn = "setl"; break;
         case TK_GREATER_EQU: fn = "setge"; break;
-        case TK_LESS_EQU: fn =  "setle"; break;
-        case TK_EQU_EQU: fn = "sete"; break;
-        case TK_NOT_EQU: fn = "setne"; break;
+        case TK_LESS_EQU:    fn = "setle"; break;
+        case TK_EQU_EQU:     fn = "sete"; break;
+        case TK_NOT_EQU:     fn = "setne"; break;
         default: loggerPanic("op: %c is not implemented for pointer arithmetic\n",(char)op);
     }
 
@@ -516,6 +508,9 @@ void asmPointerArithmetic(Cctrl *cc, aoStr *buf, long op, Ast *LHS, Ast *RHS) {
             "%-3s   %%rax, %%rcx\n\t"
             "movq   %%rcx, %%rax\n\t", fn);
     } else {
+        /* XXX: ?
+         * Could be more specific than cmp if we know we are in and if 
+         * condition and needed to do a jump? */
         asmPop(buf,REG_RCX);
         aoStrCatPrintf(buf,
                 "cmpq   %%rax, %%rcx\n\t"

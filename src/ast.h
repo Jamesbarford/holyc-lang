@@ -375,6 +375,7 @@ AstType *astConvertArray(AstType *ast_type);
 Ast *astClassRef(AstType *type, Ast *cls, char *field_name);
 AstType *astClassType(StrMap *fields, aoStr *clsname, int size, int is_intrinsic);
 Ast *astCast(Ast *var, AstType *to);
+int astGetPointerSize(Ast *ast);
 
 AstType *astGetResultType(long op, AstType *a, AstType *b);
 AstType *astTypeCheck(AstType *expected, Ast *ast, long op);

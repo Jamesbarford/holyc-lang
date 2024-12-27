@@ -4,6 +4,7 @@
 #include "cctrl.h"
 
 #define IR_FLAG_FUNC_ARG (1<<0)
+#define IR_FLAG_GLOBAL   (1<<1)
 
 typedef enum {
     /* loads */

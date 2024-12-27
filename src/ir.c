@@ -15,6 +15,8 @@
 #include "util.h"
 
 void irFromAstInternal(Ast *ast, IrCtx *ctx);
+void irLoadImmediateInt(IrCtx *ctx, long _i64, int size);
+void irLoadImmediateFloat(IrCtx *ctx, Ast *ast);
 
 IrModule *irModuleNew(void) {
     IrModule *module = (IrModule *)malloc(sizeof(IrModule));
@@ -78,20 +80,63 @@ void irInstructionAdd(IrCtx *ctx,
     ptrVecPush(ctx->ir_module->instructions, inst);
 }
 
+void irIntArithmetic(IrCtx *ctx, IrOp op, int dest, int s1, int s2, int size) {
+    irInstructionAdd(ctx,op,dest,s1,s2,size,NULL,NULL,0);
+}
+
 #define irInstructionAddNoFlags(ctx, op, dest, s1, s2, size, label, fname) \
     irInstructionAdd(ctx, op, dest, s1, s2, size, label, fname, 0)
+
+aoStr *irLoadString(IrInstruction *inst) {
+    aoStr *str = aoStrNew();
+    int is_global = inst->flags & IR_FLAG_GLOBAL;
+    char *load_str = NULL;
+
+    if (is_global) {
+        switch (inst->op) {
+            case IR_LOAD:         aoStrCatFmt(str,"GLOAD          @%i, L(%S)", inst->dest, inst->label); break;
+            case IR_LOAD_IMM:     aoStrCatFmt(str,"GLOAD_IMM      @%i, L(%S)", inst->dest, inst->label); break;
+            case IR_LOAD_IMM_F64: aoStrCatFmt(str,"GLOAD_IMM_F64  @%i, L(%S)", inst->dest, inst->label); break;
+            case IR_LOAD_IMM_STR: aoStrCatFmt(str,"GLOAD_IMM_STR  @%i, L(%S)", inst->dest, inst->label); break;
+            case IR_LOAD_FN:      aoStrCatFmt(str,"GLOAD_FN       @%i, L(%S)", inst->dest, inst->label); break;
+            case IR_LOAD_F64:     aoStrCatFmt(str,"GLOAD_F64      @%i, L(%S)", inst->dest, inst->label); break;
+            case IR_LOAD_GLOBAL:  aoStrCatFmt(str,"GLOAD_GLOBAL   @%i, L(%S)", inst->dest, inst->label); break;
+            case IR_LOAD_ARRAY:   aoStrCatFmt(str,"GLOAD_ARRAY    @%i, L(%S)", inst->dest, inst->label); break;
+            default: loggerPanic("Operation %d is not a valid load instruction\n", inst->op);
+        }
+    } else {
+        switch (inst->op) {
+            case IR_LOAD:         aoStrCatFmt(str,"LOAD           @%i, @%i", inst->dest, inst->s1); break;
+            case IR_LOAD_IMM:     aoStrCatFmt(str,"LOAD_IMM       @%i, $%i", inst->dest, inst->s1); break;
+            case IR_LOAD_IMM_F64: aoStrCatFmt(str,"LOAD_IMM_F64   @%i, $%f", inst->dest, inst->f64); break;
+            case IR_LOAD_IMM_STR: aoStrCatFmt(str,"LOAD_IMM_STR    "); break;
+            case IR_LOAD_FN:      aoStrCatFmt(str,"LOAD_FN         "); break;
+            case IR_LOAD_F64:     aoStrCatFmt(str,"LOAD_F64        "); break;
+            case IR_LOAD_GLOBAL:  aoStrCatFmt(str,"LOAD_GLOBAL     "); break;
+            case IR_LOAD_ARRAY:   aoStrCatFmt(str,"LOAD_ARRAY     @%i, @%i", inst->dest, inst->s1); break;
+            default: loggerPanic("Operation %d is not a valid load instruction\n", inst->op);
+        }
+    }
+    return str;
+}
 
 aoStr *irInstructionToString(IrInstruction *inst) {
     aoStr *str = aoStrNew();
     switch (inst->op) {
-        case IR_LOAD:            aoStrCatFmt(str,"LOAD           @%i, @%i", inst->dest, inst->s1); break;
-        case IR_LOAD_IMM:        aoStrCatFmt(str,"LOAD_IMM       @%i, $%i", inst->dest, inst->s1); break;
-        case IR_LOAD_IMM_F64:    aoStrCatFmt(str,"LOAD_IMM_F64   @%i, $%f", inst->dest, inst->f64); break;
-        case IR_LOAD_IMM_STR:    aoStrCatFmt(str,"LOAD_IMM_STR    "); break;
-        case IR_LOAD_FN:         aoStrCatFmt(str,"LOAD_FN         "); break;
-        case IR_LOAD_F64:        aoStrCatFmt(str,"LOAD_F64        "); break;
-        case IR_LOAD_GLOBAL:     aoStrCatFmt(str,"LOAD_GLOBAL     "); break;
-        case IR_LOAD_ARRAY:      aoStrCatFmt(str,"LOAD_ARRAY     @%i, @%i", inst->dest, inst->s1); break;
+        case IR_LOAD:
+        case IR_LOAD_IMM:
+        case IR_LOAD_IMM_F64:
+        case IR_LOAD_IMM_STR:
+        case IR_LOAD_FN:
+        case IR_LOAD_F64:
+        case IR_LOAD_GLOBAL:
+        case IR_LOAD_ARRAY: {
+            aoStr *load = irLoadString(inst);
+            aoStrCatFmt(str,"%S",load);
+            aoStrRelease(load);
+            break;
+        }
+
         case IR_SAVE:            aoStrCatFmt(str,"SAVE           @%i, @%i",
                                          inst->dest, inst->s1); break;
         case IR_SAVE_IMM:        aoStrCatFmt(str,"SAVE_IMM        "); break;
@@ -259,33 +304,81 @@ void irArrayInit(IrCtx *ctx, Ast *ast, AstType *type) {
     }
 }
 
-void irBinaryOp(IrCtx *ctx, int kind, Ast *ast) {
-    if (ast->left && ast->left->kind == AST_DEREF) {
-        if (ast->left) {
-            irFromAstInternal(ast->left,ctx);
+void irPointerArithmetic(IrCtx *ctx, long op, Ast *LHS, Ast *RHS) {
+    int size = astGetPointerSize(LHS);
+
+    irFromAstInternal(LHS,ctx);
+    irCtxNextRegId(ctx);
+    irFromAstInternal(RHS,ctx);
+    int save_reg = LHS->tmp_reg;
+
+    IrOp ir_op = -1;
+    switch (op) {
+        case '+':            ir_op = IR_ADD; break;
+        case '-':            ir_op = IR_SUB; break;
+        case '>':            ir_op = IR_GT; break;
+        case '<':            ir_op = IR_LT; break;
+        case TK_GREATER_EQU: ir_op = IR_GTE; break;
+        case TK_LESS_EQU:    ir_op = IR_LTE; break;
+        case TK_EQU_EQU:     ir_op = IR_EQ; break;
+        case TK_NOT_EQU:     ir_op = IR_NOT_EQ; break;
+        default: loggerPanic("Invalid pointer operation: '%s'\n",
+                             lexemePunctToStringWithFlags(op,0));
+    }
+
+    if (op == '+' || op == '-') {
+        if (size > 1) {
+            /* The max size is 8 so loading */
+            irCtxNextRegId(ctx);
+            irLoadImmediateInt(ctx,size,8);
+
+            int reg = ctx->next_temp_reg;
+            /* Now we add the offset to the pointer */
+            irIntArithmetic(ctx,IR_MUL,reg,reg,RHS->tmp_reg,8);
+            irIntArithmetic(ctx,ir_op,reg,save_reg,reg,8);
         } else {
-            irFromAstInternal(ast,ctx);
+            /* Otherwise this is some sort of comparison */
+            irCtxNextRegId(ctx);
+            irInstructionAdd(ctx,ir_op,ctx->next_temp_reg,
+                    LHS->tmp_reg,RHS->tmp_reg,size,NULL,NULL,0);
         }
-
-        if (ast->right) {
-            irFromAstInternal(ast->right,ctx);
-        }
-    } else if (!ast->right) { // unary
-        irFromAstInternal(ast->left,ctx);
     } else {
+        // do not know
+    }
+}
+
+void irBinaryOp(IrCtx *ctx, int kind, Ast *ast) {
+    Ast *RHS = ast->right;
+    Ast *LHS = ast->left;
+    if (ast->type->kind == AST_TYPE_POINTER) {
+        irPointerArithmetic(ctx,kind,LHS,RHS);
+        return;
+    }
+
+   // if (ast->left && ast->left->kind == AST_DEREF) {
+   //     if (ast->left) {
+   //     } else {
+   //         irFromAstInternal(ast,ctx);
+   //     }
+
+   //     if (ast->right) {
+   //         irFromAstInternal(ast->right,ctx);
+   //     }
+   // } else if (!ast->right) { // unary
+   //     irFromAstInternal(ast->left,ctx);
+   // } else {
         /* eval left */
-        if (ast->left->tmp_reg == -1) {
-            ast->left->tmp_reg = ctx->next_temp_reg;
+        if (LHS->tmp_reg == -1) {
+            LHS->tmp_reg = ctx->next_temp_reg;
         }
-        int save_reg = ast->left->tmp_reg;
+        int save_reg = LHS->tmp_reg;
 
-
-        irFromAstInternal(ast->left,ctx);
+        irFromAstInternal(LHS,ctx);
         /* eval right */
-        if (ast->right->tmp_reg == -1) {
-            ast->right->tmp_reg = ctx->next_temp_reg;
+        if (RHS->tmp_reg == -1) {
+            RHS->tmp_reg = ctx->next_temp_reg;
         }
-        irFromAstInternal(ast->right,ctx);
+        irFromAstInternal(RHS,ctx);
         /* Well we've lost track of the variables, in assembly land we'd stash 
          * them in RAX and RCX */
         IrOp op = irOpFromKind(kind);
@@ -295,19 +388,26 @@ void irBinaryOp(IrCtx *ctx, int kind, Ast *ast) {
 
         irInstructionAddNoFlags(ctx, op,
                 dest_reg,
-                ast->left->tmp_reg,
-                ast->right->tmp_reg,
+                LHS->tmp_reg,
+                RHS->tmp_reg,
                 ast->type->size,
                 NULL,NULL);
         irInstructionAddNoFlags(ctx, IR_SAVE,
                 save_reg,
-                //ctx->next_temp_reg,
                 dest_reg,
                 0,
                 ast->type->size,
                 NULL,NULL);
-       //ast->left->tmp_reg = ctx->next_temp_reg;
-    }
+   // }
+}
+
+void irLoadImmediateInt(IrCtx *ctx, long _i64, int size) {
+    irInstructionAdd(ctx,IR_LOAD_IMM,ctx->next_temp_reg,
+                     _i64,0,size,NULL,NULL,ctx->flags);
+}
+
+void irLoadImmediateFloat(IrCtx *ctx, Ast *ast) {
+    irInstructionFloat(ctx,IR_LOAD_IMM_F64, ctx->next_temp_reg,ast->f64,ctx->flags);
 }
 
 void irFromAstInternal(Ast *ast, IrCtx *ctx) {
@@ -321,21 +421,21 @@ void irFromAstInternal(Ast *ast, IrCtx *ctx) {
 
     switch(ast->kind) {
     case AST_LITERAL: {
-        irCtxNextRegId(ctx);
         ast->tmp_reg = ctx->next_temp_reg;
+      //  irCtxNextRegId(ctx);
         switch (ast->type->kind) {
         case AST_TYPE_VOID: break;
         case AST_TYPE_INT: {
-            irInstructionAdd(ctx, IR_LOAD_IMM, ctx->next_temp_reg,ast->i64,0,ast->type->size,NULL,NULL,ctx->flags);
+            irLoadImmediateInt(ctx,ast->i64,ast->type->size);
             break;
         }
         case AST_TYPE_CHAR:  {
-            irInstructionAdd(ctx, IR_LOAD_IMM, ctx->next_temp_reg,ast->i64,0,ast->type->size,NULL,NULL,ctx->flags);
+            irLoadImmediateInt(ctx,ast->i64,ast->type->size);
             break;
         }
-        
+
         case AST_TYPE_FLOAT: {
-            irInstructionFloat(ctx,IR_LOAD_IMM_F64, ctx->next_temp_reg,ast->f64,ctx->flags);
+            irLoadImmediateFloat(ctx,ast);
             break;
         }
         default:
@@ -364,6 +464,15 @@ void irFromAstInternal(Ast *ast, IrCtx *ctx) {
         break;
     }    
 
+    case AST_GVAR: {
+        int reg_id = irCtxNextRegId(ctx);
+        ast->tmp_reg = reg_id;
+        IrOp load_op = irGetLVarLoad(ast->type);
+        astPrint(ast);
+        irInstructionAdd(ctx,load_op,reg_id,0,0,
+                         ast->type->size,ast->gname,NULL,IR_FLAG_GLOBAL);
+        break;
+    }
     case AST_DECL: {
         char *name = NULL;
         IrOp save_op = -1;
@@ -390,9 +499,6 @@ void irFromAstInternal(Ast *ast, IrCtx *ctx) {
         }
         break;
     }
-
-    case AST_GVAR:
-        break;
     
     case AST_ASM_FUNCALL: {
         Ast *asm_stmt = strMapGet(ctx->cc->asm_functions, ast->fname->data);
@@ -584,14 +690,19 @@ void irFromAstInternal(Ast *ast, IrCtx *ctx) {
             //irFromAstInternal(ast->operand,ctx);
     
             /* the offset into the array */
+            //irFromAstInternal(ast->operand,ctx);
+            //AstType *op_type = ast->operand->type;
+            //AstType *result = ast->type;
+            //int var_id = ast->tmp_reg;
+            //printf("%s\n",astKindToString(ast->operand->left->type->kind));
+            //int reg_id = irCtxNextRegId(ctx);
+            //IrOp load_op = irGetLVarLoad(result);
+            //irInstructionAddNoFlags(ctx,load_op,reg_id,var_id,0,result->size,NULL,NULL);
+            loggerDebug("here!\n");
             irFromAstInternal(ast->operand,ctx);
-            AstType *op_type = ast->operand->type;
-            AstType *result = ast->type;
-            int var_id = ast->tmp_reg;
-            printf("%s\n",astKindToString(ast->operand->left->type->kind));
-            int reg_id = irCtxNextRegId(ctx);
-            IrOp load_op = irGetLVarLoad(result);
-            irInstructionAddNoFlags(ctx,load_op,reg_id,var_id,0,result->size,NULL,NULL);
+            //irBinaryOp(ctx,ast->operand->kind,ast->operand);
+            //astPrint(ast->operand);
+         
 
            // if (result->kind == AST_ADDR) {
            //     irInstructionAdd();
@@ -606,8 +717,8 @@ void irFromAstInternal(Ast *ast, IrCtx *ctx) {
 
         
             
-            astTypePrint(op_type);
-            astTypePrint(result);
+           // astTypePrint(op_type);
+           // astTypePrint(result);
             
 
 
