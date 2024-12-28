@@ -9,7 +9,7 @@
 
 Ast *parseLambdaInnerFunctionArguments(Cctrl *cc, Ast *lambda, Ast *func_call);
 Ast *parseLambdaCreateCall(Cctrl *cc, Ast *ast_lambda, PtrVec *argv);
-Ast *parseLambda(Cctrl *cc, AstType *decl_type, lexeme *identifier);
-Ast *parseLambdaNoCapture(Cctrl *cc, AstType *decl_type, lexeme *identifier);
+Ast *parseLambda(Cctrl *cc, AstType *decl_type, Lexeme *identifier);
+Ast *parseLambdaNoCapture(Cctrl *cc, AstType *decl_type, Lexeme *identifier);
 
 #endif

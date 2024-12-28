@@ -211,11 +211,11 @@ int tokenPunctIs(Lexeme *tok, long ch) {
     return tok && (tok->tk_type == TK_PUNCT || tok->tk_type == TK_EOF) && tok->i64 == ch;
 }
 
-int tokenIsIdent(lexeme *tok) {
+int tokenIsIdent(Lexeme *tok) {
     return tok && tok->tk_type == TK_IDENT;
 }
 
-int tokenIsKeyword(lexeme *tok) {
+int tokenIsKeyword(Lexeme *tok) {
     return tok && tok->tk_type == TK_KEYWORD;
 }
 

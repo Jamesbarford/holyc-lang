@@ -15,9 +15,9 @@
 
 /* A function call in a lambda needs to be handled slightly differently
  * as the arguments are references and need to be dereferenced */
-Ast *
-parseLambdaInnerFunctionArguments(Cctrl *cc, Ast *ast_lambda,
-                                      Ast *func_call)
+Ast *parseLambdaInnerFunctionArguments(Cctrl *cc,
+                                       Ast *ast_lambda,
+                                       Ast *func_call)
 {
     /* this is what the programmer has declared */
     PtrVec *real_argv = parseArgv(cc, func_call, ')', func_call->fname->data,
@@ -54,12 +54,10 @@ parseLambdaInnerFunctionArguments(Cctrl *cc, Ast *ast_lambda,
                                  dereferenced_argv);
 }
 
-Ast *
-parseLambdaCreateCall(Cctrl *cc, Ast *ast_lambda, PtrVec *argv)
-{
+Ast *parseLambdaCreateCall(Cctrl *cc, Ast *ast_lambda, PtrVec *argv) {
     aoStr *scoped_function = cc->tmp_fname;
     int is_recursive_call = aoStrCmp(ast_lambda->lambdafname,
-                                       scoped_function);
+                                     scoped_function);
 
     /* Add variables from the capture croup */
     if (ast_lambda->capture->size) {
@@ -107,9 +105,9 @@ parseLambdaCreateCall(Cctrl *cc, Ast *ast_lambda, PtrVec *argv)
  * '[' '&' 'variable_name' ',' ... ']'
  */
 static int
-parse_lambda_capture_group(Cctrl *cc, lexeme **toks)
+parse_lambda_capture_group(Cctrl *cc, Lexeme **toks)
 {
-    lexeme *tok = cctrlTokenGet(cc);
+    Lexeme *tok = cctrlTokenGet(cc);
     /* Empty capture group */
     if (tokenPunctIs(tok, ']')) {
         return 0;
@@ -118,21 +116,22 @@ parse_lambda_capture_group(Cctrl *cc, lexeme **toks)
     int token_count = 0;
     while (1) {
         if (!tokenPunctIs(tok, '&')) {
-            loggerPanic(
-                    "line %ld: Expected '&' got '%s' when parsing lambda definition"
+            char *fix = mprintf("Use `&%.*s` to create a reference", tok->len, tok->start);
+            cctrlRaiseExceptionFromTo(cc,fix, '[', ']',
+                    "Expected '&' got '%.*s' when parsing lambda definition"
                     " can only pass by pointer\n",
-                    cc->lineno, lexemeToString(tok));
+                    tok->len,
+                    tok->start);
+            free(fix);
         }
 
         tok = cctrlTokenGet(cc);
         if (!tokenIsIdent(tok)) {
-            loggerPanic("line %d: Expected identifier got %s\n", tok->line,
-                         lexemeToString(tok));
+            cctrlRaiseException(cc,"Expected identifier got %s\n",lexemeToString(tok));
         }
         if (token_count + 1 == LAMBDA_MAX_CAPTURE) {
-            loggerPanic(
-                    "line %d: Max number of lambda capture variables is %d\n",
-                    tok->line, LAMBDA_MAX_CAPTURE);
+            cctrlRaiseException(cc,"Max number of lambda capture variables is %d\n",
+                    LAMBDA_MAX_CAPTURE);
         }
         toks[token_count++] = tok;
 
@@ -143,8 +142,8 @@ parse_lambda_capture_group(Cctrl *cc, lexeme **toks)
             tok = cctrlTokenGet(cc);
             continue;
         } else {
-            loggerPanic("line %d: Expected ']' or ',' got '%s'\n", tok->line,
-                         lexemeToString(tok));
+            cctrlRaiseException(cc, "Expected ']' or ',' got '%s'\n",
+                                lexemeToString(tok));
         }
     }
 
@@ -162,15 +161,12 @@ parse_lambda_capture_group(Cctrl *cc, lexeme **toks)
  *    '<Ast>'
  * '}' ';'
  */
-Ast *
-parseLambda(Cctrl *cc, AstType *decl_type, lexeme *identifier)
-{
+Ast *parseLambda(Cctrl *cc, AstType *decl_type, Lexeme *identifier) {
     if (decl_type->kind != AST_TYPE_AUTO) {
-        loggerPanic("line %ld: lambdas can only be declared with auto\n",
-                     cc->lineno);
+        cctrlRaiseException(cc,"lambdas can only be declared with auto\n");
     }
 
-    lexeme *tok = cctrlTokenGet(cc);
+    Lexeme *tok = cctrlTokenGet(cc);
     if (!tokenPunctIs(tok, '[')) {
         cctrlRaiseException(cc,"Expected '[' got %s\n", lexemeToString(tok));
     }
@@ -188,10 +184,7 @@ parseLambda(Cctrl *cc, AstType *decl_type, lexeme *identifier)
     /* We have declared a scoped lambda function */
     if (scope_fname != NULL) {
         lambda_global_name = aoStrNew();
-        aoStrCatLen(lambda_global_name, scope_fname->data, scope_fname->len);
-        aoStrPutChar(lambda_global_name, '_');
-        aoStrPutChar(lambda_global_name, '_');
-        aoStrCatLen(lambda_global_name, lambda_name->data, lambda_name->len);
+        aoStrCatFmt(lambda_global_name, "%S__%S",scope_fname, lambda_name);
     } else {
         lambda_global_name = lambda_name;
     }
@@ -203,7 +196,7 @@ parseLambda(Cctrl *cc, AstType *decl_type, lexeme *identifier)
     cc->localenv = strMapNewWithParent(32, cc->global_env);
     cc->tmp_locals = lambda_locals;
 
-    lexeme *tokens[LAMBDA_MAX_CAPTURE];
+    Lexeme *tokens[LAMBDA_MAX_CAPTURE];
     int token_count = parse_lambda_capture_group(cc, tokens);
     StrMap *lambda_capture_map = strMapNew(LAMBDA_MAX_CAPTURE);
 
@@ -218,9 +211,10 @@ parseLambda(Cctrl *cc, AstType *decl_type, lexeme *identifier)
 
     for (int i = 0; i < token_count; ++i) {
         /* Look up the variables from the parent */
-        lexeme *capture = tokens[i];
-        Ast *capture_var = strMapGetLen(scope_env, capture->start,
-                                          capture->len);
+        Lexeme *capture = tokens[i];
+        Ast *capture_var = strMapGetLen(scope_env,
+                                        capture->start,
+                                        capture->len);
         Ast *ref = NULL;
         /* This can happen if we are inside another lambda who's capture
          * group has the same variable as a reference */
@@ -278,86 +272,8 @@ parseLambda(Cctrl *cc, AstType *decl_type, lexeme *identifier)
 
     /* instantiate the lambda without a body, as we want to store it in the
      * symbol table so it can be used for recursion */
-    Ast *ast_lambda = astMakeLambda(rettype, lambda_global_name, lambda_name,
-                                      lambda_params,
-                                      /*lambda_body=*/NULL, lambda_locals,
-                                      lambda_capture_map, has_var_args);
-
-    if (scope_env) {
-        if (!strMapAddOrErr(scope_env, ast_lambda->fname->data, ast_lambda)) {
-            cctrlRaiseException(cc,"Lambda %s already declared",
-                astLValueToString(ast_lambda, 0));
-        }
-    }
-
-    /* Allow for recursion */
-    if (cc->localenv) {
-        if (!strMapAddOrErr(cc->localenv, ast_lambda->fname->data,
-                             ast_lambda)) {
-            cctrlRaiseException(cc,"Lambda %s already declared",
-                         astLValueToString(ast_lambda, 0));
-        }
-    }
-    if (!strMapAddOrErr(cc->global_env, ast_lambda->lambdafname->data,
-                         ast_lambda)) {
-        cctrlRaiseException(cc, "Lambda %s already declared",
-                     astLValueToString(ast_lambda, 0));
-    }
-
-    ast_lambda->body = parseCompoundStatement(cc);//, PRS_STMT_BAN_GOTO);
-    /* Correct the return type */
-    if (cc->tmp_rettype != return_type) {
-        ast_lambda->type = astMakeFunctionType(cc->tmp_rettype, lambda_params);
-    } else if (return_type->kind == AST_TYPE_AUTO) {
-        ast_lambda->type = cctrlGetKeyWord(cc,str_lit("U0"));
-    }
-
-    cctrlTokenExpect(cc, ';');
-
-    /* Rest back to the enclosing functions scope */
-    cc->tmp_locals = scope_locals;
-    cc->localenv = scope_env;
-    cc->tmp_rettype = scope_rettype;
-    cc->tmp_fname = scope_fname;
-    return ast_lambda;
-}
-
-/* we join at ( */
-Ast *parseLambdaNoCapture(Cctrl *cc, AstType *type, lexeme *identifier) {
-    int has_var_args = 0;
-    StrMap *scope_env = cc->localenv;
-    List *scope_locals = cc->tmp_locals;
-    AstType *scope_rettype = cc->tmp_rettype;
-    aoStr *scope_fname = cc->tmp_fname;
-    aoStr *lambda_name = aoStrNew();
-    aoStr *lambda_global_name = NULL;
-    List *lambda_locals = listNew();
-
-    cc->localenv = strMapNewWithParent(32, cc->global_env);
-    cc->tmp_locals = lambda_locals;
-    
-    PtrVec *lambda_params = parseParams(cc, ')', &has_var_args, 1);
-    AstType *lambda_rettype = astMakeFunctionType(type, lambda_params);
-
-
-
-    aoStrCatLen(lambda_name, identifier->start, identifier->len);
-
-    /* We have declared a scoped lambda function */
-    if (scope_fname != NULL) {
-        lambda_global_name = aoStrNew();
-        aoStrCatLen(lambda_global_name, scope_fname->data, scope_fname->len);
-        aoStrPutChar(lambda_global_name, '_');
-        aoStrPutChar(lambda_global_name, '_');
-        aoStrCatLen(lambda_global_name, lambda_name->data, lambda_name->len);
-    } else {
-        lambda_global_name = lambda_name;
-    }
-
-
-    StrMap *lambda_capture_map = strMapNew(4);
-
-    Ast *ast_lambda = astMakeLambda(lambda_rettype, lambda_global_name,
+    Ast *ast_lambda = astMakeLambda(rettype,
+                                    lambda_global_name,
                                     lambda_name,
                                     lambda_params,
                                     /*lambda_body=*/NULL,
@@ -382,16 +298,108 @@ Ast *parseLambdaNoCapture(Cctrl *cc, AstType *type, lexeme *identifier) {
     }
     if (!strMapAddOrErr(cc->global_env, ast_lambda->lambdafname->data,
                          ast_lambda)) {
+        cctrlRaiseException(cc, "Lambda %s already declared",
+                     astLValueToString(ast_lambda, 0));
+    }
+
+    Ast *prev_func = cc->tmp_func;
+    cc->tmp_func = ast_lambda;
+
+    ast_lambda->body = parseCompoundStatement(cc);//, PRS_STMT_BAN_GOTO);
+    cc->tmp_func = prev_func;
+    /* Correct the return type */
+    if (cc->tmp_rettype != return_type) {
+        astTypePrint(cc->tmp_rettype);
+        ast_lambda->type = astMakeFunctionType(cc->tmp_rettype, lambda_params);
+    } else if (return_type->kind == AST_TYPE_AUTO) {
+        ast_lambda->type = cctrlGetKeyWord(cc,str_lit("U0"));
+    }
+
+    cctrlTokenExpect(cc, ';');
+
+    /* Rest back to the enclosing functions scope */
+    cc->tmp_locals = scope_locals;
+    cc->localenv = scope_env;
+    cc->tmp_rettype = scope_rettype;
+    cc->tmp_fname = scope_fname;
+    return ast_lambda;
+}
+
+/* we join at ( */
+Ast *parseLambdaNoCapture(Cctrl *cc, AstType *type, Lexeme *identifier) {
+    int has_var_args = 0;
+    StrMap *scope_env = cc->localenv;
+    List *scope_locals = cc->tmp_locals;
+    AstType *scope_rettype = cc->tmp_rettype;
+    aoStr *scope_fname = cc->tmp_fname;
+    aoStr *lambda_name = aoStrNew();
+    aoStr *lambda_global_name = NULL;
+    List *lambda_locals = listNew();
+
+    cc->localenv = strMapNewWithParent(32, cc->global_env);
+    cc->tmp_locals = lambda_locals;
+    
+    PtrVec *lambda_params = parseParams(cc, ')', &has_var_args, 1);
+    AstType *lambda_rettype = astMakeFunctionType(type, lambda_params);
+
+
+
+    aoStrCatLen(lambda_name, identifier->start, identifier->len);
+
+    /* We have declared a scoped lambda function */
+    if (scope_fname != NULL) {
+        lambda_global_name = aoStrNew();
+        aoStrCatLen(lambda_global_name, scope_fname->data, scope_fname->len);
+        aoStrCatFmt(lambda_global_name, "%S__%S",scope_fname, lambda_name);
+    } else {
+        lambda_global_name = lambda_name;
+    }
+
+
+    StrMap *lambda_capture_map = strMapNew(4);
+
+    Ast *ast_lambda = astMakeLambda(lambda_rettype,
+                                    lambda_global_name,
+                                    lambda_name,
+                                    lambda_params,
+                                    /*lambda_body=*/NULL,
+                                    lambda_locals,
+                                    lambda_capture_map,
+                                    has_var_args);
+
+
+    if (scope_env) {
+        if (!strMapAddOrErr(scope_env, ast_lambda->fname->data, ast_lambda)) {
+            cctrlRaiseException(cc,"Lambda %s already declared",
+                astLValueToString(ast_lambda, 0));
+        }
+    }
+
+    /* Allow for recursion */
+    if (cc->localenv) {
+        if (!strMapAddOrErr(cc->localenv, ast_lambda->fname->data,
+                             ast_lambda)) {
+            cctrlRaiseException(cc,"Lambda %s already declared",
+                         astLValueToString(ast_lambda, 0));
+        }
+    }
+    if (!strMapAddOrErr(cc->global_env, ast_lambda->lambdafname->data,
+                         ast_lambda)) {
         cctrlRaiseException(cc, "Lambda %s already declared\n",
                      astLValueToString(ast_lambda, 0));
     }
 
 
-    lexeme *tok = cctrlTokenGet(cc);
+    Ast *prev_func = cc->tmp_func;
+    cc->tmp_func = ast_lambda;
+
+    Lexeme *tok = cctrlTokenGet(cc);
     cc->tmp_fname = ast_lambda->fname;
     Ast *body = parseCompoundStatement(cc);
     ast_lambda->body = body;
-    lambda_rettype->rettype = cc->tmp_rettype;
+    //lambda_rettype->rettype = cc->tmp_rettype;
+
+    cc->tmp_func = prev_func;
 
     /* Rest back to the enclosing functions scope */
     cc->tmp_locals = scope_locals;

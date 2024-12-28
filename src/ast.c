@@ -760,7 +760,6 @@ static void astFreeCast(Ast *ast) {
     free(ast);
 }
 
-<<<<<<< HEAD
 Ast *astComment(char *comment, int len) {
     Ast *ast = astNew();
     ast->type = NULL;
@@ -770,11 +769,9 @@ Ast *astComment(char *comment, int len) {
     return ast;
 }
 
-=======
-Ast *
-astMakeLambda(AstType *lambda_rettype, aoStr *lambda_global_name,
-                aoStr *lambda_name, PtrVec *params, Ast *body, List *locals,
-                StrMap *lambda_capture_map, int has_var_args)
+Ast *astMakeLambda(AstType *lambda_rettype, aoStr *lambda_global_name,
+                   aoStr *lambda_name, PtrVec *params, Ast *body, List *locals,
+                   StrMap *lambda_capture_map, int has_var_args)
 {
     Ast *ast = astNew();
     ast->type = lambda_rettype;
@@ -1220,6 +1217,10 @@ static aoStr *astTypeToAoStrInternal(AstType *type) {
         aoStrCatPrintf(str,str_lit("auto"));
         return str;
 
+    case AST_TYPE_INLINE:
+        aoStrCatFmt(str,"inline");
+        return str;
+            
     default:
         loggerPanic("Unknown type: %d\n", type->kind);
     }

@@ -977,7 +977,7 @@ void asmBinOpFunctionAssign(Cctrl *cc, aoStr *buf, Ast *fnptr, Ast *fn) {
             break;
         
         case AST_LAMBDA: {
-            normalised = asmNormaliseFunctionName(fn->asmfname->data);
+            char *normalised = asmNormaliseFunctionName(fn->asmfname->data);
             aoStrCatPrintf(buf,
                               "leaq   %s(%%rip), %%rax\n\t"
                               "movq    %%rax, %d(%%rbp)\n\t",
@@ -2191,38 +2191,8 @@ void asmGetRegisterCounts(List *params, int *ireg, int *freg) {
     }
 }
 
-<<<<<<< HEAD
-int asmFunctionInit(Cctrl *cc, aoStr *buf, Ast *func) {
-    (void)cc;
-    int offset = 0;
-    int ireg = 0, freg = 0, locals = 0, arg = 2;
-    Ast *ast_tmp = NULL;
-
-    char *fname = asmNormaliseFunctionName(func->fname->data);
-=======
-int asmSaveRegisters(Cctrl *cc, aoStr *buf) {
-    static const int save_size = 176;
-    aoStrCatPrintf(buf,
-            "subq    $%d, %%rsp\n\t"
-            "movq    %%rdi, (%%rsp)\n\t"
-            "movq    %%rsi, 8(%%rsp)\n\t"
-            "movq    %%rdx, 16(%%rsp)\n\t"
-            "movq    %%rcx, 24(%%rsp)\n\t"
-            "movq    %%r8, 32(%%rsp)\n\t"
-            "movq    %%r9, 40(%%rsp)\n\t"
-            "movaps  %%xmm0, 48(%%rsp)\n\t"
-            "movaps  %%xmm1, 64(%%rsp)\n\t"
-            "movaps  %%xmm2, 80(%%rsp)\n\t"
-            "movaps  %%xmm3, 96(%%rsp)\n\t"
-            "movaps  %%xmm4, 112(%%rsp)\n\t"
-            "movaps  %%xmm5, 128(%%rsp)\n\t"
-            "movaps  %%xmm6, 144(%%rsp)\n\t"
-            "movaps  %%xmm7, 160(%%rsp)\n\t",
-            save_size);
-    return save_size;
-}
-
 int asmFunctionInit(Cctrl *cc, aoStr *buf, Ast *func, char *fname) {
+    (void)cc;
     int offset = 0;
     int ireg = 0, freg = 0, locals = 0, arg = 2;
     Ast *ast_tmp = NULL;

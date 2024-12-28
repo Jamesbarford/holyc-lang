@@ -438,6 +438,7 @@ Ast *findFunctionDecl(Cctrl *cc, char *fname, int len) {
 Ast *parseFunctionPrepArgv(Cctrl *cc, Ast *function_declaration, AstType *rettype,
                          char *fname, int len, PtrVec *argv)
 {
+    printf("fname=%.*s\n",len,fname);
     switch (function_declaration->kind) {
     case AST_LVAR:
     case AST_FUNPTR:
@@ -510,7 +511,7 @@ PtrVec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
                                                     ')',
                                                     &has_var_args,
                                                     1);
-                lexeme *tok = cctrlTokenGet(cc);
+                Lexeme *tok = cctrlTokenGet(cc);
                 /* XXX: Need to add this to the ast list AND add it to the global_env
                  * maybe we need something separate for function definitions? 
                  * Then in x86 can loop over it at the end without having to do
@@ -644,69 +645,39 @@ Ast *parseInlineFunctionCall(Cctrl *cc, Ast *fn, PtrVec *argv) {
 /* Read function arguments for a function being called */
 Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
     AstType *rettype = NULL;
-<<<<<<< HEAD
     Ast *maybe_fn = findFunctionDecl(cc,fname,len);
-    PtrVec *argv = parseArgv(cc,maybe_fn,terminator,fname,len);
 
     if (maybe_fn) {
         rettype = maybe_fn->type->rettype;
         if (maybe_fn->flags & AST_FLAG_INLINE && !(cc->flags & CCTRL_TRANSPILING)) {
+            PtrVec *argv = parseArgv(cc,maybe_fn,terminator,fname,len);
             return parseInlineFunctionCall(cc, maybe_fn, argv);
         }
     }
 
     if (!maybe_fn) {
-=======
-    Ast *decl = findFunctionDecl(cc,fname,len);
-    if (decl) {
-        rettype = decl->type->rettype;
-    }
-
-    if (!decl) {
->>>>>>> f734067 (Added partial support for lambdas, but this does not feel in keeping with the ehtos of the language; its a fairly complex abstraction and capture looks far too much like c++)
         if ((len == 6 && !strncmp(fname,"printf",6))) {
             rettype = ast_int_type;
-            PtrVec *argv = parseArgv(cc,decl,terminator,fname,len);
+            PtrVec *argv = parseArgv(cc,maybe_fn,terminator,fname,len);
             return astFunctionCall(rettype,fname,len,argv);
         }
-        /* Walk back untill we fin the missing function */
+        /* Walk back until we fin the missing function */
         Lexeme *peek = cctrlTokenPeek(cc);
         while (peek->len != len && memcmp(fname,peek->start,len) != 0) {
             cctrlTokenRewind(cc);
             peek = cctrlTokenPeek(cc);
         }
-        
         cctrlRaiseException(cc,"Function: %.*s() not defined",len,fname);
     }
 
-<<<<<<< HEAD
-    switch (maybe_fn->kind) {
-        case AST_LVAR:
-        case AST_FUNPTR:
-            return astFunctionPtrCall(rettype,fname,len,argv,maybe_fn);
-
-        case AST_ASM_FUNCDEF:
-        case AST_ASM_FUNC_BIND:
-            return astAsmFunctionCall(rettype,
-                    aoStrDup(maybe_fn->asmfname),argv);
-
-        case AST_EXTERN_FUNC:
-        case AST_FUNC:
-        case AST_FUN_PROTO:
-            return astFunctionCall(rettype,fname,len,argv);
-        default: {
-            cctrlRaiseException(cc,"Unknown function: %.*s", len, fname);
-        }
-=======
-    Ast *function_scope = strMapGet(cc->global_env, cc->tmp_fname->data);
-    int is_lambda = function_scope->kind == AST_LAMBDA;
+    Ast *function_scope = strMapGetLen(cc->global_env, fname, len);
+    int is_lambda = function_scope && function_scope->kind == AST_LAMBDA;
     if (is_lambda) {
-        return parseLambdaInnerFunctionArguments(cc, decl, function_scope);
->>>>>>> f734067 (Added partial support for lambdas, but this does not feel in keeping with the ehtos of the language; its a fairly complex abstraction and capture looks far too much like c++)
+        return parseLambdaInnerFunctionArguments(cc, maybe_fn, function_scope);
     }
 
-    PtrVec *argv = parseArgv(cc,decl,terminator,fname,len);
-    return parseFunctionPrepArgv(cc, decl, rettype, fname, len, argv);
+    PtrVec *argv = parseArgv(cc,maybe_fn,terminator,fname,len);
+    return parseFunctionPrepArgv(cc, maybe_fn, rettype, fname, len, argv);
 }
 
 /* parse either a function call or a variable being used */
@@ -769,6 +740,7 @@ static Ast *parseIdentifierOrFunction(Cctrl *cc,
 
     /* Is a function call if the next char is '(' and the peek is not a type */
     if (!cctrlIsKeyword(cc,peek->start,peek->len)) {
+        printf("pre fn call: %.*s\n", len,name);
         return parseFunctionArguments(cc,name,len,')');
     }
 

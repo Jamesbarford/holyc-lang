@@ -1451,12 +1451,12 @@ void parseCompoundStatementInternal(Cctrl *cc, Ast *body) {
                 if (!tokenPunctIs(peek,'(')) {
                     /* A normal variable */
                     varname = cctrlTokenGet(cc);
-<<<<<<< HEAD
                     if (varname->tk_type != TK_IDENT) {
                         cctrlTokenRewind(cc);
                         cctrlRaiseException(cc,"Expected type declaration with identifer got '%.*s' - should be"ESC_BLUE" '%s "ESC_RESET ESC_BOLD"<var_name>'",
                                 peek->len, peek->start, astTypeToString(next_type));
-=======
+                    }
+                    
                     if (!tokenIsIdent(varname)) {
                         if (varname) {
                             cctrlRaiseException(cc,"Expected variable name got: %s", lexemeToString(varname));
@@ -1465,9 +1465,8 @@ void parseCompoundStatementInternal(Cctrl *cc, Ast *body) {
                         }
                     }
 
-                    printf("here\n");
                     peek = cctrlTokenPeek(cc);
-                    lexeme *peek_two = cctrlTokenPeekBy(cc, 1);
+                    Lexeme *peek_two = cctrlTokenPeekBy(cc, 1);
                     /* We have a lambda definition in a function scope */
                     if (tokenPunctIs(peek, '=') && tokenPunctIs(peek_two, '[')) {
                         cctrlTokenGet(cc);
