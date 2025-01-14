@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.10)
 
 project(HolyC)
 
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 set(CMAKE_C_STANDARD_REQUIRED True)
 set(CMAKE_C_STANDARD 11)
@@ -38,7 +38,7 @@ set(SOURCES
     cfg-print.c
     cfg.c
     compile.c
-    ir.c
+    ir.cc
     lexer.c
     list.c
     main.c

@@ -7,6 +7,10 @@
 #include "map.h"
 #include "list.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define LEX_MAX_IDENT_LEN  128
 #define LEX_CHAR_CONST_LEN 9
 
@@ -200,5 +204,9 @@ char *lexerReportLine(Lexer *l, ssize_t lineno);
 void lexerPoolRelease(void);
 int lexemeEq(Lexeme *l1, Lexeme *l2);
 char *lexReadfile(char *path, ssize_t *_len);
+
+#ifdef __cplusplus
+};
+#endif
 
 #endif // !LEXER_H

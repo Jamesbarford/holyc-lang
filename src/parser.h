@@ -5,6 +5,10 @@
 #include "ast.h"
 #include "cctrl.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define PUNCT_TERM_COMMA  (1<<0) // ';'
 #define PUNCT_TERM_SEMI   (1<<1) // ','
 #define PUNCT_TERM_RPAREN (1<<2) // ')'
@@ -17,5 +21,9 @@
 void parseToAst(Cctrl *cc);
 Ast *parseStatement(Cctrl *cc);
 long evalIntConstExpr(Ast *ast);
+
+#ifdef __cplusplus
+};
+#endif
 
 #endif // !PARSER_H

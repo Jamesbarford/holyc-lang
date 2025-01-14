@@ -20,6 +20,7 @@ all:
 	cmake -S ./src \
 		-B ./build \
 		-G 'Unix Makefiles' \
+		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
 		-DCMAKE_C_COMPILER=$(C_COMPILER) \
 		-DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
 		-DCMAKE_INSTALL_PREFIX=$(INSTALL_PREFIX) \

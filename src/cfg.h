@@ -6,6 +6,10 @@
 #include "map.h"
 #include "memory.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 enum bbType {
     BB_GARBAGE       = -1,
     BB_END_BLOCK     = 0,
@@ -125,5 +129,9 @@ void bbPrint(BasicBlock *bb);
 void bbPrintNoAst(BasicBlock *bb);
 char *bbToString(BasicBlock *bb);
 char *bbToJSON(BasicBlock *bb);
+
+#ifdef __cplusplus
+};
+#endif
 
 #endif

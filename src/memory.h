@@ -3,6 +3,10 @@
 
 #include "map.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define MEM_PREFIX (sizeof(long))
 
 typedef struct MemoryPool {
@@ -43,5 +47,9 @@ void memPoolRelease(MemoryPool *pool);
 MemoryPoolIterator *memPoolIteratorNew(MemoryPool *pool);
 void memPoolIteratorRelease(MemoryPoolIterator *it);
 void *memPoolNext(MemoryPoolIterator *it);
+
+#ifdef __cplusplus
+};
+#endif
 
 #endif

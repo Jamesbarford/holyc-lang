@@ -3,6 +3,10 @@
 
 #include <limits.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define HT_LOAD    0.60
 #define HT_DELETED LONG_MAX
 #define HT_VACANT  LONG_MAX-1
@@ -162,5 +166,9 @@ IntSetIterator *intSetIteratorNew(IntSet *iset);
 long intSetNext(IntSetIterator *it);
 void intSetIteratorRelease(IntSetIterator *it);
 char *intSetToString(IntSet *iset);
+
+#ifdef __cplusplus
+};
+#endif
 
 #endif

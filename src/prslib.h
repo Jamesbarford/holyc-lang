@@ -3,6 +3,10 @@
 
 #include "cctrl.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 Ast *parseUnaryExpr(Cctrl *cc);
 Ast *parseExpr(Cctrl *cc, int prec);
 Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator);
@@ -20,5 +24,9 @@ AstType *parseFunctionPointerType(Cctrl *cc,
         char **fnptr_name, int *fnptr_name_len, AstType *rettype);
 Ast *findFunctionDecl(Cctrl *cc, char *fname, int len);
 Ast *parseCreateBinaryOp(Cctrl *cc, long operation, Ast *left, Ast *right);
+
+#ifdef __cplusplus
+};
+#endif
 
 #endif

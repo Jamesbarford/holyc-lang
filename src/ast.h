@@ -5,6 +5,10 @@
 #include "map.h"
 #include "list.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Relates to the 'kind' property on the AstType struct */
 #define AST_TYPE_VOID         0
 #define AST_TYPE_INT          1
@@ -413,6 +417,10 @@ void astTypePrint(AstType *type);
 void astKindPrint(int kind);
 const char *astTypeKindToHumanReadable(AstType *type);
 const char *astKindToHumanReadable(Ast *ast);
+
+#ifdef __cplusplus
+};
+#endif
 
 #endif
 

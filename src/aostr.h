@@ -11,6 +11,10 @@
 #include <stddef.h>
 #include <sys/types.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct aoStr aoStr;
 
 typedef struct aoStr {
@@ -49,4 +53,8 @@ char *mprintf(const char *fmt, ...);
 char *mprintVa(const char *fmt, va_list ap, ssize_t *_len);
 aoStr *aoStrError(void);
 
+
+#ifdef __cplusplus
+};
+#endif
 #endif

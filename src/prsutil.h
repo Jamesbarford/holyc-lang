@@ -6,6 +6,10 @@
 #include "lexer.h"
 #include "map.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define PUNCT_TERM_COMMA  (1<<0) // ';'
 #define PUNCT_TERM_SEMI   (1<<1) // ','
 #define PUNCT_TERM_RPAREN (1<<2) // ')'
@@ -49,4 +53,10 @@ void assertIsPointer(Ast *ast, long lineno);
 void typeCheckWarn(Cctrl *cc, long op, Ast *expected, Ast *actual);
 void typeCheckReturnTypeWarn(Cctrl *cc, Ast *maybe_func, 
                              AstType *check, Ast *retval);
+
+#ifdef __cplusplus
+};
+#endif
+
+
 #endif // PRS_UTIL

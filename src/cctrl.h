@@ -8,6 +8,10 @@
 #include "map.h"
 #include "lexer.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define CCTRL_TOKEN_BUFFER_SIZE 16
 #define CCTRL_TOKEN_BUFFER_MASK CCTRL_TOKEN_BUFFER_SIZE-1
 
@@ -161,5 +165,9 @@ Ast *cctrlGetOrSetString(Cctrl *cc, char *str, int len);
 void cctrlRewindUntilPunctMatch(Cctrl *cc, long ch, int *_count);
 void cctrlRewindUntilStrMatch(Cctrl *cc, char *str, int len, int *_count);
 aoStr *cctrlMessagePrintF(Cctrl *cc, int severity, char *fmt,...);
+
+#ifdef __cplusplus
+};
+#endif
 
 #endif // !CCTRL_H

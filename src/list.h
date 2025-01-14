@@ -1,6 +1,10 @@
 #ifndef LIST_H
 #define LIST_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+    
 typedef struct List {
     struct List *next;
     struct List *prev;
@@ -26,5 +30,9 @@ int listCount(List *ll);
 void listMergeAppend(List *l1, List *l2);
 void listMergePrepend(List *l1, List *l2);
 List *listCopy(List *l);
+
+#ifdef __cplusplus
+};
+#endif
 
 #endif // !LIST_H
