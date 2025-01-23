@@ -1,4 +1,4 @@
-# HolyC Programming Language Implimentation - BETA
+# HolyC Programming Language Implementation - BETA
 
 <p align="center">
   <img 
