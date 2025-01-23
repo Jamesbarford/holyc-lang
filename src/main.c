@@ -138,7 +138,8 @@ void getASMFileName(HccOpts *opts, char *file_name) {
         slashptr = file_name;
     }
 
-    int no_ext_len = strlen(slashptr) - (end-slashptr);
+    const char *dot_end = strrchr(slashptr, '.');
+    int no_ext_len = (dot_end == NULL) ? 0 : dot_end - slashptr;
 
     opts->infile_no_ext = mprintf("%.*s", no_ext_len, slashptr);
     opts->asm_outfile = mprintf("%s.s", opts->infile_no_ext);
