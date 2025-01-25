@@ -1,4 +1,4 @@
-# HolyC Programming Language Implimentation - BETA
+# HolyC Programming Language Implementation - BETA
 
 <p align="center">
   <img 
@@ -283,21 +283,7 @@ main(void)
 ```
 
 ## Bugs
-This is a non exhaustive list of things that are buggy, if you find something's
-please open an issue or open a pull request. I do, however, intend to fix them 
-when I get time.
-- Using `%f` for string formatting floats not work
-- Memory management for the compiler is virtually non-existent, presently all
-  the tokens are made before compiling which is very slow.
-- Line number in error messages is sometimes off and does not report the file
-- Function pointers in a parameter list have to come at the end
-- Variable arguments are all passed on the stack
-- Casting between `I32` and `I64` is very buggy, the most obvious of which 
-  is calling a function which expects `I64` and calling it with an `I32` and
-  vice versa, this will often cause a segmentation fault. As such prefer using
-  `I64` for integer types.
-- The preprocessor for `#define` can presently _only_ accept numerical 
-  expressions and strings. It is not like a c compilers preprocessor.
+Please open an issue on [github](https://github.com/Jamesbarford/holyc-lang/issues)
 
 ## Inspirations & Resources:
 A lot of the assembly has been cobbled together by running `gcc -S -O0 <file>`
