@@ -235,7 +235,10 @@ void emitFile(aoStr *asmbuf, HccOpts *opts) {
             aoStrCatPrintf(run_cmd,"gcc -L"INSTALL_PREFIX"/lib %s "CLIBS" && ./a.out && rm ./a.out",
                     ASM_TMP_FILE);
 #endif
-            safeSystem(run_cmd->data);
+            /* Don't use 'safeSystem' else anything other than a '0' exit 
+             * code will cause a panic which is incorrect... This is a bit of 
+             * as run, in an ideall world, would not be calling out to gcc */
+            system(run_cmd->data);
             aoStrRelease(run_cmd);
             exit(0);
         }
