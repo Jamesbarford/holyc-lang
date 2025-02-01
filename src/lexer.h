@@ -123,7 +123,6 @@
 #define KW_PP_ERROR     79
 
 /* Compiler Flags*/
-#define CCF_ESCAPE_STRING_NEWLINES (1ULL << 40)
 #define CCF_MULTI_CHAR_OP     (1<<0)
 #define CCF_PRE_PROC          (1<<1)
 #define CCF_ACCEPT_NEWLINES   (1<<2)

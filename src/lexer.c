@@ -682,114 +682,61 @@ finish:
 }
 
 long lexInStr(Lexer *l, unsigned char *buf, long size, int *done,
-        char terminator, int escape_quotes)
+              char terminator)
 {
-    long i = 0, j = 0, k = 0, ch = 0;
-    *done = 1;
-
-    escape_quotes = 0;
-    if (escape_quotes) {
-        ch = lexNextChar(l);
-    }
+    long i = 0;
+    long ch = 0;
 
     while (i < size - 1) {
         ch = lexNextChar(l);
         if (ch == '\n') {
             l->lineno++;
         }
-        if (escape_quotes && (ch == '"' && lexPeek(l) == '"')) {
-            ch = lexNextChar(l);
+
+        if (!ch || ch == terminator) {
+            /* XXX: Should raise exception if we run out of tokens as it is 
+             * an unterminated string. */
             buf[i++] = '\0';
-            return i;
-        } else if (!escape_quotes && (!ch || ch == terminator)) {
-            buf[i++] = '\0';
+            *done = 1;
             return i;
         } else if (ch == '\\') {
             ch = lexNextChar(l);
-
-            if (l->flags & CCF_ESCAPE_STRING_NEWLINES) {
-                buf[i++] = '\\';
-                buf[i++] = ch;
-                goto out;
-            }
+            buf[i++] = '\\';
 
             switch (ch) {
-            case '\\':
-                buf[i++] = '\\';
-                buf[i++] = '\\';
-                break;
-            case '0':
-                buf[i++] = '\\';
-                buf[i++] = '0';
-                break;
-            case '\'':
-                buf[i++] = '\\';
-                buf[i++] = '\'';
-                break;
-            case '`':
-                buf[i++] = '\\';
-                buf[i++] = '`';
-            case '"':
-                buf[i++] = '\\';
-                buf[i++] = '"';
-                break;
-            case 'd':
-                buf[i++] = '\\';
-                buf[i++] = 'd';
-                break;
-            /* XXX: This potentially breaks multi line strings*/
-            case 'n':
-                buf[i++] = '\\';
-                buf[i++] = 'n';
-                break;
-            case 'r':
-                buf[i++] = '\\';
-                buf[i++] = 'r';
-                break;
-            case 't':
-                buf[i++] = '\\';
-                buf[i++] = 't';
-                break;
-            case 'v':
-                buf[i++] = '\\';
-                buf[i++] = 'v';
-                break;
-            case 'f':
-                buf[i++] = '\\';
-                buf[i++] = 'f';
-                break;
-            case 'x':
-            case 'X':
-                j = 0;
-                for (k = 0; k < 2; k++) {
-                    ch = toupper(lexNextChar(l));
-                    if (isHex(ch)) {
-                        if (ch <= '9') {
-                            j = (j << 4) + ch - '0';
-                        } else {
-                            j = (j << 4) - 'A' + 10;
-                        }
-                    } 
-                        break;
-                }
-                buf[i++] = j;
-                break;
+                case '\\': buf[i++] = '\\'; break;
+                case '\'': buf[i++] = '\''; break;
+                case '0':  buf[i++] = '0'; break;
+                case '`':  buf[i++] = '`'; break;
+                case '"':  buf[i++] = '\"'; break;
+                case 'n':  buf[i++] = 'n'; break;
+                case 'r':  buf[i++] = 'r'; break;
+                case 't':  buf[i++] = 't'; break;
+                case 'b':  buf[i++] = 'b'; break;
+                case 'v':  buf[i++] = 'v'; break;
+                case 'f':  buf[i++] = 'f'; break;
+
+                case 'x':
+                case 'X':
+                    buf[i++] = '\\';
+                    buf[i++] = 'x';
+                    buf[i++] = toupper(lexNextChar(l));
+                    buf[i++] = toupper(lexNextChar(l));
+                    break;
             default:
-                buf[i++] = '\\';
+                loggerPanic("Line: %d - Invalid escape character: '%c'\n",
+                        l->lineno, (char)ch);
             }
         } else {
-            if (escape_quotes && ch == '\"') {
-                buf[i++] = '\\';
-            }
             buf[i++] = ch;
         }
     }
-out:
+
     *done = 0;
     return i;
 }
 
-long lexString(Lexer *l, char terminator, int escape_quotes) {
+long lexString(Lexer *l, char terminator) {
     char *buf2, buf[128];
     int str_done = 0;
     long len, char_count;
@@ -799,7 +746,7 @@ long lexString(Lexer *l, char terminator, int escape_quotes) {
     
     do {
         char_count = lexInStr(l, (unsigned char *)buf, sizeof(buf),
-                &str_done,terminator,escape_quotes);
+                &str_done,terminator);
         char *buf3 = (char *)malloc(len+char_count);
         if (buf2) {
             memcpy(buf3,buf2,len);
@@ -1000,11 +947,7 @@ int lex(Lexer *l, Lexeme *le) {
             return 1;
 
         case '\"':
-            if (lexPeek(l) == '"') {
-                lexString(l,'"',1);
-            } else {
-                lexString(l,'"',0);
-            }
+            lexString(l,'"');
             le->start = l->cur_str;
             le->len = l->cur_strlen;
             l->cur_str = NULL;

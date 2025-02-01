@@ -2112,33 +2112,13 @@ void asmDataSection(Cctrl *cc, aoStr *buf) {
         Ast *ast = (Ast *)n->value;
         assert(ast->kind == AST_STRING);
 
-        char *label = ast->slabel->data;
-        char *str = ast->sval->data;
-        aoStr *escaped = aoStrAlloc(1<<10);
-
-        char *ptr = str;
-        while (*ptr) {
-            switch (*ptr) {
-                case '\\': aoStrCatPrintf(escaped,"\\"); break;
-                case '\n': aoStrCatPrintf(escaped,"\\n"); break;
-                case '\t': aoStrCatPrintf(escaped,"\\t"); break;
-                case '\r': aoStrCatPrintf(escaped,"\\r"); break;
-                case '\b': aoStrCatPrintf(escaped,"\\n"); break;
-                case '\v': aoStrCatPrintf(escaped,"\\v"); break;
-                default: aoStrPutChar(escaped,*ptr); break;
-            }
-            ptr++;
-        }
-
-        if (escaped->len) {
-            aoStrCatPrintf(buf,"%s:\n\t",label);
+        if (ast->sval->len) {
+            aoStrCatFmt(buf,"%S:\n\t",ast->slabel);
             aoStrCatPrintf(buf,
-                    ".string \"%s\\0\"\n\t"
+                    ".string \"%S\\0\"\n\t"
                     ".data\n\t"
-                    ".align 4\n"
-                    , escaped->data);
+                    ".align 4\n", ast->sval);
         }
-        aoStrRelease(escaped);
     }
     aoStrPutChar(buf,'\t');
     strMapIteratorRelease(it);
