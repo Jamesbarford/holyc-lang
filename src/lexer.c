@@ -522,7 +522,7 @@ char *lexReadfile(char *path, ssize_t *_len) {
     lseek(fd, 0, SEEK_SET);
 
     /* Add a `+1` for `\0` */
-    char *buf = (char *)malloc(sizeof(char) * (len+1));
+    char *buf = (char *)malloc((sizeof(char) * len)+1);
     int size = 0;
     int rbytes = 0;
     while ((rbytes = read(fd,buf,len)) != 0) {
