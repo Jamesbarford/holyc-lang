@@ -1,6 +1,7 @@
 C_COMPILER     ?= gcc
 BUILD_TYPE     ?= Release
 INSTALL_PREFIX ?= /usr/local
+CFLAGS         ?= -Wextra -Wall -Wno-implicit-fallthrough
 
 default: all
 
@@ -23,7 +24,7 @@ all:
 		-DCMAKE_C_COMPILER=$(C_COMPILER) \
 		-DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
 		-DCMAKE_INSTALL_PREFIX=$(INSTALL_PREFIX) \
-		-DCMAKE_C_FLAGS='-Wextra -Wall -Wno-implicit-fallthrough' \
+		-DCMAKE_C_FLAGS=$(CFLAGS) \
 		&& $(MAKE) -C ./build -j2
 
 install:
