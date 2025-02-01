@@ -252,6 +252,11 @@ void assemble(CliArgs *args) {
 int main(int argc, char **argv) {
     is_terminal = isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
 
+    /* Using these pools vastly simplifies everything as we can free everything 
+     * at the end. */
+    aoStrMemPoolInit();
+    lexemePoolInit();
+
     int lexer_flags = CCF_PRE_PROC;
     aoStr *asmbuf;
     Cctrl *cc;
@@ -264,6 +269,7 @@ int main(int argc, char **argv) {
 
     if (args.assemble) {
         assemble(&args);
+        aoStrPoolRelease();
         return 0;
     }
 
@@ -274,6 +280,7 @@ int main(int argc, char **argv) {
 
     if (args.print_tokens) {
         compileToTokens(cc,&args,lexer_flags);
+        aoStrPoolRelease();
         return 0;
     }
 
@@ -284,6 +291,7 @@ int main(int argc, char **argv) {
                " * please check for errors! */\n\n"
                "%s",args.infile, buf->data);
         aoStrRelease(buf);
+        aoStrPoolRelease();
         return 0;
     }
 
@@ -291,6 +299,7 @@ int main(int argc, char **argv) {
 
     if (args.print_ast) {
         compilePrintAst(cc);
+        aoStrPoolRelease();
         return 0;
     }
 
@@ -308,6 +317,7 @@ int main(int argc, char **argv) {
             unlink(dot_outfile);
         }
         free(dot_outfile);
+        aoStrPoolRelease();
         return 0;
     }
 

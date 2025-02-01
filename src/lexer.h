@@ -196,6 +196,7 @@ int tokenPunctIs(Lexeme *tok, long ch);
 int tokenIdentIs(Lexeme *tok, char *ident, int len);
 void lexemeFree(void *_le);
 char *lexerReportLine(Lexer *l, ssize_t lineno);
+void lexemePoolInit(void);
 void lexerPoolRelease(void);
 int lexemeEq(Lexeme *l1, Lexeme *l2);
 char *lexReadfile(char *path, ssize_t *_len);

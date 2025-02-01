@@ -10,9 +10,34 @@
 #include "ast.h"
 #include "aostr.h"
 #include "lexer.h"
+#include "mempool.h"
+
+static MemPool aostr_pool;
+static int aostr_pool_init = 0;
+
+void aoStrMemPoolInit(void) {
+    if (!aostr_pool_init) {
+        aostr_pool_init = 1;
+        memPoolInit(&aostr_pool, 1024);
+    }
+}
+
+static aoStr *aoStrPoolAlloc(void) {
+    return (aoStr *)memPoolTryAlloc(&aostr_pool, sizeof(aoStr));
+}
+
+static void aoStrPoolReleaseStr(void *_pool, void *str) {
+    (void)_pool;
+    free(((aoStr *)str)->data);
+}
+
+void aoStrPoolRelease(void) {
+    memPoolSetDeallocate(&aostr_pool, &aoStrPoolReleaseStr);
+    memPoolRelease(&aostr_pool, 0);
+}
 
 aoStr *aoStrAlloc(size_t capacity) {
-    aoStr *buf = (aoStr *)malloc(sizeof(aoStr));
+    aoStr *buf = aoStrPoolAlloc();
     capacity += 10;
     buf->capacity = capacity;
     buf->len = 0;
@@ -26,15 +51,14 @@ aoStr *aoStrNew(void) {
 
 void aoStrRelease(aoStr *buf) {
     if (buf) {
-        free(buf->data);
-        free(buf);
+        memPoolFree(&aostr_pool, buf);
     }
 }
 
 /* Get the underlying string and free the container 'aoStr' */
 char *aoStrMove(aoStr *buf) {
     char *buffer = buf->data;
-    free(buf);
+    // free(buf);
     return buffer;
 }
 
@@ -518,7 +542,8 @@ aoStr *aoStrPrintf(const char *fmt, ...) {
     size_t len = 0;
     size_t capacity = 0;
     char *new_buf = mprintVaImpl(fmt,ap,&len,&capacity);
-    aoStr *buffer = (aoStr *)malloc(sizeof(aoStr));
+    aoStr *buffer = aoStrPoolAlloc();
+    // (aoStr *)malloc(sizeof(aoStr));
     buffer->data = new_buf;
     buffer->len = len;
     buffer->capacity = capacity;

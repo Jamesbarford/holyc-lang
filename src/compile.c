@@ -33,7 +33,7 @@ void compilePrintAst(Cctrl *cc) {
         {
             tmp = astToString(ast);
             printf("%s\n", tmp);
-            free(tmp);
+            // free(tmp);
         }
         it = it->next;
     }

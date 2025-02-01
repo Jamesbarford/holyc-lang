@@ -729,7 +729,7 @@ static Ast *parsePrimary(Cctrl *cc) {
         real_len++;
         cctrlTokenRewind(cc);
         ast = cctrlGetOrSetString(cc, str->data, str->len, real_len);
-        free(str);
+        // free(str);
         return ast;
     }
     case TK_PUNCT:

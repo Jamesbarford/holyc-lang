@@ -13,13 +13,34 @@
 #include "map.h"
 #include "lexer.h"
 #include "list.h"
-#include "memory.h"
+#include "mempool.h"
 #include "prslib.h"
 #include "prsutil.h"
 #include "util.h"
 
 /* prototypes */
 int lexPreProcIf(StrMap *macro_defs, Lexer *l);
+
+static MemPool lexer_pool;
+static int lexer_pool_init = 0;
+
+void lexemePoolInit(void) {
+    if (!lexer_pool_init) {
+        lexer_pool_init = 1;
+        memPoolInit(&lexer_pool, 2048);
+    }
+}
+
+void lexerPoolRelease(void) {
+    if (lexer_pool_init) {
+        lexer_pool_init = 0;
+        memPoolRelease(&lexer_pool, 0);
+    }
+}
+
+Lexeme *lexerPoolAllocLexeme(void) {
+    return (Lexeme *)memPoolAlloc(&lexer_pool, sizeof(Lexeme));
+}
 
 typedef struct {
     char *name;
@@ -107,7 +128,7 @@ static LexerTypes lexer_types[] = {
         && ch != 'X' && ch != '\\')
 
 Lexeme *lexemeNew(char *start, int len) {
-    Lexeme *le = (Lexeme *)malloc(sizeof(Lexeme));
+    Lexeme *le = lexerPoolAllocLexeme();
     le->start = start;
     le->len = len;
     le->line = -1;
@@ -116,7 +137,7 @@ Lexeme *lexemeNew(char *start, int len) {
 }
 
 Lexeme *lexemeSentinal(void) {
-    Lexeme *le = (Lexeme *)malloc(sizeof(Lexeme));
+    Lexeme *le = lexerPoolAllocLexeme();
     le->start = "(-sentinal-)";
     le->len = 12;
     le->line = 1;
@@ -133,7 +154,7 @@ void lexemeAssignOp(Lexeme *le, char *start, int len, long op, int line) {
 }
 
 Lexeme *lexemeTokNew(char *start, int len, int line, long ch) {
-    Lexeme *copy = (Lexeme *)malloc(sizeof(Lexeme));
+    Lexeme *copy = lexerPoolAllocLexeme();
     copy->tk_type = TK_PUNCT;
     copy->start = start;
     copy->len = len;
@@ -142,22 +163,15 @@ Lexeme *lexemeTokNew(char *start, int len, int line, long ch) {
     return copy;
 }
 
-static MemoryPool *lexeme_pool = NULL;
-void lexerPoolRelease(void) {
-    if (lexeme_pool) {
-        memPoolRelease(lexeme_pool);
-    }
-}
-
 /* Copy the lexeme with memory allocated from the pool */
 Lexeme *lexemePoolCpy(Lexeme *le) {
-    Lexeme *cpy = (Lexeme *)memPoolAlloc(lexeme_pool);
+    Lexeme *cpy = lexerPoolAllocLexeme();
     memcpy(cpy,le,sizeof(Lexeme));
     return cpy;
 }
 
 Lexeme *lexemeCopy(Lexeme *le) {
-    Lexeme *copy = (Lexeme *)malloc(sizeof(Lexeme));
+    Lexeme *copy = lexerPoolAllocLexeme();
     memcpy(copy,le,sizeof(Lexeme));
     return copy;
 }
@@ -191,9 +205,9 @@ void lexInit(Lexer *l, char *source, int flags) {
     if (macro_proccessor == NULL) {
         macro_proccessor = ccMacroProcessor(NULL);
     }
-    if (lexeme_pool == NULL) {
-        lexeme_pool = memPoolNew(sizeof(Lexeme),64);
-    }
+
+    lexemePoolInit();
+
     /* XXX: create one symbol table for the whole application ;
      * hoist to 'compile.c'*/
     for (int i = 0; i < (int)static_size(lexer_types); ++i) {
@@ -545,7 +559,7 @@ void lexPushFile(Lexer *l, aoStr *filename) {
     LexFile *f = (LexFile *)malloc(sizeof(LexFile));
     ssize_t file_len = 0;
     char *src = lexReadfile(filename->data, &file_len);
-    aoStr *src_code = (aoStr *)malloc(sizeof(aoStr));
+    aoStr *src_code = aoStrNew();
     src_code->data = src;
     src_code->len = file_len;
     src_code->capacity = 0;
@@ -1614,7 +1628,7 @@ Lexeme *lexToken(StrMap *macro_defs, Lexer *l) {
 void lexemeFree(void *_le) {
     if (_le) {
         Lexeme *le = (Lexeme *)_le;
-        free(le);
+      //  free(le);
     }
 }
 

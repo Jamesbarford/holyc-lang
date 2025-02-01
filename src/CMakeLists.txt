@@ -44,6 +44,7 @@ set(SOURCES
     main.c
     map.c
     memory.c
+    mempool.c
     parser.c
     prsasm.c
     prslib.c
@@ -65,6 +66,7 @@ set(HEADERS
     list.h
     map.h
     memory.h
+    mempool.h
     parser.h
     prsasm.h
     prslib.h

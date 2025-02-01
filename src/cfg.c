@@ -31,8 +31,7 @@ void bbInit(void *_bb) {
 }
 
 static void cfgBuilderInit(CFGBuilder *builder, Cctrl *cc, IntMap *leaf_cache, int block_no) {
-    MemoryPool *block_pool = memPoolNewAndInitialise(
-            sizeof(BasicBlock),10, &bbInit);
+    MemPool *block_pool = memPoolNew(2048);
 
     builder->cc = cc;
     builder->bb_block_no = block_no;
@@ -306,7 +305,7 @@ static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder,
                                              int type,
                                              unsigned int flags)
 {
-    BasicBlock *bb = (BasicBlock *)memPoolAlloc(builder->block_pool);
+    BasicBlock *bb = (BasicBlock *)memPoolAlloc(builder->block_pool, sizeof(BasicBlock));
 
     bb->type = type;
     bb->flags = 0;
@@ -1523,7 +1522,7 @@ static IntSet *cfgCreateDoWhileAdjacencyList(CFG *cfg, BasicBlock *bb) {
  * */
 void cfgBuildAdjacencyList(CFG *cfg) {
     IntSet *iset;
-    MemoryPoolIterator *it = memPoolIteratorNew(cfg->_memory);
+    MemPoolIterator *it = memPoolIteratorNew(cfg->_memory);
     BasicBlock *bb;
     while ((bb = memPoolNext(it)) != NULL) {
         if (bbIsType(bb, BB_GARBAGE)) {

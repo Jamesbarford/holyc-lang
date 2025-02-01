@@ -4,7 +4,7 @@
 #include "aostr.h"
 #include "cctrl.h"
 #include "map.h"
-#include "memory.h"
+#include "mempool.h"
 
 enum bbType {
     BB_GARBAGE       = -1,
@@ -93,7 +93,7 @@ typedef struct CFG {
      * hashtable */
     IntMap *no_to_block;
     /* This a pointer to the memory pool which holds all of the basic blocks */
-    MemoryPool *_memory;
+    MemPool *_memory;
 } CFG;
 
 typedef struct CFGBuilder {
@@ -102,7 +102,7 @@ typedef struct CFGBuilder {
     unsigned long flags;
     Cctrl *cc;
     CFG *cfg;
-    MemoryPool *block_pool;
+    MemPool *block_pool;
 
     BasicBlock *bb;
     BasicBlock *bb_cur_loop;
