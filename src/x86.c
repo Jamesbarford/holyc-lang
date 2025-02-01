@@ -2130,14 +2130,12 @@ void asmDataSection(Cctrl *cc, aoStr *buf) {
             ptr++;
         }
 
-        if (escaped->len) {
-            aoStrCatPrintf(buf,"%s:\n\t",label);
-            aoStrCatPrintf(buf,
-                    ".string \"%s\\0\"\n\t"
-                    ".data\n\t"
-                    ".align 4\n"
-                    , escaped->data);
-        }
+        aoStrCatPrintf(buf,"%s:\n\t",label);
+        aoStrCatPrintf(buf,
+                ".string \"%s\\0\"\n\t"
+                ".data\n\t"
+                ".align 4\n"
+                , escaped->data);
         aoStrRelease(escaped);
     }
     aoStrPutChar(buf,'\t');
