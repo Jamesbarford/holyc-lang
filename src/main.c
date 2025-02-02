@@ -227,20 +227,15 @@ void emitFile(aoStr *asmbuf, HccOpts *opts) {
     } else {
         if (opts->run) {
             aoStr *run_cmd = aoStrNew();
-#if IS_MACOS
-            aoStrCatPrintf(run_cmd,"echo '%s' | gcc -x assembler - "CLIBS" -L"INSTALL_PREFIX"/lib && ./a.out && rm ./a.out",
-                    asmbuf->data);
-#else
             writeAsmToTmp(asmbuf);
             aoStrCatPrintf(run_cmd,"gcc -L"INSTALL_PREFIX"/lib %s "CLIBS" && ./a.out && rm ./a.out",
                     ASM_TMP_FILE);
-#endif
             /* Don't use 'safeSystem' else anything other than a '0' exit 
-             * code will cause a panic which is incorrect... This is a bit of 
-             * as run, in an ideall world, would not be calling out to gcc */
-            system(run_cmd->data);
+             * code will cause a panic which is incorrect... This is a bit of a
+             * hack as run, in an ideal world, would not be calling out to gcc */
+            (void)system(run_cmd->data);
             aoStrRelease(run_cmd);
-            exit(0);
+            exit(EXIT_SUCCESS);
         }
 
         writeAsmToTmp(asmbuf);
@@ -272,10 +267,6 @@ void assemble(HccOpts *opts) {
     if (opts->run) {
         ssize_t len = 0;
         char *buffer = lexReadfile(opts->infile,&len);
-#if IS_MACOS
-        aoStrCatPrintf(run_cmd,"echo '%s' | gcc -x assembler - "CLIBS" -L"INSTALL_PREFIX"/lib && ./a.out && rm ./a.out",
-                buffer);
-#else
         aoStr asm_buf = {
             .data = buffer,
             .len = len,
@@ -284,12 +275,12 @@ void assemble(HccOpts *opts) {
         writeAsmToTmp(&asm_buf);
         aoStrCatPrintf(run_cmd,"gcc -L"INSTALL_PREFIX"/lib %s "CLIBS" && ./a.out && rm ./a.out",
                 ASM_TMP_FILE);
-#endif
         free(buffer);
+        (void)system(run_cmd->data);
     } else {
         aoStrCatPrintf(run_cmd, "gcc %s -L"INSTALL_PREFIX"/lib "CLIBS, opts->infile);
+        safeSystem(run_cmd->data);
     }
-    safeSystem(run_cmd->data);
     aoStrRelease(run_cmd);
 }
 
@@ -315,7 +306,7 @@ void usage(void) {
             "  -D<var>    Set a compiler #define (does not accept a value)\n"
             "  --help     Print this message\n",
             cctrlGetVersion());
-    exit(1);
+    exit(EXIT_FAILURE);
 }
 
 void parseCliOptions(HccOpts *opts, int argc, char **argv) {
@@ -374,7 +365,7 @@ void parseCliOptions(HccOpts *opts, int argc, char **argv) {
             if (opts->output_filename == infile) {
                 fprintf(stderr, "hcc: \033[0;31mfatal error\033[0m: no input files.\n"
                         "Usage: hcc -o <program_name> <file>.HC\n");
-                exit(1);
+                exit(EXIT_FAILURE);
             }
             char *outfile = opts->output_filename;
             char *infile_no_dot = (infile[0] == '.' && infile[1] == '/')
@@ -385,7 +376,7 @@ void parseCliOptions(HccOpts *opts, int argc, char **argv) {
             if (!strcmp(outfile,infile_no_dot)) {
                 fprintf(stderr, "hcc: \033[0;31mfatal error\033[0m: output file"
                         " same name as input file.\n");
-                exit(1);
+                exit(EXIT_FAILURE);
             }
         } else if (!strncmp(argv[i],"-g",2)) {
             opts->asm_debug_comments = 1;
