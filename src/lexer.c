@@ -718,7 +718,6 @@ long lexInStr(Lexer *l, unsigned char *buf, long size, int *done,
 
                 case 'x':
                 case 'X':
-                    buf[i++] = '\\';
                     buf[i++] = 'x';
                     buf[i++] = toupper(lexNextChar(l));
                     buf[i++] = toupper(lexNextChar(l));

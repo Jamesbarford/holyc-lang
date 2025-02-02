@@ -269,6 +269,41 @@ aoStr *aoStrEscapeString(aoStr *buf) {
     return outstr;
 }
 
+/* If we have an escaped string this will give the size of `\n` as `1` rather 
+ * than `\` `n` which would be `2` */
+size_t aoStrEscapeLen(aoStr *str) {
+    size_t len = 0;
+    char *ptr = str->data;
+    while (*ptr) {
+        if (*ptr == '\\') {
+            ptr++;
+            printf("%c\n",*ptr);
+            switch (*ptr) {
+                case '\\': len++; break;
+                case '\'': len++; break;
+                case '0':  len++; break;
+                case '`':  len++; break;
+                case '"':  len++; break;
+                case 'n':  len++; break;
+                case 'r':  len++; break;
+                case 't':  len++; break;
+                case 'b':  len++; break;
+                case 'v':  len++; break;
+                case 'f':  len++; break;
+                case 'x':
+                case 'X':  ptr += 2; len++; break;
+                default:
+                    len++;
+                    break;
+            }
+        } else {
+            len++;
+        }
+        ptr++;
+    }
+    return len;
+}
+
 void aoStrArrayRelease(aoStr **arr, int count) {
     if (arr) {
         for (int i = 0; i < count; ++i) {

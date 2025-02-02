@@ -1044,32 +1044,37 @@ static Ast *parseCast(Cctrl *cc) {
     return ast;
 }
 
-static AstType *parseSizeOfType(Cctrl *cc) {
-    Lexeme *tok,*peek;
-    AstType *type;
-    Ast *ast;
-
-    tok = cctrlTokenGet(cc);
-    peek = cctrlTokenPeek(cc);
+static Ast *parseSizeof(Cctrl *cc) {
+    Lexeme *tok = cctrlTokenGet(cc);
+    Lexeme *peek = cctrlTokenPeek(cc);
+    AstType *type = NULL;
+    Ast *ast = NULL;
 
     if (tokenPunctIs(tok,'(') && cctrlIsKeyword(cc,peek->start,peek->len)) {
         type = parseFullType(cc);
         cctrlTokenExpect(cc,')');
-        peek = cctrlTokenPeek(cc);
-        return type;
+    } else {
+        cctrlTokenRewind(cc);
+        ast = parseUnaryExpr(cc);
+        type = ast->type;
     }
 
-    cctrlTokenRewind(cc);
-    ast = parseUnaryExpr(cc);
-    return ast->type;
-}
-
-static Ast *parseSizeof(Cctrl *cc) {
-    AstType *type = parseSizeOfType(cc);
     if (cc->flags & CCTRL_PRESERVE_SIZEOF) {
         return astSizeOf(type);
     }
-    long size = type->size;
+
+    /* If we have a string we want the _true_ length of it which as the string
+     * is escaped needs to be calculated manually. */
+    long size = 0; 
+    if (ast && ast->kind == AST_STRING) {
+        size = (long)aoStrEscapeLen(ast->sval);
+        /* A string terminates with `\0` which adds 1*/
+        size += 1;
+    } else {
+        /* Otherwise the size is sufficient */
+        size = type->size;
+    }
+
     assert(size >= 0);
     return astI64Type(size);
 }
