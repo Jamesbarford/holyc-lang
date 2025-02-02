@@ -2114,7 +2114,7 @@ void asmDataSection(Cctrl *cc, aoStr *buf) {
 
         if (ast->sval->len) {
             aoStrCatFmt(buf,"%S:\n\t",ast->slabel);
-            aoStrCatPrintf(buf,
+            aoStrCatFmt(buf,
                     ".string \"%S\\0\"\n\t"
                     ".data\n\t"
                     ".align 4\n", ast->sval);
