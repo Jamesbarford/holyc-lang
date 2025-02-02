@@ -626,55 +626,59 @@ U8 *MPrintQ(U8 *ptr,I64 flags = 0)
   _dst=&dst;
   if (ptr)
     while (ch=*ptr++) {
-      switch (ch) {
-	case '$$':
-	  if (flags&PRTF_DOLLAR) {
-	    SPutChar(_dst,'\\',_buf);
-	    SPutChar(_dst,'d',_buf);
-	  } else {
-	    SPutChar(_dst,ch,_buf);
-	    SPutChar(_dst,ch,_buf);
-	  }
-	  break;
-	case '%':
-	  SPutChar(_dst,ch,_buf);
-	  if (flags&PRTF_SLASH)
-	    SPutChar(_dst,ch,_buf);
-	  break;
-	case '\n':
-	  SPutChar(_dst,'\\',_buf);
-	  SPutChar(_dst,'n',_buf);
-	  break;
-	case '\r':
-	  SPutChar(_dst,'\\',_buf);
-	  SPutChar(_dst,'r',_buf);
-	  break;
-	case '\t':
-	  SPutChar(_dst,'\\',_buf);
-	  SPutChar(_dst,'t',_buf);
-	  break;
-	case '\v':
-	  SPutChar(_dst,'\\',_buf);
-	  SPutChar(_dst,'v',_buf);
-	  break;
-	case '\f':
-	  SPutChar(_dst,'\\',_buf);
-	  SPutChar(_dst,'f',_buf);
-	  break;
-	case '"':
-	case '\\':
-	  SPutChar(_dst,'\\',_buf);
-	  SPutChar(_dst,ch,_buf);
-	  break;
-	default:
-	  if (ch>=CH_SHIFT_SPACE && ch!=0x7F)
-	    SPutChar(_dst,ch,_buf);
-	  else {
-	    StrPrint(buf2,"x%02X",ch);
-	    ptr2=buf2;
-	    while (*ptr2)
-	      SPutChar(_dst,*ptr2++,_buf);
-	  }
+      /* XXX: '$$' creates a ridiculously high number which makes the jump table
+       * occupy over 10k lines in assembly as the table is not optimised to 
+       * if's. Thus it is split out. */
+      if (ch == '$$') {
+        if (flags&PRTF_DOLLAR) {
+          SPutChar(_dst,'\\',_buf);
+          SPutChar(_dst,'d',_buf);
+        } else {
+          SPutChar(_dst,ch,_buf);
+          SPutChar(_dst,ch,_buf);
+        }
+      } else {
+        switch (ch) {
+          case '%':
+            SPutChar(_dst,ch,_buf);
+            if (flags&PRTF_SLASH)
+              SPutChar(_dst,ch,_buf);
+            break;
+          case '\n':
+            SPutChar(_dst,'\\',_buf);
+            SPutChar(_dst,'n',_buf);
+            break;
+          case '\r':
+            SPutChar(_dst,'\\',_buf);
+            SPutChar(_dst,'r',_buf);
+            break;
+          case '\t':
+            SPutChar(_dst,'\\',_buf);
+            SPutChar(_dst,'t',_buf);
+            break;
+          case '\v':
+            SPutChar(_dst,'\\',_buf);
+            SPutChar(_dst,'v',_buf);
+            break;
+          case '\f':
+            SPutChar(_dst,'\\',_buf);
+            SPutChar(_dst,'f',_buf);
+            break;
+          case '"':
+          case '\\':
+            SPutChar(_dst,'\\',_buf);
+            SPutChar(_dst,ch,_buf);
+            break;
+          default:
+            if (ch>=CH_SHIFT_SPACE && ch!=0x7F)
+              SPutChar(_dst,ch,_buf);
+            else {
+              StrPrint(buf2,"x%02X",ch);
+              ptr2=buf2;
+              while (*ptr2)
+                SPutChar(_dst,*ptr2++,_buf);
+            }
+        }
       }
     }
   SPutChar(_dst,0,_buf);
