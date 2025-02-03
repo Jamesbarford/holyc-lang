@@ -718,14 +718,17 @@ static Ast *parsePrimary(Cctrl *cc) {
         }
         return ast;
     case TK_STR: {
+        long real_len = 0;
         aoStr *str = aoStrNew();
         cctrlTokenRewind(cc);
         /* Concatinate adjacent strings together */
         while ((tok = cctrlTokenGet(cc)) != NULL && tok->tk_type == TK_STR) {
-            aoStrCatPrintf(str,"%.*s",tok->len,tok->start);
+            aoStrCatFmt(str,"%.*s",tok->len,tok->start);
+            real_len += tok->i64-1;
         }
+        real_len++;
         cctrlTokenRewind(cc);
-        ast = cctrlGetOrSetString(cc, str->data, str->len);
+        ast = cctrlGetOrSetString(cc, str->data, str->len, real_len);
         free(str);
         return ast;
     }
@@ -1067,9 +1070,7 @@ static Ast *parseSizeof(Cctrl *cc) {
      * is escaped needs to be calculated manually. */
     long size = 0; 
     if (ast && ast->kind == AST_STRING) {
-        size = (long)aoStrEscapeLen(ast->sval);
-        /* A string terminates with `\0` which adds 1*/
-        size += 1;
+        size = ast->real_len;
     } else {
         /* Otherwise the size is sufficient */
         size = type->size;

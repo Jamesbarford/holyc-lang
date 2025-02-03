@@ -653,7 +653,7 @@ int strMapResize(StrMap *map) {
     return 1;
 }
 
-int strMapAdd(StrMap *map, char *key, void *value) {
+int strMapAddLen(StrMap *map, char *key, long key_len, void *value) {
     int is_free;
 
     if (map->size >= map->threashold) {
@@ -663,7 +663,6 @@ int strMapAdd(StrMap *map, char *key, void *value) {
         }
     }
 
-    long key_len = strlen(key);
     unsigned long idx = strMapGetNextIdx(map, key, key_len, &is_free);
 
     if (is_free) {
@@ -673,13 +672,17 @@ int strMapAdd(StrMap *map, char *key, void *value) {
         map->size++;
         return 1;
     } else {
-        // return 0;
         StrMapNode *n = map->entries[idx];
         n->key = key;
         n->key_len = key_len;
         n->value = value;
         return 1;
     }
+}
+
+int strMapAdd(StrMap *map, char *key, void *value) {
+    long key_len = strlen(key);
+    return strMapAddLen(map,key,key_len,value);
 }
 
 int strMapAddOrErr(StrMap *map, char *key, void *value) {

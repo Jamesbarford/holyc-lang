@@ -928,7 +928,7 @@ Ast *cctrlGetVar(Cctrl *cc, char *varname, int len) {
             if (cc->flags & CCTRL_PASTE_DEFINES) {
                 return astLVar(astMakePointerType(ast_u8_type), varname, len);
             }
-            return cctrlGetOrSetString(cc, tok->start, tok->len);
+            return cctrlGetOrSetString(cc, tok->start, tok->len, tok->i64);
         }
         default:
             return NULL;
@@ -964,16 +964,16 @@ void cctrlSetCommandLineDefines(Cctrl *cc, List *defines_list) {
 }
 
 /* De-duplicates strings by checking their existance */
-Ast *cctrlGetOrSetString(Cctrl *cc, char *str, int len) {
+Ast *cctrlGetOrSetString(Cctrl *cc, char *str, int len, long real_len) {
     Ast *ast_str = NULL;
     if (cc->strs) {
         ast_str = strMapGetLen(cc->strs, str, len);
         if (!ast_str) {
-            ast_str = astString(str,len);
-            strMapAdd(cc->strs, ast_str->sval->data, ast_str);
+            ast_str = astString(str,len,real_len);
+            strMapAddLen(cc->strs,ast_str->sval->data,len,ast_str);
         }
     } else {
-        ast_str = astString(str,len);
+        ast_str = astString(str,len,real_len);
     }
     return ast_str;
 }

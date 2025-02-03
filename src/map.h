@@ -3,7 +3,7 @@
 
 #include <limits.h>
 
-#define HT_LOAD    0.60
+#define HT_LOAD    0.65
 #define HT_DELETED LONG_MAX
 #define HT_VACANT  LONG_MAX-1
 #define HT_PROBE_1 1
@@ -120,6 +120,7 @@ StrMap *strMapNew(unsigned long capacity);
 StrMap *strMapNewWithParent(unsigned long capacity, StrMap *parent);
 void *strMapGetLen(StrMap *map, char *key, long key_len);
 void *strMapGet(StrMap *map, char *key);
+int strMapAddLen(StrMap *map, char *key, long key_len, void *value);
 int strMapAdd(StrMap *map, char *key, void *value);
 int strMapAddOrErr(StrMap *map, char *key, void *value);
 int strMapHas(StrMap *map, char *key);

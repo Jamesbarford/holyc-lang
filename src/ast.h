@@ -131,6 +131,7 @@ typedef struct Ast {
         struct {
             aoStr *sval;
             aoStr *slabel;
+            long real_len;
         };
 
         /* Local variable */
@@ -302,7 +303,7 @@ void astReleaseList(List *ast_list);
 Ast *astI64Type(long long val);
 Ast *astF64Type(double val);
 Ast *astCharType(long ch);
-Ast *astString(char *str, int len);
+Ast *astString(char *str, int len, long real_len);
 
 /* Declarations */
 Ast *astDecl(Ast *var, Ast *init);

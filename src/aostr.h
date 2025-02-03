@@ -41,7 +41,6 @@ void aoStrCatPrintf(aoStr *b, const char *fmt, ...);
 void aoStrCatFmt(aoStr *buf, const char *fmt, ...);
 aoStr *aoStrPrintf(const char *fmt, ...);
 aoStr *aoStrEscapeString(aoStr *buf);
-size_t aoStrEscapeLen(aoStr *str);
 aoStr *aoStrEncode(aoStr *buf);
 
 void aoStrArrayRelease(aoStr **arr, int count);

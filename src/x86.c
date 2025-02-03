@@ -2103,22 +2103,18 @@ void asmGlobalVar(StrMap *seen_globals, aoStr *buf, Ast* ast) {
 }
 
 void asmDataSection(Cctrl *cc, aoStr *buf) {
-    aoStrCatPrintf(buf, "sign_bit:\n\t.quad 0x8000000000000000\n");
-    aoStrCatPrintf(buf, "one_dbl:\n\t.double 1.0\n");
+    aoStrCatFmt(buf, "sign_bit:\n\t.quad 0x8000000000000000\n");
+    aoStrCatFmt(buf, "one_dbl:\n\t.double 1.0\n");
 
     StrMapIterator *it = strMapIteratorNew(cc->strs);
     StrMapNode *n = NULL;
     while ((n = strMapNext(it)) != NULL) {
         Ast *ast = (Ast *)n->value;
         assert(ast->kind == AST_STRING);
-
-        if (ast->sval->len) {
-            aoStrCatFmt(buf,"%S:\n\t",ast->slabel);
-            aoStrCatFmt(buf,
-                    ".string \"%S\\0\"\n\t"
-                    ".data\n\t"
-                    ".align 4\n", ast->sval);
-        }
+        aoStrCatFmt(buf,
+                "%S:\n\t"
+                ".asciz \"%S\"\n",
+                ast->slabel, ast->sval);
     }
     aoStrPutChar(buf,'\t');
     strMapIteratorRelease(it);

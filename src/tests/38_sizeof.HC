@@ -11,18 +11,19 @@ Bool SizeofString()
 Bool SizeofChars()
 {
   /* This is very quirky */
-  if (sizeof('f') != 8) return FALSE;
+  if (sizeof('f') != 1) return FALSE;
   return TRUE;
 }
 
 Bool SizeofEscapedChars()
 {
+  if (sizeof("\f\f\f") != 4) return FALSE;
+  if (sizeof("\\\\\\") != 4) return FALSE;
+  if (sizeof("\0\0\0") != 4) return FALSE;
   if (sizeof("\n\n\n") != 4) return FALSE;
   if (sizeof("\r\r\r") != 4) return FALSE;
   if (sizeof("\t\t\t") != 4) return FALSE;
-  if (sizeof("\t\t\t") != 4) return FALSE;
   if (sizeof("\v\v\v") != 4) return FALSE;
-  if (sizeof("\0\0\0") != 4) return FALSE;
   if (sizeof("\"\"\"") != 4) return FALSE;
   return TRUE;
 }
@@ -36,14 +37,12 @@ Bool SizeofBytes()
 Bool SizeofBuiltinTypes()
 {
     if (sizeof(U0)   != 0) return FALSE;
-    printf("here\n");
     if (sizeof(Bool) != 1) return FALSE;
     if (sizeof(I8)   != 1) return FALSE;
     if (sizeof(U8)   != 1) return FALSE;
     if (sizeof(I16)  != 2) return FALSE;
     if (sizeof(U16)  != 2) return FALSE;
     if (sizeof(I32)  != 4) return FALSE;
-    printf("here\n");
     if (sizeof(U32)  != 4) return FALSE;
     if (sizeof(I64)  != 8) return FALSE;
     if (sizeof(U64)  != 8) return FALSE;
@@ -66,13 +65,14 @@ class Type2
 class Type3
 {
   I64 a;   /* 8 */
-  I16 b;   /* 2 */
+  I16 b;   /* 2.. */
   U8 *buf; /* 8 */
 };
 
 Bool SizeofTypes()
 {
-  if (sizeof(Type1) != 18) return FALSE;
+  /* Structs are aligned */
+  if (sizeof(Type1) != 24) return FALSE;
   if (sizeof(Type2) != 8) return FALSE;
 
   return TRUE;
@@ -124,46 +124,53 @@ Bool SizeofArrays()
 I32 Main()
 {
   "Test - sizeof(...): \n";
-  I64 tests = 7;
+  I64 tests = 8;
   I64 correct = 0;
 
   
-  if (!SizeofString()) { correct++;
+  if (SizeofString()) {
+    correct++;
   } else {
     "Failed - SizeofString()\n";
   }
-  
-  if (!SizeofChars()) {
+
+  if (SizeofChars()) {
     correct++;
   } else {
     "Failed - SizeofChars()\n";
   }
   
-  if (!SizeofBytes()) {
+  if (SizeofEscapedChars()) {
+    correct++;
+  } else {
+    "Failed - SizeofEscapedChars()\n";
+  }
+
+  if (SizeofBytes()) {
     correct++;
   } else {
     "Failed - SizeofBytes()\n";
   }
-  
-  if (!SizeofBuiltinTypes()) {
+
+  if (SizeofBuiltinTypes()) {
     correct++;
   } else {
     "Failed - SizeofBuiltinTypes()\n";
   }
   
-  if (!SizeofTypes()) {
+  if (SizeofTypes()) {
     correct++;
   } else {
     "Failed - SizeofTypes()\n";
   }
   
-  if (!SizeofPointer()) {
+  if (SizeofPointer()) {
     correct++;
   } else {
     "Failed - SizeofPointer()\n";
   }
 
-  if (!SizeofArrays()) {
+  if (SizeofArrays()) {
     correct++;
   } else {
     "Failed - SizeofArrays()\n";

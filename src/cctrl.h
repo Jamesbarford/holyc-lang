@@ -155,7 +155,7 @@ void cctrlRaiseExceptionFromTo(Cctrl *cc, char *suggestion, char from, char to, 
 void cctrlRaiseException(Cctrl *cc, char *fmt, ...) __attribute__ ((noreturn));
 void cctrlRaiseSuggestion(Cctrl *cc, char *suggestion, char *fmt, ...) __attribute__ ((noreturn));
 void cctrlIce(Cctrl *cc, char *fmt, ...) __attribute__ ((noreturn));
-Ast *cctrlGetOrSetString(Cctrl *cc, char *str, int len);
+Ast *cctrlGetOrSetString(Cctrl *cc, char *str, int len, long real_len);
 void cctrlRewindUntilPunctMatch(Cctrl *cc, long ch, int *_count);
 void cctrlRewindUntilStrMatch(Cctrl *cc, char *str, int len, int *_count);
 aoStr *cctrlMessagePrintF(Cctrl *cc, int severity, char *fmt,...);

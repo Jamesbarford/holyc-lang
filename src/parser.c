@@ -17,8 +17,6 @@
 
 #define MAX_ALIGN         16
 
-#define RANGE_LOOP_IDX "___tmp___"
-
 /* PARSER Prototypes */
 Ast *parseStatement(Cctrl *cc);
 Ast *parseIfStatement(Cctrl *cc);
@@ -30,27 +28,27 @@ Ast *parseCompoundStatement(Cctrl *cc);
 AstType *parseClassDef(Cctrl *cc, int is_intrinsic);
 AstType *parseUnionDef(Cctrl *cc);
 
+static aoStr *getRangeLoopIdx(void) {
+    static int id = 0;
+    return aoStrPrintf("___tmp%d___", ++id);
+}
+
 /* Kinda cheating converting it to a string and calling printf */
 Ast *parseFloatingCharConst(Cctrl *cc, Lexeme *tok) {
     unsigned long ch = (unsigned long)tok->i64;
-    Ast *ast;
     char str[9];
     PtrVec *argv = ptrVecNew();
-    str[0] = ch & 0xFF;
-    str[1] = ((unsigned long)ch) >> 8  & 0xFF;
-    str[2] = ((unsigned long)ch) >> 16 & 0xFF;
-    str[3] = ((unsigned long)ch) >> 24 & 0xFF;
-    str[4] = ((unsigned long)ch) >> 32 & 0xFF;
-    str[5] = ((unsigned long)ch) >> 40 & 0xFF;
-    str[6] = ((unsigned long)ch) >> 48 & 0xFF;
-    str[7] = ((unsigned long)ch) >> 56 & 0xFF;
-    str[8] = '\0';
+    int len = 0;
 
-    ast = cctrlGetOrSetString(cc,str,sizeof(str));
+    while (ch) {
+        str[len++] = ch & 0xFF;
+        ch = ch >> 8; 
+    }
+
+    Ast *ast = cctrlGetOrSetString(cc,str,len,len);
     ptrVecPush(argv,ast);
-    ast = astFunctionCall(ast_void_type,"printf",6,argv);
     cctrlTokenExpect(cc,';');
-    return ast;
+    return astFunctionCall(ast_void_type,"printf",6,argv);
 }
 
 void parseTypeCheckClassFieldInitaliser(Cctrl *cc, AstType *cls_field_type, Ast *init) {
@@ -72,7 +70,7 @@ Ast *parseDeclArrayInitInt(Cctrl *cc, AstType *type) {
     Ast *init;
 
     if (type->ptr && type->ptr->kind == AST_TYPE_CHAR && tok->tk_type == TK_STR) {
-        return astString(tok->start,tok->len);
+        return cctrlGetOrSetString(cc,tok->start,tok->len,tok->i64);
     }
 
     if (!tokenPunctIs(tok, '{')) {
@@ -160,6 +158,7 @@ typedef struct ClsField {
     AstType *type;
     aoStr *field_name;
 } ClsField;
+
 ClsField *clsFieldNew(AstType *type, aoStr *field_name) {
     ClsField *f = (ClsField *)malloc(sizeof(ClsField));
     f->type = type;
@@ -197,7 +196,7 @@ List *parseClassOrUnionFields(Cctrl *cc, aoStr *name,
         } else if (name && !memcmp(name->data,tok_name->start,tok_name->len)) {
             base_type = parseBaseDeclSpec(cc);
             if (base_type == NULL) {
-                base_type = astClassType(NULL, aoStrDup(name), 8,0);
+                base_type = astClassType(NULL, aoStrDup(name),8,0);
             }
         } else if (tok_name->tk_type == TK_KEYWORD) { 
             switch (tok_name->i64) {
@@ -299,10 +298,9 @@ unsigned int CalcUnionSize(List *fields) {
 unsigned int CalcClassSize(List *fields) {
     unsigned int offset = 0;
     unsigned int size = 0;
-    AstType *type;
     listForEach(fields) {
         ClsField *cls_field = (ClsField *)it->value;
-        type = cls_field->type;
+        AstType *type = cls_field->type;
         if (type->size < MAX_ALIGN) size = type->size;
         else                        size = MAX_ALIGN;
 
@@ -321,7 +319,7 @@ int CalcPadding(int offset, int size) {
 }
 
 StrMap *parseClassOffsets(Cctrl *cc,
-                          int *real_size, 
+                          int *aligned_size, 
                           List *fields, 
                           AstType *base_class,
                           aoStr *clsname,
@@ -347,7 +345,7 @@ StrMap *parseClassOffsets(Cctrl *cc,
     }
 
     if (is_intrinsic) {
-        *real_size = 16;
+        *aligned_size = 16;
         listForEach(fields) {
             ClsField *cls_field = (ClsField *)it->value;
             field = cls_field->type;
@@ -390,6 +388,7 @@ StrMap *parseClassOffsets(Cctrl *cc,
             } else {
                 size = field->size;
             }
+
             padding = CalcPadding(offset,size);
             offset += (padding);
             field->offset = offset;
@@ -402,7 +401,7 @@ StrMap *parseClassOffsets(Cctrl *cc,
         free(cls_field);
     }
 
-    *real_size = offset + CalcPadding(offset, 8);
+    *aligned_size = offset + CalcPadding(offset, 8);
     return fields_dict;
 }
 
@@ -443,6 +442,7 @@ AstType *parseClassOrUnion(Cctrl *cc, StrMap *env,
 {
     aoStr *tag = NULL;
     int real_size = 0;
+    int aligned_size = 0;
     unsigned int class_size;
     Lexeme *tok = cctrlTokenGet(cc);
     AstType *prev = NULL, *ref = NULL, *base_class = NULL;
@@ -487,25 +487,25 @@ AstType *parseClassOrUnion(Cctrl *cc, StrMap *env,
     }
 
     if (is_class) {
-        fields_dict = parseClassOffsets(cc,&real_size,fields,base_class,tag,is_intrinsic);
+        fields_dict = parseClassOffsets(cc,&aligned_size,fields,base_class,tag,is_intrinsic);
     } else {
-        fields_dict = parseUnionOffsets(cc,&real_size,fields);
+        fields_dict = parseUnionOffsets(cc,&aligned_size,fields);
     }
     listRelease(fields,NULL);
 
     if (prev && fields_dict) {
         prev->fields = fields_dict;
-        prev->size = real_size;
+        prev->size = aligned_size;
         return prev;
     }
 
     if (fields_dict) {
-        ref = astClassType(fields_dict,tag,real_size,is_intrinsic); 
+        ref = astClassType(fields_dict,tag,aligned_size,is_intrinsic); 
         if (base_class) {
             ref->size += base_class->size;
         }
     } else {
-        ref = astClassType(NULL,tag,0,is_intrinsic); 
+        ref = astClassType(NULL,tag,aligned_size,is_intrinsic); 
     }
     if (!is_class) ref->kind = AST_TYPE_UNION;
     if (tag) {
@@ -706,7 +706,10 @@ Ast *parseOptExpr(Cctrl *cc) {
 
 Ast *parseDesugarArrayLoop(Cctrl *cc, Ast *iteratee, Ast *static_array) {
     /* Create a temporay variable as the counter */
-    Ast *counter_var = astLVar(ast_int_type, str_lit(RANGE_LOOP_IDX));
+    aoStr *range_tmp_var = getRangeLoopIdx();
+    Ast *counter_var = astLVar(ast_int_type,range_tmp_var->data,
+                               range_tmp_var->len);
+
     Ast *counter = astDecl(counter_var,astI64Type(0));
 
     /* How much memory it takes up / size of one element */
@@ -717,7 +720,8 @@ Ast *parseDesugarArrayLoop(Cctrl *cc, Ast *iteratee, Ast *static_array) {
         iteratee->type = deref_type;
     }
 
-    strMapAdd(cc->localenv,RANGE_LOOP_IDX,counter_var);
+    strMapAddLen(cc->localenv,range_tmp_var->data,
+                 range_tmp_var->len,counter_var);
     strMapAdd(cc->localenv,iteratee->lname->data,iteratee);
 
     if (cc->tmp_locals) {
@@ -769,10 +773,13 @@ void parseAssertContainerHasFields(Cctrl *cc, AstType *size_field,
 Ast *parseCreateForRange(Cctrl *cc, Ast *iteratee,
                          Ast *size_ref, Ast *entries_ref)
 {
-    Ast *counter_var = astLVar(ast_int_type,str_lit(RANGE_LOOP_IDX));
+    aoStr *range_tmp_var = getRangeLoopIdx();
+    Ast *counter_var = astLVar(ast_int_type,range_tmp_var->data,
+                               range_tmp_var->len);
     Ast *counter = astDecl(counter_var,astI64Type(0));
 
-    strMapAdd(cc->localenv,RANGE_LOOP_IDX,counter_var);
+    strMapAddLen(cc->localenv,range_tmp_var->data,
+                 range_tmp_var->len,counter_var);
     strMapAdd(cc->localenv,iteratee->lname->data,iteratee);
     if (cc->tmp_locals) {
         listAppend(cc->tmp_locals,counter_var);
