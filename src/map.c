@@ -188,7 +188,7 @@ IntMapNode *intMapNodeNew(long key, void *value) {
 static unsigned long intMapGetIdx(IntMap *map, long key) {
     unsigned long idx = intMapHashFunction(key, map->mask); 
     unsigned long mask = map->mask;
-    unsigned long probe = 1;
+    // unsigned long probe = 1;
     IntMapNode **entries = map->entries;
     IntMapNode *cur;
 
@@ -196,8 +196,9 @@ static unsigned long intMapGetIdx(IntMap *map, long key) {
         if (cur->key == key) {
             return idx;
         }
-        idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-        probe++;
+        idx = (idx + 1) & mask;
+        // idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
+        // probe++;
     }
     return HT_DELETED;
 }
@@ -232,7 +233,7 @@ IntMapNode *intMapNext(IntMapIterator *it) {
 static unsigned long intMapGetNextIdx(IntMap *map, long key, int *_is_free) { 
     unsigned long mask = map->mask;
     unsigned long idx = key & mask;
-    unsigned long probe = 1;
+    // unsigned long probe = 1;
     IntMapNode *cur;
 
     while ((cur = map->entries[idx]) != NULL) {
@@ -240,8 +241,9 @@ static unsigned long intMapGetNextIdx(IntMap *map, long key, int *_is_free) {
             *_is_free = 0;
             return idx;
         }
-       idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-       probe++;
+        idx = (idx + 1) & mask;
+        // idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
+        // probe++;
     }
     *_is_free = 1;
     return idx;
@@ -505,7 +507,7 @@ static int strMapKeyMatch(StrMapNode *n, char *key, ssize_t key_len) {
 
 static long strMapGetIdx(StrMap *map, char *key, long key_len) {
     unsigned long mask = map->mask;
-    unsigned long probe = 1;
+    // unsigned long probe = 1;
     unsigned long idx = strMapHashFunction(key, key_len, mask);
     StrMapNode **entries = map->entries;
     StrMapNode *cur;
@@ -514,8 +516,9 @@ static long strMapGetIdx(StrMap *map, char *key, long key_len) {
         if (strMapKeyMatch(cur,key,key_len)) {
             return idx;
         }
-        idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-        probe++;
+        idx = (idx + 1) & mask;
+        // idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
+        // probe++;
     }
     return HT_DELETED;
 }
@@ -525,7 +528,7 @@ static unsigned long strMapGetNextIdx(StrMap *map, char *key, long key_len,
 { // Finds the next avalible slot
     unsigned long mask = map->mask;
     unsigned long idx = strMapHashFunction(key, key_len, mask);
-    unsigned long probe = 1;
+    // unsigned long probe = 1;
     StrMapNode *cur;
     *_is_free = 0;
     while ((cur = map->entries[idx]) != NULL) {
@@ -536,8 +539,9 @@ static unsigned long strMapGetNextIdx(StrMap *map, char *key, long key_len,
             *_is_free = 0;
             return idx;
         }
-        idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-        probe++;
+        idx = (idx + 1) & mask;
+        // idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
+        // probe++;
     }
     *_is_free = 1;
     return idx;
@@ -715,13 +719,12 @@ int strMapAddOrErr(StrMap *map, char *key, void *value) {
 }
 
 int strMapRemove(StrMap *map, char *key) {
-    unsigned long idx, mask, probe;
     long len = strlen(key);
+    unsigned long mask = map->mask;
+    unsigned long idx = strMapHashFunction(key, len, mask);
+    // unsigned long probe = 1;
     StrMapNode **entries = map->entries;
     StrMapNode *cur;
-    mask = map->mask;
-    idx = strMapHashFunction(key, len, mask);
-    probe = 1;
 
     while ((cur = entries[idx])) {
         if (cur->key_len == len && !strncmp(cur->key, key, len)) {
@@ -731,8 +734,9 @@ int strMapRemove(StrMap *map, char *key) {
             map->size--;
             return 1;
         }
-        idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-        probe++;
+        idx = (idx + 1) & mask;
+        // (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
+        // probe++;
     }
     return 0;
 }
@@ -808,16 +812,17 @@ static unsigned long intSetGetNextIdx(long *entries, unsigned long mask,
         long key, int *_is_free)
 { 
     unsigned long idx = key & mask;
-    unsigned long probe = 1;
     long cur;
+    // unsigned long probe = 1;
 
     while ((cur = entries[idx]) != HT_VACANT) {
         if (cur == key || cur == HT_DELETED) {
             *_is_free = 0;
             return idx;
         }
-        idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-        probe++;
+        idx = (idx + 1) & mask;
+        // (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
+        // probe++;
     }
     *_is_free = 1;
     return idx;
@@ -825,15 +830,16 @@ static unsigned long intSetGetNextIdx(long *entries, unsigned long mask,
 
 static long intSetGetIdx(long *entries, unsigned long mask, long key) {
     unsigned long idx = intMapHashFunction(key, mask);
-    unsigned long probe = 1;
+    // unsigned long probe = 1;
     long cur_key;
 
     while ((cur_key = entries[idx]) != HT_VACANT) {
         if (cur_key == key) {
             return idx;
         }
-        idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-        probe++;
+        idx = (idx + 1) & mask;
+        // idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
+        // probe++;
     }
     return HT_DELETED;
 }
