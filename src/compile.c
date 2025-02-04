@@ -5,6 +5,7 @@
 #include "aostr.h"
 #include "ast.h"
 #include "cctrl.h"
+#include "cli.h"
 #include "compile.h"
 #include "x86.h"
 #include "lexer.h"
@@ -48,15 +49,15 @@ aoStr *compileToAsm(Cctrl *cc) {
     return asmbuf;
 }
 
-void compileToTokens(Cctrl *cc, HccOpts *opts, int lexer_flags) {
+void compileToTokens(Cctrl *cc, CliArgs *args, int lexer_flags) {
     Lexer *l = (Lexer *)malloc(sizeof(Lexer));
     aoStr *builtin_path;
     StrMap *seen_files;
 
     seen_files = strMapNew(32);
     
-    builtin_path = aoStrPrintf("%s/include/tos.HH", opts->install_dir);
-    char *root_dir = mprintf("%s/include/", opts->install_dir);
+    builtin_path = aoStrPrintf("%s/include/tos.HH", args->install_dir);
+    char *root_dir = mprintf("%s/include/", args->install_dir);
 
     lexInit(l,NULL,CCF_PRE_PROC|lexer_flags);
     l->seen_files = seen_files;
@@ -64,7 +65,7 @@ void compileToTokens(Cctrl *cc, HccOpts *opts, int lexer_flags) {
     lexSetBuiltinRoot(l,root_dir);
 
     /* library files */
-    lexPushFile(l,aoStrDupRaw(opts->infile,strlen(opts->infile)));
+    lexPushFile(l,aoStrDupRaw(args->infile,strlen(args->infile)));
     /* the structure is a stack so this will get popped first */
     lexPushFile(l,builtin_path);
 
@@ -80,16 +81,16 @@ void compileToTokens(Cctrl *cc, HccOpts *opts, int lexer_flags) {
     free(root_dir);
 }
 
-int compileToAst(Cctrl *cc, HccOpts *opts, int lexer_flags) {
+int compileToAst(Cctrl *cc, CliArgs *args, int lexer_flags) {
     Lexer *l = (Lexer *)malloc(sizeof(Lexer));
-    aoStr *builtin_path = aoStrPrintf("%s/include/tos.HH", opts->install_dir);
-    char *root_dir = mprintf("%s/include/", opts->install_dir);
+    aoStr *builtin_path = aoStrPrintf("%s/include/tos.HH", args->install_dir);
+    char *root_dir = mprintf("%s/include/", args->install_dir);
 
     lexInit(l,NULL,CCF_PRE_PROC|lexer_flags);
     l->lineno = 1;
     lexSetBuiltinRoot(l,root_dir);
 
-    lexPushFile(l,aoStrDupRaw(opts->infile,strlen(opts->infile)));
+    lexPushFile(l,aoStrDupRaw(args->infile,strlen(args->infile)));
     /* library files */
     /* the structure is a so this will get popped first */
     lexPushFile(l,builtin_path);

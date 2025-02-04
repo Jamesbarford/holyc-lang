@@ -2,7 +2,7 @@
 #define CONFIG_H
 
 #if defined(__APPLE__) && defined(MAC_OS_X_VERSION_10_6)
-#define OS_STR "MacOS"
+#define OS_STR "apple"
 #define IS_MACOS 1
 #endif
 #if defined(__APPLE__) && defined(MAC_OS_X_VERSION_10_6) || \
@@ -25,5 +25,10 @@
 #define ARCH_STR "aarch64"
 #endif
 
+#ifndef __GNUC__
+    #define __attribute__(x)  // Define as empty if not using GCC/Clang
+#endif
+
+#define __noreturn __attribute__((noreturn))
 
 #endif // !CONFIG_H

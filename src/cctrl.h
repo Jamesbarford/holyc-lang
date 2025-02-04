@@ -5,6 +5,7 @@
 
 #include "aostr.h"
 #include "ast.h"
+#include "config.h"
 #include "map.h"
 #include "lexer.h"
 
@@ -151,10 +152,10 @@ AstType *cctrlGetKeyWord(Cctrl *cc, char *name, int len);
 void cctrlInfo(Cctrl *cc, char *fmt, ...);
 void cctrlWarning(Cctrl *cc, char *fmt, ...);
 void cctrlWarningFromTo(Cctrl *cc, char *suggestion, char from, char to, char *fmt, ...);
-void cctrlRaiseExceptionFromTo(Cctrl *cc, char *suggestion, char from, char to, char *fmt, ...) __attribute__ ((noreturn));
-void cctrlRaiseException(Cctrl *cc, char *fmt, ...) __attribute__ ((noreturn));
-void cctrlRaiseSuggestion(Cctrl *cc, char *suggestion, char *fmt, ...) __attribute__ ((noreturn));
-void cctrlIce(Cctrl *cc, char *fmt, ...) __attribute__ ((noreturn));
+__noreturn void cctrlRaiseExceptionFromTo(Cctrl *cc, char *suggestion, char from, char to, char *fmt, ...);
+__noreturn void cctrlRaiseException(Cctrl *cc, char *fmt, ...);
+__noreturn void cctrlRaiseSuggestion(Cctrl *cc, char *suggestion, char *fmt, ...);
+__noreturn void cctrlIce(Cctrl *cc, char *fmt, ...);
 Ast *cctrlGetOrSetString(Cctrl *cc, char *str, int len, long real_len);
 void cctrlRewindUntilPunctMatch(Cctrl *cc, long ch, int *_count);
 void cctrlRewindUntilStrMatch(Cctrl *cc, char *str, int len, int *_count);

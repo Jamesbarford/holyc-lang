@@ -1,9 +1,9 @@
 #ifndef TRANSPILER_H
 #define TRANSPILER_H
 
-#include "aostr.h"
+#include "cli.h"
 #include "cctrl.h"
 
-aoStr *transpileToC(Cctrl *cc, HccOpts *opts);
+aoStr *transpileToC(Cctrl *cc, CliArgs *args);
 
 #endif // TRANSPILER_H
