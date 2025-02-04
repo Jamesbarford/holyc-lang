@@ -413,8 +413,8 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
             }
             case CLI_HELP:    cliPrintUsage(); break;
             case CLI_VERSION: cliVersionPrint(); break;
-            case CLI_TERRY: cliTerryInfo(); break;
-            }
+            case CLI_TERRY:   cliTerryInfo(); break;
+        }
     }
 
     if (args->to_stdout && !args->assemble_only) {
