@@ -5,6 +5,8 @@ Bool SizeofString()
   if (sizeof("hello") != 6) return FALSE;
   if (sizeof("h") != 2) return FALSE;
   if (sizeof("hello world") != 12) return FALSE;
+  if (sizeof("hello" " world") != 12) return FALSE;
+  if (sizeof("hey" "how " "are " " you?") != 17) return FALSE;
   return TRUE;
 }
 
