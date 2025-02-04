@@ -920,8 +920,8 @@ int lex(Lexer *l, Lexeme *le) {
         case '\"': {
             long real_len = 0;
             aoStr *str = lexString(l,'"',&real_len);
-            le->start = str->data; // l->cur_str;
-            le->len = str->len; //l->cur_strlen;
+            le->start = str->data;
+            le->len = str->len;
             le->tk_type = TK_STR;
             le->line = l->lineno;
             le->i64 = real_len;
