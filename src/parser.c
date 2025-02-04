@@ -42,7 +42,7 @@ Ast *parseFloatingCharConst(Cctrl *cc, Lexeme *tok) {
 
     while (ch) {
         str[len++] = ch & 0xFF;
-        ch = ch >> 8; 
+        ch = ch >> 8;
     }
 
     Ast *ast = cctrlGetOrSetString(cc,str,len,len);
@@ -441,7 +441,6 @@ AstType *parseClassOrUnion(Cctrl *cc, StrMap *env,
         int is_intrinsic)
 {
     aoStr *tag = NULL;
-    int real_size = 0;
     int aligned_size = 0;
     unsigned int class_size;
     Lexeme *tok = cctrlTokenGet(cc);
