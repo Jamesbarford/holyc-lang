@@ -22,10 +22,7 @@ Steps to reproduce the behavior:
 A clear and concise description of what you expected to happen.
 
 **Compiler version**
-(run hcc --help)
-
-**Commit Hash**
-(run git log and take the first hash)
+(run hcc --version)
 
 **Desktop (please complete the following information):**
  - OS: [e.g. Ubuntu 24.02]

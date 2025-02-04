@@ -399,7 +399,6 @@ Lexeme *cctrlTokenGet(Cctrl *cc) {
 
 aoStr *cctrlSeverityMessage(int severity) {
     aoStr *buf = aoStrNew();
-    int is_terminal = isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
     if (is_terminal) {
         switch (severity) {
             case CCTRL_ERROR:
@@ -445,7 +444,6 @@ aoStr *cctrlSeverityMessage(int severity) {
 
 void cctrlFileAndLine(Cctrl *cc, aoStr *buf, ssize_t lineno, ssize_t char_pos, char *msg, int severity) {
     aoStr *severity_msg = cctrlSeverityMessage(severity);
-    int is_terminal = isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
 
     aoStrCatFmt(buf,"%S%s", severity_msg, msg);
     if (buf->data[buf->len - 1] != '\n') {
@@ -473,7 +471,6 @@ void cctrlFileAndLine(Cctrl *cc, aoStr *buf, ssize_t lineno, ssize_t char_pos, c
 }
 
 char *lexemeToColor(Cctrl *cc, Lexeme *tok, int is_err) {
-    int is_terminal = isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
     if (!is_terminal) {
         switch (tok->tk_type) {
             case TK_KEYWORD: return mprintf("%.*s", tok->len,tok->start);
@@ -567,7 +564,6 @@ void cctrlCreateColoredLine(Cctrl *cc,
                             const char *line_buffer)
 {
     (void)suggestion;
-    int is_terminal = isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
     if (is_terminal) {
         aoStrCat(buf, ESC_CYAN"     |\n"ESC_RESET);
     } else {
@@ -623,7 +619,6 @@ aoStr *cctrlCreateErrorLine(Cctrl *cc,
                             char *suggestion)
 {
     char *color = severity == CCTRL_ERROR || CCTRL_ICE ? ESC_BOLD_RED : CCTRL_WARN ? ESC_BOLD_YELLOW : ESC_CYAN;
-    int is_terminal = isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
     if (!cc->lexer_) {
         aoStr *buf = aoStrNew();
         cctrlFileAndLine(cc,buf,lineno,-1,msg,severity);
@@ -687,7 +682,6 @@ aoStr *cctrlCreateErrorLine(Cctrl *cc,
 
 aoStr *cctrlMessagVnsPrintF(Cctrl *cc, char *fmt, va_list ap, int severity) {
     char *msg = mprintVa(fmt, ap, NULL);
-    int is_terminal = isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
     aoStr *bold_msg = aoStrNew();
     if (is_terminal) {
         aoStrCatFmt(bold_msg, ESC_BOLD"%s"ESC_CLEAR_BOLD, msg);
@@ -704,7 +698,6 @@ aoStr *cctrlMessagVnsPrintF(Cctrl *cc, char *fmt, va_list ap, int severity) {
 aoStr *cctrlMessagVnsPrintFWithSuggestion(Cctrl *cc, char *fmt, va_list ap, 
                                           int severity, char *suggestion)
 {
-    int is_terminal = isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
     char *msg = mprintVa(fmt, ap, NULL);
     aoStr *bold_msg = aoStrNew();
     if (is_terminal) {
@@ -860,7 +853,7 @@ aoStr *cctrlRaiseFromTo(Cctrl *cc, int severity, char *suggestion, char from,
             aoStrCatFmt(buf,"%s^%s",color,ESC_RESET);
         }
         if (suggestion) {
-            if (isatty(STDOUT_FILENO)) {
+            if (is_terminal) {
                 aoStrCatFmt(buf,"%s %s%s",color,suggestion,ESC_RESET);
             } else {
                 aoStrCatFmt(buf, " %s", suggestion);

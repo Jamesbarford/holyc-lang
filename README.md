@@ -65,7 +65,7 @@ ExampleFunction;
 ## Compatibility
 Currently this holyc compiler will compile holyc source code to an x86_64 
 compatible binary which has been tested on amd linux and an intel mac.
-Thus most `x86_64` architectures should be supported.
+Thus most x86_64 architectures should be supported.
 
 ## Building
 ### Operating Systems:
@@ -123,30 +123,8 @@ If you would like to include `sqlite3` then please add `-DHCC_LINK_SQLITE3=1`
 to either the Makefile or when configuring cmake.
 
 ## Using the compiler
-Once the compiler has been compiled the following options are available, they 
-can be displayed by running `hcc --help`
-```
-HolyC Compiler 2024. UNSTABLE
-hcc [..OPTIONS] <..file>
-
-OPTIONS:
-  -ast       Print the ast and exit
-  -cfg       Create graphviz control flow graph as a .dot file
-  -cfg-png   Create graphviz control flow graph as a png
-  -cfg-svg   Create graphviz control flow graph as a svg
-  -tokens    Print the tokens and exit
-  -S         Emit assembly only
-  -obj       Emit an objectfile
-  -lib       Emit a dynamic and static library
-  -clibs     Link c libraries like: -clibs=`-lSDL2 -lxml2 -lcurl...`
-  -o         Output filename: hcc -o <name> ./<file>.HC
-  -o-        Output assembly to stdout, only for use with -S
-  -run       Immediately run the file (not JIT)
-  -transpile Transpile the code to C, this is best effort
-  -g         Not implemented
-  -D<var>    Set a compiler #define (does not accept a value)
-  --help     Print this message
-```
+Once the compiler has been compiled, aside from compiling `.HC` files, more 
+options can be displayed by running `hcc --help`
 
 ## Key Differences between this and TempleOS HolyC
 - `auto` key word for type inference, an addition which makes it easier

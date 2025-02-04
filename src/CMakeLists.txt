@@ -37,6 +37,7 @@ set(SOURCES
     cctrl.c
     cfg-print.c
     cfg.c
+    cli.c
     compile.c
     lexer.c
     list.c
@@ -57,6 +58,7 @@ set(HEADERS
     cctrl.h
     cfg-print.h
     cfg.h
+    cli.h
     compile.h
     config.h
     lexer.h

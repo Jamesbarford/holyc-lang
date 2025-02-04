@@ -26,6 +26,8 @@
 
 #define min(x,y) (((x) < (y) ? (x) : (y)))
 
+extern int is_terminal;
+
 #ifndef DEBUG
 #define loggerDebug(...)
 

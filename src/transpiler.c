@@ -1684,7 +1684,7 @@ aoStr *transpileIncludes(TranspileCtx *ctx) {
     return buf;
 }
 
-aoStr *transpileToC(Cctrl *cc, HccOpts *opts) {
+aoStr *transpileToC(Cctrl *cc, CliArgs *args) {
     TranspileCtx *ctx = transpileCtxNew(cc);
     transpileInitMaps();
     
@@ -1692,8 +1692,8 @@ aoStr *transpileToC(Cctrl *cc, HccOpts *opts) {
     StrMap *built_in_types = strMapNew(32);
     StrMap *clsdefs = cc->clsdefs;
 
-    aoStr *builtin_path = aoStrPrintf("%s/include/tos.HH", opts->install_dir);
-    char *root = mprintf("%s/include",opts->install_dir);
+    aoStr *builtin_path = aoStrPrintf("%s/include/tos.HH", args->install_dir);
+    char *root = mprintf("%s/include",args->install_dir);
 
     Lexer *l = (Lexer *)malloc(sizeof(Lexer));
     l->lineno = 1;
@@ -1707,7 +1707,7 @@ aoStr *transpileToC(Cctrl *cc, HccOpts *opts) {
     cc->clsdefs = built_in_types;
     parseToAst(cc);
 
-    lexPushFile(l,aoStrDupRaw(opts->infile,strlen(opts->infile)));
+    lexPushFile(l,aoStrDupRaw(args->infile,strlen(args->infile)));
     cctrlInitParse(cc,l);
     cc->clsdefs = clsdefs;
     strMapMerge(clsdefs, built_in_types);
