@@ -106,7 +106,6 @@ static U64 IntMapGetIdx(IntMap *map, I64 key)
 {
   U64 idx = IntMapHashFunction(key, map->mask); 
   U64 mask = map->mask;
-  U64 probe = 1;
   IntMapNode **entries = map->entries;
   IntMapNode *cur;
 
@@ -114,8 +113,7 @@ static U64 IntMapGetIdx(IntMap *map, I64 key)
     if (cur->key == key) {
       return idx;
     }
-    idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-    probe++;
+    idx = (idx + 1) & mask;
   }
   return HT_DELETED;
 }
@@ -124,7 +122,6 @@ static U64 IntMapGetNextIdx(IntMap *map, I64 key, Bool *_is_free)
 {// Finds the next avalible slot and marks it in the bit vector as set
   U64 mask = map->mask;
   U64 idx = key & mask;
-  U64 probe = 1;
   IntMapNode *cur;
 
   while ((cur = map->entries[idx]) != NULL) {
@@ -132,8 +129,7 @@ static U64 IntMapGetNextIdx(IntMap *map, I64 key, Bool *_is_free)
       *_is_free = FALSE;
       return idx;
     }
-    idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-    probe++;
+    idx = (idx + 1) & mask;
   }
   *_is_free = TRUE;
   return idx;
@@ -393,9 +389,9 @@ static U64 StrMapGetNextIdx(StrMap *map, U8 *key, I64 key_len, Bool *_is_free)
 {// Finds the next avalible slot and marks it in the bit vector as set
   U64 mask = map->mask;
   U64 idx = StrHash(key) & mask;
-  U64 probe = 1;
   StrMapNode *cur;
   *_is_free = FALSE;
+
   while ((cur = map->entries[idx]) != NULL) {
     if (cur->key == NULL) {
       *_is_free = FALSE;
@@ -404,8 +400,7 @@ static U64 StrMapGetNextIdx(StrMap *map, U8 *key, I64 key_len, Bool *_is_free)
       *_is_free = FALSE;
       return idx;
     }
-    idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-    probe++;
+    idx = (idx + 1) & mask;
   }
   *_is_free = TRUE;
   return idx;
@@ -413,9 +408,8 @@ static U64 StrMapGetNextIdx(StrMap *map, U8 *key, I64 key_len, Bool *_is_free)
 
 static I64 StrMapGetIdx(StrMap *map, U8 *key, I64 key_len)
 {
-  auto mask = map->mask;
-  auto probe = 1;
-  auto idx = StrHash(key) & mask;
+  U64 mask = map->mask;
+  U64 idx = StrHash(key) & mask;
   StrMapNode **entries = map->entries;
   StrMapNode *cur;
 
@@ -423,8 +417,7 @@ static I64 StrMapGetIdx(StrMap *map, U8 *key, I64 key_len)
     if (cur->key_len == key_len && !StrNCmp(cur->key, key, key_len)) {
       return idx;
     }
-    idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-    probe++;
+    idx = (idx + 1) & mask;
   }
   return HT_DELETED;
 }
@@ -537,15 +530,14 @@ Bool StrMapSet(StrMap *map, U8 *key, U0 *value)
 
 public Bool StrMapDelete(StrMap *map, U8 *key)
 {
-  U64 idx,mask,probe;
   I64 len = StrLen(key);
   StrMapNode **entries = map->entries;
   StrMapNode *cur;
-  mask = map->mask;
-  idx = StrHash(key) & mask;
-  probe = 1;
+  U64 mask = map->mask;
+  U64 idx = StrHash(key) & mask;
   U0 (*free_value)(U0 *_val) = map->_free_value;
   U0 (*free_key)(U0 *_key) = map->_free_key;
+
   while ((cur = entries[idx])) {
     if (cur->key_len == len && !StrNCmp(cur->key,key,len)) {
       if (free_key)   free_key(cur->key);
@@ -556,8 +548,7 @@ public Bool StrMapDelete(StrMap *map, U8 *key)
       map->size--;
       return TRUE;
     }
-    idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-    probe++;
+    idx = (idx + 1) & mask;
   }
   return TRUE;
 }
