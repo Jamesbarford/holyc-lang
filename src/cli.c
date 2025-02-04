@@ -81,7 +81,7 @@ static CliParser parsers[] = {
     {str_lit("-tokens"),    0, CLI_PRINT_TOKENS, "-tokens", "Print the tokens and exit", &cliParseNop},
     {str_lit("-S"),         0, CLI_ASSEMBLE_ONLY, "-S", "Emit assembly only", &cliParseNop},
     {str_lit("-obj"),       0, CLI_EMIT_OBJECT, "-obj", "Emit an objectfile", &cliParseNop},
-    {str_lit("-lib"),       0, CLI_EMIT_DYLIB, "-lib", "Emit a dynamic and static library", &cliParseNop},
+    {str_lit("-lib"),       1, CLI_EMIT_DYLIB, "-lib <libname>", "Emit a dynamic and static library: `-lib <libname>`", &cliParseString},
     {str_lit("-clibs"),     0, CLI_CLIBS, "-clibs", "Link c libraries like: -clibs=`-lSDL2 -lxml2 -lcurl...`", &cliParseNop},
     {str_lit("-run"),       0, CLI_RUN, "-run", "Immediately run the file (not JIT)", &cliParseNop},
     {str_lit("-o"),         1, CLI_OUTPUT_FILENAME, "-o <binary_name>", "Output filename: `-o <name> ./<file>.HC`", &cliParseString},
@@ -394,7 +394,11 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
             case CLI_CFG_CREATE_SVG:     args->cfg_create_svg = 1; break;
             case CLI_ASM_DEBUG_COMMENTS: args->asm_debug_comments = 1; break;
             case CLI_ASSEMBLE_ONLY:      args->assemble_only = 1; break;
-            case CLI_EMIT_DYLIB:         args->emit_dylib = 1; break;
+            case CLI_EMIT_DYLIB: {
+                args->emit_dylib = 1;
+                args->lib_name = mprintf("%s",value.str);
+                break;
+            }
             case CLI_EMIT_OBJECT:        args->emit_object = 1; break;
             case CLI_RUN:                args->run = 1; break;
             case CLI_ASSEMBLE:           args->assemble = 1; break;
