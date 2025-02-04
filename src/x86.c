@@ -2103,42 +2103,18 @@ void asmGlobalVar(StrMap *seen_globals, aoStr *buf, Ast* ast) {
 }
 
 void asmDataSection(Cctrl *cc, aoStr *buf) {
-    aoStrCatPrintf(buf, "sign_bit:\n\t.quad 0x8000000000000000\n");
-    aoStrCatPrintf(buf, "one_dbl:\n\t.double 1.0\n");
+    aoStrCatFmt(buf, "sign_bit:\n\t.quad 0x8000000000000000\n");
+    aoStrCatFmt(buf, "one_dbl:\n\t.double 1.0\n");
 
     StrMapIterator *it = strMapIteratorNew(cc->strs);
     StrMapNode *n = NULL;
     while ((n = strMapNext(it)) != NULL) {
         Ast *ast = (Ast *)n->value;
         assert(ast->kind == AST_STRING);
-
-        char *label = ast->slabel->data;
-        char *str = ast->sval->data;
-        aoStr *escaped = aoStrAlloc(1<<10);
-
-        char *ptr = str;
-        while (*ptr) {
-            switch (*ptr) {
-                case '\\': aoStrCatPrintf(escaped,"\\"); break;
-                case '\n': aoStrCatPrintf(escaped,"\\n"); break;
-                case '\t': aoStrCatPrintf(escaped,"\\t"); break;
-                case '\r': aoStrCatPrintf(escaped,"\\r"); break;
-                case '\b': aoStrCatPrintf(escaped,"\\n"); break;
-                case '\v': aoStrCatPrintf(escaped,"\\v"); break;
-                default: aoStrPutChar(escaped,*ptr); break;
-            }
-            ptr++;
-        }
-
-        if (escaped->len) {
-            aoStrCatPrintf(buf,"%s:\n\t",label);
-            aoStrCatPrintf(buf,
-                    ".string \"%s\\0\"\n\t"
-                    ".data\n\t"
-                    ".align 4\n"
-                    , escaped->data);
-        }
-        aoStrRelease(escaped);
+        aoStrCatFmt(buf,
+                "%S:\n\t"
+                ".asciz \"%S\"\n",
+                ast->slabel, ast->sval);
     }
     aoStrPutChar(buf,'\t');
     strMapIteratorRelease(it);

@@ -718,14 +718,17 @@ static Ast *parsePrimary(Cctrl *cc) {
         }
         return ast;
     case TK_STR: {
+        long real_len = 0;
         aoStr *str = aoStrNew();
         cctrlTokenRewind(cc);
         /* Concatinate adjacent strings together */
         while ((tok = cctrlTokenGet(cc)) != NULL && tok->tk_type == TK_STR) {
-            aoStrCatPrintf(str,"%.*s",tok->len,tok->start);
+            aoStrCatFmt(str,"%.*s",tok->len,tok->start);
+            real_len += tok->i64-1;
         }
+        real_len++;
         cctrlTokenRewind(cc);
-        ast = cctrlGetOrSetString(cc, str->data, str->len);
+        ast = cctrlGetOrSetString(cc, str->data, str->len, real_len);
         free(str);
         return ast;
     }
@@ -1044,32 +1047,35 @@ static Ast *parseCast(Cctrl *cc) {
     return ast;
 }
 
-static AstType *parseSizeOfType(Cctrl *cc) {
-    Lexeme *tok,*peek;
-    AstType *type;
-    Ast *ast;
-
-    tok = cctrlTokenGet(cc);
-    peek = cctrlTokenPeek(cc);
+static Ast *parseSizeof(Cctrl *cc) {
+    Lexeme *tok = cctrlTokenGet(cc);
+    Lexeme *peek = cctrlTokenPeek(cc);
+    AstType *type = NULL;
+    Ast *ast = NULL;
 
     if (tokenPunctIs(tok,'(') && cctrlIsKeyword(cc,peek->start,peek->len)) {
         type = parseFullType(cc);
         cctrlTokenExpect(cc,')');
-        peek = cctrlTokenPeek(cc);
-        return type;
+    } else {
+        cctrlTokenRewind(cc);
+        ast = parseUnaryExpr(cc);
+        type = ast->type;
     }
 
-    cctrlTokenRewind(cc);
-    ast = parseUnaryExpr(cc);
-    return ast->type;
-}
-
-static Ast *parseSizeof(Cctrl *cc) {
-    AstType *type = parseSizeOfType(cc);
     if (cc->flags & CCTRL_PRESERVE_SIZEOF) {
         return astSizeOf(type);
     }
-    long size = type->size;
+
+    /* If we have a string we want the _true_ length of it which as the string
+     * is escaped needs to be calculated manually. */
+    long size = 0; 
+    if (ast && ast->kind == AST_STRING) {
+        size = ast->real_len;
+    } else {
+        /* Otherwise the size is sufficient */
+        size = type->size;
+    }
+
     assert(size >= 0);
     return astI64Type(size);
 }

@@ -192,10 +192,16 @@ static void astFreeGVar(Ast *ast) {
     free(ast);
 }
 
-Ast *astString(char *str, int len) {
+Ast *astString(char *str, int len, long real_len) {
     Ast *ast = astNew();
     ast->kind = AST_STRING;
-    ast->sval = aoStrDupRaw(str,len);
+    if (len == 0) {
+        ast->sval = aoStrPrintf("\\0");
+        ast->real_len = 1;
+    } else {
+        ast->sval = aoStrDupRaw(str,len);
+        ast->real_len = real_len;
+    }
     ast->type = astMakeArrayType(ast_u8_type, ast->sval->len + 1);
     ast->slabel = astMakeLabel();
     return ast;
@@ -606,6 +612,7 @@ AstType *astMakeClassField(AstType *type, int offset) {
     memcpy(field_type,type,sizeof(AstType));
     field_type->clsname = NULL;
     field_type->offset = offset;
+    field_type->size = type->size;
     return field_type;
 }
 

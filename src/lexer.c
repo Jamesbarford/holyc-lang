@@ -681,144 +681,62 @@ finish:
     return TK_IDENT;
 }
 
-long lexInStr(Lexer *l, unsigned char *buf, long size, int *done,
-        char terminator, int escape_quotes)
-{
-    long i = 0, j = 0, k = 0, ch = 0;
-    *done = 1;
+/* As this function escapes strings we pass in `_real_len` to be able 
+ * to capture the length of the string minus escape sequences. */
+aoStr *lexString(Lexer *l, char terminator, long *_real_len) {
+    aoStr *buffer = aoStrNew();
+    char ch = '\0';
+    long real_len = 0;
+    int is_bytes = 0;
 
-    escape_quotes = 0;
-    if (escape_quotes) {
-        ch = lexNextChar(l);
-    }
-
-    while (i < size - 1) {
-        ch = lexNextChar(l);
+    while ((ch = lexNextChar(l)) != terminator) {
+        real_len++;
         if (ch == '\n') {
             l->lineno++;
         }
-        if (escape_quotes && (ch == '"' && lexPeek(l) == '"')) {
-            ch = lexNextChar(l);
-            buf[i++] = '\0';
-            return i;
-        } else if (!escape_quotes && (!ch || ch == terminator)) {
-            buf[i++] = '\0';
-            return i;
+
+        if (!ch || ch == terminator) {
+            goto done;
         } else if (ch == '\\') {
             ch = lexNextChar(l);
-
-            if (l->flags & CCF_ESCAPE_STRING_NEWLINES) {
-                buf[i++] = '\\';
-                buf[i++] = ch;
-                goto out;
-            }
+            aoStrPutChar(buffer, '\\');
 
             switch (ch) {
-            case '\\':
-                buf[i++] = '\\';
-                buf[i++] = '\\';
-                break;
-            case '0':
-                buf[i++] = '\\';
-                buf[i++] = '0';
-                break;
-            case '\'':
-                buf[i++] = '\\';
-                buf[i++] = '\'';
-                break;
-            case '`':
-                buf[i++] = '\\';
-                buf[i++] = '`';
-            case '"':
-                buf[i++] = '\\';
-                buf[i++] = '"';
-                break;
-            case 'd':
-                buf[i++] = '\\';
-                buf[i++] = 'd';
-                break;
-            /* XXX: This potentially breaks multi line strings*/
-            case 'n':
-                buf[i++] = '\\';
-                buf[i++] = 'n';
-                break;
-            case 'r':
-                buf[i++] = '\\';
-                buf[i++] = 'r';
-                break;
-            case 't':
-                buf[i++] = '\\';
-                buf[i++] = 't';
-                break;
-            case 'v':
-                buf[i++] = '\\';
-                buf[i++] = 'v';
-                break;
-            case 'f':
-                buf[i++] = '\\';
-                buf[i++] = 'f';
-                break;
-            case 'x':
-            case 'X':
-                j = 0;
-                for (k = 0; k < 2; k++) {
-                    ch = toupper(lexNextChar(l));
-                    if (isHex(ch)) {
-                        if (ch <= '9') {
-                            j = (j << 4) + ch - '0';
-                        } else {
-                            j = (j << 4) - 'A' + 10;
-                        }
-                    } 
-                        break;
-                }
-                buf[i++] = j;
-                break;
+                case '\\': aoStrPutChar(buffer, '\\'); break;
+                case '\'': aoStrPutChar(buffer, '\''); break;
+                case '0':  aoStrPutChar(buffer, '0'); break;
+                case '`':  aoStrPutChar(buffer, '`'); break;
+                case '"':  aoStrPutChar(buffer, '"'); break;
+                case 'n':  aoStrPutChar(buffer, 'n'); break;
+                case 'r':  aoStrPutChar(buffer, 'r'); break;
+                case 't':  aoStrPutChar(buffer, 't'); break;
+                case 'b':  aoStrPutChar(buffer, 'b'); break;
+                case 'f':  aoStrPutChar(buffer, 'f'); break;
+                case 'v':  aoStrCatFmt(buffer, "x0B"); break;
+                case 'x':
+                case 'X':
+                    is_bytes = 1;
+                    aoStrPutChar(buffer, 'x');
+                    aoStrPutChar(buffer, toupper(lexNextChar(l)));
+                    aoStrPutChar(buffer, toupper(lexNextChar(l)));
+                    break;
             default:
-                buf[i++] = '\\';
+                loggerPanic("Line: %d - Invalid escape character: '%c'\n",
+                        l->lineno, (char)ch);
             }
         } else {
-            if (escape_quotes && ch == '\"') {
-                buf[i++] = '\\';
-            }
-            buf[i++] = ch;
+            aoStrPutChar(buffer, ch);
         }
     }
-out:
-    *done = 0;
-    return i;
-}
 
-long lexString(Lexer *l, char terminator, int escape_quotes) {
-    char *buf2, buf[128];
-    int str_done = 0;
-    long len, char_count;
-
-    len = char_count = 0;
-    buf2 = NULL;
-    
-    do {
-        char_count = lexInStr(l, (unsigned char *)buf, sizeof(buf),
-                &str_done,terminator,escape_quotes);
-        char *buf3 = (char *)malloc(len+char_count);
-        if (buf2) {
-            memcpy(buf3,buf2,len);
-            free(buf2);
-            buf2 = buf3;
-            memcpy(buf2+len,buf,char_count);
-        } else {
-            buf2 = buf3;
-            memcpy(buf2,buf,char_count);
-        }
-        len += char_count;
-    } while(!str_done);
-
-    free(l->cur_str);
-    l->cur_str = (char *)malloc(len);
-    memcpy(l->cur_str,buf2,len);
-    free(buf2);
-    l->cur_strlen = len;
-    return TK_STR;
+done:
+    /* XXX: Should raise exception if we run out of tokens as it is 
+     * an unterminated string. */
+    if (!is_bytes) {
+        real_len++;
+    }
+    *_real_len = real_len;
+    return buffer;
 }
 
 /* Length of the char const is returned, it OR's in at max 8 characters. 
@@ -999,20 +917,20 @@ int lex(Lexer *l, Lexeme *le) {
             l->ishex = 0;
             return 1;
 
-        case '\"':
-            if (lexPeek(l) == '"') {
-                lexString(l,'"',1);
-            } else {
-                lexString(l,'"',0);
-            }
-            le->start = l->cur_str;
-            le->len = l->cur_strlen;
-            l->cur_str = NULL;
-            l->cur_strlen = 0;
+        case '\"': {
+            long real_len = 0;
+            aoStr *str = lexString(l,'"',&real_len);
+            le->start = str->data;
+            le->len = str->len;
             le->tk_type = TK_STR;
             le->line = l->lineno;
+            le->i64 = real_len;
+
+            l->cur_str = NULL;
+            l->cur_strlen = 0;
             return 1;
-        
+        }
+
         case '\'':
             lexCharConst(l);
             le->start = start+1;

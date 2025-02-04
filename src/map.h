@@ -120,6 +120,7 @@ StrMap *strMapNew(unsigned long capacity);
 StrMap *strMapNewWithParent(unsigned long capacity, StrMap *parent);
 void *strMapGetLen(StrMap *map, char *key, long key_len);
 void *strMapGet(StrMap *map, char *key);
+int strMapAddLen(StrMap *map, char *key, long key_len, void *value);
 int strMapAdd(StrMap *map, char *key, void *value);
 int strMapAddOrErr(StrMap *map, char *key, void *value);
 int strMapHas(StrMap *map, char *key);

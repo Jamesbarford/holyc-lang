@@ -72,9 +72,8 @@ void aoStrToLowerCase(aoStr *buf) {
 
 void aoStrPutChar(aoStr *buf, char ch) {
     aoStrExtendBufferIfNeeded(buf, 10);
-    buf->data[buf->len] = ch;
-    buf->data[buf->len + 1] = '\0';
-    buf->len++;
+    buf->data[buf->len++] = ch;
+    buf->data[buf->len] = '\0';
 }
 
 void aoStrRepeatChar(aoStr *buf, char ch, int times) {
