@@ -106,6 +106,7 @@ Bool SizeofArrays()
     {2,2,"b"},
     {3,3,"c"},
   };
+  U8 *strs[] = {"hello", " world\n"};
 
   if (sizeof(array1) != sizeof(I8)  * 3) return FALSE;
   if (sizeof(array2) != sizeof(I16) * 3) return FALSE;
@@ -119,6 +120,11 @@ Bool SizeofArrays()
   if (sizeof(array3) / sizeof(array3[0]) != 3) return FALSE;
   if (sizeof(array4) / sizeof(array4[0]) != 3) return FALSE;
   if (sizeof(array5) / sizeof(array5[0]) != 3) return FALSE;
+  if (sizeof(strs) / sizeof(strs[0]) != 2) return FALSE;
+
+  if (sizeof(strs)    != sizeof(U8 *) * 2) return FALSE;
+  if (sizeof(strs[0]) != 8) return FALSE;
+  if (sizeof(strs[1]) != 8) return FALSE;
 
   return TRUE;
 }
@@ -128,7 +134,6 @@ I32 Main()
   "Test - sizeof(...): \n";
   I64 tests = 8;
   I64 correct = 0;
-
   
   if (SizeofString()) {
     correct++;
