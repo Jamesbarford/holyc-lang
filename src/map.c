@@ -188,7 +188,6 @@ IntMapNode *intMapNodeNew(long key, void *value) {
 static unsigned long intMapGetIdx(IntMap *map, long key) {
     unsigned long idx = intMapHashFunction(key, map->mask); 
     unsigned long mask = map->mask;
-    // unsigned long probe = 1;
     IntMapNode **entries = map->entries;
     IntMapNode *cur;
 
@@ -197,8 +196,6 @@ static unsigned long intMapGetIdx(IntMap *map, long key) {
             return idx;
         }
         idx = (idx + 1) & mask;
-        // idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-        // probe++;
     }
     return HT_DELETED;
 }
@@ -233,7 +230,6 @@ IntMapNode *intMapNext(IntMapIterator *it) {
 static unsigned long intMapGetNextIdx(IntMap *map, long key, int *_is_free) { 
     unsigned long mask = map->mask;
     unsigned long idx = key & mask;
-    // unsigned long probe = 1;
     IntMapNode *cur;
 
     while ((cur = map->entries[idx]) != NULL) {
@@ -242,8 +238,6 @@ static unsigned long intMapGetNextIdx(IntMap *map, long key, int *_is_free) {
             return idx;
         }
         idx = (idx + 1) & mask;
-        // idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-        // probe++;
     }
     *_is_free = 1;
     return idx;
@@ -507,7 +501,6 @@ static int strMapKeyMatch(StrMapNode *n, char *key, ssize_t key_len) {
 
 static long strMapGetIdx(StrMap *map, char *key, long key_len) {
     unsigned long mask = map->mask;
-    // unsigned long probe = 1;
     unsigned long idx = strMapHashFunction(key, key_len, mask);
     StrMapNode **entries = map->entries;
     StrMapNode *cur;
@@ -517,8 +510,6 @@ static long strMapGetIdx(StrMap *map, char *key, long key_len) {
             return idx;
         }
         idx = (idx + 1) & mask;
-        // idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-        // probe++;
     }
     return HT_DELETED;
 }
@@ -528,7 +519,6 @@ static unsigned long strMapGetNextIdx(StrMap *map, char *key, long key_len,
 { // Finds the next avalible slot
     unsigned long mask = map->mask;
     unsigned long idx = strMapHashFunction(key, key_len, mask);
-    // unsigned long probe = 1;
     StrMapNode *cur;
     *_is_free = 0;
     while ((cur = map->entries[idx]) != NULL) {
@@ -540,8 +530,6 @@ static unsigned long strMapGetNextIdx(StrMap *map, char *key, long key_len,
             return idx;
         }
         idx = (idx + 1) & mask;
-        // idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-        // probe++;
     }
     *_is_free = 1;
     return idx;
@@ -722,7 +710,6 @@ int strMapRemove(StrMap *map, char *key) {
     long len = strlen(key);
     unsigned long mask = map->mask;
     unsigned long idx = strMapHashFunction(key, len, mask);
-    // unsigned long probe = 1;
     StrMapNode **entries = map->entries;
     StrMapNode *cur;
 
@@ -735,8 +722,6 @@ int strMapRemove(StrMap *map, char *key) {
             return 1;
         }
         idx = (idx + 1) & mask;
-        // (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-        // probe++;
     }
     return 0;
 }
@@ -813,7 +798,6 @@ static unsigned long intSetGetNextIdx(long *entries, unsigned long mask,
 { 
     unsigned long idx = key & mask;
     long cur;
-    // unsigned long probe = 1;
 
     while ((cur = entries[idx]) != HT_VACANT) {
         if (cur == key || cur == HT_DELETED) {
@@ -821,8 +805,6 @@ static unsigned long intSetGetNextIdx(long *entries, unsigned long mask,
             return idx;
         }
         idx = (idx + 1) & mask;
-        // (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-        // probe++;
     }
     *_is_free = 1;
     return idx;
@@ -830,7 +812,6 @@ static unsigned long intSetGetNextIdx(long *entries, unsigned long mask,
 
 static long intSetGetIdx(long *entries, unsigned long mask, long key) {
     unsigned long idx = intMapHashFunction(key, mask);
-    // unsigned long probe = 1;
     long cur_key;
 
     while ((cur_key = entries[idx]) != HT_VACANT) {
@@ -838,8 +819,6 @@ static long intSetGetIdx(long *entries, unsigned long mask, long key) {
             return idx;
         }
         idx = (idx + 1) & mask;
-        // idx = (idx + HT_PROBE_1 * probe + HT_PROBE_3 * probe * probe) & mask;
-        // probe++;
     }
     return HT_DELETED;
 }
