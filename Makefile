@@ -1,7 +1,7 @@
 C_COMPILER     ?= gcc
 BUILD_TYPE     ?= Release
 INSTALL_PREFIX ?= /usr/local
-CFLAGS         ?= -Wextra -Wall -Wno-implicit-fallthrough
+CFLAGS         ?= "-Wextra -Wall -Wno-implicit-fallthrough"
 
 default: all
 
