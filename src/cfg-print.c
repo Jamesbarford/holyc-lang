@@ -85,7 +85,7 @@ static aoStr *bbAstArrayToString(PtrVec *ast_array, int ast_count) {
         if (i + 1 != ast_count) {
             aoStrPutChar(ast_str,'|');
         }
-        xfree(lvalue_str);
+        // xfree(lvalue_str);
     }
     return ast_str;
 }
@@ -114,7 +114,7 @@ static void cfgBranchPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
         aoStrCatPrintf(builder->viz,"%s\n",internal->data);
     }
     aoStrCatPrintf(builder->viz,"if (%s)\\l\\\n}\"];\n\n",lvalue_str);
-    xfree(lvalue_str);
+ //   xfree(lvalue_str);
     aoStrRelease(internal);
 }
 
@@ -140,7 +140,7 @@ static void cfgDoWhileCondPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     }
 
     aoStrCatPrintf(builder->viz,"if (%s)\\l\\\n}\"];\n\n",lvalue_str);
-    xfree(lvalue_str);
+    // xfree(lvalue_str);
     aoStrRelease(internal);
 }
 
@@ -241,7 +241,7 @@ static void cfgCasePrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
         if (i + 1 != ast_count) {
             aoStrPutChar(ast_str,'|');
         }
-        free(lvalue_str);
+        // free(lvalue_str);
     }
 
     aoStrCatPrintf(builder->viz,
@@ -262,7 +262,7 @@ static void cfgCasePrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
                 bb->next->block_no);
     }
 
-    xfree(lvalue_str);
+    // xfree(lvalue_str);
     aoStrRelease(ast_str);
 }
 
@@ -294,7 +294,7 @@ static void cfgSwitchPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     aoStrCat(builder->viz,"\n}\"];\n\n");
     aoStrRelease(ast_str);
     aoStrRelease(internal);
-    xfree(lvalue_str);
+    // xfree(lvalue_str);
 }
 
 static void cfgContinuePrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
@@ -534,7 +534,7 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
             char *error = cfgGraphVizError(builder,bb,
                     CFG_GRAPHVIZ_ERROR_INVALID_TYPE);
             loggerWarning("%s\n",error);
-            free(error);
+            // free(error);
             break;
         }
     }

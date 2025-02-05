@@ -483,8 +483,8 @@ PtrVec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
                     //    cctrlTokenGet(cc);
                     //}
 
-                    free(expected);
-                    free(got);
+                    //free(expected);
+                    //free(got);
                 }
             }
             ptrVecPush(argv_vec,ast);
@@ -624,13 +624,13 @@ static Ast *parseIdentifierOrFunction(Cctrl *cc,
                 case '(': {
                     char *msg = mprintf("Try defining function `%.*s()`?",len,name);
                     cctrlRaiseSuggestion(cc,msg,"Variable or function `%.*s` has not been defined", len, name);
-                    free(msg);
+                    // free(msg);
                     break;
                 }
                 case '[': {
                     char *msg = mprintf("Try defining array `I64 %.*s[] = {1, 2, 3}`?",len,name);
                     cctrlRaiseSuggestion(cc,msg,"Variable or function `%.*s` has not been defined", len, name);
-                    free(msg);
+                    // free(msg);
                     break;
                 }
                 default:
@@ -840,7 +840,7 @@ Ast *parseGetClassField(Cctrl *cc, Ast *cls) {
                                 astTypeKindToHumanReadable(cls->type),
                                 type_str,
                                 var_str);
-        free(msg);
+        // free(msg);
     }
 
     type = cls->type;
@@ -1011,7 +1011,7 @@ Ast *parseExpr(Cctrl *cc, int prec) {
                                  lexemeTypeToString(peek->tk_type),
                                  peek->len, 
                                  peek->start);
-            free(msg);
+            // free(msg);
         }
 
         if (compound_assign) {

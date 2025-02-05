@@ -250,7 +250,7 @@ void asmPop(aoStr *buf, char *reg) {
 void asmCall(aoStr *buf, char *fname) {
     char *_fname = asmNormaliseFunctionName(fname);
     aoStrCatPrintf(buf,"call   %s\n\t", _fname);
-    free(_fname);
+    // free(_fname);
 }
 
 /* Save a global variable */
@@ -965,7 +965,7 @@ void asmBinOpFunctionAssign(Cctrl *cc, aoStr *buf, Ast *fnptr, Ast *fn) {
                     "movq    %%rax, %d(%%rbp)\n\t",
                     normalised,
                     fnptr->loff);
-            free(normalised);
+            // free(normalised);
             break;
         }
 
@@ -1045,7 +1045,7 @@ void asmBinaryOp(Cctrl *cc, aoStr *buf, Ast *ast) {
             fname = asmNormaliseFunctionName(ast->fname->data);
         }
         aoStrCatPrintf(buf,"leaq    %s(%%rip), %%rax\n\t",fname);
-        free(fname);
+        // free(fname);
     } else {
         loggerPanic("Cannot handle>: %s\n", astToString(ast));
     }

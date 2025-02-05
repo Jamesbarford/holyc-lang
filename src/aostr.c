@@ -28,7 +28,9 @@ static aoStr *aoStrPoolAlloc(void) {
 
 static void aoStrPoolReleaseStr(void *_pool, void *str) {
     (void)_pool;
-    free(((aoStr *)str)->data);
+    if (str) {
+        free(((aoStr *)str)->data);
+    }
 }
 
 void aoStrPoolRelease(void) {
@@ -55,10 +57,11 @@ void aoStrRelease(aoStr *buf) {
     }
 }
 
-/* Get the underlying string and free the container 'aoStr' */
+/* Get the underlying string, we do not free the `aoStr`... it will get 
+ * collected later. This means we don't need to manually keep track of this 
+ * buffer */
 char *aoStrMove(aoStr *buf) {
     char *buffer = buf->data;
-    // free(buf);
     return buffer;
 }
 
@@ -357,52 +360,6 @@ error:
 
 static char *mprintVaImpl(const char *fmt, va_list ap, size_t *_len, size_t *_allocated) {
     va_list copy;
-    int allocated = 256;
-    int len = 0;
-    char *buffer = (char *)malloc(sizeof(char)*allocated+1);
-
-    while (1) {
-        va_copy(copy,ap);
-        len = vsnprintf(buffer,allocated,fmt,copy);
-        va_end(copy);
-
-        if (len < 0) {
-            free(buffer);
-            return NULL;
-        }
-
-        if (len >= allocated) {
-            free(buffer);
-            allocated = (len + 2);
-            buffer = (char *)malloc(sizeof(char)*allocated);
-            if (buffer == NULL) return NULL;
-            continue;
-        }
-        break;
-    }
-    if (_len) *_len = len;
-    if (_allocated) *_allocated = allocated;
-    buffer[len] = '\0';
-    return buffer;
-}
-
-
-char *mprintVa(const char *fmt, va_list ap, ssize_t *_len) {
-    return mprintVaImpl(fmt,ap,(size_t *)_len,NULL);
-}
-
-/* Allocating printf */
-char *mprintf(const char *fmt, ...) {
-    va_list ap;
-    va_start(ap,fmt);
-    char *buf = mprintVa(fmt, ap, NULL);
-    va_end(ap);
-    return buf;
-}
-
-void aoStrCatPrintf(aoStr *b, const char *fmt, ...) {
-    va_list ap, copy;
-    va_start(ap, fmt);
 
     /* Probably big enough */
     size_t fmt_len = strlen(fmt);
@@ -420,7 +377,7 @@ void aoStrCatPrintf(aoStr *b, const char *fmt, ...) {
 
         if (len < 0) {
             free(buf);
-            return;
+            return NULL;
         }
 
         if (((size_t)len) >= bufferlen) {
@@ -428,15 +385,52 @@ void aoStrCatPrintf(aoStr *b, const char *fmt, ...) {
             bufferlen = ((size_t)len) + 2;
             buf = (char *)malloc(bufferlen);
             if (buf == NULL) {
-                return;
+                return NULL;
             }
             continue;
         }
         break;
     }
 
-    aoStrCatLen(b, buf, len);
-    free(buf);
+    if (_len) *_len = len;
+    if (_allocated) *_allocated = bufferlen;
+    buf[len] = '\0';
+    return buf;
+}
+
+char *mprintVa(const char *fmt, va_list ap, ssize_t *_len) {
+    return mprintVaImpl(fmt,ap,(size_t *)_len,NULL);
+}
+
+static aoStr *aoStrPrintfVa(const char *fmt, va_list ap) {
+    size_t len = 0;
+    size_t capacity = 0;
+    char *new_buf = mprintVaImpl(fmt,ap,&len,&capacity);
+    aoStr *buffer = aoStrPoolAlloc();
+    buffer->data = new_buf;
+    buffer->len = len;
+    buffer->capacity = capacity;
+    return buffer;
+}
+
+/* Allocating printf */
+char *mprintf(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap,fmt);
+    /* This is so we can use the pool allocator, and not have to deal with 
+     * freeing aribitary strings */
+    aoStr *buffer = aoStrPrintfVa(fmt, ap);
+    va_end(ap);
+    return aoStrMove(buffer);
+}
+
+void aoStrCatPrintf(aoStr *b, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+
+    aoStr *new_str = aoStrPrintfVa(fmt, ap);
+    aoStrCatAoStr(b,new_str);
+    aoStrRelease(new_str);
     va_end(ap);
 }
 
@@ -539,14 +533,7 @@ void aoStrCatFmt(aoStr *buf, const char *fmt, ...) {
 aoStr *aoStrPrintf(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    size_t len = 0;
-    size_t capacity = 0;
-    char *new_buf = mprintVaImpl(fmt,ap,&len,&capacity);
-    aoStr *buffer = aoStrPoolAlloc();
-    // (aoStr *)malloc(sizeof(aoStr));
-    buffer->data = new_buf;
-    buffer->len = len;
-    buffer->capacity = capacity;
+    aoStr *buffer = aoStrPrintfVa(fmt,ap);
     va_end(ap);
     return buffer;
 }

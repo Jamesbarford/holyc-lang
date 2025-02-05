@@ -425,23 +425,19 @@ void memPoolFree(MemPool *pool, void *ptr) {
  * as it is all traceable back too the pool. */
 void memPoolRelease(MemPool *pool, char free_pool) {
     if (pool) {
+        MemPoolIterator *it = memPoolIteratorNew(pool);
+        void *ptr = NULL;
+
+        /* Sometimes we may want to have non-pooled memory used on 
+         * an allocated object */
+        if (pool->deallocate) {
+            while ((ptr = memPoolNext(it)) != NULL) {
+                pool->deallocate(pool, ptr);
+            }
+        }
+
         for (unsigned int i = 0; i < pool->segment_count; ++i) {
             MemSegment *segment = pool->segments[i];
-            /* Sometimes we may want to have non-pooled memory used on 
-             * an allocated object */
-            if (pool->deallocate) {
-                MemChunk *chunk = segment->list;
-                while (chunk) {
-                    void *ptr = (void *)((unsigned char *)chunk + sizeof(MemChunk));
-                    /* We only want to call deallocate on the user pointer */
-                    if (chunk->free == 0) {
-                        pool->deallocate(pool, ptr);
-                    } else {
-                        printf("%s\n", memChunkToString(chunk));
-                    }
-                    chunk = chunk->next;
-                }
-            }
             free(segment->buffer);
             free(segment);
         }

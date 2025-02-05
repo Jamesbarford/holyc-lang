@@ -294,6 +294,9 @@ extern Ast *placeholder_arg;
 extern Ast *ast_loop_sentinal;
 extern Ast *ast_forever_sentinal;
 
+void astMemPoolInit(void);
+void astMemPoolRelease(void);
+
 AstType *astTypeCopy(AstType *type);
 void astRelease(Ast *ast);
 void astVectorRelease(PtrVec *vec);

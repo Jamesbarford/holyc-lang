@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include "aostr.h"
+#include "ast.h"
 #include "cctrl.h"
 #include "cfg-print.h"
 #include "cfg.h"
@@ -249,17 +250,29 @@ void assemble(CliArgs *args) {
     aoStrRelease(run_cmd);
 }
 
+void createMemoryPools(void) {
+    lexemePoolInit();
+    astMemPoolInit();
+    aoStrMemPoolInit();
+}
+
+void destroyMemoryPools(void) {
+    lexerPoolRelease();
+    astMemPoolRelease();
+    aoStrPoolRelease();
+}
+
 int main(int argc, char **argv) {
+    createMemoryPools();
     is_terminal = isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
 
     /* Using these pools vastly simplifies everything as we can free everything 
      * at the end. */
-    aoStrMemPoolInit();
-    lexemePoolInit();
 
     int lexer_flags = CCF_PRE_PROC;
     aoStr *asmbuf;
     Cctrl *cc;
+
 
     CliArgs args;
     cliArgsInit(&args);
@@ -269,7 +282,7 @@ int main(int argc, char **argv) {
 
     if (args.assemble) {
         assemble(&args);
-        aoStrPoolRelease();
+        destroyMemoryPools();
         return 0;
     }
 
@@ -280,7 +293,7 @@ int main(int argc, char **argv) {
 
     if (args.print_tokens) {
         compileToTokens(cc,&args,lexer_flags);
-        aoStrPoolRelease();
+        destroyMemoryPools();
         return 0;
     }
 
@@ -291,7 +304,7 @@ int main(int argc, char **argv) {
                " * please check for errors! */\n\n"
                "%s",args.infile, buf->data);
         aoStrRelease(buf);
-        aoStrPoolRelease();
+        destroyMemoryPools();
         return 0;
     }
 
@@ -313,11 +326,9 @@ int main(int argc, char **argv) {
                     ext,dot_outfile,args.infile_no_ext,ext);
             printf("Creating %s: %s\n",ext,dot_cmd);
             safeSystem(dot_cmd);
-            free(dot_cmd);
             unlink(dot_outfile);
         }
-        free(dot_outfile);
-        aoStrPoolRelease();
+        destroyMemoryPools();
         return 0;
     }
 
@@ -327,4 +338,5 @@ int main(int argc, char **argv) {
     if (args.defines_list) {
         listRelease(args.defines_list,NULL);
     }
+    destroyMemoryPools();
 }

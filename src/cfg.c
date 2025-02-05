@@ -231,8 +231,8 @@ char *bbToString(BasicBlock *bb) {
             BB_FMT_FLAG_CHARS,
             str_flags,
             str_prev);
-    free((char*)str_flags);
-    free((char*)str_prev);
+    //free((char*)str_flags);
+    //free((char*)str_prev);
 
     if (bb->next)  aoStrCatPrintf(str,"next = bb%d, ",bb->next->block_no);
     if (bb->_if)   aoStrCatPrintf(str,"if = bb%d, ",bb->_if->block_no);

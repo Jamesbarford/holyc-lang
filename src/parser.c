@@ -58,9 +58,9 @@ void parseTypeCheckClassFieldInitaliser(Cctrl *cc, AstType *cls_field_type, Ast 
         char *var_string = astLValueToString(init,0);
         cctrlWarning(cc,"Incompatible value being assigned to class field expected '%s' got '%s %s'",
                 cls_field_str,init_field,var_string);
-        free(cls_field_str);
-        free(init_field);
-        free(var_string);
+        //free(cls_field_str);
+        //free(init_field);
+        //free(var_string);
     }
 }
 
@@ -1090,9 +1090,9 @@ void parseRaiseCaseException(Cctrl *cc, Ast *case_expr) {
     char *type = astTypeToString(case_expr->type);
     char *suggestion = mprintf("Invalid use of type %s", type);
     cctrlRaiseExceptionFromTo(cc, suggestion, 'c', ':', "`case` must be followed by an integer constant got - %s", exp);
-    free(exp);
-    free(type);
-    free(suggestion);
+    //free(exp);
+    //free(type);
+    //free(suggestion);
 }
 
 Ast *parseCaseLabel(Cctrl *cc, Lexeme *tok) {
