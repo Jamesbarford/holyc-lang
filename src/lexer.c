@@ -48,6 +48,17 @@ Lexeme *lexerAllocLexeme(void) {
     return (Lexeme *)arenaAlloc(&lexeme_arena, sizeof(Lexeme));
 }
 
+char *lexerAllocateBuffer(unsigned int size) {
+    return (char *)arenaAlloc(&lexeme_arena, size);
+}
+
+char *lexerReAllocBuffer(char *ptr, unsigned int old_size, unsigned int new_size) {
+    (void)ptr;
+    char *buffer = lexerAllocateBuffer(new_size);
+    memcpy(buffer,ptr,old_size);
+    return buffer;
+}
+
 typedef struct {
     char *name;
     int kind;
@@ -697,11 +708,15 @@ finish:
 }
 
 /* As this function escapes strings we pass in `_real_len` to be able 
- * to capture the length of the string minus escape sequences. */
-aoStr *lexString(Lexer *l, char terminator, long *_real_len) {
-    aoStr *buffer = aoStrNew();
-    char ch = '\0';
+ * to capture the length of the string minus escape sequences. 
+ * The string is allocated from the lexers arean not the global allocator */
+char *lexString(Lexer *l, char terminator, long *_real_len, int *_buffer_len) {
+    unsigned int capacity = 64;
+    int len = 0;
     long real_len = 0;
+
+    char *buffer = lexerAllocateBuffer(64);
+    char ch = '\0';
     int is_bytes = 0;
 
     while ((ch = lexNextChar(l)) != terminator) {
@@ -710,37 +725,47 @@ aoStr *lexString(Lexer *l, char terminator, long *_real_len) {
             l->lineno++;
         }
 
+        if (len + 3 >= capacity) {
+            buffer = lexerReAllocBuffer(buffer, len, capacity * 2);
+            capacity *= 2;
+        }
+
         if (!ch || ch == terminator) {
             goto done;
         } else if (ch == '\\') {
             ch = lexNextChar(l);
-            aoStrPutChar(buffer, '\\');
 
+            buffer[len++] = '\\';
             switch (ch) {
-                case '\\': aoStrPutChar(buffer, '\\'); break;
-                case '\'': aoStrPutChar(buffer, '\''); break;
-                case '0':  aoStrPutChar(buffer, '0'); break;
-                case '`':  aoStrPutChar(buffer, '`'); break;
-                case '"':  aoStrPutChar(buffer, '"'); break;
-                case 'n':  aoStrPutChar(buffer, 'n'); break;
-                case 'r':  aoStrPutChar(buffer, 'r'); break;
-                case 't':  aoStrPutChar(buffer, 't'); break;
-                case 'b':  aoStrPutChar(buffer, 'b'); break;
-                case 'f':  aoStrPutChar(buffer, 'f'); break;
-                case 'v':  aoStrCatFmt(buffer, "x0B"); break;
+                case '\\': buffer[len++] = '\\'; break;
+                case '\'': buffer[len++] = '\''; break;
+                case '0':  buffer[len++] = '0' ; break;
+                case '`':  buffer[len++] = '`' ; break;
+                case '"':  buffer[len++] = '"' ; break;
+                case 'n':  buffer[len++] = 'n' ; break;
+                case 'r':  buffer[len++] = 'r' ; break;
+                case 't':  buffer[len++] = 't' ; break;
+                case 'b':  buffer[len++] = 'b' ; break;
+                case 'f':  buffer[len++] = 'f' ; break;
+                case 'v':  
+                    buffer[len++] = 'x';
+                    buffer[len++] = '0';
+                    buffer[len++] = 'B';
+                    break;
+
                 case 'x':
                 case 'X':
                     is_bytes = 1;
-                    aoStrPutChar(buffer, 'x');
-                    aoStrPutChar(buffer, toupper(lexNextChar(l)));
-                    aoStrPutChar(buffer, toupper(lexNextChar(l)));
+                    buffer[len++] = 'x';
+                    buffer[len++] = toupper(lexNextChar(l));
+                    buffer[len++] = toupper(lexNextChar(l));
                     break;
             default:
                 loggerPanic("Line: %d - Invalid escape character: '%c'\n",
                         l->lineno, (char)ch);
             }
         } else {
-            aoStrPutChar(buffer, ch);
+            buffer[len++] = ch;
         }
     }
 
@@ -750,7 +775,9 @@ done:
     if (!is_bytes) {
         real_len++;
     }
+    buffer[len] = '\0';
     *_real_len = real_len;
+    *_buffer_len = len;
     return buffer;
 }
 
@@ -933,14 +960,11 @@ int lex(Lexer *l, Lexeme *le) {
             return 1;
 
         case '\"': {
-            long real_len = 0;
-            aoStr *str = lexString(l,'"',&real_len);
-            le->start = str->data;
-            le->len = str->len;
+            le->len = 0;
+            le->i64 = 0;
+            le->start = lexString(l,'"',&le->i64,&le->len);
             le->tk_type = TK_STR;
             le->line = l->lineno;
-            le->i64 = real_len;
-
             l->cur_str = NULL;
             l->cur_strlen = 0;
             return 1;
