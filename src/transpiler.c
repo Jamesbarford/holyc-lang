@@ -564,8 +564,7 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
         break;
 
         case AST_STRING: {
-            escaped = aoStrEscapeString(ast->sval);
-            char *defn = transpileHighlightString(ctx,escaped->data);
+            char *defn = transpileHighlightString(ctx,ast->sval->data);
             aoStrCat(buf,defn);
             break;
         }
