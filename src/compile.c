@@ -34,7 +34,6 @@ void compilePrintAst(Cctrl *cc) {
         {
             tmp = astToString(ast);
             printf("%s\n", tmp);
-            // free(tmp);
         }
         it = it->next;
     }
@@ -52,12 +51,7 @@ aoStr *compileToAsm(Cctrl *cc) {
 
 void compileToTokens(Cctrl *cc, CliArgs *args, int lexer_flags) {
     Lexer *l = (Lexer *)globalArenaAllocate(sizeof(Lexer));
-    aoStr *builtin_path;
-    StrMap *seen_files;
-
-    seen_files = strMapNew(32);
-    
-    builtin_path = aoStrPrintf("%s/include/tos.HH", args->install_dir);
+    StrMap *seen_files = strMapNew(32);
     char *root_dir = mprintf("%s/include/", args->install_dir);
 
     lexInit(l,NULL,CCF_PRE_PROC|lexer_flags);
@@ -65,16 +59,11 @@ void compileToTokens(Cctrl *cc, CliArgs *args, int lexer_flags) {
     l->lineno = 1;
     lexSetBuiltinRoot(l,root_dir);
 
-    /* library files */
     lexPushFile(l,aoStrDupRaw(args->infile,strlen(args->infile)));
-    /* the structure is a stack so this will get popped first */
-    lexPushFile(l,builtin_path);
 
     Lexeme *token = NULL;
-
     while ((token = lexToken(cc->macro_defs,l))) {
         lexemePrint(token);
-        //free(token);
     }
 
     strMapRelease(seen_files);
