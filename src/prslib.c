@@ -475,16 +475,8 @@ PtrVec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
                 if ((check = astTypeCheck(param->type,ast,'=')) == NULL) {
                     char *expected = astTypeToColorString(param->type);
                     char *got = astTypeToColorString(ast->type);
-                    //cctrlRewindUntilStrMatch(cc,tok->start,tok->len,&count);
-                    //cctrlTokenPeek(cc);
                     cctrlWarning(cc,"Incompatible function argument, expected '%s' got '%s' function '%.*s'",
                             expected,got,len,fname);
-                    //for (int i = 0; i < count; ++i) {
-                    //    cctrlTokenGet(cc);
-                    //}
-
-                    //free(expected);
-                    //free(got);
                 }
             }
             ptrVecPush(argv_vec,ast);
@@ -624,13 +616,11 @@ static Ast *parseIdentifierOrFunction(Cctrl *cc,
                 case '(': {
                     char *msg = mprintf("Try defining function `%.*s()`?",len,name);
                     cctrlRaiseSuggestion(cc,msg,"Variable or function `%.*s` has not been defined", len, name);
-                    // free(msg);
                     break;
                 }
                 case '[': {
                     char *msg = mprintf("Try defining array `I64 %.*s[] = {1, 2, 3}`?",len,name);
                     cctrlRaiseSuggestion(cc,msg,"Variable or function `%.*s` has not been defined", len, name);
-                    // free(msg);
                     break;
                 }
                 default:
@@ -729,7 +719,6 @@ static Ast *parsePrimary(Cctrl *cc) {
         real_len++;
         cctrlTokenRewind(cc);
         ast = cctrlGetOrSetString(cc, str->data, str->len, real_len);
-        // free(str);
         return ast;
     }
     case TK_PUNCT:
@@ -840,7 +829,6 @@ Ast *parseGetClassField(Cctrl *cc, Ast *cls) {
                                 astTypeKindToHumanReadable(cls->type),
                                 type_str,
                                 var_str);
-        // free(msg);
     }
 
     type = cls->type;
@@ -1011,7 +999,6 @@ Ast *parseExpr(Cctrl *cc, int prec) {
                                  lexemeTypeToString(peek->tk_type),
                                  peek->len, 
                                  peek->start);
-            // free(msg);
         }
 
         if (compound_assign) {
