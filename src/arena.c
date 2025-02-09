@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <assert.h>
 
+#include "aostr.h"
 #include "arena.h"
 
 static ArenaBlock *arenaBlockNew(unsigned int capacity) {
@@ -133,16 +134,21 @@ void arenaPrintStats(Arena *arena) {
 
     unsigned int average_unused_amount = total_diff == 0 || total_non_full_blocks == 0 ? 0 : total_diff / total_non_full_blocks;
 
-    printf("Total Memory: %u\n"
-           "Total Allocated: %u\n"
-           "Per Block capacity: %u\n"
+    aoStr *total_mem = aoStrIntToHumanReadableBytes((long) total_capacity);
+    aoStr *total_allocated = aoStrIntToHumanReadableBytes((long)total_used);
+    aoStr *per_block_capacity = aoStrIntToHumanReadableBytes((long)arena->block_capacity);
+
+    printf("Total Memory: %s (%u)\n"
+           "Total Allocated: %s (%u)\n"
+           "Per Block capacity: %s (%u)\n"
            "Total blocks: %u\n"
            "Total Big Blocks: %u\n"
            "Total non full blocks: %u\n"
            "Average unused amount: %u\n",
-           total_capacity,
-           total_used,
-           arena->block_capacity,
+           total_mem->data, total_capacity,
+           total_allocated->data, total_used,
+           per_block_capacity->data, arena->block_capacity,
+
            total_blocks,
            big_allocs,
            total_non_full_blocks,

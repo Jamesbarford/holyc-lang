@@ -27,7 +27,6 @@ void xfree(void *ptr) {
     if (ptr) free(ptr);
 }
 
-
 void globalArenaInit(unsigned int capcity) {
     if (!global_memory_arena_init) {
         arenaInit(&global_memory_arena, capcity);

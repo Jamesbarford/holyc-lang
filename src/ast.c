@@ -18,7 +18,7 @@ static int ast_arena_init = 0;
 
 void astMemoryInit(void) {
     if (!ast_arena_init) {
-        arenaInit(&ast_arena, sizeof(Ast) * 256);
+        arenaInit(&ast_arena, sizeof(Ast) * 512);
         ast_arena_init = 1;
     }
 }

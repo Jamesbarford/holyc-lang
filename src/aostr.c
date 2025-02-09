@@ -522,3 +522,22 @@ aoStr *aoStrError(void) {
     aoStr *str = aoStrDupRaw(err,strlen(err));
     return str;
 }
+
+aoStr *aoStrIntToHumanReadableBytes(long bytes) {
+    aoStr *str = aoStrAlloc(32);
+    double d;
+
+    if (bytes < 1024) {
+        aoStrCatFmt(str, "%uB", bytes);
+    } else if (bytes < (1024*1024)) {
+        d = (double)bytes/(1024);
+        aoStrCatPrintf(str, "%.2fK", d);
+    } else if (bytes < (1024LL*1024*1024)) {
+        d = (double)bytes/(1024*1024);
+        aoStrCatPrintf(str, "%.2fM", d);
+    } else if ((long long)bytes < (1024LL*1024*1024*1024)) {
+        d = (double)bytes/(1024LL*1024*1024);
+        aoStrCatPrintf(str, "%.2fG", d);
+    }
+    return str;
+}
