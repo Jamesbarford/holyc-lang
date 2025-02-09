@@ -48,5 +48,6 @@ aoStr **aoStrSplit(char *to_split, char delimiter, int *count);
 char *mprintf(const char *fmt, ...);
 char *mprintVa(const char *fmt, va_list ap, ssize_t *_len);
 aoStr *aoStrError(void);
+aoStr *aoStrIntToHumanReadableBytes(long bytes);
 
 #endif

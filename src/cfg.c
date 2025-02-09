@@ -31,8 +31,7 @@ void bbInit(void *_bb) {
 }
 
 static void cfgBuilderInit(CFGBuilder *builder, Cctrl *cc, IntMap *leaf_cache, int block_no) {
-    MemoryPool *block_pool = memPoolNewAndInitialise(
-            sizeof(BasicBlock),10, &bbInit);
+    MemPool *block_pool = memPoolNew(2048);
 
     builder->cc = cc;
     builder->bb_block_no = block_no;
@@ -232,8 +231,6 @@ char *bbToString(BasicBlock *bb) {
             BB_FMT_FLAG_CHARS,
             str_flags,
             str_prev);
-    free((char*)str_flags);
-    free((char*)str_prev);
 
     if (bb->next)  aoStrCatPrintf(str,"next = bb%d, ",bb->next->block_no);
     if (bb->_if)   aoStrCatPrintf(str,"if = bb%d, ",bb->_if->block_no);
@@ -269,12 +266,7 @@ char *bbToJSON(BasicBlock *bb) {
     } else {
         if (bb->next) aoStrCatPrintf(str,"    \"next\": \"bb%d\"\n",bb->next->block_no);
     }
-    if (str_prev_ptr) {
-        free(str_prev_ptr);
-    }
 
-    free((char*)str_flags);
-    free((char*)str_prev);
     aoStrCat(str,"}\n");
     return aoStrMove(str);
 }
@@ -282,7 +274,6 @@ char *bbToJSON(BasicBlock *bb) {
 void bbPrintNoAst(BasicBlock *bb) {
     char *bb_string = bbToString(bb);
     printf("%s\n",bb_string);
-    free(bb_string);
 }
 
 void bbPrint(BasicBlock *bb) {
@@ -294,11 +285,8 @@ void bbPrint(BasicBlock *bb) {
         char *ast_str = astLValueToString(bb->ast_array->entries[i],0);
         aoStrCat(str,ast_str);
         aoStrPutChar(str,'\n');
-        free(ast_str);
     }
-    free((char*)bb_str);
     printf("========\n%s========\n",str->data);
-    aoStrRelease(str);
 }
 
 
@@ -306,7 +294,7 @@ static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder,
                                              int type,
                                              unsigned int flags)
 {
-    BasicBlock *bb = (BasicBlock *)memPoolAlloc(builder->block_pool);
+    BasicBlock *bb = (BasicBlock *)memPoolAlloc(builder->block_pool, sizeof(BasicBlock));
 
     bb->type = type;
     bb->flags = 0;
@@ -1206,7 +1194,6 @@ void cfgAdjacencyListPrintShallow(CFG *cfg) {
         BasicBlock *bb = (BasicBlock *)entry->value;
         char *bb_string = bbToJSON(bb);
         printf("%s\n====\n",bb_string);
-        free(bb_string);
     }
     intMapIteratorRelease(it);
 }
@@ -1523,7 +1510,7 @@ static IntSet *cfgCreateDoWhileAdjacencyList(CFG *cfg, BasicBlock *bb) {
  * */
 void cfgBuildAdjacencyList(CFG *cfg) {
     IntSet *iset;
-    MemoryPoolIterator *it = memPoolIteratorNew(cfg->_memory);
+    MemPoolIterator *it = memPoolIteratorNew(cfg->_memory);
     BasicBlock *bb;
     while ((bb = memPoolNext(it)) != NULL) {
         if (bbIsType(bb, BB_GARBAGE)) {

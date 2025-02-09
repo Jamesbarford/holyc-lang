@@ -33,6 +33,7 @@ set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O2")
 
 set(SOURCES
     aostr.c
+    arena.c
     ast.c
     cctrl.c
     cfg-print.c
@@ -44,6 +45,7 @@ set(SOURCES
     main.c
     map.c
     memory.c
+    mempool.c
     parser.c
     prsasm.c
     prslib.c
@@ -54,6 +56,7 @@ set(SOURCES
 
 set(HEADERS 
     aostr.h
+    arena.h
     ast.h
     cctrl.h
     cfg-print.h
@@ -65,6 +68,7 @@ set(HEADERS
     list.h
     map.h
     memory.h
+    mempool.h
     parser.h
     prsasm.h
     prslib.h

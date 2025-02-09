@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include "aostr.h"
+#include "ast.h"
 #include "cctrl.h"
 #include "cfg-print.h"
 #include "cfg.h"
@@ -15,6 +16,7 @@
 #include "config.h"
 #include "lexer.h"
 #include "list.h"
+#include "memory.h"
 #include "transpiler.h"
 #include "util.h"
 
@@ -249,12 +251,40 @@ void assemble(CliArgs *args) {
     aoStrRelease(run_cmd);
 }
 
+
+void memoryInit(void) {
+    astMemoryInit();
+    lexemeMemoryInit();
+    globalArenaInit(4096*10);
+}
+
+void memoryRelease(void) {
+    astMemoryRelease();
+    lexemeMemoryRelease();
+    globalArenaRelease();
+}
+
+void memoryPrintStats(void) {
+    printf("============== Arena Stats ===========\n");
+    lexemeMemoryStats();
+    printf("\n\n");
+    astMemoryStats();
+    printf("\n\n");
+    globalArenaPrintStats();
+    printf("=========== Arena Stats End ==========\n");
+}
+
 int main(int argc, char **argv) {
+    memoryInit();
     is_terminal = isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
+
+    /* Using these pools vastly simplifies everything as we can free everything 
+     * at the end. */
 
     int lexer_flags = CCF_PRE_PROC;
     aoStr *asmbuf;
     Cctrl *cc;
+
 
     CliArgs args;
     cliArgsInit(&args);
@@ -264,7 +294,7 @@ int main(int argc, char **argv) {
 
     if (args.assemble) {
         assemble(&args);
-        return 0;
+        goto success;
     }
 
     cc = cctrlNew();
@@ -274,7 +304,7 @@ int main(int argc, char **argv) {
 
     if (args.print_tokens) {
         compileToTokens(cc,&args,lexer_flags);
-        return 0;
+        goto success;
     }
 
     if (args.transpile) {
@@ -283,15 +313,14 @@ int main(int argc, char **argv) {
                " * `hcc -transpile %s`\n"
                " * please check for errors! */\n\n"
                "%s",args.infile, buf->data);
-        aoStrRelease(buf);
-        return 0;
+        goto success;
     }
 
     compileToAst(cc,&args,lexer_flags);
 
     if (args.print_ast) {
         compilePrintAst(cc);
-        return 0;
+        goto success;
     }
 
     if (args.cfg_create || args.cfg_create_png || args.cfg_create_svg) {
@@ -304,11 +333,9 @@ int main(int argc, char **argv) {
                     ext,dot_outfile,args.infile_no_ext,ext);
             printf("Creating %s: %s\n",ext,dot_cmd);
             safeSystem(dot_cmd);
-            free(dot_cmd);
             unlink(dot_outfile);
         }
-        free(dot_outfile);
-        return 0;
+        goto success;
     }
 
     asmbuf = compileToAsm(cc);
@@ -317,4 +344,11 @@ int main(int argc, char **argv) {
     if (args.defines_list) {
         listRelease(args.defines_list,NULL);
     }
+
+success:
+    if (args.print_mem_stats) {
+        memoryPrintStats();
+    }
+    memoryRelease();
+    return 0;
 }

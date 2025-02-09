@@ -158,7 +158,6 @@ void assertTokenIsTerminatorWithMsg(Cctrl *cc, Lexeme *tok,
                         tok->len,tok->start,
                         msg,
                         token_msg);
-    free(msg);
 }
 
 AstType *parseGetType(Cctrl *cc, Lexeme *tok) {
@@ -471,8 +470,6 @@ void typeCheckWarn(Cctrl *cc, long op, Ast *expected, Ast *actual) {
     for (int i = 0; i < count; ++i) {
         cctrlTokenGet(cc);
     }
-    free(suggestion);
-    free(actual_str);
     aoStrRelease(expected_type);
     aoStrRelease(actual_type);
 }
@@ -505,5 +502,4 @@ void typeCheckReturnTypeWarn(Cctrl *cc, Ast *maybe_func,
     for (int i = 0; i < count; ++i) {
         cctrlTokenGet(cc);
     }
-    free(msg);
 }

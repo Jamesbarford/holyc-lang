@@ -7,6 +7,7 @@
 #include "cctrl.h"
 #include "cli.h"
 #include "compile.h"
+#include "memory.h"
 #include "x86.h"
 #include "lexer.h"
 #include "list.h"
@@ -33,7 +34,7 @@ void compilePrintAst(Cctrl *cc) {
         {
             tmp = astToString(ast);
             printf("%s\n", tmp);
-            free(tmp);
+            // free(tmp);
         }
         it = it->next;
     }
@@ -50,7 +51,7 @@ aoStr *compileToAsm(Cctrl *cc) {
 }
 
 void compileToTokens(Cctrl *cc, CliArgs *args, int lexer_flags) {
-    Lexer *l = (Lexer *)malloc(sizeof(Lexer));
+    Lexer *l = (Lexer *)globalArenaAllocate(sizeof(Lexer));
     aoStr *builtin_path;
     StrMap *seen_files;
 
@@ -77,12 +78,10 @@ void compileToTokens(Cctrl *cc, CliArgs *args, int lexer_flags) {
     }
 
     strMapRelease(seen_files);
-    free(l);
-    free(root_dir);
 }
 
 int compileToAst(Cctrl *cc, CliArgs *args, int lexer_flags) {
-    Lexer *l = (Lexer *)malloc(sizeof(Lexer));
+    Lexer *l = (Lexer *)globalArenaAllocate(sizeof(Lexer));
     aoStr *builtin_path = aoStrPrintf("%s/include/tos.HH", args->install_dir);
     char *root_dir = mprintf("%s/include/", args->install_dir);
 
@@ -99,12 +98,7 @@ int compileToAst(Cctrl *cc, CliArgs *args, int lexer_flags) {
 
     parseToAst(cc);
 
-    lexerPoolRelease();
-
     lexReleaseAllFiles(l);
-    aoStrRelease(builtin_path);
     listRelease(l->files,NULL);
-    free(l);
-    free(root_dir);
     return 1;
 }

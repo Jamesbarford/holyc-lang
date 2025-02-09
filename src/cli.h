@@ -29,6 +29,7 @@ enum CliArgType {
     CLI_CLIBS,
     CLI_DEFINES_LIST,
     CLI_VERSION,
+    CLI_MEM_STATS,
     CLI_HELP,
     CLI_TERRY,
 };
@@ -56,6 +57,7 @@ typedef struct CliArgs {
     int print_ast;
     int print_tokens;
     int print_help;
+    int print_mem_stats;
     int cfg_create;
     int cfg_create_png;
     int cfg_create_svg;

@@ -9,6 +9,7 @@
 
 #include "aostr.h"
 #include "ast.h"
+#include "arena.h"
 #include "cctrl.h"
 #include "map.h"
 #include "lexer.h"
@@ -20,6 +21,43 @@
 
 /* prototypes */
 int lexPreProcIf(StrMap *macro_defs, Lexer *l);
+
+static Arena lexeme_arena;
+static int lexeme_arena_init = 0;
+
+void lexemeMemoryInit(void) {
+    if (!lexeme_arena_init) {
+        lexeme_arena_init = 1;
+        arenaInit(&lexeme_arena, sizeof(Lexeme) * 1000);
+    }
+}
+
+void lexemeMemoryRelease(void) {
+    if (lexeme_arena_init) {
+        lexeme_arena_init = 0;
+        arenaClear(&lexeme_arena);
+    }
+}
+
+void lexemeMemoryStats(void) {
+    printf("Lexeme Arena:\n");
+    arenaPrintStats(&lexeme_arena);
+}
+
+Lexeme *lexerAllocLexeme(void) {
+    return (Lexeme *)arenaAlloc(&lexeme_arena, sizeof(Lexeme));
+}
+
+char *lexerAllocateBuffer(unsigned int size) {
+    return (char *)arenaAlloc(&lexeme_arena, size);
+}
+
+char *lexerReAllocBuffer(char *ptr, unsigned int old_size, unsigned int new_size) {
+    (void)ptr;
+    char *buffer = lexerAllocateBuffer(new_size);
+    memcpy(buffer,ptr,old_size);
+    return buffer;
+}
 
 typedef struct {
     char *name;
@@ -107,7 +145,7 @@ static LexerTypes lexer_types[] = {
         && ch != 'X' && ch != '\\')
 
 Lexeme *lexemeNew(char *start, int len) {
-    Lexeme *le = (Lexeme *)malloc(sizeof(Lexeme));
+    Lexeme *le = lexerAllocLexeme();
     le->start = start;
     le->len = len;
     le->line = -1;
@@ -116,7 +154,7 @@ Lexeme *lexemeNew(char *start, int len) {
 }
 
 Lexeme *lexemeSentinal(void) {
-    Lexeme *le = (Lexeme *)malloc(sizeof(Lexeme));
+    Lexeme *le = lexerAllocLexeme();
     le->start = "(-sentinal-)";
     le->len = 12;
     le->line = 1;
@@ -133,7 +171,7 @@ void lexemeAssignOp(Lexeme *le, char *start, int len, long op, int line) {
 }
 
 Lexeme *lexemeTokNew(char *start, int len, int line, long ch) {
-    Lexeme *copy = (Lexeme *)malloc(sizeof(Lexeme));
+    Lexeme *copy = lexerAllocLexeme();
     copy->tk_type = TK_PUNCT;
     copy->start = start;
     copy->len = len;
@@ -142,22 +180,8 @@ Lexeme *lexemeTokNew(char *start, int len, int line, long ch) {
     return copy;
 }
 
-static MemoryPool *lexeme_pool = NULL;
-void lexerPoolRelease(void) {
-    if (lexeme_pool) {
-        memPoolRelease(lexeme_pool);
-    }
-}
-
-/* Copy the lexeme with memory allocated from the pool */
-Lexeme *lexemePoolCpy(Lexeme *le) {
-    Lexeme *cpy = (Lexeme *)memPoolAlloc(lexeme_pool);
-    memcpy(cpy,le,sizeof(Lexeme));
-    return cpy;
-}
-
 Lexeme *lexemeCopy(Lexeme *le) {
-    Lexeme *copy = (Lexeme *)malloc(sizeof(Lexeme));
+    Lexeme *copy = lexerAllocLexeme();
     memcpy(copy,le,sizeof(Lexeme));
     return copy;
 }
@@ -191,9 +215,11 @@ void lexInit(Lexer *l, char *source, int flags) {
     if (macro_proccessor == NULL) {
         macro_proccessor = ccMacroProcessor(NULL);
     }
-    if (lexeme_pool == NULL) {
-        lexeme_pool = memPoolNew(sizeof(Lexeme),64);
+
+    if (!lexeme_arena_init) {
+        lexemeMemoryInit();
     }
+
     /* XXX: create one symbol table for the whole application ;
      * hoist to 'compile.c'*/
     for (int i = 0; i < (int)static_size(lexer_types); ++i) {
@@ -545,7 +571,7 @@ void lexPushFile(Lexer *l, aoStr *filename) {
     LexFile *f = (LexFile *)malloc(sizeof(LexFile));
     ssize_t file_len = 0;
     char *src = lexReadfile(filename->data, &file_len);
-    aoStr *src_code = (aoStr *)malloc(sizeof(aoStr));
+    aoStr *src_code = aoStrNew();
     src_code->data = src;
     src_code->len = file_len;
     src_code->capacity = 0;
@@ -682,11 +708,15 @@ finish:
 }
 
 /* As this function escapes strings we pass in `_real_len` to be able 
- * to capture the length of the string minus escape sequences. */
-aoStr *lexString(Lexer *l, char terminator, long *_real_len) {
-    aoStr *buffer = aoStrNew();
-    char ch = '\0';
+ * to capture the length of the string minus escape sequences. 
+ * The string is allocated from the lexers arean not the global allocator */
+char *lexString(Lexer *l, char terminator, long *_real_len, int *_buffer_len) {
+    unsigned int capacity = 64;
+    int len = 0;
     long real_len = 0;
+
+    char *buffer = lexerAllocateBuffer(64);
+    char ch = '\0';
     int is_bytes = 0;
 
     while ((ch = lexNextChar(l)) != terminator) {
@@ -695,37 +725,47 @@ aoStr *lexString(Lexer *l, char terminator, long *_real_len) {
             l->lineno++;
         }
 
+        if (len + 3 >= capacity) {
+            buffer = lexerReAllocBuffer(buffer, len, capacity * 2);
+            capacity *= 2;
+        }
+
         if (!ch || ch == terminator) {
             goto done;
         } else if (ch == '\\') {
             ch = lexNextChar(l);
-            aoStrPutChar(buffer, '\\');
 
+            buffer[len++] = '\\';
             switch (ch) {
-                case '\\': aoStrPutChar(buffer, '\\'); break;
-                case '\'': aoStrPutChar(buffer, '\''); break;
-                case '0':  aoStrPutChar(buffer, '0'); break;
-                case '`':  aoStrPutChar(buffer, '`'); break;
-                case '"':  aoStrPutChar(buffer, '"'); break;
-                case 'n':  aoStrPutChar(buffer, 'n'); break;
-                case 'r':  aoStrPutChar(buffer, 'r'); break;
-                case 't':  aoStrPutChar(buffer, 't'); break;
-                case 'b':  aoStrPutChar(buffer, 'b'); break;
-                case 'f':  aoStrPutChar(buffer, 'f'); break;
-                case 'v':  aoStrCatFmt(buffer, "x0B"); break;
+                case '\\': buffer[len++] = '\\'; break;
+                case '\'': buffer[len++] = '\''; break;
+                case '0':  buffer[len++] = '0' ; break;
+                case '`':  buffer[len++] = '`' ; break;
+                case '"':  buffer[len++] = '"' ; break;
+                case 'n':  buffer[len++] = 'n' ; break;
+                case 'r':  buffer[len++] = 'r' ; break;
+                case 't':  buffer[len++] = 't' ; break;
+                case 'b':  buffer[len++] = 'b' ; break;
+                case 'f':  buffer[len++] = 'f' ; break;
+                case 'v':  
+                    buffer[len++] = 'x';
+                    buffer[len++] = '0';
+                    buffer[len++] = 'B';
+                    break;
+
                 case 'x':
                 case 'X':
                     is_bytes = 1;
-                    aoStrPutChar(buffer, 'x');
-                    aoStrPutChar(buffer, toupper(lexNextChar(l)));
-                    aoStrPutChar(buffer, toupper(lexNextChar(l)));
+                    buffer[len++] = 'x';
+                    buffer[len++] = toupper(lexNextChar(l));
+                    buffer[len++] = toupper(lexNextChar(l));
                     break;
             default:
                 loggerPanic("Line: %d - Invalid escape character: '%c'\n",
                         l->lineno, (char)ch);
             }
         } else {
-            aoStrPutChar(buffer, ch);
+            buffer[len++] = ch;
         }
     }
 
@@ -735,7 +775,9 @@ done:
     if (!is_bytes) {
         real_len++;
     }
+    buffer[len] = '\0';
     *_real_len = real_len;
+    *_buffer_len = len;
     return buffer;
 }
 
@@ -918,14 +960,11 @@ int lex(Lexer *l, Lexeme *le) {
             return 1;
 
         case '\"': {
-            long real_len = 0;
-            aoStr *str = lexString(l,'"',&real_len);
-            le->start = str->data;
-            le->len = str->len;
+            le->len = 0;
+            le->i64 = 0;
+            le->start = lexString(l,'"',&le->i64,&le->len);
             le->tk_type = TK_STR;
             le->line = l->lineno;
-            le->i64 = real_len;
-
             l->cur_str = NULL;
             l->cur_strlen = 0;
             return 1;
@@ -1313,7 +1352,6 @@ Lexeme *lexDefine(StrMap *macro_defs, Lexer *l) {
             expanded->line = start->line;
         }
         strMapAdd(macro_defs,ident->data,expanded);
-        astRelease(ast);
     }
     for (ssize_t i = 0; i < tokens->size; ++i) {
         lexemeFree(tokens->entries[i]);
@@ -1422,7 +1460,6 @@ int lexPreProcIf(StrMap *macro_defs, Lexer *l) {
         }
         expanded->line = start->line;
     }
-    astRelease(ast);
     for (ssize_t i = 0; i < macro_tokens->size; ++i) {
         lexemeFree(macro_tokens->entries[i]);
     }
@@ -1525,7 +1562,7 @@ Lexeme *lexToken(StrMap *macro_defs, Lexer *l) {
         }
 
         if (l->flags & (CCF_ASM_BLOCK) && tokenPunctIs(&le, '}')) {
-            copy = lexemePoolCpy(&le);
+            copy = lexemeCopy(&le);
             /* turn off assembly lexing */
             l->flags &= ~(CCF_MULTI_COLON|CCF_ACCEPT_NEWLINES|CCF_ASM_BLOCK);
             return copy;
@@ -1535,7 +1572,7 @@ Lexeme *lexToken(StrMap *macro_defs, Lexer *l) {
             switch (le.i64) {
                 case KW_ASM:
                     l->flags |= (CCF_MULTI_COLON|CCF_ACCEPT_NEWLINES|CCF_ASM_BLOCK);
-                    copy = lexemePoolCpy(&le);
+                    copy = lexemeCopy(&le);
                     return copy;
 
                 case KW_PP_INCLUDE: {
@@ -1595,17 +1632,17 @@ Lexeme *lexToken(StrMap *macro_defs, Lexer *l) {
                     break;
 
                 default:
-                    copy = lexemePoolCpy(&le);
+                    copy = lexemeCopy(&le);
                     return copy;
             }
         }
         
         if (le.tk_type == TK_IDENT) {
-            copy = lexemePoolCpy(&le);
+            copy = lexemeCopy(&le);
             return copy;
         }
 
-        copy = lexemePoolCpy(&le);
+        copy = lexemeCopy(&le);
         return copy;
     }
     return NULL;
@@ -1614,13 +1651,11 @@ Lexeme *lexToken(StrMap *macro_defs, Lexer *l) {
 void lexemeFree(void *_le) {
     if (_le) {
         Lexeme *le = (Lexeme *)_le;
-        free(le);
+        (void)le;
     }
 }
 
 static void lexReleaseLexFile(LexFile *lex_file) {
-    aoStrRelease(lex_file->filename);
-    aoStrRelease(lex_file->src);
     free(lex_file);
 }
 
