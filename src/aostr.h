@@ -19,9 +19,6 @@ typedef struct aoStr {
     size_t capacity;
 } aoStr;
 
-void aoStrMemPoolInit(void);
-void aoStrPoolRelease(void);
-
 aoStr *aoStrAlloc(size_t capacity);
 aoStr *aoStrNew(void);
 void aoStrRelease(aoStr *buf);
