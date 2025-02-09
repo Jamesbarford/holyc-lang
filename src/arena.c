@@ -118,7 +118,6 @@ void arenaPrintStats(Arena *arena) {
     while (block) {
         total_capacity += block->capacity;
         if (block->used == 0 && block->capacity > arena->block_capacity) {
-            // printf("%u %u\n", block->capacity, arena->block_capacity);
             big_allocs++;
             total_used += block->capacity;
         } else {
