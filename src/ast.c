@@ -1213,11 +1213,11 @@ void _astToString(aoStr *str, Ast *ast, int depth) {
             break;
 
         case AST_STRING: {
-            escaped = aoStrEscapeString(ast->sval);
             if (!isatty(STDOUT_FILENO)) {
-                aoStrCatPrintf(str, "<string> \"%s\"", escaped->data);
+                aoStrCatPrintf(str, "<string> \"%s\"", ast->sval->data);
             } else {
-                aoStrCatPrintf(str, "<string> \033[0;35m\"%s\"\033[0m", escaped->data);
+                aoStrCatPrintf(str, "<string> \033[0;35m\"%s\"\033[0m",
+                        ast->sval->data);
             }
             break;
         }
@@ -1847,7 +1847,7 @@ static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
                 quote = "&#34;";
                 encoded = aoStrEncode(ast->sval);
             } else {
-                encoded = aoStrEscapeString(ast->sval);
+                encoded = ast->sval;
             }
             aoStrCatPrintf(str,"%s%s%s",quote,encoded->data,quote);
             break;

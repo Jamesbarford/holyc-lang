@@ -765,7 +765,35 @@ char *lexString(Lexer *l, char terminator, long *_real_len, int *_buffer_len) {
                         l->lineno, (char)ch);
             }
         } else {
-            buffer[len++] = ch;
+            /* Because HC can have multi line strings, tabs or other escaped 
+             * characters which are typeable we need to escape them. */
+            switch (ch) {
+                case '\n':
+                    buffer[len++] = '\\';
+                    buffer[len++] = 'n';
+                    break;
+                case '\t':
+                    buffer[len++] = '\\';
+                    buffer[len++] = 't';
+                    break;
+                case '\r':
+                    buffer[len++] = '\\';
+                    buffer[len++] = 'r';
+                    break;
+                case '\f':
+                    buffer[len++] = '\\';
+                    buffer[len++] = 'f';
+                    break;
+                case '\v':
+                    buffer[len++] = '\\';
+                    buffer[len++] = 'x';
+                    buffer[len++] = '0';
+                    buffer[len++] = 'B';
+                    break;
+                default:
+                    buffer[len++] = ch;
+                    break;
+            }
         }
     }
 

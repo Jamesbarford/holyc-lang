@@ -255,7 +255,7 @@ aoStr *aoStrEscapeString(aoStr *buf) {
             default:  aoStrPutChar(outstr, *ptr); break;
             }
         } else {
-            //aoStrPutChar(outstr, '\\');
+            aoStrPutChar(outstr, '\\');
             switch (*ptr) {
             case '\'': aoStrPutChar(outstr,'\''); break;
             case '\\': aoStrPutChar(outstr, '\\'); break;
