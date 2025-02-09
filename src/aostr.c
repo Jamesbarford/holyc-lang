@@ -10,40 +10,22 @@
 #include "ast.h"
 #include "aostr.h"
 #include "lexer.h"
-#include "mempool.h"
+#include "memory.h"
 
-static MemPool aostr_pool;
-static int aostr_pool_init = 0;
-
-void aoStrMemPoolInit(void) {
-    if (!aostr_pool_init) {
-        aostr_pool_init = 1;
-        memPoolInit(&aostr_pool, 1024);
-    }
+static aoStr *_aoStrAlloc(void) {
+    return (aoStr *)globalArenaAllocate(sizeof(aoStr));
 }
 
-static aoStr *aoStrPoolAlloc(void) {
-    return (aoStr *)memPoolTryAlloc(&aostr_pool, sizeof(aoStr));
-}
-
-static void aoStrPoolReleaseStr(void *_pool, void *str) {
-    (void)_pool;
-    if (str) {
-        free(((aoStr *)str)->data);
-    }
-}
-
-void aoStrPoolRelease(void) {
-    memPoolSetDeallocate(&aostr_pool, &aoStrPoolReleaseStr);
-    memPoolRelease(&aostr_pool, 0);
+static char *aoStrBufferAlloc(size_t capacity) {
+    return (char *)globalArenaAllocate((unsigned int)capacity);
 }
 
 aoStr *aoStrAlloc(size_t capacity) {
-    aoStr *buf = aoStrPoolAlloc();
+    aoStr *buf = _aoStrAlloc();
     capacity += 10;
     buf->capacity = capacity;
     buf->len = 0;
-    buf->data = (char *)malloc(sizeof(char) * capacity);
+    buf->data = aoStrBufferAlloc(sizeof(char) * capacity);
     return buf;
 }
 
@@ -52,9 +34,7 @@ aoStr *aoStrNew(void) {
 }
 
 void aoStrRelease(aoStr *buf) {
-    if (buf) {
-        memPoolFree(&aostr_pool, buf);
-    }
+    return;
 }
 
 /* Get the underlying string, we do not free the `aoStr`... it will get 
@@ -73,10 +53,11 @@ int aoStrExtendBuffer(aoStr *buf, size_t additional) {
         return -1;
     }
 
-    char *tmp = (char *)realloc(buf->data, new_capacity);
+    char *tmp = aoStrBufferAlloc(new_capacity);
     if (tmp == NULL) {
         return 0;
     }
+    memcpy(tmp,buf->data,buf->capacity);
     buf->data = tmp;
     buf->capacity = new_capacity;
     return 1;
@@ -368,7 +349,7 @@ static char *mprintVaImpl(const char *fmt, va_list ap, size_t *_len, size_t *_al
         bufferlen = fmt_len;
     }
     int len = 0;
-    char *buf = (char *)malloc(sizeof(char) * bufferlen+1);
+    char *buf = aoStrBufferAlloc(sizeof(char) * bufferlen+1);
 
     while (1) {
         va_copy(copy, ap);
@@ -376,14 +357,12 @@ static char *mprintVaImpl(const char *fmt, va_list ap, size_t *_len, size_t *_al
         va_end(copy);
 
         if (len < 0) {
-            free(buf);
             return NULL;
         }
 
         if (((size_t)len) >= bufferlen) {
-            free(buf);
             bufferlen = ((size_t)len) + 2;
-            buf = (char *)malloc(bufferlen);
+            buf = aoStrBufferAlloc(bufferlen);
             if (buf == NULL) {
                 return NULL;
             }
@@ -406,7 +385,7 @@ static aoStr *aoStrPrintfVa(const char *fmt, va_list ap) {
     size_t len = 0;
     size_t capacity = 0;
     char *new_buf = mprintVaImpl(fmt,ap,&len,&capacity);
-    aoStr *buffer = aoStrPoolAlloc();
+    aoStr *buffer = _aoStrAlloc();
     buffer->data = new_buf;
     buffer->len = len;
     buffer->capacity = capacity;

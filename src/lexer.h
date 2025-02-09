@@ -177,6 +177,10 @@ typedef struct Lexer {
     LexFile *cur_file;
 } Lexer;
 
+void lexemeMemoryInit(void);
+void lexemeMemoryRelease(void);
+void lexemeMemoryStats(void);
+
 Lexeme *lexemeTokNew(char *start, int len, int line, long ch);
 Lexeme *lexemeNew(char *start, int len);
 Lexeme *lexemeSentinal(void);
@@ -196,9 +200,8 @@ int tokenPunctIs(Lexeme *tok, long ch);
 int tokenIdentIs(Lexeme *tok, char *ident, int len);
 void lexemeFree(void *_le);
 char *lexerReportLine(Lexer *l, ssize_t lineno);
-void lexemePoolInit(void);
-void lexerPoolRelease(void);
 int lexemeEq(Lexeme *l1, Lexeme *l2);
 char *lexReadfile(char *path, ssize_t *_len);
+
 
 #endif // !LEXER_H

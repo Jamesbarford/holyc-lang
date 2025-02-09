@@ -11,6 +11,7 @@
 #include "lexer.h"
 #include "list.h"
 #include "map.h"
+#include "memory.h"
 #include "parser.h"
 #include "transpiler.h"
 #include "util.h"
@@ -550,7 +551,6 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
             }
             char *defn = transpileHighlightStringAsCharacter(ctx, tmp_buf);
             aoStrCat(buf,defn);
-            free(defn);
             break;
         }
         
@@ -567,8 +567,6 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
             escaped = aoStrEscapeString(ast->sval);
             char *defn = transpileHighlightString(ctx,escaped->data);
             aoStrCat(buf,defn);
-            aoStrRelease(escaped);
-            free(defn);
             break;
         }
     }
@@ -611,7 +609,6 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
             transpileAstInternal(ast->declinit,ctx,indent);
             *indent = saved_indent;
         }
-        aoStrRelease(decl);
         break;
     }
 
@@ -627,7 +624,6 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
         char *fname = substitution_name ? substitution_name : asm_fname->data;
         aoStr *argv = transpileArgvList(ast->args, ctx);
         aoStrCatFmt(buf, "%s(%S)", fname, argv);
-        aoStrRelease(argv);
         break;
     }
 
@@ -658,8 +654,6 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
         } else {
             aoStrCatFmt(buf, "%S()", formatted);
         }
-        aoStrRelease(argv);
-        aoStrRelease(formatted);
         break;
     }
 
@@ -668,7 +662,6 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
     case AST_EXTERN_FUNC: {
         aoStr *formatted = transpileFormatFunction(ast->fname);
         aoStrCatFmt(buf, "&%S", formatted);
-        aoStrRelease(formatted);
         break;
     }
 
@@ -911,8 +904,6 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
         aoStr *type_cast = transpileVarDecl(ctx, ast->type,NULL);
         aoStr *lvalue = transpileLValue(ast->operand, ctx);
         aoStrCatFmt(buf, "(%S)%S", type_cast, lvalue);
-        aoStrRelease(type_cast);
-        aoStrRelease(lvalue);
         break;
     }
 
@@ -1023,7 +1014,6 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
     case AST_SIZEOF: {
         aoStr *type_str = transpileVarDecl(ctx, ast->type, NULL);
         aoStrCatFmt(buf, "%s(%S)", transpileKeyWordHighlight(ctx,KW_SIZEOF), type_str);
-        aoStrRelease(type_str);
         break;
     }
 
@@ -1099,8 +1089,6 @@ aoStr *transpileParamsList(PtrVec *params, TranspileCtx *ctx) {
         if (i + 1 != params->size) {
             aoStrCatLen(buf, str_lit(", "));
         }
-        aoStrRelease(decl);
-        aoStrRelease(var);
     }
     return buf;
 }
@@ -1115,7 +1103,6 @@ aoStr *transpileArgvList(PtrVec *argv, TranspileCtx *ctx) {
         if (i + 1 != argv->size) {
             aoStrCatLen(buf, str_lit(", "));
         }
-        aoStrRelease(var);
     }
     return buf;
 }
@@ -1263,8 +1250,6 @@ aoStr *transpileVarDeclInfo(TranspileCtx *ctx, TypeInfo *info, char *name) {
         }
     }
     
-    if (info->params) aoStrRelease(info->params);
-
     return str;
 }
 
@@ -1316,9 +1301,6 @@ aoStr *transpileFunctionProto(TranspileCtx *ctx, AstType *type, char *name) {
         aoStrCatFmt(str, "%s",name);
     }
     
-    if (info.base_name) aoStrRelease(info.base_name);
-    if (info.params)    aoStrRelease(info.params);
-
     return str;
 }
 
@@ -1362,7 +1344,6 @@ static void transpileFields(TranspileCtx *ctx,
             } else {
                 aoStrCatFmt(buf,"%S;\n", decl);
             }
-            aoStrRelease(decl);
         }
         strMapAdd(seen, n->key, n->value);
     }
@@ -1466,7 +1447,6 @@ aoStr *transpileFunction(Ast *fn, TranspileCtx *ctx) {
         AstType *c_main_type = astMakeFunctionType(ast_i32_type,
                 fn->type->params);
         fn_proto = transpileFunctionProto(ctx, c_main_type,"main");
-        free(c_main_type);
     } else {
         fn_proto = transpileFunctionProto(ctx, fn->type,fname->data);
     }
@@ -1513,7 +1493,6 @@ char *transpileFormatAsmLine(Cctrl *cc, char *line) {
             if (maybe_asm_fn) {
                 aoStr *name = astNormaliseFunctionName(maybe_asm_fn->fname->data);
                 len = snprintf(buffer,sizeof(buffer),"call %s", name->data);
-                aoStrRelease(name);
             } else {
                 /* Otherwise we are probably not looking at a call to an 
                  * assembly routine */
@@ -1633,12 +1612,6 @@ aoStr *transpileAsmFunction(Cctrl *cc, Ast *asmfn, Ast *asm_stmt, TranspileCtx *
     }
     aoStrCat(c_asm_blk, "\n}");
 
-    for (int i = 0; i < line_count; ++i) {
-        aoStrRelease(lines[i]);
-    }
-    aoStrRelease(var_type);
-    aoStrRelease(fn_proto);
-
     return c_asm_blk;
 }
 
@@ -1651,7 +1624,6 @@ void transpileAstList(Cctrl *cc, TranspileCtx *ctx) {
             aoStr *c_function = transpileFunction(ast, ctx);
             aoStrCatAoStr(ctx->buf,c_function);
             aoStrRepeatChar(ctx->buf, '\n', 2);
-            aoStrRelease(c_function);
             strMapAdd(seen, ast->fname->data, ast);
         } else if (ast->kind == AST_ASM_FUNC_BIND) {
             Ast *asm_stmt = strMapGet(cc->asm_functions, ast->asmfname->data);
@@ -1660,7 +1632,6 @@ void transpileAstList(Cctrl *cc, TranspileCtx *ctx) {
                 aoStr *asm_func = transpileAsmFunction(cc, ast, asm_stmt, ctx);
                 aoStrCatAoStr(ctx->buf,asm_func);
                 aoStrRepeatChar(ctx->buf, '\n', 2);
-                aoStrRelease(asm_func);
                 strMapAdd(seen, ast->asmfname->data, ast);
             }
         } else if (ast->kind == AST_COMMENT) {
@@ -1695,7 +1666,7 @@ aoStr *transpileToC(Cctrl *cc, CliArgs *args) {
     aoStr *builtin_path = aoStrPrintf("%s/include/tos.HH", args->install_dir);
     char *root = mprintf("%s/include",args->install_dir);
 
-    Lexer *l = (Lexer *)malloc(sizeof(Lexer));
+    Lexer *l = (Lexer *)globalArenaAllocate(sizeof(Lexer));
     l->lineno = 1;
     
     lexInit(l,NULL,(CCF_PRE_PROC));
@@ -1712,12 +1683,9 @@ aoStr *transpileToC(Cctrl *cc, CliArgs *args) {
     cc->clsdefs = clsdefs;
     strMapMerge(clsdefs, built_in_types);
     parseToAst(cc);
-    lexerPoolRelease();
     lexReleaseAllFiles(l);
     listRelease(l->files,NULL);
-    free(l);
-    free(root);
-    
+
     aoStr *include_buf = transpileIncludes(ctx);
 
     aoStr *ast_buf = aoStrNew();

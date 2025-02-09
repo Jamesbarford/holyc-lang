@@ -4,12 +4,44 @@
 #include <unistd.h>
 
 #include "aostr.h"
+#include "arena.h"
 #include "ast.h"
 #include "config.h"
 #include "list.h"
 #include "lexer.h"
 #include "map.h"
+#include "memory.h"
 #include "util.h"
+
+static Arena ast_arena;
+static int ast_arena_init = 0;
+
+void astMemoryInit(void) {
+    if (!ast_arena_init) {
+        arenaInit(&ast_arena, sizeof(Ast) * 256);
+        ast_arena_init = 1;
+    }
+}
+
+void astMemoryRelease(void) {
+    if (ast_arena_init) {
+        ast_arena_init = 0;
+        arenaClear(&ast_arena);
+    }
+}
+
+void astMemoryStats(void) {
+    printf("Ast Arena:\n");
+    arenaPrintStats(&ast_arena);
+}
+
+static Ast *astAlloc(void) {
+    return (Ast *)arenaAlloc(&ast_arena, sizeof(Ast));
+}
+
+static AstType *astTypeAlloc(void) {
+    return (AstType *)arenaAlloc(&ast_arena, sizeof(AstType));
+}
 
 AstType *ast_u8_type = &(AstType){.kind = AST_TYPE_CHAR, .size = 1, .ptr = NULL,.issigned=0};
 AstType *ast_i8_type = &(AstType){.kind = AST_TYPE_CHAR, .size = 1, .ptr = NULL,.issigned=1};
@@ -37,24 +69,20 @@ char *_astToStringRec(Ast *ast, int depth);
 void astVectorRelease(PtrVec *vec);
 
 Ast *astNew(void) {
-    Ast *ast; 
-    if ((ast = (Ast *)calloc(1,sizeof(Ast))) == NULL) {
-        loggerPanic("OOM when allocating AST\n");
-    }
+    Ast *ast = astAlloc();
+    memset(ast,0,sizeof(Ast));
     return ast;
 }
 
 AstType *astTypeNew(void) {
-    AstType *type;
-    if ((type = (AstType *)calloc(1,sizeof(AstType))) == NULL) {
-        loggerPanic("OOM when allocating AstType\n");
-    }
-    return type;
+    AstType *ast_type = astTypeAlloc();
+    memset(ast_type,0,sizeof(AstType));
+    return ast_type;
 }
 
 Ast *astMakeForeverSentinal(void) {
-    Ast *ast = astNew();
-    AstType *type = astTypeNew();
+    Ast *ast = astAlloc();
+    AstType *type = astTypeAlloc();
     memcpy(ast,ast_forever_sentinal,sizeof(Ast));
     ast->type = type;
     memcpy(ast->type,ast_forever_sentinal->type,sizeof(AstType));
@@ -1021,9 +1049,6 @@ check_type:
     }
 
 out:
-    if (actual != original_actual) {
-        free(actual);
-    }
     return ret;
 }
 
@@ -1431,8 +1456,7 @@ void _astToString(aoStr *str, Ast *ast, int depth) {
     
     case AST_ASM_FUNCALL: {
         tmp = astFunctionToStringInternal(ast,ast->type);
-        aoStrCatPrintf(str, "<asm_function_call> %s\n", 
-                    tmp);
+        aoStrCatPrintf(str, "<asm_function_call> %s\n", tmp);
             /// free(tmp);
             depth++;
             for (ssize_t i = 0; i < ast->args->size; ++i) {
@@ -2253,6 +2277,7 @@ void astVectorRelease(PtrVec *vec) {
 
 /* Free an Ast */
 void astRelease(Ast *ast) {
+    return;
     if (!ast) {
         return;
     }

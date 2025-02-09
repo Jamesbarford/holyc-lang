@@ -16,6 +16,7 @@
 #include "config.h"
 #include "lexer.h"
 #include "list.h"
+#include "memory.h"
 #include "transpiler.h"
 #include "util.h"
 
@@ -250,20 +251,31 @@ void assemble(CliArgs *args) {
     aoStrRelease(run_cmd);
 }
 
-void createMemoryPools(void) {
-    lexemePoolInit();
-    astMemPoolInit();
-    aoStrMemPoolInit();
+
+void memoryInit(void) {
+    astMemoryInit();
+    lexemeMemoryInit();
+    globalArenaInit(4096*10);
 }
 
-void destroyMemoryPools(void) {
-    lexerPoolRelease();
-    astMemPoolRelease();
-    aoStrPoolRelease();
+void memoryRelease(void) {
+    astMemoryRelease();
+    lexemeMemoryRelease();
+    globalArenaRelease();
+}
+
+void memoryPrintStats(void) {
+    printf("============== Arena Stats ===========\n");
+    lexemeMemoryStats();
+    printf("\n\n");
+    astMemoryStats();
+    printf("\n\n");
+    globalArenaPrintStats();
+    printf("=========== Arena Stats End ==========\n");
 }
 
 int main(int argc, char **argv) {
-    createMemoryPools();
+    memoryInit();
     is_terminal = isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
 
     /* Using these pools vastly simplifies everything as we can free everything 
@@ -282,8 +294,7 @@ int main(int argc, char **argv) {
 
     if (args.assemble) {
         assemble(&args);
-        destroyMemoryPools();
-        return 0;
+        goto success;
     }
 
     cc = cctrlNew();
@@ -293,8 +304,7 @@ int main(int argc, char **argv) {
 
     if (args.print_tokens) {
         compileToTokens(cc,&args,lexer_flags);
-        destroyMemoryPools();
-        return 0;
+        goto success;
     }
 
     if (args.transpile) {
@@ -303,17 +313,14 @@ int main(int argc, char **argv) {
                " * `hcc -transpile %s`\n"
                " * please check for errors! */\n\n"
                "%s",args.infile, buf->data);
-        aoStrRelease(buf);
-        destroyMemoryPools();
-        return 0;
+        goto success;
     }
 
     compileToAst(cc,&args,lexer_flags);
 
     if (args.print_ast) {
         compilePrintAst(cc);
-        aoStrPoolRelease();
-        return 0;
+        goto success;
     }
 
     if (args.cfg_create || args.cfg_create_png || args.cfg_create_svg) {
@@ -328,8 +335,7 @@ int main(int argc, char **argv) {
             safeSystem(dot_cmd);
             unlink(dot_outfile);
         }
-        destroyMemoryPools();
-        return 0;
+        goto success;
     }
 
     asmbuf = compileToAsm(cc);
@@ -338,5 +344,11 @@ int main(int argc, char **argv) {
     if (args.defines_list) {
         listRelease(args.defines_list,NULL);
     }
-    destroyMemoryPools();
+
+success:
+    if (args.print_mem_stats) {
+        memoryPrintStats();
+    }
+    memoryRelease();
+    return 0;
 }

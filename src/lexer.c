@@ -9,11 +9,12 @@
 
 #include "aostr.h"
 #include "ast.h"
+#include "arena.h"
 #include "cctrl.h"
 #include "map.h"
 #include "lexer.h"
 #include "list.h"
-#include "mempool.h"
+#include "memory.h"
 #include "prslib.h"
 #include "prsutil.h"
 #include "util.h"
@@ -21,25 +22,30 @@
 /* prototypes */
 int lexPreProcIf(StrMap *macro_defs, Lexer *l);
 
-static MemPool lexer_pool;
-static int lexer_pool_init = 0;
+static Arena lexeme_arena;
+static int lexeme_arena_init = 0;
 
-void lexemePoolInit(void) {
-    if (!lexer_pool_init) {
-        lexer_pool_init = 1;
-        memPoolInit(&lexer_pool, 2048);
+void lexemeMemoryInit(void) {
+    if (!lexeme_arena_init) {
+        lexeme_arena_init = 1;
+        arenaInit(&lexeme_arena, sizeof(Lexeme) * 1000);
     }
 }
 
-void lexerPoolRelease(void) {
-    if (lexer_pool_init) {
-        lexer_pool_init = 0;
-        memPoolRelease(&lexer_pool, 0);
+void lexemeMemoryRelease(void) {
+    if (lexeme_arena_init) {
+        lexeme_arena_init = 0;
+        arenaClear(&lexeme_arena);
     }
 }
 
-Lexeme *lexerPoolAllocLexeme(void) {
-    return (Lexeme *)memPoolAlloc(&lexer_pool, sizeof(Lexeme));
+void lexemeMemoryStats(void) {
+    printf("Lexeme Arena:\n");
+    arenaPrintStats(&lexeme_arena);
+}
+
+Lexeme *lexerAllocLexeme(void) {
+    return (Lexeme *)arenaAlloc(&lexeme_arena, sizeof(Lexeme));
 }
 
 typedef struct {
@@ -128,7 +134,7 @@ static LexerTypes lexer_types[] = {
         && ch != 'X' && ch != '\\')
 
 Lexeme *lexemeNew(char *start, int len) {
-    Lexeme *le = lexerPoolAllocLexeme();
+    Lexeme *le = lexerAllocLexeme();
     le->start = start;
     le->len = len;
     le->line = -1;
@@ -137,7 +143,7 @@ Lexeme *lexemeNew(char *start, int len) {
 }
 
 Lexeme *lexemeSentinal(void) {
-    Lexeme *le = lexerPoolAllocLexeme();
+    Lexeme *le = lexerAllocLexeme();
     le->start = "(-sentinal-)";
     le->len = 12;
     le->line = 1;
@@ -154,7 +160,7 @@ void lexemeAssignOp(Lexeme *le, char *start, int len, long op, int line) {
 }
 
 Lexeme *lexemeTokNew(char *start, int len, int line, long ch) {
-    Lexeme *copy = lexerPoolAllocLexeme();
+    Lexeme *copy = lexerAllocLexeme();
     copy->tk_type = TK_PUNCT;
     copy->start = start;
     copy->len = len;
@@ -163,15 +169,8 @@ Lexeme *lexemeTokNew(char *start, int len, int line, long ch) {
     return copy;
 }
 
-/* Copy the lexeme with memory allocated from the pool */
-Lexeme *lexemePoolCpy(Lexeme *le) {
-    Lexeme *cpy = lexerPoolAllocLexeme();
-    memcpy(cpy,le,sizeof(Lexeme));
-    return cpy;
-}
-
 Lexeme *lexemeCopy(Lexeme *le) {
-    Lexeme *copy = lexerPoolAllocLexeme();
+    Lexeme *copy = lexerAllocLexeme();
     memcpy(copy,le,sizeof(Lexeme));
     return copy;
 }
@@ -206,7 +205,9 @@ void lexInit(Lexer *l, char *source, int flags) {
         macro_proccessor = ccMacroProcessor(NULL);
     }
 
-    lexemePoolInit();
+    if (!lexeme_arena_init) {
+        lexemeMemoryInit();
+    }
 
     /* XXX: create one symbol table for the whole application ;
      * hoist to 'compile.c'*/
@@ -1539,7 +1540,7 @@ Lexeme *lexToken(StrMap *macro_defs, Lexer *l) {
         }
 
         if (l->flags & (CCF_ASM_BLOCK) && tokenPunctIs(&le, '}')) {
-            copy = lexemePoolCpy(&le);
+            copy = lexemeCopy(&le);
             /* turn off assembly lexing */
             l->flags &= ~(CCF_MULTI_COLON|CCF_ACCEPT_NEWLINES|CCF_ASM_BLOCK);
             return copy;
@@ -1549,7 +1550,7 @@ Lexeme *lexToken(StrMap *macro_defs, Lexer *l) {
             switch (le.i64) {
                 case KW_ASM:
                     l->flags |= (CCF_MULTI_COLON|CCF_ACCEPT_NEWLINES|CCF_ASM_BLOCK);
-                    copy = lexemePoolCpy(&le);
+                    copy = lexemeCopy(&le);
                     return copy;
 
                 case KW_PP_INCLUDE: {
@@ -1609,17 +1610,17 @@ Lexeme *lexToken(StrMap *macro_defs, Lexer *l) {
                     break;
 
                 default:
-                    copy = lexemePoolCpy(&le);
+                    copy = lexemeCopy(&le);
                     return copy;
             }
         }
         
         if (le.tk_type == TK_IDENT) {
-            copy = lexemePoolCpy(&le);
+            copy = lexemeCopy(&le);
             return copy;
         }
 
-        copy = lexemePoolCpy(&le);
+        copy = lexemeCopy(&le);
         return copy;
     }
     return NULL;
@@ -1633,8 +1634,6 @@ void lexemeFree(void *_le) {
 }
 
 static void lexReleaseLexFile(LexFile *lex_file) {
-    aoStrRelease(lex_file->filename);
-    aoStrRelease(lex_file->src);
     free(lex_file);
 }
 
