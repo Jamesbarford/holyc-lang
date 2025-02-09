@@ -1554,7 +1554,6 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
             case AST_FUN_PROTO:
                 /* upgrade prototype to a function */
                 func->locals = cc->tmp_locals;
-                // astVectorRelease(func->params);
                 func->params = params;
                 cc->tmp_params = func->params;
                 cc->tmp_rettype = func->type->rettype;

@@ -1328,7 +1328,6 @@ Lexeme *lexDefine(StrMap *macro_defs, Lexer *l) {
             expanded->line = start->line;
         }
         strMapAdd(macro_defs,ident->data,expanded);
-        astRelease(ast);
     }
     for (ssize_t i = 0; i < tokens->size; ++i) {
         lexemeFree(tokens->entries[i]);
@@ -1437,7 +1436,6 @@ int lexPreProcIf(StrMap *macro_defs, Lexer *l) {
         }
         expanded->line = start->line;
     }
-    astRelease(ast);
     for (ssize_t i = 0; i < macro_tokens->size; ++i) {
         lexemeFree(macro_tokens->entries[i]);
     }
@@ -1629,7 +1627,7 @@ Lexeme *lexToken(StrMap *macro_defs, Lexer *l) {
 void lexemeFree(void *_le) {
     if (_le) {
         Lexeme *le = (Lexeme *)_le;
-      //  free(le);
+        (void)le;
     }
 }
 

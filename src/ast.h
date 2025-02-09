@@ -299,9 +299,7 @@ void astMemoryRelease(void);
 void astMemoryStats(void);
 
 AstType *astTypeCopy(AstType *type);
-void astRelease(Ast *ast);
 void astVectorRelease(PtrVec *vec);
-void astReleaseList(List *ast_list);
 
 /* Literals */
 Ast *astI64Type(long long val);
