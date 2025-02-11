@@ -421,7 +421,6 @@ aoStr *cctrlSeverityMessage(int severity) {
                 char *ice_msg = mprintf(ESC_BOLD_RED"INTERNAL COMPILER ERROR"ESC_RESET" - hcc %s: ",
                                         cctrlGetVersion());
                 aoStrCat(buf,ice_msg);
-                free(ice_msg);
                 break;
             }
         }
@@ -434,7 +433,6 @@ aoStr *cctrlSeverityMessage(int severity) {
                 char *ice_msg = mprintf("INTERNAL COMPILER ERROR - hcc %s: ",
                                         cctrlGetVersion());
                 aoStrCat(buf,ice_msg);
-                free(ice_msg);
                 break;
             }
         }
@@ -597,7 +595,6 @@ void cctrlCreateColoredLine(Cctrl *cc,
 
         colored_lexeme = lexemeToColor(cc,&tok, is_err && should_color_err);
         aoStrCat(colored_buffer, colored_lexeme);
-        free(colored_lexeme);
         current_offset += tok.len;
     }
 
@@ -691,7 +688,6 @@ aoStr *cctrlMessagVnsPrintF(Cctrl *cc, char *fmt, va_list ap, int severity) {
     Lexeme *cur_tok = cctrlTokenPeek(cc);
     aoStr *buf = cctrlCreateErrorLine(cc,cur_tok->line,bold_msg->data,severity,NULL);
     aoStrRelease(bold_msg);
-    free(msg);
     return buf;
 }
 
@@ -708,7 +704,6 @@ aoStr *cctrlMessagVnsPrintFWithSuggestion(Cctrl *cc, char *fmt, va_list ap,
     Lexeme *cur_tok = cctrlTokenPeek(cc);
     aoStr *buf = cctrlCreateErrorLine(cc,cur_tok->line,bold_msg->data,severity,suggestion);
     aoStrRelease(bold_msg);
-    free(msg);
     return buf;
 }
 
@@ -864,7 +859,6 @@ aoStr *cctrlRaiseFromTo(Cctrl *cc, int severity, char *suggestion, char from,
     }
 
     aoStrRelease(bold_msg);
-    free(line_buffer);
     return buf;
 }
 
