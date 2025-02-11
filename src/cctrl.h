@@ -6,16 +6,16 @@
 #include "aostr.h"
 #include "ast.h"
 #include "config.h"
-#include "map.h"
 #include "lexer.h"
+#include "map.h"
 
 #define CCTRL_TOKEN_BUFFER_SIZE 16
-#define CCTRL_TOKEN_BUFFER_MASK CCTRL_TOKEN_BUFFER_SIZE-1
+#define CCTRL_TOKEN_BUFFER_MASK CCTRL_TOKEN_BUFFER_SIZE - 1
 
-#define CCTRL_TRANSPILING     (1<<0)
-#define CCTRL_SAVE_ANONYMOUS  (1<<1)
-#define CCTRL_PASTE_DEFINES   (1<<2)
-#define CCTRL_PRESERVE_SIZEOF (1<<3)
+#define CCTRL_TRANSPILING     (1 << 0)
+#define CCTRL_SAVE_ANONYMOUS  (1 << 1)
+#define CCTRL_PASTE_DEFINES   (1 << 2)
+#define CCTRL_PRESERVE_SIZEOF (1 << 3)
 
 /* For messages */
 #define CCTRL_ICE   0
@@ -34,7 +34,7 @@ typedef struct TokenRingBuffer {
 TokenRingBuffer *tokenRingBufferNew(void);
 
 void tokenBufferPrint(TokenRingBuffer *ring_buffer);
-int tokenRingBufferEmpty(TokenRingBuffer *ring_buffer);
+int tokenRingBufferEmpty(const TokenRingBuffer *ring_buffer);
 void tokenRingBufferPush(TokenRingBuffer *ring_buffer, Lexeme *token);
 Lexeme *tokenRingBufferPop(TokenRingBuffer *ring_buffer);
 Lexeme *tokenRingBufferPeek(TokenRingBuffer *ring_buffer);
@@ -58,7 +58,7 @@ typedef struct Cctrl {
     /* Local environment for a function */
     StrMap *localenv;
 
-    /* assembly functions that have been bound to HC, this is the HC 
+    /* assembly functions that have been bound to HC, this is the HC
      * name, not the assembly name */
     StrMap *asm_funcs;
 
@@ -86,7 +86,7 @@ typedef struct Cctrl {
     /* Current function return type */
     AstType *tmp_rettype;
 
-    /* Temporary function parameters, for trying to keep track of function 
+    /* Temporary function parameters, for trying to keep track of function
      * pointers */
     PtrVec *tmp_params;
 
@@ -140,25 +140,28 @@ Lexeme *cctrlTokenGet(Cctrl *cc);
 Lexeme *cctrlTokenPeek(Cctrl *cc);
 Lexeme *cctrlTokenPeekBy(Cctrl *cc, int cnt);
 void cctrlInitMacroProcessor(Cctrl *cc);
-void cctrlTokenRewind(Cctrl *cc);
+void cctrlTokenRewind(const Cctrl *cc);
 void cctrlTokenExpect(Cctrl *cc, long expected);
-void cctrlSetCommandLineDefines(Cctrl *cc, List *defines_list);
+void cctrlSetCommandLineDefines(const Cctrl *cc, const List *defines_list);
 
 void cctrlInitParse(Cctrl *cc, Lexer *lexer_);
 
-Ast *cctrlGetVar(Cctrl *cc, char *varname, int len);
-int cctrlIsKeyword(Cctrl *cc, char *name, int len);
-AstType *cctrlGetKeyWord(Cctrl *cc, char *name, int len);
+Ast *cctrlGetVar(const Cctrl *cc, char *varname, int len);
+int cctrlIsKeyword(const Cctrl *cc, char *name, int len);
+AstType *cctrlGetKeyWord(const Cctrl *cc, char *name, int len);
 void cctrlInfo(Cctrl *cc, char *fmt, ...);
 void cctrlWarning(Cctrl *cc, char *fmt, ...);
-void cctrlWarningFromTo(Cctrl *cc, char *suggestion, char from, char to, char *fmt, ...);
-__noreturn void cctrlRaiseExceptionFromTo(Cctrl *cc, char *suggestion, char from, char to, char *fmt, ...);
+void cctrlWarningFromTo(Cctrl *cc, char *suggestion, char from, char to,
+                        char *fmt, ...);
+__noreturn void cctrlRaiseExceptionFromTo(Cctrl *cc, char *suggestion,
+                                          char from, char to, char *fmt, ...);
 __noreturn void cctrlRaiseException(Cctrl *cc, char *fmt, ...);
-__noreturn void cctrlRaiseSuggestion(Cctrl *cc, char *suggestion, char *fmt, ...);
+__noreturn void cctrlRaiseSuggestion(Cctrl *cc, char *suggestion, char *fmt,
+                                     ...);
 __noreturn void cctrlIce(Cctrl *cc, char *fmt, ...);
-Ast *cctrlGetOrSetString(Cctrl *cc, char *str, int len, long real_len);
+Ast *cctrlGetOrSetString(const Cctrl *cc, char *str, int len, long real_len);
 void cctrlRewindUntilPunctMatch(Cctrl *cc, long ch, int *_count);
-void cctrlRewindUntilStrMatch(Cctrl *cc, char *str, int len, int *_count);
-aoStr *cctrlMessagePrintF(Cctrl *cc, int severity, char *fmt,...);
+void cctrlRewindUntilStrMatch(Cctrl *cc, const char *str, int len, int *_count);
+aoStr *cctrlMessagePrintF(Cctrl *cc, int severity, char *fmt, ...);
 
 #endif // !CCTRL_H

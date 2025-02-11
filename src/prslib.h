@@ -8,7 +8,7 @@ Ast *parseExpr(Cctrl *cc, int prec);
 Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator);
 PtrVec *parseParams(Cctrl *cc, long terminator, int *has_var_args, int store);
 void parseDeclInternal(Cctrl *cc, Lexeme **tok, AstType **type);
-void parseAssignAuto(Cctrl *cc, Ast *ast);
+void parseAssignAuto(Cctrl *cc, const Ast *ast);
 AstType *parseReturnAuto(Cctrl *cc, Ast *retval);
 AstType *parseArrayDimensions(Cctrl *cc, AstType *base_type);
 AstType *parsePointerType(Cctrl *cc, AstType *type);
@@ -16,8 +16,8 @@ AstType *parseBaseDeclSpec(Cctrl *cc);
 AstType *parseDeclSpec(Cctrl *cc);
 AstType *parseFullType(Cctrl *cc);
 Ast *parseFunctionPointer(Cctrl *cc, AstType *rettype);
-AstType *parseFunctionPointerType(Cctrl *cc,
-        char **fnptr_name, int *fnptr_name_len, AstType *rettype);
+AstType *parseFunctionPointerType(Cctrl *cc, char **fnptr_name,
+                                  int *fnptr_name_len, AstType *rettype);
 Ast *findFunctionDecl(Cctrl *cc, char *fname, int len);
 Ast *parseCreateBinaryOp(Cctrl *cc, long operation, Ast *left, Ast *right);
 

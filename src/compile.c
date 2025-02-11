@@ -7,34 +7,30 @@
 #include "cctrl.h"
 #include "cli.h"
 #include "compile.h"
-#include "memory.h"
-#include "x86.h"
 #include "lexer.h"
 #include "list.h"
+#include "memory.h"
 #include "parser.h"
 #include "util.h"
+#include "x86.h"
 
-void compilePrintAst(Cctrl *cc) {
-    List *it;
-    Ast *ast;
-    char *tmp;
+void compilePrintAst(const Cctrl *cc) {
 
     printf("AST: \n");
 
-    it = cc->ast_list->next;
+    const List *it = cc->ast_list->next;
     while (it != cc->ast_list) {
-        ast = (Ast *)it->value;
+        Ast *ast = (Ast *)it->value;
         if (ast == NULL) {
             printf("here\n");
+        } else {
+            if (ast->kind != AST_FUN_PROTO && ast->kind != AST_EXTERN_FUNC &&
+                ast->kind != AST_ASM_FUNC_BIND) {
+                const char *tmp = astToString(ast);
+                printf("%s\n", tmp);
+            }
         }
 
-        if (ast->kind != AST_FUN_PROTO &&
-            ast->kind != AST_EXTERN_FUNC && 
-            ast->kind != AST_ASM_FUNC_BIND)
-        {
-            tmp = astToString(ast);
-            printf("%s\n", tmp);
-        }
         it = it->next;
     }
 }
@@ -54,15 +50,15 @@ void compileToTokens(Cctrl *cc, CliArgs *args, int lexer_flags) {
     StrMap *seen_files = strMapNew(32);
     char *root_dir = mprintf("%s/include/", args->install_dir);
 
-    lexInit(l,NULL,CCF_PRE_PROC|lexer_flags);
+    lexInit(l, NULL, CCF_PRE_PROC | lexer_flags);
     l->seen_files = seen_files;
     l->lineno = 1;
-    lexSetBuiltinRoot(l,root_dir);
+    lexSetBuiltinRoot(l, root_dir);
 
-    lexPushFile(l,aoStrDupRaw(args->infile,strlen(args->infile)));
+    lexPushFile(l, aoStrDupRaw(args->infile, strlen(args->infile)));
 
     Lexeme *token = NULL;
-    while ((token = lexToken(cc->macro_defs,l))) {
+    while ((token = lexToken(cc->macro_defs, l))) {
         lexemePrint(token);
     }
 
@@ -74,20 +70,20 @@ int compileToAst(Cctrl *cc, CliArgs *args, int lexer_flags) {
     aoStr *builtin_path = aoStrPrintf("%s/include/tos.HH", args->install_dir);
     char *root_dir = mprintf("%s/include/", args->install_dir);
 
-    lexInit(l,NULL,CCF_PRE_PROC|lexer_flags);
+    lexInit(l, NULL, CCF_PRE_PROC | lexer_flags);
     l->lineno = 1;
-    lexSetBuiltinRoot(l,root_dir);
+    lexSetBuiltinRoot(l, root_dir);
 
-    lexPushFile(l,aoStrDupRaw(args->infile,strlen(args->infile)));
+    lexPushFile(l, aoStrDupRaw(args->infile, strlen(args->infile)));
     /* library files */
     /* the structure is a so this will get popped first */
-    lexPushFile(l,builtin_path);
+    lexPushFile(l, builtin_path);
 
-    cctrlInitParse(cc,l);
+    cctrlInitParse(cc, l);
 
     parseToAst(cc);
 
     lexReleaseAllFiles(l);
-    listRelease(l->files,NULL);
+    listRelease(l->files, NULL);
     return 1;
 }

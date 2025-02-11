@@ -7,9 +7,10 @@
 #ifndef AOSTR_H
 #define AOSTR_H
 
+#include <sys/types.h>
+
 #include <stdarg.h>
 #include <stddef.h>
-#include <sys/types.h>
 
 typedef struct aoStr aoStr;
 
@@ -21,30 +22,30 @@ typedef struct aoStr {
 
 aoStr *aoStrAlloc(size_t capacity);
 aoStr *aoStrNew(void);
-void aoStrRelease(aoStr *buf);
+void aoStrRelease(const aoStr *buf);
 
 int aoStrExtendBuffer(aoStr *buf, size_t additional);
 void aoStrToLowerCase(aoStr *buf);
 void aoStrPutChar(aoStr *buf, char ch);
 void aoStrRepeatChar(aoStr *buf, char ch, int times);
-int aoStrCmp(aoStr *b1, aoStr *b2);
-aoStr *aoStrDupRaw(char *s, size_t len);
-aoStr *aoStrDup(aoStr *buf);
+int aoStrCmp(const aoStr *b1, const aoStr *b2);
+aoStr *aoStrDupRaw(const char *s, size_t len);
+aoStr *aoStrDup(const aoStr *buf);
 
-char *aoStrMove(aoStr *buf);
+char *aoStrMove(const aoStr *buf);
 
 void aoStrCatLen(aoStr *buf, const void *d, size_t len);
-void aoStrCatAoStr(aoStr *buf, aoStr *s2);
+void aoStrCatAoStr(aoStr *buf, const aoStr *s2);
 void aoStrCat(aoStr *buf, const void *d);
-void aoStrCatRepeat(aoStr *buf, char *str, int times);
+void aoStrCatRepeat(aoStr *buf, const char *str, int times);
 void aoStrCatPrintf(aoStr *b, const char *fmt, ...);
 void aoStrCatFmt(aoStr *buf, const char *fmt, ...);
 aoStr *aoStrPrintf(const char *fmt, ...);
-aoStr *aoStrEscapeString(aoStr *buf);
-aoStr *aoStrEncode(aoStr *buf);
+aoStr *aoStrEscapeString(const aoStr *buf);
+aoStr *aoStrEncode(const aoStr *buf);
 
 void aoStrArrayRelease(aoStr **arr, int count);
-aoStr **aoStrSplit(char *to_split, char delimiter, int *count);
+aoStr **aoStrSplit(const char *to_split, char delimiter, int *count);
 char *mprintf(const char *fmt, ...);
 char *mprintVa(const char *fmt, va_list ap, ssize_t *_len);
 aoStr *aoStrError(void);

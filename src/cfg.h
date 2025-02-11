@@ -7,19 +7,19 @@
 #include "mempool.h"
 
 enum bbType {
-    BB_GARBAGE       = -1,
-    BB_END_BLOCK     = 0,
-    BB_HEAD_BLOCK    = 1,
+    BB_GARBAGE = -1,
+    BB_END_BLOCK = 0,
+    BB_HEAD_BLOCK = 1,
     BB_CONTROL_BLOCK = 2,
-    BB_BRANCH_BLOCK  = 3,
-    BB_LOOP_BLOCK    = 4,
-    BB_RETURN_BLOCK  = 5,
-    BB_BREAK_BLOCK   = 6,
+    BB_BRANCH_BLOCK = 3,
+    BB_LOOP_BLOCK = 4,
+    BB_RETURN_BLOCK = 5,
+    BB_BREAK_BLOCK = 6,
     BB_DO_WHILE_COND = 7,
-    BB_GOTO          = 8,
-    BB_SWITCH        = 9,
-    BB_CASE          = 10,
-    BB_CONTINUE      = 11,
+    BB_GOTO = 8,
+    BB_SWITCH = 9,
+    BB_CASE = 10,
+    BB_CONTINUE = 11,
 };
 
 #define CFG_MAX_PREV      (32)
@@ -38,23 +38,26 @@ enum bbType {
 #define BB_FLAG_LABEL              (0x10)
 #define BB_FLAG_ELSE_BRANCH        (0x20)
 #define BB_FLAG_IF_BRANCH          (0x40)
-#define BB_FLAG_LOOP_JUMP          (0x80) /* this is for when a goto is jumping
-                                           * out of a loop */
-#define BB_FLAG_GOTO_LOOP          (0x100) /* this is for when a goto forms a 
-                                            * loop */
-#define BB_FLAG_CASE_OWNED         (0x200)
-#define BB_FLAG_WHILE_LOOP         (0x400)
-#define BB_FLAG_CASE_BREAK         (0x800)
-#define BB_FLAG_FOR_LOOP           (0x1000)
-#define BB_FLAG_FOR_LOOP_HAS_STEP  (0x2000)
-#define BB_FLAG_HAD_NO_ELSE        (0x4000) /* Where an if branch had no written
-                                             * else branch */
+#define BB_FLAG_LOOP_JUMP                        \
+    (0x80) /* this is for when a goto is jumping \
+            * out of a loop */
+#define BB_FLAG_GOTO_LOOP                      \
+    (0x100) /* this is for when a goto forms a \
+             * loop */
+#define BB_FLAG_CASE_OWNED        (0x200)
+#define BB_FLAG_WHILE_LOOP        (0x400)
+#define BB_FLAG_CASE_BREAK        (0x800)
+#define BB_FLAG_FOR_LOOP          (0x1000)
+#define BB_FLAG_FOR_LOOP_HAS_STEP (0x2000)
+#define BB_FLAG_HAD_NO_ELSE                       \
+    (0x4000) /* Where an if branch had no written \
+              * else branch */
 
 typedef struct BasicBlock {
     /* @Confirm:
      * Should we stick ssa on this struct? */
     int type;
-    /* For denoting a loop head / end, not a big fan of having flags AND 
+    /* For denoting a loop head / end, not a big fan of having flags AND
      * a type field but I presently can't think of a better way for loops. */
     unsigned int flags;
     int block_no;
@@ -63,8 +66,8 @@ typedef struct BasicBlock {
     struct BasicBlock *_if;
     struct BasicBlock *_else;
     struct BasicBlock *prev;
-    /* For a control block points to the next node, for a branch that is a 
-     * loop head the next pointer is the BB_LOOP_BLOCK, so we can keep track of 
+    /* For a control block points to the next node, for a branch that is a
+     * loop head the next pointer is the BB_LOOP_BLOCK, so we can keep track of
      * it more easily */
     struct BasicBlock *next;
     IntMap *prev_blocks;
@@ -73,8 +76,7 @@ typedef struct BasicBlock {
     PtrVec *ast_array;
 } BasicBlock;
 
-#define bbPrevCnt(bb) \
-  ((bb)->prev_blocks->size)
+#define bbPrevCnt(bb) ((bb)->prev_blocks->size)
 
 /* Head of a CFG is a function */
 typedef struct CFG {
@@ -84,12 +86,12 @@ typedef struct CFG {
     BasicBlock *head;
     /* How many basic blocks are in the graph */
     int bb_count;
-    /* A more compact representation of the graph, a block number to its 
+    /* A more compact representation of the graph, a block number to its
      * connected blocks (not including previous nodes)
      * [block_no] => {block, block...}*/
     IntMap *graph;
     /* Block number to it's block struct
-     * [block_no] => block 
+     * [block_no] => block
      * hashtable */
     IntMap *no_to_block;
     /* This a pointer to the memory pool which holds all of the basic blocks */
@@ -119,7 +121,7 @@ BasicBlock *bbAddNext(BasicBlock *cur, int type, BasicBlock *next);
 char *bbTypeToString(int type);
 char *bbFlagsToString(unsigned int flags);
 char *bbPreviousBlockNumbersToString(BasicBlock *bb);
-int bbPrevHas(BasicBlock *bb, int block_no);
+int bbPrevHas(const BasicBlock *bb, int block_no);
 BasicBlock *cfgGet(CFG *cfg, int block_no);
 PtrVec *cfgConstruct(Cctrl *cc);
 void bbPrint(BasicBlock *bb);

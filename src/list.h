@@ -7,12 +7,11 @@ typedef struct List {
     void *value;
 } List;
 
-#define listForEach(l) \
-    for (List *it = l->next; it != l; it = it->next)
+#define listForEach(l) for (List *it = l->next; it != l; it = it->next)
 
 void listInit(List *l);
 List *listNew(void);
-int listEmpty(List *l);
+int listEmpty(const List *l);
 void listAppend(List *head, void *value);
 void listPrepend(List *head, void *value);
 void listInsertBefore(List *ll, List *new_node);

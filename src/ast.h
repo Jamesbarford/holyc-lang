@@ -2,8 +2,8 @@
 #define AST_H
 
 #include "aostr.h"
-#include "map.h"
 #include "list.h"
+#include "map.h"
 
 /* Relates to the 'kind' property on the AstType struct */
 #define AST_TYPE_VOID         0
@@ -20,54 +20,56 @@
 #define AST_TYPE_AUTO         11
 
 /* Relates to the 'kind' property on the Ast struct */
-#define AST_GVAR           256
-#define AST_DEREF          257
-#define AST_GOTO           258
-#define AST_LABEL          259
-#define AST_ADDR           260
-#define AST_LVAR           261
-#define AST_FUNC           262
-#define AST_DECL           263
-#define AST_STRING         264
-#define AST_FUNCALL        265
-#define AST_LITERAL        266
-#define AST_ARRAY_INIT     267
-#define AST_IF             268
-#define AST_FOR            269
-#define AST_RETURN         270
-#define AST_WHILE          271
-#define AST_OP_ADD         272
-#define AST_CLASS_REF      273
-#define AST_COMPOUND_STMT  274
-#define AST_ASM_STMT       275
-#define AST_ASM_FUNC_BIND  276
-#define AST_ASM_FUNCALL    277
-#define AST_FUNPTR         278
-#define AST_FUNPTR_CALL    279
-#define AST_BREAK          280
-#define AST_CONTINUE       281
-#define AST_DEFAULT_PARAM  282
-#define AST_VAR_ARGS       283
-#define AST_ASM_FUNCDEF    284
-#define AST_CAST           285
-#define AST_FUN_PROTO      286
-#define AST_CASE           287
-#define AST_JUMP           288
-#define AST_EXTERN_FUNC    289
-#define AST_DO_WHILE       290
-#define AST_PLACEHOLDER    291
-#define AST_SWITCH         292
-#define AST_DEFAULT        293
-#define AST_SIZEOF         294
-#define AST_COMMENT        295
+#define AST_GVAR          256
+#define AST_DEREF         257
+#define AST_GOTO          258
+#define AST_LABEL         259
+#define AST_ADDR          260
+#define AST_LVAR          261
+#define AST_FUNC          262
+#define AST_DECL          263
+#define AST_STRING        264
+#define AST_FUNCALL       265
+#define AST_LITERAL       266
+#define AST_ARRAY_INIT    267
+#define AST_IF            268
+#define AST_FOR           269
+#define AST_RETURN        270
+#define AST_WHILE         271
+#define AST_OP_ADD        272
+#define AST_CLASS_REF     273
+#define AST_COMPOUND_STMT 274
+#define AST_ASM_STMT      275
+#define AST_ASM_FUNC_BIND 276
+#define AST_ASM_FUNCALL   277
+#define AST_FUNPTR        278
+#define AST_FUNPTR_CALL   279
+#define AST_BREAK         280
+#define AST_CONTINUE      281
+#define AST_DEFAULT_PARAM 282
+#define AST_VAR_ARGS      283
+#define AST_ASM_FUNCDEF   284
+#define AST_CAST          285
+#define AST_FUN_PROTO     286
+#define AST_CASE          287
+#define AST_JUMP          288
+#define AST_EXTERN_FUNC   289
+#define AST_DO_WHILE      290
+#define AST_PLACEHOLDER   291
+#define AST_SWITCH        292
+#define AST_DEFAULT       293
+#define AST_SIZEOF        294
+#define AST_COMMENT       295
 
 /* @Cleanup
- * Urgently get rid of this, we do not need `n` ways of setting a label on 
+ * Urgently get rid of this, we do not need `n` ways of setting a label on
  * an AST it is extremely confusing */
-#define astHackedGetLabel(ast) \
-    ((ast)->kind == AST_GOTO || (ast)->kind == AST_LABEL ? ((ast)->slabel ? (ast)->slabel : (ast)->sval) : \
-    ((ast)->kind == AST_JUMP ? (ast)->jump_label : (ast)->kind == AST_CASE ? (ast)->case_label : NULL))
-
+#define astHackedGetLabel(ast)                                      \
+    ((ast)->kind == AST_GOTO || (ast)->kind == AST_LABEL ?          \
+             ((ast)->slabel ? (ast)->slabel : (ast)->sval) :        \
+             ((ast)->kind == AST_JUMP         ? (ast)->jump_label : \
+                      (ast)->kind == AST_CASE ? (ast)->case_label : \
+                                                NULL))
 
 typedef struct AstType AstType;
 /* Type of the variable or type of return type of a function */
@@ -99,8 +101,7 @@ typedef struct AstType {
     PtrVec *params;
 } AstType;
 
-
-#define AST_FLAG_INLINE (1<<0)
+#define AST_FLAG_INLINE (1 << 0)
 
 typedef struct Ast Ast;
 typedef struct Ast {
@@ -111,7 +112,7 @@ typedef struct Ast {
     long deref_symbol;
     union {
         struct {
-        /* 8, 16, 32, 64 bit number */
+            /* 8, 16, 32, 64 bit number */
             long long i64;
         };
 
@@ -180,8 +181,8 @@ typedef struct Ast {
             /* Declaration */
             List *locals;
             Ast *body;
-            Ast *ref; /* for function pointers, a reference to the variable 
-                       * allows for keeping track of the offset when converting 
+            Ast *ref; /* for function pointers, a reference to the variable
+                       * allows for keeping track of the offset when converting
                        * to assembly. */
             Ast *default_fn; /* For function pointers, allows setting a default
                               * value... we could use this for all default vals
@@ -257,9 +258,9 @@ typedef struct Ast {
             long case_end;
             aoStr *case_label;
             /* Scopes ast nodes to the case label... Think this makes sense;
-             * in my head it does. As then all the top level case nodes 
+             * in my head it does. As then all the top level case nodes
              * have the begining and end ranges... making creating a jump table
-             * feasible... or degrade into a series of 'ifs' if the range is 
+             * feasible... or degrade into a series of 'ifs' if the range is
              * sparse */
             List *case_asts;
         };
@@ -298,14 +299,14 @@ void astMemoryInit(void);
 void astMemoryRelease(void);
 void astMemoryStats(void);
 
-AstType *astTypeCopy(AstType *type);
+AstType *astTypeCopy(const AstType *type);
 void astVectorRelease(PtrVec *vec);
 
 /* Literals */
 Ast *astI64Type(long long val);
 Ast *astF64Type(double val);
 Ast *astCharType(long ch);
-Ast *astString(char *str, int len, long real_len);
+Ast *astString(const char *str, int len, long real_len);
 
 /* Declarations */
 Ast *astDecl(Ast *var, Ast *init);
@@ -315,8 +316,8 @@ Ast *astBinaryOp(long operation, Ast *left, Ast *right, int *_is_err);
 Ast *astUnaryOperator(AstType *type, long kind, Ast *operand);
 
 /* Variable definitions */
-Ast *astLVar(AstType *type, char *name, int len);
-Ast *astGVar(AstType *type, char *name, int len, int is_static);
+Ast *astLVar(AstType *type, const char *name, int len);
+Ast *astGVar(AstType *type, const char *name, int len, int is_static);
 
 /* More beefy data structures */
 Ast *astArrayInit(List *init);
@@ -324,56 +325,57 @@ Ast *astCompountStatement(List *stmts);
 
 /* Control */
 Ast *astFor(Ast *init, Ast *cond, Ast *step, Ast *body, aoStr *for_begin,
-        aoStr *for_middle, aoStr *for_end);
+            aoStr *for_middle, aoStr *for_end);
 Ast *astIf(Ast *cond, Ast *then, Ast *els);
 Ast *astWhile(Ast *whilecond, Ast *whilebody, aoStr *while_begin,
-        aoStr *while_end);
-Ast *astDoWhile(Ast *whilecond, Ast *whilebody, aoStr *while_begin, 
-        aoStr *while_end);
-Ast *astContinue(aoStr *continue_label);
-Ast *astBreak(aoStr *break_label);
-Ast *astCase(aoStr *case_label, long case_begin, long case_end, List *case_asts);
+              aoStr *while_end);
+Ast *astDoWhile(Ast *whilecond, Ast *whilebody, aoStr *while_begin,
+                aoStr *while_end);
+Ast *astContinue(const aoStr *continue_label);
+Ast *astBreak(const aoStr *break_label);
+Ast *astCase(aoStr *case_label, long case_begin, long case_end,
+             List *case_asts);
 /* Do it with lists, then do it with a vector */
 Ast *astSwitch(Ast *cond, PtrVec *cases, Ast *case_default,
-        aoStr *case_end_label, int switch_bounds_checked);
-Ast *astDefault(aoStr *case_label,List *case_asts);
+               aoStr *case_end_label, int switch_bounds_checked);
+Ast *astDefault(aoStr *case_label, List *case_asts);
 
 /* Functions */
-Ast *astFunctionCall(AstType *type, char *fname, int len, PtrVec *argv);
-Ast *astFunction(AstType *rettype, char *fname, int len, PtrVec *params,
+Ast *astFunctionCall(AstType *type, const char *fname, int len, PtrVec *argv);
+Ast *astFunction(AstType *rettype, const char *fname, int len, PtrVec *params,
                  Ast *body, List *locals, int has_var_args);
 Ast *astReturn(Ast *retval, AstType *rettype);
-Ast *astFunctionPtr(AstType *type, char *fname, int len, 
-                    PtrVec *params);
+Ast *astFunctionPtr(AstType *type, const char *fname, int len, PtrVec *params);
 
-Ast *astFunctionPtrCall(AstType *type, char *fname, int len,
-                         PtrVec *argv, Ast *ref);
+Ast *astFunctionPtrCall(AstType *type, const char *fname, int len, PtrVec *argv,
+                        Ast *ref);
 Ast *astFunctionDefaultParam(Ast *var, Ast *init);
 Ast *astVarArgs(void);
 
 Ast *astAsmBlock(aoStr *asm_stmt, List *funcs);
-Ast *astAsmFunctionBind(AstType *rettype, aoStr *asm_fname, 
-        aoStr *fname, PtrVec *params);
+Ast *astAsmFunctionBind(AstType *rettype, aoStr *asm_fname, aoStr *fname,
+                        PtrVec *params);
 Ast *astAsmFunctionCall(AstType *rettype, aoStr *asm_fname, PtrVec *argv);
 Ast *astAsmFunctionDef(aoStr *asm_fname, aoStr *asm_stmt);
 
 /* Only used when transpiling */
 Ast *astSizeOf(AstType *type);
-Ast *astComment(char *comment, int len);
+Ast *astComment(const char *comment, int len);
 
 /* Gotos */
 Ast *astGoto(aoStr *label);
 Ast *astLabel(aoStr *label);
-Ast *astJump(char *jumpname, int len);
+Ast *astJump(const char *jumpname, int len);
 
 /* Pointers */
 AstType *astMakePointerType(AstType *type);
 AstType *astMakeArrayType(AstType *type, int len);
-AstType *astMakeClassField(AstType *type, int offset);
+AstType *astMakeClassField(const AstType *type, int offset);
 AstType *astMakeFunctionType(AstType *rettype, PtrVec *param_types);
 AstType *astConvertArray(AstType *ast_type);
 Ast *astClassRef(AstType *type, Ast *cls, char *field_name);
-AstType *astClassType(StrMap *fields, aoStr *clsname, int size, int is_intrinsic);
+AstType *astClassType(StrMap *fields, aoStr *clsname, int size,
+                      int is_intrinsic);
 Ast *astCast(Ast *var, AstType *to);
 
 AstType *astGetResultType(long op, AstType *a, AstType *b);
@@ -381,37 +383,37 @@ AstType *astTypeCheck(AstType *expected, Ast *ast, long op);
 
 aoStr *astMakeLabel(void);
 aoStr *astMakeTmpName(void);
-int astIsIntType(AstType *type);
-int astIsFloatType(AstType *type);
+int astIsIntType(const AstType *type);
+int astIsFloatType(const AstType *type);
 int astIsVarArg(Ast *ast);
 int astIsRangeOperator(long op);
 Ast *astGlobalCmdArgs(void);
 
-aoStr *astNormaliseFunctionName(char *fname);
+aoStr *astNormaliseFunctionName(const char *fname);
 int astIsAssignment(long op);
 int astIsBinCmp(long op);
 Ast *astMakeForeverSentinal(void);
 Ast *astMakeLoopSentinal(void);
 char *astAnnonymousLabel(void);
 
-int astIsLabelMatch(Ast *ast, aoStr *goto_label);
+int astIsLabelMatch(const Ast *ast, const aoStr *goto_label);
 
 /* For debugging */
-aoStr *astTypeToAoStr(AstType *type);
-char *astTypeToString(AstType *type);
-char *astTypeToColorString(AstType *type);
-aoStr *astTypeToColorAoStr(AstType *type);
+aoStr *astTypeToAoStr(const AstType *type);
+char *astTypeToString(const AstType *type);
+char *astTypeToColorString(const AstType *type);
+aoStr *astTypeToColorAoStr(const AstType *type);
 char *astKindToString(int kind);
-char *astFunctionToString(Ast *func);
-char *astFunctionNameToString(AstType *rettype, char *fname, int len);
+char *astFunctionToString(const Ast *func);
+char *astFunctionNameToString(const AstType *rettype, const char *fname,
+                              int len);
 char *astToString(Ast *ast);
-char *astLValueToString(Ast *ast, unsigned long lexme_flags);
-aoStr *astLValueToAoStr(Ast *ast, unsigned long lexeme_flags);
+char *astLValueToString(const Ast *ast, unsigned long lexme_flags);
+aoStr *astLValueToAoStr(const Ast *ast, unsigned long lexeme_flags);
 void astPrint(Ast *ast);
-void astTypePrint(AstType *type);
+void astTypePrint(const AstType *type);
 void astKindPrint(int kind);
-const char *astTypeKindToHumanReadable(AstType *type);
-const char *astKindToHumanReadable(Ast *ast);
+const char *astTypeKindToHumanReadable(const AstType *type);
+const char *astKindToHumanReadable(const Ast *ast);
 
 #endif
-

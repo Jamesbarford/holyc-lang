@@ -6,8 +6,8 @@ typedef struct ArenaBlock {
     unsigned int capacity;
     unsigned int used;
     void *mem;
-    ArenaBlock *next; 
-} ArenaBlock; 
+    ArenaBlock *next;
+} ArenaBlock;
 
 typedef struct Arena {
     unsigned int block_capacity;
@@ -17,10 +17,10 @@ typedef struct Arena {
 } Arena;
 
 void arenaInit(Arena *arena, unsigned int capacity);
-void arenaClear(Arena *arena);
+void arenaClear(const Arena *arena);
 Arena *arenaNew(unsigned int capacity);
 void *arenaAlloc(Arena *arena, unsigned int size);
 void arenaRelease(Arena *arena);
-void arenaPrintStats(Arena *arena);
+void arenaPrintStats(const Arena *arena);
 
 #endif // MEMORY_ARENA_H__

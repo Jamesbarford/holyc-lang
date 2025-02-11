@@ -11,17 +11,17 @@
 #include <unistd.h>
 
 #include "aostr.h"
-#include "config.h"
 #include "cli.h"
+#include "config.h"
 #include "util.h"
 #include "version.h"
 
 #define BUFFER_INITIAL_CAPACITY 1024
-#define LINELEN_DEFAULT 80
-
+#define LINELEN_DEFAULT         80
 
 char *cliParseAssign(char *arg) {
-    while (*arg != '=') arg++;
+    while (*arg != '=')
+        arg++;
     return arg;
 }
 
@@ -34,13 +34,13 @@ int cliParseString(CliValue *value, char *rawarg) {
 int cliParseDefine(CliValue *value, char *rawarg) {
     rawarg += 2; /* move past -D */
     value->type = CLI_STRING;
-    value->str = mprintf("%s",rawarg);
+    value->str = mprintf("%s", rawarg);
     return 1;
 }
 
-int cliParseInt(CliValue *value, char *rawarg) {
+int cliParseInt(CliValue *value, const char *rawarg) {
     char *endptr = NULL;
-    /* This program makes no sense if the argument passed it is greater than 
+    /* This program makes no sense if the argument passed it is greater than
      * INT_MAX or <= `0` */
     value->integer = (int)strtol(rawarg, &endptr, 10);
     if (value->integer <= 0) {
@@ -59,14 +59,15 @@ int cliParseNop(CliValue *value, char *rawarg) {
     return 1;
 }
 
-int cliParseBoolean(CliValue *value, char *rawarg) {
+int cliParseBoolean(CliValue *value, const char *rawarg) {
     int retval = 0;
     value->type = CLI_FLAG;
 
-    if (!strncmp(rawarg,str_lit("true")) || !strncmp(rawarg,str_lit("1"))) {
+    if (!strncmp(rawarg, str_lit("true")) || !strncmp(rawarg, str_lit("1"))) {
         value->boolean = 1;
         retval = 1;
-    } else if (!strncmp(rawarg,str_lit("false")) || !strncmp(rawarg,str_lit("0"))) {
+    } else if (!strncmp(rawarg, str_lit("false")) ||
+               !strncmp(rawarg, str_lit("0"))) {
         value->boolean = 0;
         retval = 1;
     }
@@ -74,31 +75,51 @@ int cliParseBoolean(CliValue *value, char *rawarg) {
 }
 
 static CliParser parsers[] = {
-    {str_lit("-ast"),       0, CLI_PRINT_AST, "-ast", "Print the ast and exit", &cliParseNop},
-    {str_lit("-cfg"),       0, CLI_CFG_CREATE, "-cfg", "Create graphviz control flow graph", &cliParseNop},
-    {str_lit("-cfg-png"),   0, CLI_CFG_CREATE_PNG, "-cfg-svg", "Create graphviz control flow graph as a PNG", &cliParseNop},
-    {str_lit("-cfg-svg"),   0, CLI_CFG_CREATE_SVG, "-cfg-png", "Create graphviz control flow graph as a SVG", &cliParseNop},
-    {str_lit("-tokens"),    0, CLI_PRINT_TOKENS, "-tokens", "Print the tokens and exit", &cliParseNop},
-    {str_lit("-S"),         0, CLI_ASSEMBLE_ONLY, "-S", "Emit assembly only", &cliParseNop},
-    {str_lit("-obj"),       0, CLI_EMIT_OBJECT, "-obj", "Emit an objectfile", &cliParseNop},
-    {str_lit("-lib"),       1, CLI_EMIT_DYLIB, "-lib <libname>", "Emit a dynamic and static library: `-lib <libname>`", &cliParseString},
-    {str_lit("-clibs"),     0, CLI_CLIBS, "-clibs", "Link c libraries like: -clibs=`-lSDL2 -lxml2 -lcurl...`", &cliParseNop},
-    {str_lit("-run"),       0, CLI_RUN, "-run", "Immediately run the file (not JIT)", &cliParseNop},
-    {str_lit("-o"),         1, CLI_OUTPUT_FILENAME, "-o <binary_name>", "Output filename: `-o <name> ./<file>.HC`", &cliParseString},
-    {str_lit("-o-"),        0, CLI_TO_STDOUT, "-o-", "Output assembly to stdout, only for use with -S", &cliParseNop},
-    {str_lit("-transpile"), 0, CLI_TRANSPILE, "-transpile", "Transpile the code to C, this is best effort", &cliParseNop},
-    {str_lit("-D"),         0, CLI_DEFINES_LIST, "-D<VAR>", "Set a compiler #define (does not accept a value)", &cliParseDefine},
-    {str_lit("--mem-stats"),  0, CLI_MEM_STATS, "--mem-stats", "Stats about memory usage when compiling" , &cliParseNop},
-    {str_lit("--version"),  0, CLI_VERSION, "--version", "Print the version of the compiler", &cliParseNop},
-    {str_lit("--help"),     0, CLI_HELP, "--help", "Print this message", &cliParseNop},
-    {str_lit("--terry"),    0, CLI_TERRY, "--terry", "Information about Terry A. Davis", &cliParseNop},
+        {str_lit("-ast"), 0, CLI_PRINT_AST, "-ast", "Print the ast and exit",
+         &cliParseNop},
+        {str_lit("-cfg"), 0, CLI_CFG_CREATE, "-cfg",
+         "Create graphviz control flow graph", &cliParseNop},
+        {str_lit("-cfg-png"), 0, CLI_CFG_CREATE_PNG, "-cfg-svg",
+         "Create graphviz control flow graph as a PNG", &cliParseNop},
+        {str_lit("-cfg-svg"), 0, CLI_CFG_CREATE_SVG, "-cfg-png",
+         "Create graphviz control flow graph as a SVG", &cliParseNop},
+        {str_lit("-tokens"), 0, CLI_PRINT_TOKENS, "-tokens",
+         "Print the tokens and exit", &cliParseNop},
+        {str_lit("-S"), 0, CLI_ASSEMBLE_ONLY, "-S", "Emit assembly only",
+         &cliParseNop},
+        {str_lit("-obj"), 0, CLI_EMIT_OBJECT, "-obj", "Emit an objectfile",
+         &cliParseNop},
+        {str_lit("-lib"), 1, CLI_EMIT_DYLIB, "-lib <libname>",
+         "Emit a dynamic and static library: `-lib <libname>`",
+         &cliParseString},
+        {str_lit("-clibs"), 0, CLI_CLIBS, "-clibs",
+         "Link c libraries like: -clibs=`-lSDL2 -lxml2 -lcurl...`",
+         &cliParseNop},
+        {str_lit("-run"), 0, CLI_RUN, "-run",
+         "Immediately run the file (not JIT)", &cliParseNop},
+        {str_lit("-o"), 1, CLI_OUTPUT_FILENAME, "-o <binary_name>",
+         "Output filename: `-o <name> ./<file>.HC`", &cliParseString},
+        {str_lit("-o-"), 0, CLI_TO_STDOUT, "-o-",
+         "Output assembly to stdout, only for use with -S", &cliParseNop},
+        {str_lit("-transpile"), 0, CLI_TRANSPILE, "-transpile",
+         "Transpile the code to C, this is best effort", &cliParseNop},
+        {str_lit("-D"), 0, CLI_DEFINES_LIST, "-D<VAR>",
+         "Set a compiler #define (does not accept a value)", &cliParseDefine},
+        {str_lit("--mem-stats"), 0, CLI_MEM_STATS, "--mem-stats",
+         "Stats about memory usage when compiling", &cliParseNop},
+        {str_lit("--version"), 0, CLI_VERSION, "--version",
+         "Print the version of the compiler", &cliParseNop},
+        {str_lit("--help"), 0, CLI_HELP, "--help", "Print this message",
+         &cliParseNop},
+        {str_lit("--terry"), 0, CLI_TERRY, "--terry",
+         "Information about Terry A. Davis", &cliParseNop},
 };
 
 static size_t longestCommand(void) {
-    int commands_len = (int)(sizeof(parsers)/sizeof(parsers[0]));
+    int commands_len = (int)(sizeof(parsers) / sizeof(parsers[0]));
     size_t max_len = 0;
     for (int i = 0; i < commands_len; ++i) {
-        CliParser *parser = &parsers[i];
+        const CliParser *parser = &parsers[i];
         size_t len = strlen(parser->optname);
         if (len > max_len) {
             max_len = len;
@@ -108,22 +129,22 @@ static size_t longestCommand(void) {
 }
 
 aoStr *gitGetHash(void) {
-    char tmp[64];
     aoStr *hash = aoStrAlloc(64);
     FILE *fp = popen("git rev-parse main", "r");
 
     if (fp == NULL) {
         aoStrCatFmt(hash, "no git hash");
     } else {
+        char tmp[64];
         if (fgets(tmp, sizeof(tmp), fp) == NULL) {
             aoStrCatFmt(hash, "git hash retrival failed");
         } else {
             size_t len = strlen(tmp);
-            if (tmp[len-1] == '\n') {
+            if (tmp[len - 1] == '\n') {
                 len--;
             }
-            aoStrCatFmt(hash,"%.*s",(int)len,tmp);
-        } 
+            aoStrCatFmt(hash, "%.*s", (int)len, tmp);
+        }
     }
 
     pclose(fp);
@@ -138,8 +159,10 @@ const char *getBuildModeStr(void) {
 #endif
 }
 
-/* For creating error messages that can't take advantage of the nicer cctrl one */
-__noreturn void cliPanicGeneric(const char *const_msg, const char *fmt, va_list ap) {
+/* For creating error messages that can't take advantage of the nicer cctrl one
+ */
+__noreturn void cliPanicGeneric(const char *const_msg, const char *fmt,
+                                va_list ap) {
     char buffer[BUFSIZ];
     size_t len = vsnprintf(buffer, sizeof(buffer), fmt, ap);
     buffer[len] = '\0';
@@ -157,7 +180,7 @@ __noreturn void cliPanicGeneric(const char *const_msg, const char *fmt, va_list 
 
 __noreturn void cliPanic(const char *fmt, ...) {
     va_list ap;
-    va_start(ap,fmt);
+    va_start(ap, fmt);
     cliPanicGeneric("Error: ", fmt, ap);
 }
 
@@ -170,16 +193,13 @@ __noreturn void cliVersionPrint(void) {
         aoStrCatFmt(buffer, "hcc %s\n", cctrlGetVersion());
     }
     aoStrCatFmt(buffer,
-            "binary: hcc\n"
-            "commit-hash: %s\n"
-            "arch: %s %s\n"
-            "build: %s\n",
-            git_hash->data,
-            OS_STR,
-            ARCH_STR,
-            getBuildModeStr());
+                "binary: hcc\n"
+                "commit-hash: %s\n"
+                "arch: %s %s\n"
+                "build: %s\n",
+                git_hash->data, OS_STR, ARCH_STR, getBuildModeStr());
 
-    printf("%s",buffer->data);
+    printf("%s", buffer->data);
     aoStrRelease(git_hash);
     aoStrRelease(buffer);
     exit(EXIT_SUCCESS);
@@ -191,35 +211,42 @@ __noreturn void cliTerryInfo(void) {
     } else {
         fprintf(stderr, "Terry A. Davis\n");
     }
-    fprintf(stderr, "1969 - 2018\n"
-                    "Terry was an electrical engineer and computer programmer who created TempleOS\n"
-                    "as well as the HolyC programming language. More can be read about Terry and\n"
-                    "his life here https://en.wikipedia.org/wiki/Terry_A._Davis\n");
+    fprintf(stderr,
+            "1969 - 2018\n"
+            "Terry was an electrical engineer and computer programmer who created TempleOS\n"
+            "as well as the HolyC programming language. More can be read about Terry and\n"
+            "his life here https://en.wikipedia.org/wiki/Terry_A._Davis\n");
     exit(EXIT_SUCCESS);
 }
 
 __noreturn void cliNoInputFiles(void) {
     if (is_terminal) {
-        fprintf(stderr, "\033[1;1mhcc\033[0m: "ESC_BOLD_RED"fatal error\033[0m: no input files\n"
+        fprintf(stderr,
+                "\033[1;1mhcc\033[0m: " ESC_BOLD_RED
+                "fatal error\033[0m: no input files\n"
                 "compilation terminated.\n");
     } else {
-        fprintf(stderr, "hcc: fatal error: no input files\n"
+        fprintf(stderr,
+                "hcc: fatal error: no input files\n"
                 "compilation terminated.\n");
     }
     exit(EXIT_FAILURE);
 }
 
 __noreturn void cliPrintUsage(void) {
-    int commands_len = (int)(sizeof(parsers)/sizeof(parsers[0]));
+    int commands_len = (int)(sizeof(parsers) / sizeof(parsers[0]));
     size_t longest = longestCommand() + 4;
     aoStr *buffer = aoStrNew();
 
     if (is_terminal) {
-        aoStrCatFmt(buffer,"\033[1;1mhcc - HolyC Compiler %s\033[0m\n", cctrlGetVersion());
+        aoStrCatFmt(buffer, "\033[1;1mhcc - HolyC Compiler %s\033[0m\n",
+                    cctrlGetVersion());
     } else {
-        aoStrCatFmt(buffer,"hcc - HolyC Compiler %s\n", cctrlGetVersion());
+        aoStrCatFmt(buffer, "hcc - HolyC Compiler %s\n", cctrlGetVersion());
     }
-    aoStrCatFmt(buffer, "Compile .HC files for documentation please see here - https://holyc-lang.com/docs/intro\n\n");
+    aoStrCatFmt(
+            buffer,
+            "Compile .HC files for documentation please see here - https://holyc-lang.com/docs/intro\n\n");
 
     if (is_terminal) {
         aoStrCatFmt(buffer, "\033[1;1mUSAGE:\033[0m\n");
@@ -246,7 +273,7 @@ __noreturn void cliPrintUsage(void) {
         /* Making the spacing uniform */
         if (parser->optlen < longest) {
             for (size_t optlen = parser->optlen; optlen < longest; ++optlen) {
-                aoStrPutChar(buffer, ' '); 
+                aoStrPutChar(buffer, ' ');
             }
         }
 
@@ -257,26 +284,26 @@ __noreturn void cliPrintUsage(void) {
     exit(EXIT_SUCCESS);
 }
 
-CliParser *cliParserFind(char *arg, size_t arg_len) {
-    int len = (int)(sizeof(parsers)/sizeof(parsers[0]));
+CliParser *cliParserFind(const char *arg, size_t arg_len) {
+    int len = (int)(sizeof(parsers) / sizeof(parsers[0]));
 
     for (int i = 0; i < len; ++i) {
         CliParser *parser = &parsers[i];
 
         /* Exact match */
         if (arg_len == parser->optlen &&
-            !strncmp(parser->optname, arg, arg_len))
-        {
+            !strncmp(parser->optname, arg, arg_len)) {
             return parser;
         }
 
-        /* For something like `--file=<arg>` where we want to check there is a 
+        /* For something like `--file=<arg>` where we want to check there is a
          * '=' and that the `--file` part matches */
         if (arg_len > parser->optlen) {
-            if (arg[parser->optlen] == '=' && 
+            if (arg[parser->optlen] == '=' &&
                 !strncmp(parser->optname, arg, parser->optlen)) {
                 return parser;
-            } else if (!strncmp("-D", arg, 2) && !strncmp("-D", parser->optname, 2)) {
+            } else if (!strncmp("-D", arg, 2) &&
+                       !strncmp("-D", parser->optname, 2)) {
                 return parser;
             }
         }
@@ -291,34 +318,39 @@ enum CliFileType {
     HC_ASSEMBLY,
 };
 
-enum CliFileType cliGetFileType(char *filename, size_t filename_len) {
-    char *end = &filename[filename_len-1];
-    if (tolower(*end) == 'c' && tolower(*(end-1)) == 'h' && *(end-2) == '.') {
+enum CliFileType cliGetFileType(const char *filename, size_t filename_len) {
+    const char *end = &filename[filename_len - 1];
+    if (tolower(*end) == 'c' && tolower(*(end - 1)) == 'h' &&
+        *(end - 2) == '.') {
         return HC_SOURCE;
-    } else if (tolower(*end) == 'h' && tolower(*(end-1)) == 'h' && *(end-2) == '.') {
+    } else if (tolower(*end) == 'h' && tolower(*(end - 1)) == 'h' &&
+               *(end - 2) == '.') {
         return HC_HEADER;
-    } else if (tolower(*end) == 's' && *(end-1) == '.') {
+    } else if (tolower(*end) == 's' && *(end - 1) == '.') {
         return HC_ASSEMBLY;
     } else {
         return HC_INVALID;
     }
 }
 
-void getASMFileName(CliArgs *args, enum CliFileType file_type, char *filename, size_t filename_len) {
+void getASMFileName(CliArgs *args, enum CliFileType file_type, char *filename,
+                    size_t filename_len) {
     switch (file_type) {
-        case HC_INVALID:
-            cliPanic("Unknown file extension, file must end with .HC, .HH or .s case insensitive. Got: %s\n", filename);
-            break;
-        case HC_SOURCE:
-        case HC_HEADER:
-            break;
-        case HC_ASSEMBLY:
+    case HC_INVALID:
+        cliPanic(
+                "Unknown file extension, file must end with .HC, .HH or .s case insensitive. Got: %s\n",
+                filename);
+        break;
+    case HC_SOURCE:
+    case HC_HEADER:
+        break;
+    case HC_ASSEMBLY:
         args->assemble = 1;
-            break;
+        break;
     }
 
     char *slashptr = NULL;
-    for (int i = filename_len -1; i >= 0; --i) {
+    for (int i = filename_len - 1; i >= 0; --i) {
         if (filename[i] == '/') {
             slashptr = &filename[i];
             slashptr += 1;
@@ -339,7 +371,7 @@ void getASMFileName(CliArgs *args, enum CliFileType file_type, char *filename, s
     args->infile = mprintf("%s", filename);
     args->infile_no_ext = mprintf("%.*s", no_ext_len, slashptr);
     args->asm_outfile = mprintf("%s.s", args->infile_no_ext);
-    args->obj_outfile =  mprintf("%s.o", args->infile_no_ext);
+    args->obj_outfile = mprintf("%s.o", args->infile_no_ext);
 }
 
 int cliParseArgs(CliArgs *args, int argc, char **argv) {
@@ -353,7 +385,7 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
     for (int i = 0; i < argc; i++) {
         char *arg = argv[i];
         size_t arg_len = strlen(arg);
-        char *next_arg = i + 1 < argc ? argv[i+1] : NULL;
+        char *next_arg = i + 1 < argc ? argv[i + 1] : NULL;
         char *arg_to_parse = NULL;
 
         if ((parser = cliParserFind(arg, arg_len)) == NULL) {
@@ -373,7 +405,7 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
         } else if (parser->arg_count > 0) {
             if (!next_arg && parser->parse != cliParseNop) {
                 cliPanic("Unexpected end of input - expected `%s <option?>`\n",
-                      parser->optname);
+                         parser->optname);
             }
             arg_to_parse = next_arg;
             i++;
@@ -383,43 +415,78 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
 
         if (!parser->parse(&value, arg_to_parse)) {
             cliPanic("Failed to parse option for `%s` got `%s`\n",
-                  parser->usage,
-                  arg_to_parse);
+                     parser->usage, arg_to_parse);
         }
 
         switch (parser->arg_type) {
-            case CLI_PRINT_AST:          args->print_ast = 1; break;
-            case CLI_PRINT_TOKENS:       args->print_tokens = 1; break;
-            case CLI_CFG_CREATE:         args->cfg_create = 1; break;
-            case CLI_CFG_CREATE_PNG:     args->cfg_create_png = 1; break;
-            case CLI_CFG_CREATE_SVG:     args->cfg_create_svg = 1; break;
-            case CLI_ASM_DEBUG_COMMENTS: args->asm_debug_comments = 1; break;
-            case CLI_ASSEMBLE_ONLY:      args->assemble_only = 1; break;
-            case CLI_EMIT_DYLIB: {
-                args->emit_dylib = 1;
-                args->lib_name = mprintf("%s",value.str);
-                break;
+        case CLI_PRINT_AST:
+            args->print_ast = 1;
+            break;
+        case CLI_PRINT_TOKENS:
+            args->print_tokens = 1;
+            break;
+        case CLI_CFG_CREATE:
+            args->cfg_create = 1;
+            break;
+        case CLI_CFG_CREATE_PNG:
+            args->cfg_create_png = 1;
+            break;
+        case CLI_CFG_CREATE_SVG:
+            args->cfg_create_svg = 1;
+            break;
+        case CLI_ASM_DEBUG_COMMENTS:
+            args->asm_debug_comments = 1;
+            break;
+        case CLI_ASSEMBLE_ONLY:
+            args->assemble_only = 1;
+            break;
+        case CLI_EMIT_DYLIB: {
+            args->emit_dylib = 1;
+            args->lib_name = mprintf("%s", value.str);
+            break;
+        }
+        case CLI_EMIT_OBJECT:
+            args->emit_object = 1;
+            break;
+        case CLI_RUN:
+            args->run = 1;
+            break;
+        case CLI_ASSEMBLE:
+            args->assemble = 1;
+            break;
+        case CLI_TRANSPILE:
+            args->transpile = 1;
+            break;
+        case CLI_TO_STDOUT:
+            args->to_stdout = 1;
+            break;
+        case CLI_OUTPUT_FILENAME:
+            args->output_filename = mprintf("%s", value.str);
+            break;
+        case CLI_CLIBS:
+            args->clibs = mprintf("%s", value.str);
+            break;
+        case CLI_DEFINES_LIST: {
+            /* @Leak who owns this memory? This list or the macro_defs hashtable
+             * on Cctrl? */
+            if (args->defines_list == NULL) {
+                args->defines_list = listNew();
             }
-            case CLI_EMIT_OBJECT:        args->emit_object = 1; break;
-            case CLI_RUN:                args->run = 1; break;
-            case CLI_ASSEMBLE:           args->assemble = 1; break;
-            case CLI_TRANSPILE:          args->transpile = 1; break;
-            case CLI_TO_STDOUT:          args->to_stdout = 1; break;
-            case CLI_OUTPUT_FILENAME:    args->output_filename = mprintf("%s", value.str); break;
-            case CLI_CLIBS:              args->clibs = mprintf("%s", value.str); break;
-            case CLI_DEFINES_LIST: {
-                /* @Leak who owns this memory? This list or the macro_defs hashtable
-                 * on Cctrl? */
-                if (args->defines_list == NULL) {
-                    args->defines_list = listNew();
-                }
-                listAppend(args->defines_list, mprintf("%s", value.str));
-                break;
-            }
-            case CLI_MEM_STATS: args->print_mem_stats = 1; break;
-            case CLI_HELP:    cliPrintUsage(); break;
-            case CLI_VERSION: cliVersionPrint(); break;
-            case CLI_TERRY:   cliTerryInfo(); break;
+            listAppend(args->defines_list, mprintf("%s", value.str));
+            break;
+        }
+        case CLI_MEM_STATS:
+            args->print_mem_stats = 1;
+            break;
+        case CLI_HELP:
+            cliPrintUsage();
+            break;
+        case CLI_VERSION:
+            cliVersionPrint();
+            break;
+        case CLI_TERRY:
+            cliTerryInfo();
+            break;
         }
     }
 
@@ -435,7 +502,7 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
 }
 
 void cliArgsInit(CliArgs *args) {
-    memset(args,0,sizeof(CliArgs));
+    memset(args, 0, sizeof(CliArgs));
     args->clibs = "";
     args->defines_list = NULL;
 }

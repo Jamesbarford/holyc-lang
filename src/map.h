@@ -1,15 +1,15 @@
 #ifndef MAP_H
-#define MAP_H 
+#define MAP_H
 
 #include <limits.h>
 
 #define HT_LOAD    0.60
 #define HT_DELETED LONG_MAX
-#define HT_VACANT  LONG_MAX-1
+#define HT_VACANT  LONG_MAX - 1
 #define HT_PROBE_1 1
 #define HT_PROBE_3 3
 
-/* This is very similar to the MapIndex struct, maybe we can repurpose it 
+/* This is very similar to the MapIndex struct, maybe we can repurpose it
  * or repurpose this to be the index */
 typedef struct IntVec {
     int size;
@@ -21,7 +21,7 @@ IntVec *intVecNew(void);
 void intVecPush(IntVec *vec, long value);
 void intVecClear(IntVec *vec);
 void intVecRelease(IntVec *vec);
-void intVecMoveFirst(IntVec *vec, int key);
+void intVecMoveFirst(const IntVec *vec, int key);
 long intVecPop(IntVec *vec, int *ok);
 
 /* This could be used to replace the `List` */
@@ -31,10 +31,11 @@ typedef struct PtrVec {
     void **entries;
 } PtrVec;
 #define vecInBounds(vec, idx) ((idx >= 0) && idx < (vec)->size)
-#define vecGetInBounds(vec, idx) (vecInBounds(vec,idx) ? (vec)->entries[idx] : NULL)
-#define vecEmpty(vec) ((vec)->size == 0)
-#define vecGet(type,vec,idx) ((type)((vec)->entries[idx]))
-#define vecTail(type,vec) ((type)((vec)->entries[(vec)->size-1]))
+#define vecGetInBounds(vec, idx) \
+    (vecInBounds(vec, idx) ? (vec)->entries[idx] : NULL)
+#define vecEmpty(vec)          ((vec)->size == 0)
+#define vecGet(type, vec, idx) ((type)((vec)->entries[idx]))
+#define vecTail(type, vec)     ((type)((vec)->entries[(vec)->size - 1]))
 
 PtrVec *ptrVecNew(void);
 void ptrVecPush(PtrVec *vec, void *value);
@@ -46,7 +47,6 @@ typedef struct IntMapNode {
     void *value;
 } IntMapNode;
 
-
 typedef struct IntMap {
     unsigned long size;     /* How many entries are in the hashtable */
     unsigned long capacity; /* How much capacity we have in the entries array */
@@ -57,8 +57,8 @@ typedef struct IntMap {
     void (*_free_value)(
             void *value); /* User defined callback for freeing values */
     IntVec *indexes; /* Where all of the values are in the entries array, in
-                    * insertion order. Means we can iterate over the
-                    * HashTable quickly at the cost of memory */
+                      * insertion order. Means we can iterate over the
+                      * HashTable quickly at the cost of memory */
     IntMapNode **entries; /* All of the entries, XXX: could this be IntMapNode
                            *entries? */
 } IntMap;
@@ -69,10 +69,10 @@ typedef struct IntMapIterator {
 } IntMapIterator;
 
 int intMapAdd(IntMap *map, long key, void *value);
-void *intMapGet(IntMap *map, long key);
-void *intMapGetAt(IntMap *map, long index);
+void *intMapGet(const IntMap *map, long key);
+void *intMapGetAt(const IntMap *map, long index);
 int intMapDelete(IntMap *map, long key);
-int intMapHas(IntMap *map, long key);
+int intMapHas(const IntMap *map, long key);
 IntMap *intMapNew(unsigned long capacity);
 void intMapSetFreeValue(IntMap *map, void (*_free_value)(void *value));
 void intMapClear(IntMap *map);
@@ -103,8 +103,8 @@ typedef struct StrMap {
             void *_value); /* User defined callback for freeing values */
     void (*_free_key)(void *_key); /* User defined callback for freeing keys */
     IntVec *indexes; /* Where all of the values are in the entries array, in
-                    * insertion order. Means we can iterate over the
-                    * HashTable quickly at the cost of memory */
+                      * insertion order. Means we can iterate over the
+                      * HashTable quickly at the cost of memory */
     StrMapNode **entries; /* All of the entries, XXX: could this be IntMapNode
                            *entries? */
 } StrMap;
@@ -118,13 +118,13 @@ unsigned long roundUpToNextPowerOf2(unsigned long v);
 
 StrMap *strMapNew(unsigned long capacity);
 StrMap *strMapNewWithParent(unsigned long capacity, StrMap *parent);
-void *strMapGetLen(StrMap *map, char *key, long key_len);
-void *strMapGet(StrMap *map, char *key);
+void *strMapGetLen(const StrMap *map, char *key, long key_len);
+void *strMapGet(const StrMap *map, char *key);
 int strMapAddLen(StrMap *map, char *key, long key_len, void *value);
 int strMapAdd(StrMap *map, char *key, void *value);
 int strMapAddOrErr(StrMap *map, char *key, void *value);
-int strMapHas(StrMap *map, char *key);
-int strMapRemove(StrMap *map, char *key);
+int strMapHas(const StrMap *map, const char *key);
+int strMapRemove(StrMap *map, const char *key);
 void strMapRelease(StrMap *map);
 int strMapResize(StrMap *map);
 void strMapSetFreeValue(StrMap *map, void (*_free_value)(void *value));
@@ -135,7 +135,6 @@ void strMapRemoveKeys(StrMap *map1, StrMap *map2);
 StrMapIterator *strMapIteratorNew(StrMap *map);
 void strMapIteratorRelease(StrMapIterator *it);
 StrMapNode *strMapNext(StrMapIterator *it);
-
 
 typedef struct IntSet {
     unsigned long size;

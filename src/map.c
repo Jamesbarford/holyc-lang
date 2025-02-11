@@ -1,9 +1,9 @@
+#include <assert.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <assert.h>
 
 #include "aostr.h"
 #include "map.h"
@@ -23,47 +23,47 @@ void setAllLongs(long *array, unsigned long len, long value) {
         vec = (ret_type *)malloc(sizeof(ret_type));                   \
         vec->size = 0;                                                \
         vec->capacity = VECTOR_INITIAL_CAPACITY;                      \
-        vec->entries = (entry_type *)malloc(sizeof(entry_type) * VECTOR_INITIAL_CAPACITY); \
+        vec->entries = (entry_type *)malloc(sizeof(entry_type) *      \
+                                            VECTOR_INITIAL_CAPACITY); \
     } while (0)
 
-#define vectorResize(vec, type)                           \
-    do {                                                  \
-        int new_capacity = vec->capacity * 2;             \
-        type *new_entries = (type *)realloc(vec->entries, \
-                    sizeof(type)*new_capacity);           \
-        vec->entries = new_entries;                       \
-        vec->capacity = new_capacity;                     \
+#define vectorResize(vec, type)                                           \
+    do {                                                                  \
+        int new_capacity = vec->capacity * 2;                             \
+        type *new_entries = (type *)realloc(vec->entries,                 \
+                                            sizeof(type) * new_capacity); \
+        vec->entries = new_entries;                                       \
+        vec->capacity = new_capacity;                                     \
     } while (0)
 
-#define vectorPush(vec, type, value)                      \
-    do {                                                  \
-        if (vec->size + 1 >= vec->capacity) {             \
-            vectorResize(vec,type);                       \
-        }                                                 \
-        vec->entries[vec->size++] = value;                \
+#define vectorPush(vec, type, value)          \
+    do {                                      \
+        if (vec->size + 1 >= vec->capacity) { \
+            vectorResize(vec, type);          \
+        }                                     \
+        vec->entries[vec->size++] = value;    \
     } while (0)
 
-#define vectorBoundsCheck(vec_size, idx)                                   \
-    do {                                                                   \
-        if (idx < 0 || idx >= vec_size) {                                  \
-            loggerPanic("idx '%d' is out of range for vector of size %d\n",\
-                    idx,vec->size);                                        \
-        }                                                                  \
+#define vectorBoundsCheck(vec_size, idx)                                    \
+    do {                                                                    \
+        if (idx < 0 || idx >= vec_size) {                                   \
+            loggerPanic("idx '%d' is out of range for vector of size %d\n", \
+                        idx, vec->size);                                    \
+        }                                                                   \
     } while (0)
 
-#define vectorRelease(vec)                                                 \
-    do {                                                                   \
-        if (vec) {                                                         \
-            free(vec->entries);                                            \
-            free(vec);                                                     \
-        }                                                                  \
+#define vectorRelease(vec)      \
+    do {                        \
+        if (vec) {              \
+            free(vec->entries); \
+            free(vec);          \
+        }                       \
     } while (0)
-    
 
-/* I feel combining all of these data structures into one file will lead 
+/* I feel combining all of these data structures into one file will lead
  * to a more happy prosperous codebase */
 IntVec *intVecNew(void) {
-    vectorNew(IntVec,long);
+    vectorNew(IntVec, long);
 #ifdef DEBUG
     assert(vec != NULL);
     assert(vec->entries != NULL);
@@ -72,7 +72,7 @@ IntVec *intVecNew(void) {
 }
 
 void intVecPush(IntVec *vec, long value) {
-    vectorPush(vec,long,value);
+    vectorPush(vec, long, value);
 }
 
 long intVecPop(IntVec *vec, int *ok) {
@@ -87,7 +87,7 @@ long intVecPop(IntVec *vec, int *ok) {
 
 int intVecGet(IntVec *vec, int idx) {
 #ifdef DEBUG
-    vectorBoundsCheck(vec->size,idx);
+    vectorBoundsCheck(vec->size, idx);
 #endif
     /* No checking */
     return vec->entries[idx];
@@ -105,7 +105,7 @@ void intVecRelease(IntVec *vec) {
 }
 
 /* Make the first instance of key the first element in the vector */
-void intVecMoveFirst(IntVec *vec, int key) {
+void intVecMoveFirst(const IntVec *vec, int key) {
     int idx = -1;
     for (int i = 0; i < vec->size; ++i) {
         if (vec->entries[i] == key) {
@@ -113,14 +113,15 @@ void intVecMoveFirst(IntVec *vec, int key) {
             break;
         }
     }
-    if (idx == -1) return;
+    if (idx == -1)
+        return;
     int tmp = vec->entries[0];
     vec->entries[0] = vec->entries[idx];
     vec->entries[idx] = tmp;
 }
 
 PtrVec *ptrVecNew(void) {
-    vectorNew(PtrVec,void*);
+    vectorNew(PtrVec, void *);
 #ifdef DEBUG
     assert(vec != NULL);
     assert(vec->entries != NULL);
@@ -129,12 +130,12 @@ PtrVec *ptrVecNew(void) {
 }
 
 void ptrVecPush(PtrVec *vec, void *value) {
-    vectorPush(vec,void*,value);
+    vectorPush(vec, void *, value);
 }
 
 void *ptrVecGet(PtrVec *vec, int idx) {
 #ifdef DEBUG
-    vectorBoundsCheck(vec->size,idx);
+    vectorBoundsCheck(vec->size, idx);
 #endif
     /* No checking */
     return vec->entries[idx];
@@ -160,7 +161,6 @@ unsigned long roundUpToNextPowerOf2(unsigned long v) {
     return v;
 }
 
-
 IntMap *intMapNew(unsigned long capacity) {
     IntMap *map = (IntMap *)malloc(sizeof(IntMap));
     capacity = roundUpToNextPowerOf2(capacity);
@@ -185,8 +185,8 @@ IntMapNode *intMapNodeNew(long key, void *value) {
     return n;
 }
 
-static unsigned long intMapGetIdx(IntMap *map, long key) {
-    unsigned long idx = intMapHashFunction(key, map->mask); 
+static unsigned long intMapGetIdx(const IntMap *map, long key) {
+    unsigned long idx = intMapHashFunction(key, map->mask);
     unsigned long mask = map->mask;
     IntMapNode **entries = map->entries;
     IntMapNode *cur;
@@ -215,7 +215,7 @@ void intMapIteratorRelease(IntMapIterator *it) {
 
 IntMapNode *intMapNext(IntMapIterator *it) {
     while (it->idx < (unsigned long)it->map->indexes->size) {
-        long idx = intVecGet(it->map->indexes,it->idx);
+        long idx = intVecGet(it->map->indexes, it->idx);
         IntMapNode *n = it->map->entries[idx];
         if (n->key != HT_DELETED) {
             it->idx++;
@@ -226,8 +226,9 @@ IntMapNode *intMapNext(IntMapIterator *it) {
     return NULL;
 }
 
-/* Finds the next avalible slot */ 
-static unsigned long intMapGetNextIdx(IntMap *map, long key, int *_is_free) { 
+/* Finds the next avalible slot */
+static unsigned long intMapGetNextIdx(const IntMap *map, long key,
+                                      int *_is_free) {
     unsigned long mask = map->mask;
     unsigned long idx = key & mask;
     IntMapNode *cur;
@@ -244,10 +245,10 @@ static unsigned long intMapGetNextIdx(IntMap *map, long key, int *_is_free) {
 }
 
 void intMapClear(IntMap *map) {
-    IntVec *indexes = map->indexes;
+    const IntVec *indexes = map->indexes;
     void (*free_value)(void *value) = map->_free_value;
     for (int i = 0; i < indexes->size; ++i) {
-        long idx = vecGet(long,indexes,i);
+        long idx = vecGet(long, indexes, i);
         IntMapNode *n = map->entries[idx];
         if (n) {
             if (free_value)
@@ -256,7 +257,7 @@ void intMapClear(IntMap *map) {
         }
     }
     map->size = 0;
-    memset(map->entries,0,map->capacity*sizeof(IntMapNode *));
+    memset(map->entries, 0, map->capacity * sizeof(IntMapNode *));
     intVecClear(map->indexes);
 }
 
@@ -279,25 +280,23 @@ void intMapRelease(IntMap *map) { // free the entire hashtable
 
 int intMapResize(IntMap *map) {
     // Resize the hashtable, will return false if OMM
-    unsigned long new_capacity, new_mask;
-    IntMapNode **new_entries, **old_entries;
-    long *new_indexes;
     long *old_index_entries = map->indexes->entries;
     int indexes_capacity = (int)map->indexes->size;
     int is_free;
 
-    old_entries = map->entries;
+    IntMapNode **old_entries = map->entries;
 
-    new_capacity = map->capacity << 1;
-    new_mask = new_capacity - 1;
+    unsigned long new_capacity = map->capacity << 1;
+    unsigned long new_mask = new_capacity - 1;
 
-    new_indexes = (long *)calloc(indexes_capacity, sizeof(long));
+    long *new_indexes = (long *)calloc(indexes_capacity, sizeof(long));
     /* OOM */
     if (new_indexes == NULL) {
         return 0;
     }
 
-    new_entries = (IntMapNode **)calloc(new_capacity, sizeof(IntMapNode *));
+    IntMapNode **new_entries = (IntMapNode **)calloc(new_capacity,
+                                                     sizeof(IntMapNode *));
     /* OOM */
     if (new_entries == NULL) {
         free(new_indexes);
@@ -309,15 +308,15 @@ int intMapResize(IntMap *map) {
     map->capacity = new_capacity;
     long new_size = 0;
 
-    /* Keeps insertion order, and does not have to go over the capacity of 
+    /* Keeps insertion order, and does not have to go over the capacity of
      * the hashtable which 'dict.c' has to do on a resize thus this should in
-     * theory be faster, but there are more array lookups however they should 
+     * theory be faster, but there are more array lookups however they should
      * have good spatial locality */
     for (long i = 0; i < indexes_capacity; ++i) {
         long idx = old_index_entries[i];
         IntMapNode *old = old_entries[idx];
         if (old->key != HT_DELETED) {
-            long new_idx = intMapGetNextIdx(map,old->key,&is_free);
+            long new_idx = intMapGetNextIdx(map, old->key, &is_free);
             new_indexes[new_size] = new_idx;
             new_entries[new_idx] = old;
             /* keep track of the new size of this hashtable */
@@ -351,7 +350,7 @@ int intMapAdd(IntMap *map, long key, void *value) {
     unsigned long idx = intMapGetNextIdx(map, key, &is_free);
     if (is_free) {
         IntMapNode *n = intMapNodeNew(key, value);
-        intVecPush(map->indexes,idx);
+        intVecPush(map->indexes, idx);
         map->entries[idx] = n;
         map->size++;
         return 1;
@@ -364,7 +363,7 @@ int intMapAdd(IntMap *map, long key, void *value) {
 }
 
 int intMapDelete(IntMap *map, long key) {
-    unsigned long idx = intMapGetIdx(map,key);
+    unsigned long idx = intMapGetIdx(map, key);
     if (idx != HT_DELETED) {
         IntMapNode *n = map->entries[idx];
         if (map->_free_value)
@@ -376,25 +375,25 @@ int intMapDelete(IntMap *map, long key) {
     return 0;
 }
 
-void *intMapGet(IntMap *map, long key) {
-    unsigned long idx = intMapGetIdx(map,key);
+void *intMapGet(const IntMap *map, long key) {
+    unsigned long idx = intMapGetIdx(map, key);
     if (idx != HT_DELETED) {
         return map->entries[idx]->value;
     }
     return NULL;
 }
 
-/* @UnSafe 
+/* @UnSafe
  * What if the nth entry is deleted? */
-void *intMapGetAt(IntMap *map, long index) {
-    long idx = intVecGet(map->indexes,index);
+void *intMapGetAt(const IntMap *map, long index) {
+    long idx = intVecGet(map->indexes, index);
     return map->entries[idx]->value;
 }
 
-/* While seemingly an overkill this means that we can use the map as a set 
+/* While seemingly an overkill this means that we can use the map as a set
  * as we can now have the value as NULL */
-int intMapHas(IntMap *map, long key) {
-    unsigned long idx = intMapGetIdx(map,key);
+int intMapHas(const IntMap *map, long key) {
+    unsigned long idx = intMapGetIdx(map, key);
     return idx != HT_DELETED;
 }
 
@@ -403,20 +402,20 @@ char *intMapToString(IntMap *map, char *(*stringify_value)(void *)) {
     unsigned long map_size = map->size;
 
     if (map_size == 0) {
-        aoStrCatLen(str,"{}",2);
+        aoStrCatLen(str, "{}", 2);
         return aoStrMove(str);
     }
 
     unsigned long i = 0;
     IntMapIterator *it = intMapIteratorNew(map);
     IntMapNode *entry;
-    aoStrPutChar(str,'{');
+    aoStrPutChar(str, '{');
     while ((entry = intMapNext(it)) != NULL) {
         char *value_string = stringify_value(entry->value);
         if ((i + 1) == map_size) {
-            aoStrCatPrintf(str,"[%ld] => %s}",entry->key,value_string);
+            aoStrCatPrintf(str, "[%ld] => %s}", entry->key, value_string);
         } else {
-            aoStrCatPrintf(str,"[%ld] => %s, ",entry->key,value_string);
+            aoStrCatPrintf(str, "[%ld] => %s, ", entry->key, value_string);
         }
         free(value_string);
         i++;
@@ -430,19 +429,19 @@ char *intMapKeysToString(IntMap *map) {
     unsigned long map_size = map->size;
 
     if (map_size == 0) {
-        aoStrCatLen(str,"{}",2);
+        aoStrCatLen(str, "{}", 2);
         return aoStrMove(str);
     }
 
     unsigned long i = 0;
     IntMapIterator *it = intMapIteratorNew(map);
     IntMapNode *entry;
-    aoStrPutChar(str,'{');
+    aoStrPutChar(str, '{');
     while ((entry = intMapNext(it)) != NULL) {
         if ((i + 1) == map_size) {
-            aoStrCatPrintf(str,"%ld}",entry->key);
+            aoStrCatPrintf(str, "%ld}", entry->key);
         } else {
-            aoStrCatPrintf(str,"%ld, ",entry->key);
+            aoStrCatPrintf(str, "%ld, ", entry->key);
         }
         i++;
     }
@@ -450,7 +449,8 @@ char *intMapKeysToString(IntMap *map) {
     return aoStrMove(str);
 }
 
-unsigned long strMapHashFunction(char *key, long key_len, unsigned long mask) {
+unsigned long strMapHashFunction(const char *key, long key_len,
+                                 unsigned long mask) {
     unsigned long hash = 0;
     for (long i = 0; i < key_len; ++i) {
         hash = ((hash << 5) - hash) + key[i];
@@ -495,18 +495,19 @@ StrMapNode *strMapNodeNew(char *key, long key_len, void *value) {
     return n;
 }
 
-static int strMapKeyMatch(StrMapNode *n, char *key, ssize_t key_len) {
-    return n->key_len == key_len && !memcmp(n->key,key,key_len);
+static int strMapKeyMatch(const StrMapNode *n, const char *key,
+                          ssize_t key_len) {
+    return n->key_len == key_len && !memcmp(n->key, key, key_len);
 }
 
-static long strMapGetIdx(StrMap *map, char *key, long key_len) {
+static long strMapGetIdx(const StrMap *map, const char *key, long key_len) {
     unsigned long mask = map->mask;
     unsigned long idx = strMapHashFunction(key, key_len, mask);
     StrMapNode **entries = map->entries;
     StrMapNode *cur;
 
     while ((cur = entries[idx]) != NULL) {
-        if (strMapKeyMatch(cur,key,key_len)) {
+        if (strMapKeyMatch(cur, key, key_len)) {
             return idx;
         }
         idx = (idx + 1) & mask;
@@ -514,9 +515,9 @@ static long strMapGetIdx(StrMap *map, char *key, long key_len) {
     return HT_DELETED;
 }
 
-static unsigned long strMapGetNextIdx(StrMap *map, char *key, long key_len,
-        int *_is_free)
-{ // Finds the next avalible slot
+static unsigned long
+strMapGetNextIdx(const StrMap *map, const char *key, long key_len,
+                 int *_is_free) { // Finds the next avalible slot
     unsigned long mask = map->mask;
     unsigned long idx = strMapHashFunction(key, key_len, mask);
     StrMapNode *cur;
@@ -525,7 +526,7 @@ static unsigned long strMapGetNextIdx(StrMap *map, char *key, long key_len,
         if (cur->key == NULL) {
             *_is_free = 0;
             return idx;
-        } else if (strMapKeyMatch(cur,key,key_len)) {
+        } else if (strMapKeyMatch(cur, key, key_len)) {
             *_is_free = 0;
             return idx;
         }
@@ -536,11 +537,11 @@ static unsigned long strMapGetNextIdx(StrMap *map, char *key, long key_len,
 }
 
 void strMapClear(StrMap *map) {
-    IntVec *indexes = map->indexes;
+    const IntVec *indexes = map->indexes;
     void (*free_value)(void *value) = map->_free_value;
     void (*free_key)(void *_key) = map->_free_key;
     for (int i = 0; i < indexes->size; ++i) {
-        long idx = vecGet(long,indexes,i);
+        long idx = vecGet(long, indexes, i);
         StrMapNode *n = map->entries[idx];
         if (n) {
             if (free_value)
@@ -551,7 +552,7 @@ void strMapClear(StrMap *map) {
         }
     }
     map->size = 0;
-    memset(map->entries,0,map->capacity*sizeof(StrMapNode *));
+    memset(map->entries, 0, map->capacity * sizeof(StrMapNode *));
     intVecClear(map->indexes);
 }
 
@@ -595,24 +596,22 @@ void strMapRemoveKeys(StrMap *map1, StrMap *map2) {
 
 // Resize the hashtable, will return false if OMM
 int strMapResize(StrMap *map) {
-    unsigned long new_capacity, new_mask;
-    long *new_indexes;
-    long *old_index_entries = map->indexes->entries;
+    const long *old_index_entries = map->indexes->entries;
     int indexes_capacity = (int)map->indexes->size;
-    StrMapNode **old_entries, **new_entries;
     int is_free;
 
-    new_capacity = map->capacity << 1;
-    new_mask = new_capacity - 1;
-    old_entries = map->entries;
+    unsigned long new_capacity = map->capacity << 1;
+    unsigned long new_mask = new_capacity - 1;
+    StrMapNode **old_entries = map->entries;
 
-    new_indexes = (long *)calloc(new_capacity, sizeof(long));
+    long *new_indexes = (long *)calloc(new_capacity, sizeof(long));
     /* OOM */
     if (new_indexes == NULL) {
         return 0;
     }
 
-    new_entries = (StrMapNode **)calloc(new_capacity, sizeof(StrMapNode *));
+    StrMapNode **new_entries = (StrMapNode **)calloc(new_capacity,
+                                                     sizeof(StrMapNode *));
     /* OOM */
     if (new_entries == NULL) {
         free(new_indexes);
@@ -624,15 +623,16 @@ int strMapResize(StrMap *map) {
     map->capacity = new_capacity;
     long new_size = 0;
 
-    /* Keeps insertion order, and does not have to go over the capacity of 
+    /* Keeps insertion order, and does not have to go over the capacity of
      * the hashtable which 'dict.c' has to do on a resize thus this should in
-     * theory be faster, but there are more array lookups however they should 
+     * theory be faster, but there are more array lookups however they should
      * have good spatial locality */
     for (unsigned long i = 0; i < map->size; ++i) {
         long idx = old_index_entries[i];
         StrMapNode *old = old_entries[idx];
         if (old->key != NULL) {
-            long new_idx = strMapGetNextIdx(map,old->key,old->key_len,&is_free);
+            long new_idx = strMapGetNextIdx(map, old->key, old->key_len,
+                                            &is_free);
             new_indexes[new_size] = new_idx;
             new_entries[new_idx] = old;
             /* keep track of the new size of this hashtable */
@@ -667,7 +667,7 @@ int strMapAddLen(StrMap *map, char *key, long key_len, void *value) {
 
     if (is_free) {
         StrMapNode *n = strMapNodeNew(key, key_len, value);
-        intVecPush(map->indexes,idx);
+        intVecPush(map->indexes, idx);
         map->entries[idx] = n;
         map->size++;
         return 1;
@@ -682,7 +682,7 @@ int strMapAddLen(StrMap *map, char *key, long key_len, void *value) {
 
 int strMapAdd(StrMap *map, char *key, void *value) {
     long key_len = strlen(key);
-    return strMapAddLen(map,key,key_len,value);
+    return strMapAddLen(map, key, key_len, value);
 }
 
 int strMapAddOrErr(StrMap *map, char *key, void *value) {
@@ -700,7 +700,7 @@ int strMapAddOrErr(StrMap *map, char *key, void *value) {
 
     if (is_free) {
         StrMapNode *n = strMapNodeNew(key, key_len, value);
-        intVecPush(map->indexes,idx);
+        intVecPush(map->indexes, idx);
         map->entries[idx] = n;
         map->size++;
         return 1;
@@ -709,7 +709,7 @@ int strMapAddOrErr(StrMap *map, char *key, void *value) {
     }
 }
 
-int strMapRemove(StrMap *map, char *key) {
+int strMapRemove(StrMap *map, const char *key) {
     long len = strlen(key);
     unsigned long mask = map->mask;
     unsigned long idx = strMapHashFunction(key, len, mask);
@@ -718,8 +718,10 @@ int strMapRemove(StrMap *map, char *key) {
 
     while ((cur = entries[idx])) {
         if (cur->key_len == len && !strncmp(cur->key, key, len)) {
-            if (map->_free_key)   map->_free_key(cur->key);
-            if (map->_free_value) map->_free_value(cur->value);
+            if (map->_free_key)
+                map->_free_key(cur->key);
+            if (map->_free_value)
+                map->_free_value(cur->value);
             cur->value = cur->key = NULL;
             map->size--;
             return 1;
@@ -729,10 +731,11 @@ int strMapRemove(StrMap *map, char *key) {
     return 0;
 }
 
-void *strMapGetLen(StrMap *map, char *key, long key_len) {
-    if (!key) return NULL;
+void *strMapGetLen(const StrMap *map, char *key, long key_len) {
+    if (!key)
+        return NULL;
     for (; map != NULL; map = map->parent) {
-        unsigned long idx = strMapGetIdx(map,key,key_len);
+        unsigned long idx = strMapGetIdx(map, key, key_len);
         if (idx != HT_DELETED) {
             StrMapNode *n = map->entries[idx];
             assert(n);
@@ -742,15 +745,15 @@ void *strMapGetLen(StrMap *map, char *key, long key_len) {
     return NULL;
 }
 
-void *strMapGet(StrMap *map, char *key) {
+void *strMapGet(const StrMap *map, char *key) {
     long key_len = strlen(key);
-    return strMapGetLen(map,key,key_len);
+    return strMapGetLen(map, key, key_len);
 }
 
-int strMapHas(StrMap *map, char *key) {
+int strMapHas(const StrMap *map, const char *key) {
     long key_len = strlen(key);
     for (; map; map = map->parent) {
-        unsigned long idx = strMapGetIdx(map,key,key_len);
+        unsigned long idx = strMapGetIdx(map, key, key_len);
         if (idx != HT_DELETED)
             return 1;
     }
@@ -783,22 +786,20 @@ StrMapNode *strMapNext(StrMapIterator *it) {
     return NULL;
 }
 
-
 IntSet *intSetNew(unsigned long capacity) {
     IntSet *iset = (IntSet *)malloc(sizeof(IntSet));
     iset->size = 0;
     iset->capacity = capacity;
-    iset->mask = capacity-1;
+    iset->mask = capacity - 1;
     iset->threashold = (unsigned long)(HT_LOAD * capacity);
-    iset->entries = (long *)malloc(sizeof(long)*capacity);
+    iset->entries = (long *)malloc(sizeof(long) * capacity);
     iset->indexes = intVecNew();
-    setAllLongs(iset->entries,capacity,HT_VACANT);
+    setAllLongs(iset->entries, capacity, HT_VACANT);
     return iset;
 }
 
-static unsigned long intSetGetNextIdx(long *entries, unsigned long mask,
-        long key, int *_is_free)
-{ 
+static unsigned long intSetGetNextIdx(const long *entries, unsigned long mask,
+                                      long key, int *_is_free) {
     unsigned long idx = key & mask;
     long cur;
 
@@ -813,7 +814,7 @@ static unsigned long intSetGetNextIdx(long *entries, unsigned long mask,
     return idx;
 }
 
-static long intSetGetIdx(long *entries, unsigned long mask, long key) {
+static long intSetGetIdx(const long *entries, unsigned long mask, long key) {
     unsigned long idx = intMapHashFunction(key, mask);
     long cur_key;
 
@@ -850,7 +851,7 @@ int intSetResize(IntSet *iset) {
         return 0;
     }
 
-    setAllLongs(new_entries,new_capacity,HT_VACANT);
+    setAllLongs(new_entries, new_capacity, HT_VACANT);
 
     iset->mask = new_mask;
     iset->entries = new_entries;
@@ -862,13 +863,14 @@ int intSetResize(IntSet *iset) {
         long idx = old_index_entries[i];
         long old_key = old_entries[idx];
         if (old_key != HT_DELETED) {
-            long new_idx = intSetGetNextIdx(new_entries,new_mask,old_key,&is_free);
+            long new_idx = intSetGetNextIdx(new_entries, new_mask, old_key,
+                                            &is_free);
             new_entries[new_idx] = old_key;
             new_indexes[new_size] = new_idx;
             /* keep track of the new size of this Set */
             new_size++;
         }
-    } 
+    }
 
     free(old_entries);
     free(iset->indexes->entries);
@@ -890,19 +892,20 @@ int intSetAdd(IntSet *iset, long key) {
     }
 
     int is_free = 0;
-    unsigned long idx = intSetGetNextIdx(iset->entries,iset->mask,key,&is_free);
+    unsigned long idx = intSetGetNextIdx(iset->entries, iset->mask, key,
+                                         &is_free);
     if (is_free) {
         iset->entries[idx] = key;
-        intVecPush(iset->indexes,idx);
+        intVecPush(iset->indexes, idx);
         iset->size++;
     }
     return 1;
 }
 
 void intSetRemove(IntSet *iset, long key) {
-    long idx = intSetGetIdx(iset->entries,iset->mask,key);
+    long idx = intSetGetIdx(iset->entries, iset->mask, key);
     if (idx != HT_DELETED) {
-        /* We do nothing with the indexes, this does mean if there are multiple 
+        /* We do nothing with the indexes, this does mean if there are multiple
          * deletes the indexes vector would grow indefinitely */
         iset->entries[idx] = HT_DELETED;
         iset->size--;
@@ -910,16 +913,16 @@ void intSetRemove(IntSet *iset, long key) {
 }
 
 int intSetHas(IntSet *iset, long key) {
-    return intSetGetIdx(iset->entries,iset->mask,key) != HT_DELETED;
+    return intSetGetIdx(iset->entries, iset->mask, key) != HT_DELETED;
 }
 
 long intSetGetAt(IntSet *iset, long index) {
-    long idx = intVecGet(iset->indexes,index);
+    long idx = intVecGet(iset->indexes, index);
     return iset->entries[idx];
 }
 
 void intSetClear(IntSet *iset) {
-    setAllLongs(iset->entries,iset->capacity,HT_VACANT);
+    setAllLongs(iset->entries, iset->capacity, HT_VACANT);
     intVecClear(iset->indexes);
 }
 
@@ -939,7 +942,7 @@ IntSetIterator *intSetIteratorNew(IntSet *iset) {
 
 long intSetNext(IntSetIterator *it) {
     while ((int)it->idx < it->iset->indexes->size) {
-        long idx = intVecGet(it->iset->indexes,it->idx);
+        long idx = intVecGet(it->iset->indexes, it->idx);
         long key = it->iset->entries[idx];
         if (key != HT_DELETED && key != HT_VACANT) {
             it->idx++;
@@ -951,7 +954,8 @@ long intSetNext(IntSetIterator *it) {
 }
 
 void intSetIteratorRelease(IntSetIterator *it) {
-    if (it) free(it);
+    if (it)
+        free(it);
 }
 
 char *intSetToString(IntSet *iset) {
@@ -959,19 +963,19 @@ char *intSetToString(IntSet *iset) {
     unsigned long set_size = iset->size;
 
     if (set_size == 0) {
-        aoStrCatLen(str,"{}",2);
+        aoStrCatLen(str, "{}", 2);
         return aoStrMove(str);
     }
 
     unsigned long i = 0;
     long key;
     IntSetIterator *it = intSetIteratorNew(iset);
-    aoStrPutChar(str,'{');
+    aoStrPutChar(str, '{');
     while ((key = intSetNext(it)) != HT_DELETED) {
         if ((i + 1) == set_size) {
-            aoStrCatPrintf(str,"%ld}",key);
+            aoStrCatPrintf(str, "%ld}", key);
         } else {
-            aoStrCatPrintf(str,"%ld, ",key);
+            aoStrCatPrintf(str, "%ld, ", key);
         }
         i++;
     }

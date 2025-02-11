@@ -4,9 +4,9 @@
 
 #include "list.h"
 
-void listInit(List *ll) {
-    ll->next = ll->prev = ll;
-    ll->value = NULL;
+void listInit(List *l) {
+    l->next = l->prev = l;
+    l->value = NULL;
 }
 
 List *listNew(void) {
@@ -16,8 +16,9 @@ List *listNew(void) {
     return ll;
 }
 
-int listEmpty(List *l) {
-    if (l == NULL) return 1;
+int listEmpty(const List *l) {
+    if (l == NULL)
+        return 1;
     return l->next == l;
 }
 
@@ -63,7 +64,7 @@ void listInsertBefore(List *ll, List *new_node) {
 void listInsertValueBefore(List *ll, void *value) {
     List *prev = listNew();
     prev->value = value;
-    listInsertBefore(ll,prev);
+    listInsertBefore(ll, prev);
 }
 
 void *listHead(List *ll) {
@@ -84,7 +85,8 @@ void *listPop(void *l) {
 }
 
 void listClear(List *ll, void (*freeValue)(void *)) {
-    if (!ll) return;
+    if (!ll)
+        return;
     List *node = ll->next;
     List *next;
     while (node != ll) {
@@ -99,13 +101,15 @@ void listClear(List *ll, void (*freeValue)(void *)) {
 }
 
 void listRelease(List *ll, void (*freeValue)(void *)) {
-    if (!ll) return;
-    listClear(ll,freeValue);
+    if (!ll)
+        return;
+    listClear(ll, freeValue);
     free(ll);
 }
 
 int listCount(List *ll) {
-    if (!ll) return 0;
+    if (!ll)
+        return 0;
     int count = 0;
     listForEach(ll) {
         count++;
@@ -162,7 +166,7 @@ void listMergeAppend(List *l1, List *l2) {
 List *listCopy(List *l) {
     List *cpy = listNew();
     listForEach(l) {
-        listAppend(cpy,it->value);
+        listAppend(cpy, it->value);
     }
     return cpy;
 }
@@ -197,17 +201,17 @@ int main(void) {
     List *l1 = listNew();
     List *l2 = listNew();
 
-    listAppend(l1,intNew(1));
-    listAppend(l1,intNew(2));
-    listAppend(l1,intNew(3));
+    listAppend(l1, intNew(1));
+    listAppend(l1, intNew(2));
+    listAppend(l1, intNew(3));
     listTestPrint(l1);
 
-    listAppend(l2,intNew(4));
-    listAppend(l2,intNew(5));
-    listAppend(l2,intNew(6));
+    listAppend(l2, intNew(4));
+    listAppend(l2, intNew(5));
+    listAppend(l2, intNew(6));
     listTestPrint(l2);
 
-    listMergePrepend(l1,l2);
+    listMergePrepend(l1, l2);
     listTestPrint(l1);
     listTestPrintReverse(l1);
 }

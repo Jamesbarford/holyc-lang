@@ -1,9 +1,9 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdarg.h>
-#include <string.h>
 #include <errno.h>
 #include <pthread.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "mempool.h"
 
@@ -16,10 +16,10 @@ typedef struct _MemString {
 __attribute__((noreturn)) void memPanic(const char *fmt, ...) {
     char buffer[BUFSIZ];
     va_list ap;
-    va_start(ap,fmt);
-    long len = vsnprintf(buffer,sizeof(buffer),fmt,ap);
+    va_start(ap, fmt);
+    long len = vsnprintf(buffer, sizeof(buffer), fmt, ap);
     buffer[len] = '\0';
-    fprintf(stderr,"Error: %s",buffer);
+    fprintf(stderr, "Error: %s", buffer);
     va_end(ap);
     exit(EXIT_FAILURE);
 }
@@ -28,7 +28,7 @@ _MemString *memStringNew(unsigned int capacity) {
     _MemString *str = (_MemString *)malloc(sizeof(_MemString));
     str->len = 0;
     str->capacity = capacity;
-    str->buf = (char *)malloc(sizeof(char)*capacity);
+    str->buf = (char *)malloc(sizeof(char) * capacity);
     return str;
 }
 
@@ -41,7 +41,7 @@ void memStringRelease(_MemString *str) {
 
 void memStringCatPrintf(_MemString *str, const char *fmt, ...) {
     va_list ap, copy;
-    va_start(ap,fmt);
+    va_start(ap, fmt);
 
     unsigned int fmt_len = strlen(fmt);
     unsigned int bufferlen = 1024;
@@ -52,23 +52,19 @@ void memStringCatPrintf(_MemString *str, const char *fmt, ...) {
     }
 
     /* Probably big enough */
-    char *buf = (char *)malloc(sizeof(char) * bufferlen+1);
+    char *buf = (char *)malloc(sizeof(char) * bufferlen + 1);
 
     while (1) {
         va_copy(copy, ap);
         len = vsnprintf(buf, bufferlen, fmt, copy);
         va_end(copy);
 
-        if (len < 0) {
-            free(buf);
-            return;
-        }
-
         if (((size_t)len) >= bufferlen) {
             free(buf);
             bufferlen = ((size_t)len) + 2;
             buf = (char *)malloc(bufferlen);
             if (buf == NULL) {
+                va_end(ap);
                 return;
             }
             continue;
@@ -77,8 +73,8 @@ void memStringCatPrintf(_MemString *str, const char *fmt, ...) {
     }
 
     if (str->len + len >= str->capacity) {
-        unsigned int new_capacity = (str->capacity*2)+len;
-        char *tmp = (char *)realloc(str->buf,sizeof(char)*new_capacity);
+        unsigned int new_capacity = (str->capacity * 2) + len;
+        char *tmp = (char *)realloc(str->buf, sizeof(char) * new_capacity);
         if (tmp == NULL) {
             memPanic("Failed to reallocated _MemString\n");
         }
@@ -86,7 +82,7 @@ void memStringCatPrintf(_MemString *str, const char *fmt, ...) {
         str->capacity = new_capacity;
     }
 
-    memcpy(str->buf+str->len,buf,len);
+    memcpy(str->buf + str->len, buf, len);
     str->len += len;
     str->buf[str->len] = '\0';
     free(buf);
@@ -99,84 +95,83 @@ char *memStringMove(_MemString *str) {
     return buf;
 }
 
-const char *memPoolErrorToString(MemPool *pool) {
+const char *memPoolErrorToString(const MemPool *pool) {
     switch (pool->error) {
-        case MEMPOOL_OK:
-            return "Ok";
-        case MEMPOOL_ALLOCATION_SPLIT_BLOCK_ERR:
-            return "MEMPOOL_ALLOCATION_SPLIT_BLOCK_FAIL";
-        case MEMPOOL_ALLOCATION_GREATER_THAN_CAPACITY_ERR:
-            return "MEMPOOL_ALLOCATION_GREATER_THAN_CAPACITY";
-        case MEMPOOL_ALLOCATION_SEGMENT_ARRAY_ERR:
-            return "MEMPOOL_ALLOCATION_NEW_SEGMENT_ERR";
-        case MEMPOOL_ALLOCATION_SEGMENT_ALLOC_ERR:
-            return "MEMPOOL_ALLOCATION_SEGMENT_ALLOC_ERR";
+    case MEMPOOL_OK:
+        return "Ok";
+    case MEMPOOL_ALLOCATION_SPLIT_BLOCK_ERR:
+        return "MEMPOOL_ALLOCATION_SPLIT_BLOCK_FAIL";
+    case MEMPOOL_ALLOCATION_GREATER_THAN_CAPACITY_ERR:
+        return "MEMPOOL_ALLOCATION_GREATER_THAN_CAPACITY";
+    case MEMPOOL_ALLOCATION_SEGMENT_ARRAY_ERR:
+        return "MEMPOOL_ALLOCATION_NEW_SEGMENT_ERR";
+    case MEMPOOL_ALLOCATION_SEGMENT_ALLOC_ERR:
+        return "MEMPOOL_ALLOCATION_SEGMENT_ALLOC_ERR";
     }
 }
 
-char *memSegmentToString(MemSegment *segment) {
+char *memSegmentToString(const MemSegment *segment) {
     _MemString *str = memStringNew(128);
-    memStringCatPrintf(str,
+    memStringCatPrintf(
+            str,
             "MemSegment {\n  id = %u;\n  buffer = %p;\n  allocated = %u;\n}",
-            segment->id,segment->buffer,segment->allocated);
+            segment->id, segment->buffer, segment->allocated);
     return memStringMove(str);
 }
 
 char *memChunkToString(MemChunk *chunk) {
     _MemString *str = memStringNew(128);
     memStringCatPrintf(str,
-            "MemChunk {\n"
-            "  segment_id = %u;\n"
-            "  address = %p;\n"
-            "  size = %u;\n"
-            "  next = %p;\n"
-            "  free = %d;\n}",
-            chunk->segment_id,chunk,
-            chunk->size, chunk->next, chunk->free);
+                       "MemChunk {\n"
+                       "  segment_id = %u;\n"
+                       "  address = %p;\n"
+                       "  size = %u;\n"
+                       "  next = %p;\n"
+                       "  free = %d;\n}",
+                       chunk->segment_id, chunk, chunk->size, chunk->next,
+                       chunk->free);
     return memStringMove(str);
 }
 
-/* This is a messy implmentation but good enough as it is for debugging not 
+/* This is a messy implmentation but good enough as it is for debugging not
  * really for actual use. */
 char *memPoolToString(MemPool *pool) {
     pthread_mutex_lock(&pool->mutex);
     _MemString *str = memStringNew(2048);
 
-    memStringCatPrintf(str,"MemPool {\n  segment_count = %u;\n"
-                           "  segment_capacity = %u;\n"
-                           "  error = %s;\n"
-                           "  segments = [",
-                           pool->segment_count,
-                           pool->segment_capacity,
-                           memPoolErrorToString(pool));
+    memStringCatPrintf(str,
+                       "MemPool {\n  segment_count = %u;\n"
+                       "  segment_capacity = %u;\n"
+                       "  error = %s;\n"
+                       "  segments = [",
+                       pool->segment_count, pool->segment_capacity,
+                       memPoolErrorToString(pool));
 
     for (unsigned int i = 0; i < pool->segment_count; ++i) {
         MemSegment *segment = pool->segments[i];
         MemChunk *chunk = segment->list;
         memStringCatPrintf(str,
-                "\n"
-                "    MemSegment {\n"
-                "      id = %u;\n"
-                "      address = %p\n"
-                "      allocated = %u;\n"
-                "      list = [",
-                segment->id, segment, segment->allocated);
+                           "\n"
+                           "    MemSegment {\n"
+                           "      id = %u;\n"
+                           "      address = %p\n"
+                           "      allocated = %u;\n"
+                           "      list = [",
+                           segment->id, segment, segment->allocated);
 
         while (chunk) {
             memStringCatPrintf(str,
-                    "\n"
-                    "        MemChunk {\n"
-                    "          segment_id = %u;\n"
-                    "          address = %p\n"
-                    "          size = %u;\n"
-                    "          free = %u;\n"
-                    "        }",
-                    chunk->segment_id,
-                    chunk,
-                    chunk->size,
-                    chunk->free);
+                               "\n"
+                               "        MemChunk {\n"
+                               "          segment_id = %u;\n"
+                               "          address = %p\n"
+                               "          size = %u;\n"
+                               "          free = %u;\n"
+                               "        }",
+                               chunk->segment_id, chunk, chunk->size,
+                               chunk->free);
             if (chunk->next != NULL) {
-                memStringCatPrintf(str,",");
+                memStringCatPrintf(str, ",");
             }
             chunk = chunk->next;
         }
@@ -196,8 +191,7 @@ static unsigned int _memAlign(unsigned int size) {
 }
 
 static MemSegment *memSegmentAlloc(unsigned int capacity,
-                                   unsigned int segment_id)
-{
+                                   unsigned int segment_id) {
     MemSegment *segment = (MemSegment *)malloc(sizeof(MemSegment));
     segment->allocated = 0;
     segment->buffer = (void *)malloc(capacity);
@@ -214,11 +208,12 @@ static MemSegment *memSegmentAlloc(unsigned int capacity,
 void memPoolInit(MemPool *pool, unsigned int bytes) {
     const unsigned int segments_array_capacity = 4;
 
-    MemSegment **segments_array = (MemSegment **)malloc(sizeof(MemSegment *) * segments_array_capacity);
+    MemSegment **segments_array = (MemSegment **)malloc(
+            sizeof(MemSegment *) * segments_array_capacity);
     if (!segments_array) {
         memPanic("Failed to allocate segments array\n");
     }
-    
+
     MemSegment *segment = memSegmentAlloc(bytes, pool->segment_count);
 
     if (!segment) {
@@ -229,7 +224,7 @@ void memPoolInit(MemPool *pool, unsigned int bytes) {
     pool->segment_capacity = bytes;
     pool->segment_count = 0;
     pool->segments = segments_array;
-    pool->segments[pool->segment_count++] = segment; 
+    pool->segments[pool->segment_count++] = segment;
 
     pool->error = MEMPOOL_OK;
     pool->deallocate = NULL;
@@ -239,12 +234,12 @@ void memPoolInit(MemPool *pool, unsigned int bytes) {
     }
 }
 
-/* How many bytes should initially be in the pool, note the pool will not 
- * be able to allocate anything larger than 'bytes' size. Thus allocating 
+/* How many bytes should initially be in the pool, note the pool will not
+ * be able to allocate anything larger than 'bytes' size. Thus allocating
  * something like a dynamically resizable array from this pool makes no sense */
 MemPool *memPoolNew(unsigned int bytes) {
     MemPool *pool = (MemPool *)malloc(sizeof(MemPool));
-    memPoolInit(pool,bytes);
+    memPoolInit(pool, bytes);
     return pool;
 }
 
@@ -253,11 +248,11 @@ void memPoolSetDeallocate(MemPool *pool, memPoolDeallocate *deallocate) {
 }
 
 #define MIN_PAYLOAD_SIZE 8
-#define MIN_SPLIT_SIZE (sizeof(MemChunk) + MIN_PAYLOAD_SIZE)
+#define MIN_SPLIT_SIZE   (sizeof(MemChunk) + MIN_PAYLOAD_SIZE)
 
-/* We only take what we need from a block and split bits off it. This can 
- * only be called if we are sure that we have enough memory in the given 
- * `MemChunk`. This can fail if there is not enough space to allocate 
+/* We only take what we need from a block and split bits off it. This can
+ * only be called if we are sure that we have enough memory in the given
+ * `MemChunk`. This can fail if there is not enough space to allocate
  * the `alloc_size + sizeof(MemChunk)` */
 static void memPoolSplitBlock(MemChunk *chunk, unsigned int alloc_size) {
     unsigned int total_needed = alloc_size + sizeof(MemChunk);
@@ -268,24 +263,24 @@ static void memPoolSplitBlock(MemChunk *chunk, unsigned int alloc_size) {
     /* The remaining size of the block */
     unsigned int new_chunk_size = chunk->size - total_needed;
 
-    MemChunk *new_chunk = (MemChunk*)((unsigned char *)chunk + total_needed);
+    MemChunk *new_chunk = (MemChunk *)((unsigned char *)chunk + total_needed);
     new_chunk->size = new_chunk_size;
     new_chunk->free = 1;
     new_chunk->next = chunk->next;
     new_chunk->segment_id = chunk->segment_id;
 
-    chunk->size = alloc_size+sizeof(MemChunk);
+    chunk->size = alloc_size + sizeof(MemChunk);
     chunk->next = new_chunk;
 }
 
-/* Find a segment that has enough memory left in it to allocate from. This 
- * highlights why segments should be fairly big - it allows for less scanning 
+/* Find a segment that has enough memory left in it to allocate from. This
+ * highlights why segments should be fairly big - it allows for less scanning
  * to find a suitable segment. */
 static MemSegment *memPoolGetSegment(MemPool *pool, unsigned int alloc_size) {
     unsigned int total_size = alloc_size + sizeof(MemChunk);
 
     for (unsigned int i = 0; i < pool->segment_count; ++i) {
-        /* If there is enough space use this segment and increment how many 
+        /* If there is enough space use this segment and increment how many
          * bytes have been allocated from the segment. */
         MemSegment *segment = pool->segments[i];
         if (segment->allocated + total_size <= pool->segment_capacity) {
@@ -305,7 +300,8 @@ static MemSegment *memPoolGetSegment(MemPool *pool, unsigned int alloc_size) {
         /* Expand the array */
         unsigned int new_capacity = pool->segments_array_capacity * 2;
 
-        MemSegment **new_segments = (MemSegment **)malloc(sizeof(MemSegment *)*(new_capacity));
+        MemSegment **new_segments = (MemSegment **)malloc(sizeof(MemSegment *) *
+                                                          (new_capacity));
         if (new_segments == NULL) {
             pool->error = MEMPOOL_ALLOCATION_SEGMENT_ARRAY_ERR;
             free(segment->buffer);
@@ -332,10 +328,11 @@ error:
 
 /* Allocate some memory from the pool */
 void *memPoolAlloc(MemPool *pool, unsigned int size) {
-    /* Gotos make controlling the lock easier by only needing to keep track 
+    /* Gotos make controlling the lock easier by only needing to keep track
      * of them in one place */
     pthread_mutex_lock(&pool->mutex);
-    if (size == 0) goto error;
+    if (size == 0)
+        goto error;
 
     /* We only provide aligned memory */
     size = _memAlign(size);
@@ -381,9 +378,10 @@ error:
 void *memPoolTryAlloc(MemPool *pool, unsigned int size) {
     void *ptr = memPoolAlloc(pool, size);
     if (ptr == NULL) {
-        unsigned int max_allocation_size = pool->segment_capacity - sizeof(MemChunk);
+        unsigned int max_allocation_size = pool->segment_capacity -
+                sizeof(MemChunk);
         memPanic("Failed to allocate %u bytes, max allocation size = %u - %s\n",
-                size, max_allocation_size, memPoolErrorToString(pool));
+                 size, max_allocation_size, memPoolErrorToString(pool));
     }
     return ptr;
 }
@@ -391,7 +389,8 @@ void *memPoolTryAlloc(MemPool *pool, unsigned int size) {
 static void memSegmentMerge(MemSegment *segment) {
     MemChunk *cur = segment->list;
     while (cur && cur->next) {
-        unsigned char *end = (unsigned char*)cur + sizeof(MemChunk) + cur->size;
+        const unsigned char *end = (unsigned char *)cur + sizeof(MemChunk) +
+                cur->size;
         if (cur->free && cur->next->free && (unsigned char *)cur->next == end) {
             cur->size += sizeof(MemChunk) + cur->next->size;
             cur->next = cur->next->next;
@@ -410,7 +409,7 @@ void memPoolFree(MemPool *pool, void *ptr) {
             pool->deallocate((void *)pool, ptr);
         }
 
-        MemChunk *chunk = (MemChunk*)((unsigned char *)ptr - sizeof(MemChunk));
+        MemChunk *chunk = (MemChunk *)((unsigned char *)ptr - sizeof(MemChunk));
         MemSegment *segment = pool->segments[chunk->segment_id];
 
         chunk->free = 1;
@@ -420,15 +419,15 @@ void memPoolFree(MemPool *pool, void *ptr) {
     pthread_mutex_unlock(&pool->mutex);
 }
 
-/* This has the potential to be extremely slow, however the upfront cost 
- * of multiple allocations is reduced and keeping track of memory simplified 
+/* This has the potential to be extremely slow, however the upfront cost
+ * of multiple allocations is reduced and keeping track of memory simplified
  * as it is all traceable back too the pool. */
 void memPoolRelease(MemPool *pool, char free_pool) {
     if (pool) {
         MemPoolIterator *it = memPoolIteratorNew(pool);
         void *ptr = NULL;
 
-        /* Sometimes we may want to have non-pooled memory used on 
+        /* Sometimes we may want to have non-pooled memory used on
          * an allocated object */
         if (pool->deallocate) {
             while ((ptr = memPoolNext(it)) != NULL) {
@@ -466,7 +465,7 @@ void memPoolIteratorRelease(MemPoolIterator *it) {
 }
 
 void *memPoolNext(MemPoolIterator *it) {
-    /* If the chunk is free or there is no chunk because we are at the end 
+    /* If the chunk is free or there is no chunk because we are at the end
      * of a list, we need a new segment or are finished iterating */
     if (it->chunk == NULL || it->chunk->free) {
         it->segment_id++;

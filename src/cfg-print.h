@@ -5,6 +5,6 @@
 #include "map.h"
 
 void cfgToFile(CFG *cfg, char *filename);
-void cfgsToFile(PtrVec *cfgs, char *filename);
+void cfgsToFile(const PtrVec *cfgs, char *filename);
 
 #endif

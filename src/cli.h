@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 
+#include "config.h"
 #include "list.h"
 
 enum CliType {
@@ -47,7 +48,7 @@ typedef struct CliParser {
     char *optname;
     size_t optlen;
     int arg_count;
-    enum CliArgType arg_type; 
+    enum CliArgType arg_type;
     char *usage;
     char *help;
     int (*parse)(struct CliValue *value, char *rawarg);
@@ -82,6 +83,7 @@ typedef struct CliArgs {
 
 void cliArgsInit(CliArgs *args);
 int cliParseArgs(struct CliArgs *cli_args, int argc, char **argv);
-__noreturn void cliPanicGeneric(const char *const_msg, const char *fmt, va_list ap);
+__noreturn void cliPanicGeneric(const char *const_msg, const char *fmt,
+                                va_list ap);
 
 #endif
