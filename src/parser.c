@@ -1521,6 +1521,39 @@ Ast *parseCompoundStatement(Cctrl *cc) {
 Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
         char *fname, int len, PtrVec *params, int has_var_args, int is_inline) 
 {
+    Lexeme *next = cctrlTokenPeek(cc);
+    if (next->i64 == KW_ASM) {
+
+        cctrlTokenGet(cc);
+        Lexeme *peek = cctrlTokenPeek(cc);
+        if (tokenPunctIs(peek,'{')) {
+            Ast *asm_block = prsAsm(cc,1);
+            aoStr *asm_fname = aoStrPrintf("_%.*s",len, fname);
+            aoStrToUpperCase(asm_fname);
+
+            Ast *asm_function = astAsmFunctionDef(asm_fname, asm_block->asm_stmt);
+
+            listAppend(asm_block->funcs, asm_function);
+            listAppend(cc->asm_blocks, asm_block);
+
+            Ast *asm_func = astAsmFunctionBind(
+                    astMakeFunctionType(rettype, params),
+                    asm_fname,aoStrDupRaw(fname,len),params);
+
+            if (!strMapAddOrErr(cc->asm_functions, asm_fname->data, asm_function)) {
+                cctrlIce(cc, "Already defined assembly function: %s", asm_fname->data);
+            }
+            strMapAddLen(cc->asm_funcs,fname,len,asm_func);
+            if (is_inline) {
+                asm_func->flags = AST_FLAG_INLINE;
+            }
+            cctrlTokenExpect(cc,'}');
+            return asm_func;
+        } else {
+            cctrlRaiseException(cc,"Floating \"asm\" keyword, expected \"asm {\"");
+        }
+    }
+
     List *locals = listNew();
     Ast *func = NULL;
     List *body = listNew();
@@ -1714,7 +1747,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
                 case KW_ASM: {
                     peek = cctrlTokenPeek(cc);
                     if (tokenPunctIs(peek,'{')) {
-                        asm_block = prsAsm(cc);
+                        asm_block = prsAsm(cc, 0);
                         listAppend(cc->asm_blocks,asm_block);
                         return asm_block;
                     }
@@ -1879,15 +1912,24 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
             if (type->kind == AST_TYPE_AUTO) {
                 cctrlRaiseException(cc,"line auto cannot be used without an initialiser");
             }
-            ast = astDecl(variable,NULL);
-            listAppend(cc->ast_list,ast);
+            Ast *ast_decl = astDecl(variable,NULL);
+
+            listAppend(cc->ast_list,ast_decl);
             strMapAdd(cc->global_env,variable->gname->data,variable);
             cctrlTokenRewind(cc);
-            *is_global = 1;
-            
-            ast = parseExpr(cc,16); // parseVariableInitialiser(cc,variable,PUNCT_TERM_COMMA|PUNCT_TERM_SEMI);
+
+            Ast *ast_expr = parseExpr(cc,16); // parseVariableInitialiser(cc,variable,PUNCT_TERM_COMMA|PUNCT_TERM_SEMI);
+
+            astPrint(ast_expr->right);
+            if (ast_expr->right->kind != AST_STRING) {
+                *is_global = 1;
+            } else {
+                ast_decl->declinit = ast_expr->right;
+                cctrlTokenExpect(cc,';');
+                return ast_decl;
+            }
             cctrlTokenExpect(cc,';');
-            return ast;
+            return ast_expr;
         } else if (type->kind == AST_TYPE_ARRAY) {
             variable = astGVar(type,name->start,name->len,0);
             strMapAdd(cc->global_env,variable->gname->data,variable);

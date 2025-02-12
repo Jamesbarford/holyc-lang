@@ -78,6 +78,12 @@ void aoStrToLowerCase(aoStr *buf) {
     }
 }
 
+void aoStrToUpperCase(aoStr *buf) {
+    for (size_t i = 0; i < buf->len; ++i) {
+        buf->data[i] = toupper(buf->data[i]);
+    }
+}
+
 void aoStrPutChar(aoStr *buf, char ch) {
     aoStrExtendBufferIfNeeded(buf, 10);
     buf->data[buf->len++] = ch;

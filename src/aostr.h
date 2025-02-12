@@ -25,6 +25,7 @@ void aoStrRelease(aoStr *buf);
 
 int aoStrExtendBuffer(aoStr *buf, size_t additional);
 void aoStrToLowerCase(aoStr *buf);
+void aoStrToUpperCase(aoStr *buf);
 void aoStrPutChar(aoStr *buf, char ch);
 void aoStrRepeatChar(aoStr *buf, char ch, int times);
 int aoStrCmp(aoStr *b1, aoStr *b2);
