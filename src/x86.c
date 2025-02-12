@@ -2065,22 +2065,21 @@ void asmInitialiseEmptyGlobal(aoStr *buf, Ast *global, int zerofill) {
     aoStr *label = asmGetGlabel(global);
     int size = global->type->size;
 
+#if IS_MACOS
     if (zerofill) {
-#if IS_LINUX
-        aoStrCatFmt(buf,"%S\n\t", label);
-        aoStrCatFmt(buf, ".zero %i\n\t", size);
-#else
         aoStrCatFmt(buf,".globl %S\n\t", label);
         aoStrCatFmt(buf, ".zerofill __DATA,__common,%S,%i,%i\n\t",
                 label,
                 size,
                 (int)log2((double)size));
-#endif
     } else {
+#endif
         aoStrCatFmt(buf,".globl %S\n\t.comm %S, %i, %u\n\t", label, label,
                         size,
                         roundUpToNextPowerOf2((unsigned long)size));
+#if IS_MACOS
     }
+#endif
 }
 
 void asmGlobalVar(StrMap *seen_globals, aoStr *buf, Ast* ast) {
