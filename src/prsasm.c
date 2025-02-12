@@ -8,6 +8,7 @@
 #include "list.h"
 #include "map.h"
 #include "prsasm.h"
+#include "util.h"
 
 
 /* format the assembly based on how many characters there are for the 
@@ -91,7 +92,9 @@ void prsAsmImm(Cctrl *cc, aoStr *buf, Lexeme *tok) {
                     prsAsmMem(cc,buf);
                 }
             }
-
+            break;
+        default:
+            printf("mem parse: %s\n", lexemeToString(tok));
             break;
     }
 }
@@ -145,6 +148,15 @@ void prsAsmPunct(Cctrl *cc, Lexeme *tok, aoStr *buf) {
     }
 }
 
+static void maybePutAsterix(Cctrl *cc, aoStr *buf, aoStr *op1, aoStr *maybe_register) {
+    int is_register = strMapGetLen(cc->x86_registers,
+                                   maybe_register->data,
+                                   maybe_register->len) != NULL;
+    if (is_register && !strncasecmp(op1->data, str_lit("JMP"))) {
+        aoStrPutChar(buf,'*');
+    }
+}
+
 static void maybePutRegister(Cctrl *cc, aoStr *buf, aoStr *maybe_register) {
     if (strMapGetLen(cc->x86_registers,
                 maybe_register->data,maybe_register->len) != NULL) {
@@ -155,7 +167,7 @@ static void maybePutRegister(Cctrl *cc, aoStr *buf, aoStr *maybe_register) {
 }
 
 /* Custom assembly to AT&T */
-Ast *prsAsmToATT(Cctrl *cc) {
+Ast *prsAsmToATT(Cctrl *cc, int parse_one) {
     aoStr *op1 = NULL, *op2 = NULL, *op3 = NULL, *asm_code = NULL, *curblock = NULL, *stdfunc = NULL, *curfunc = NULL;
     List *asm_functions;
     Ast *asm_function, *asm_block;
@@ -163,8 +175,8 @@ Ast *prsAsmToATT(Cctrl *cc) {
     int isbol = 0, count = 0;
 
     asm_functions = listNew();
-    curblock = NULL;
     asm_code = aoStrNew();
+    curblock = parse_one ? asm_code : NULL;
     memset(asm_code->data,'\0',asm_code->capacity-1);
 
     cctrlTokenExpect(cc, '{');
@@ -220,8 +232,19 @@ Ast *prsAsmToATT(Cctrl *cc) {
                     tok = cctrlTokenGet(cc);
                     isbol = 1;
                     continue;
-                }
-                if (isbol) {
+                } else if (tokenPunctIs(next, '[')) {
+                    /* loading a global */
+                    if (strncasecmp(op1->data,str_lit("lea")) != 0 && strncasecmp(op1->data,str_lit("mov")) != 0) {
+                        cctrlTokenRewind(cc);
+                        cctrlRaiseException(cc,"The `LEA` or `MOV` instruction can only be used for loading globals `%.*s`\n",
+                                tok->len,tok->start);
+                    }
+                    op3 = aoStrDupRaw(tok->start,tok->len);
+                    cctrlTokenGet(cc);
+                    next = cctrlTokenGet(cc);
+                    aoStrCatFmt(op3, "(%%%.*s)",next->len, next->start);
+                    cctrlTokenGet(cc);
+                } else if (isbol) {
                     op1 = aoStrDupRaw(tok->start,tok->len);
                     isbol = 0;
                 } else {
@@ -264,7 +287,6 @@ Ast *prsAsmToATT(Cctrl *cc) {
                             case 2: {
                                 aoStrToLowerCase(op1);
                                 aoStrCatPrintf(curblock,"\t%s%s",op1->data,getTabs(op1));
-
                                 if (op1->len == 4 && !memcmp(op1->data,"call",4)) {
                                     if (strMapGetLen(cc->libc_functions,
                                                 op2->data,op2->len) != NULL) { 
@@ -276,6 +298,7 @@ Ast *prsAsmToATT(Cctrl *cc) {
                                     }
                                 } else {
                                     aoStrToLowerCase(op2);
+                                    maybePutAsterix(cc,curblock,op1,op2);
                                     maybePutRegister(cc,curblock,op2);
                                     aoStrPutChar(curblock,'\n');
                                 }
@@ -303,8 +326,8 @@ Ast *prsAsmToATT(Cctrl *cc) {
                                 break;
                             default:
                                 cctrlRaiseException(cc,"Unexpected number of arguments for"
-                                        " x86 transpilation: %d"" Expression",
-                                        count);
+                                        " x86 transpilation: %d %s %s",
+                                        count,op1->data,op2->data);
                         }
                         isbol = 1;
                         count = 0;
@@ -352,8 +375,8 @@ Ast *prsAsmToATT(Cctrl *cc) {
 }
 
 /* The next token is expected to be '{' so the parser has just seen 'asm' */
-Ast *prsAsm(Cctrl *cc) {
-    return prsAsmToATT(cc);
+Ast *prsAsm(Cctrl *cc, int parse_one) {
+    return prsAsmToATT(cc, parse_one);
 }
 
 #ifdef PRSASM_TEST
@@ -402,7 +425,7 @@ int main(int argc, char **argv) {
         if (tokenIdentIs(tok,"asm",3)) {
             peek = cctrlTokenPeek(cc);
             if (tokenPunctIs(peek,'{')) {
-                asm_block = prsAsm(cc);
+                asm_block = prsAsm(cc,0);
                 printf("%s\n", asm_block->asm_stmt->data);
             }
         }
