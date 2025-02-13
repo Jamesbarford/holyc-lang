@@ -1,0 +1,12 @@
+- This commit breaks assembly parsing, though that was possibly broken
+  in a previous commit. Specifically the ability to load in global
+  variables that have been defined in C.
+- Need to refactor or completely overhaul the asmparser after exception
+  handling works
+- The calls to inline assembly are _extremely_ fragile to the point I
+  think they should be removed from this unit of work; they are not
+  needed
+- "naked" assembly functions that can be defined by using an asm block
+  are quite cool and should stay
+- Ensure all of this works on linux
+- Make sure all types of globals work, presently strings work
