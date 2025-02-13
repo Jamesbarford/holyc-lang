@@ -79,6 +79,8 @@ U0 throw(U64 error) {
     CALL printf
     CALL _EXIT
   @@2:
+    /* This here is the address of the 'catch' label from the function 
+     * calling 'try' */
     MOV RAX, RDI
     RET
   }
@@ -105,6 +107,7 @@ FN2::
     CALL PutChars
     MOV  RDI, 'woops'
     CALL throw
+    /* Not reached */
     MOV  RDI, 'defno'
     CALL PutChars
     LEAVE
@@ -116,7 +119,8 @@ FN1::
     MOV  RDI, 'hello'
     CALL PutChars
     CALL FN2
-    MOV  RDI, 'why?' // Should not be reached
+    /* This will not be reached as FN2 throws */
+    MOV  RDI, 'why?'
     CALL PutChars
     LEAVE
     RET
@@ -124,15 +128,22 @@ FN1::
 _DRIVER::
     PUSH RBP
     MOV  RBP, RSP
+    /* Load in the address of the 'catch' label */
     LEA  RDI, @@1[RIP]
     CALL asm_try
     CALL FN1
+    /* @Bug
+     * This is getting reached and should not be, maybe `asm_try` needs to
+     * return a `Bool` and the address of the catch label and we jump if 
+     * it is not ok? Or it gets stored on Fs and we check Fs? (Could do that 
+     * to begin with as it sounds simpler) */
     MOV  RDI, 'end'
     CALL PutChars
 @@1:
+    /* All being well, we should jump here */
     MOV  RDI, 'caught'
     CALL PutChars
-    LEAVE  // should jump here
+    LEAVE
     RET
 }
 
