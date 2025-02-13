@@ -171,7 +171,11 @@ Cctrl *cctrlNew(void) {
     int len;
     aoStr **str_array = aoStrSplit(x86_registers,',',&len);
     for (int i = 0; i < len; ++i) {
+        aoStr *upper_reg = aoStrDup(str_array[i]);
+        aoStrToUpperCase(upper_reg);
         char *reg = aoStrMove(str_array[i]);
+        strMapAdd(cc->x86_registers,reg,reg);
+        reg = aoStrMove(upper_reg);
         strMapAdd(cc->x86_registers,reg,reg);
     }
     free(str_array);

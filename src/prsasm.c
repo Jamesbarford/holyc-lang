@@ -8,6 +8,7 @@
 #include "list.h"
 #include "map.h"
 #include "prsasm.h"
+#include "prslib.h"
 #include "util.h"
 
 
@@ -30,6 +31,7 @@ void prsAsmMem(Cctrl *cc, aoStr *buf) {
     }
     cctrlTokenExpect(cc,']');
     aoStrCatPrintf(buf,"(%%%.*s)",tok->len,tok->start);
+    aoStrToLowerCase(buf);
 }
 
 void prsAsmOffset(Cctrl *cc, aoStr *buf, Lexeme *tok) {
@@ -45,6 +47,7 @@ void prsAsmOffset(Cctrl *cc, aoStr *buf, Lexeme *tok) {
     }
     cctrlTokenExpect(cc,']');
     aoStrCatPrintf(buf, "(%%%.*s)",tok->len,tok->start);
+    aoStrToLowerCase(buf);
 }
 
 void prsAsmImm(Cctrl *cc, aoStr *buf, Lexeme *tok) {
@@ -119,7 +122,7 @@ void prsAsmLabel(Cctrl *cc, aoStr *buf) {
         aoStrCatPrintf(buf, ".%s_%zu:",cc->tmp_asm_fname->data,label_num);
         cctrlTokenGet(cc);
     } else {
-        aoStrCatPrintf(buf, ".%s_%zu",cc->tmp_asm_fname->data, label_num);
+        aoStrCatPrintf(buf, ".%s_%zu",cc->tmp_asm_fname->data,label_num);
     }
 }
 
@@ -158,8 +161,8 @@ static void maybePutAsterix(Cctrl *cc, aoStr *buf, aoStr *op1, aoStr *maybe_regi
 }
 
 static void maybePutRegister(Cctrl *cc, aoStr *buf, aoStr *maybe_register) {
-    if (strMapGetLen(cc->x86_registers,
-                maybe_register->data,maybe_register->len) != NULL) {
+    if (strMapGetLen(cc->x86_registers, maybe_register->data,maybe_register->len) != NULL) {
+        aoStrToLowerCase(maybe_register);
         aoStrCatPrintf(buf,"%%%s",maybe_register->data);
     } else {
         aoStrCatLen(buf,maybe_register->data,maybe_register->len);
@@ -200,6 +203,27 @@ Ast *prsAsmToATT(Cctrl *cc, int parse_one) {
                 }
                 break;
             }
+
+            case TK_KEYWORD: {
+                if (tok->i64 == KW_SIZEOF) {
+                    Ast *sizeof_ast = parseSizeof(cc);
+                    unsigned long size = (unsigned long)sizeof_ast->i64;
+                    switch (count) {
+                        case 1:
+                            count++;
+                            op2 = aoStrPrintf("$%zu",size);
+                            break;
+                        case 2:
+                            count++;
+                            op3 = aoStrPrintf("$%zu",size);
+                            break;
+                    }
+                } else {
+                    cctrlRaiseException(cc, "\nCannot Handle keyword: %.*s in this context", tok->len, tok->start);
+                }
+                break;
+            }    
+
 
             case TK_IDENT: {
                 next = cctrlTokenPeek(cc);
@@ -242,7 +266,9 @@ Ast *prsAsmToATT(Cctrl *cc, int parse_one) {
                     op3 = aoStrDupRaw(tok->start,tok->len);
                     cctrlTokenGet(cc);
                     next = cctrlTokenGet(cc);
-                    aoStrCatFmt(op3, "(%%%.*s)",next->len, next->start);
+                    aoStr *reg = aoStrDupRaw(next->start,next->len);
+                    aoStrToLowerCase(reg);
+                    aoStrCatFmt(op3, "(%%%S)",reg);
                     cctrlTokenGet(cc);
                 } else if (isbol) {
                     op1 = aoStrDupRaw(tok->start,tok->len);
@@ -287,9 +313,9 @@ Ast *prsAsmToATT(Cctrl *cc, int parse_one) {
                             case 2: {
                                 aoStrToLowerCase(op1);
                                 aoStrCatPrintf(curblock,"\t%s%s",op1->data,getTabs(op1));
-                                if (op1->len == 4 && !memcmp(op1->data,"call",4)) {
-                                    if (strMapGetLen(cc->libc_functions,
-                                                op2->data,op2->len) != NULL) { 
+                                if (op1->len == 4 && !strncasecmp(op1->data,str_lit("call"))) {
+                                    if (strMapGetAoStr(cc->global_env, op2) != NULL || 
+                                        strMapGetAoStr(cc->libc_functions, op2) != NULL) {
                                         stdfunc = astNormaliseFunctionName(op2->data);
                                         aoStrCatPrintf(curblock,"%s\n",stdfunc->data);
                                         aoStrRelease(stdfunc);
@@ -309,8 +335,7 @@ Ast *prsAsmToATT(Cctrl *cc, int parse_one) {
 
                             case 3:
                                 aoStrToLowerCase(op1);
-                                aoStrToLowerCase(op2);
-                                aoStrToLowerCase(op3);
+                                // aoStrToLowerCase(op3);
 
                                 aoStrCatPrintf(curblock,"\t%s%s", op1->data,getTabs(op1));
 

@@ -418,7 +418,7 @@ Ast *findFunctionDecl(Cctrl *cc, char *fname, int len) {
     if ((decl = strMapGetLen(cc->global_env,fname,len)) != NULL) {
         if (decl->kind == AST_FUNC ||
             decl->kind == AST_EXTERN_FUNC ||
-            decl->kind == AST_FUN_PROTO) {
+            decl->kind == AST_FUN_PROTO || decl->kind == AST_ASM_FUNC_BIND) {
             return decl;
         }
     } else if (cc->localenv && (decl = strMapGetLen(cc->localenv,fname,len)) != NULL) {
@@ -1046,7 +1046,7 @@ static Ast *parseCast(Cctrl *cc) {
     return ast;
 }
 
-static Ast *parseSizeof(Cctrl *cc) {
+Ast *parseSizeof(Cctrl *cc) {
     Lexeme *tok = cctrlTokenGet(cc);
     Lexeme *peek = cctrlTokenPeek(cc);
     AstType *type = NULL;

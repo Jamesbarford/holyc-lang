@@ -1266,7 +1266,7 @@ Ast *parseSwitchStatement(Cctrl *cc) {
  * currently being parsed to be able to have uniqe goto labels  */
 aoStr *createFunctionLevelGotoLabel(Cctrl *cc, Lexeme *tok) {
     aoStr *label = aoStrNew();
-    aoStrCatPrintf(label,".%s_%.*s",cc->tmp_fname->data,tok->len,tok->start);
+    aoStrCatFmt(label,".%S_%.*s",cc->tmp_fname,tok->len,tok->start);
     return label;
 }
 
@@ -1393,7 +1393,7 @@ Ast *parseStatement(Cctrl *cc) {
     peek = cctrlTokenPeek(cc);
     if (tok->tk_type == TK_IDENT && peek && peek->i64 == ':') {
         label = createFunctionLevelGotoLabel(cc,tok);
-        ret = astLabel(label);
+        ret = astLabel(label, aoStrDupRaw(tok->start, tok->len));
         /* consume ':' */
         cctrlTokenExpect(cc,':');
         return ret;
@@ -1527,9 +1527,11 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
         cctrlTokenGet(cc);
         Lexeme *peek = cctrlTokenPeek(cc);
         if (tokenPunctIs(peek,'{')) {
+            aoStr *fname_duped = aoStrDupRaw(fname,len);
+            aoStr *asm_fname = astNormaliseFunctionName(fname_duped->data);
+            aoStr *prev_asm_name = cc->tmp_asm_fname;
+            cc->tmp_asm_fname = asm_fname;
             Ast *asm_block = prsAsm(cc,1);
-            aoStr *asm_fname = aoStrPrintf("_%.*s",len, fname);
-            aoStrToUpperCase(asm_fname);
 
             Ast *asm_function = astAsmFunctionDef(asm_fname, asm_block->asm_stmt);
 
@@ -1538,16 +1540,22 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
 
             Ast *asm_func = astAsmFunctionBind(
                     astMakeFunctionType(rettype, params),
-                    asm_fname,aoStrDupRaw(fname,len),params);
+                    asm_fname,asm_fname,params);
 
-            if (!strMapAddOrErr(cc->asm_functions, asm_fname->data, asm_function)) {
+            if (!strMapAddOrErr(cc->asm_functions, asm_fname->data, asm_func)) {
                 cctrlIce(cc, "Already defined assembly function: %s", asm_fname->data);
             }
-            strMapAddLen(cc->asm_funcs,fname,len,asm_func);
+
+            printf("%s\n",fname_duped->data);
+            if (!strMapAddOrErr(cc->global_env, fname_duped->data, asm_func)) {
+                cctrlIce(cc, "Already defined assembly function: %s as a non Assembly function", asm_fname->data);
+            }
+
             if (is_inline) {
                 asm_func->flags = AST_FLAG_INLINE;
             }
             cctrlTokenExpect(cc,'}');
+            cc->tmp_asm_fname = prev_asm_name;
             return asm_func;
         } else {
             cctrlRaiseException(cc,"Floating \"asm\" keyword, expected \"asm {\"");

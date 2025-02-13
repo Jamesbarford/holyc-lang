@@ -488,11 +488,12 @@ Ast *astGoto(aoStr *label) {
     return ast;
 }
 
-Ast *astLabel(aoStr *label) {
+Ast *astLabel(aoStr *label, aoStr *original_label) {
     Ast *ast = astNew();
     ast->type = NULL;
     ast->kind = AST_LABEL;
     ast->slabel = label;
+    ast->sval = original_label;
     return ast;
 }
 

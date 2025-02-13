@@ -20,5 +20,6 @@ AstType *parseFunctionPointerType(Cctrl *cc,
         char **fnptr_name, int *fnptr_name_len, AstType *rettype);
 Ast *findFunctionDecl(Cctrl *cc, char *fname, int len);
 Ast *parseCreateBinaryOp(Cctrl *cc, long operation, Ast *left, Ast *right);
+Ast *parseSizeof(Cctrl *cc);
 
 #endif

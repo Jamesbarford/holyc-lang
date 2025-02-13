@@ -363,7 +363,7 @@ Ast *astComment(char *comment, int len);
 
 /* Gotos */
 Ast *astGoto(aoStr *label);
-Ast *astLabel(aoStr *label);
+Ast *astLabel(aoStr *label, aoStr *original_label);
 Ast *astJump(char *jumpname, int len);
 
 /* Pointers */
