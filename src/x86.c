@@ -1557,11 +1557,14 @@ void asmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
 
     case AST_ASM_FUNCALL: {
         if (ast->flags & AST_FLAG_INLINE) {
-            Ast *asm_func_def = strMapGetLen(cc->asm_functions, ast->fname->data, ast->fname->len);
-            if (!asm_func_def) {
-                loggerPanic("Cannot call inline assembly code\n");
-            }
-            aoStrCatFmt(buf, "%S", asm_func_def->body->asm_stmt);
+            asmFunCall(cc,buf,ast);
+            //Ast *asm_func_def = strMapGetLen(cc->asm_functions, ast->fname->data, ast->fname->len);
+            //if (!asm_func_def) {
+            //    loggerPanic("Cannot call inline assembly code\n");
+            //}
+            //astPrint(asm_func_def);
+            //printf("%s\n",asm_func_def->body->asm_stmt->data);
+            //aoStrCatFmt(buf, "%S", asm_func_def->body->asm_stmt);
             break;
         }
     }
