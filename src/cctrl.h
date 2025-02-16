@@ -137,6 +137,7 @@ Cctrl *cctrlNew(void);
 /* Slimmed down Cctrl, for expanding macros */
 Cctrl *ccMacroProcessor(StrMap *macro_defs);
 Lexeme *cctrlTokenGet(Cctrl *cc);
+Lexeme *cctrlAsmTokenGet(Cctrl *cc);
 Lexeme *cctrlTokenPeek(Cctrl *cc);
 Lexeme *cctrlTokenPeekBy(Cctrl *cc, int cnt);
 void cctrlInitMacroProcessor(Cctrl *cc);

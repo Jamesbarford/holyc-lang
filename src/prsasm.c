@@ -8,7 +8,15 @@
 #include "list.h"
 #include "map.h"
 #include "prsasm.h"
+#include "prslib.h"
+#include "util.h"
 
+typedef struct AsmUnit {
+    aoStr *op1;
+    aoStr *op2;
+    aoStr *op3;
+    int op_count;
+} AsmUnit;
 
 /* format the assembly based on how many characters there are for the 
  * mneumonic */
@@ -23,12 +31,13 @@ static inline char *getTabs(aoStr *str) {
 
 void prsAsmMem(Cctrl *cc, aoStr *buf) {
     Lexeme *tok;
-    tok = cctrlTokenGet(cc);
+    tok = cctrlAsmTokenGet(cc);
     if (tok->tk_type != TK_IDENT) {
         cctrlRaiseException(cc,"[<register>] expected got: %s",lexemeToString(tok));
     }
     cctrlTokenExpect(cc,']');
-    aoStrCatPrintf(buf,"(%%%.*s)",tok->len,tok->start);
+    aoStrCatFmt(buf,"(%.*s)",tok->len,tok->start);
+    aoStrToLowerCase(buf);
 }
 
 void prsAsmOffset(Cctrl *cc, aoStr *buf, Lexeme *tok) {
@@ -37,13 +46,13 @@ void prsAsmOffset(Cctrl *cc, aoStr *buf, Lexeme *tok) {
     }
 
     cctrlTokenExpect(cc,'[');
-    tok = cctrlTokenGet(cc);
+    tok = cctrlAsmTokenGet(cc);
     if (tok->tk_type != TK_IDENT) {
         cctrlRaiseException(cc,"Expected <number>[<register>] Got: %s",
                 lexemeToString(tok));
     }
     cctrlTokenExpect(cc,']');
-    aoStrCatPrintf(buf, "(%%%.*s)",tok->len,tok->start);
+    aoStrCatFmt(buf, "(%.*s)",tok->len,tok->start);
 }
 
 void prsAsmImm(Cctrl *cc, aoStr *buf, Lexeme *tok) {
@@ -54,7 +63,7 @@ void prsAsmImm(Cctrl *cc, aoStr *buf, Lexeme *tok) {
                 cctrlRaiseException(cc,"Expected '-'<numerical>");
             }
 
-            tok = cctrlTokenGet(cc);
+            tok = cctrlAsmTokenGet(cc);
             if (tok->tk_type != TK_I64 && tok->tk_type != TK_F64) {
                 cctrlRaiseException(cc,"Expected -<numerical> got: %s\n",
                         lexemeToString(tok));
@@ -65,7 +74,7 @@ void prsAsmImm(Cctrl *cc, aoStr *buf, Lexeme *tok) {
                 aoStrCatPrintf(buf, "-%zu",(unsigned long)tok->i64);
             } else {
                 aoStrCatPrintf(buf, "-%zu",(unsigned long)tok->i64);
-                cctrlTokenGet(cc);
+                cctrlAsmTokenGet(cc);
                 prsAsmMem(cc,buf);
             }
             break;
@@ -87,41 +96,42 @@ void prsAsmImm(Cctrl *cc, aoStr *buf, Lexeme *tok) {
                     aoStrCatPrintf(buf, "%zu",(size_t)tok->i64);
                 }
                 if (tokenPunctIs(next,'[')) {
-                    cctrlTokenGet(cc);
+                    cctrlAsmTokenGet(cc);
                     prsAsmMem(cc,buf);
                 }
             }
-
+            break;
+        default:
+            printf("mem parse: %s\n", lexemeToString(tok));
             break;
     }
 }
 
 void prsAsmLabel(Cctrl *cc, aoStr *buf) {
-    Lexeme *tok, *next;
-    long label_num;
-
-    tok = cctrlTokenGet(cc);
+    Lexeme *tok = cctrlAsmTokenGet(cc);
     if (!tokenPunctIs(tok,'@')) {
         cctrlRaiseException(cc,": Labels must be: '@@<int>'");
     }
 
-    tok = cctrlTokenGet(cc);
+    tok = cctrlAsmTokenGet(cc);
     if (tok->tk_type != TK_I64) {
         cctrlRaiseException(cc,": Labels must be: '@@<int>'");
     }
     
-    label_num = tok->i64;
-    next = cctrlTokenPeek(cc);
+    long label_num = tok->i64;
+    Lexeme *next = cctrlTokenPeek(cc);
+    aoStr *label = aoStrDup(cc->tmp_asm_fname);
+    aoStrToLowerCase(label);
     if (tokenPunctIs(next,':')) {
-        aoStrCatPrintf(buf, ".%s_%zu:",cc->tmp_asm_fname->data,label_num);
-        cctrlTokenGet(cc);
+        aoStrCatFmt(buf, ".%S_%U:",label,label_num);
+        cctrlAsmTokenGet(cc);
     } else {
-        aoStrCatPrintf(buf, ".%s_%zu",cc->tmp_asm_fname->data, label_num);
+        aoStrCatFmt(buf, ".%S_%U",label,label_num);
     }
+    aoStrRelease(label);
 }
 
 void prsAsmPunct(Cctrl *cc, Lexeme *tok, aoStr *buf) {
-    Lexeme *next;
     switch (tok->i64) {
         case '[':
             prsAsmMem(cc,buf);
@@ -137,25 +147,16 @@ void prsAsmPunct(Cctrl *cc, Lexeme *tok, aoStr *buf) {
             cctrlRaiseException(cc,": Unexpected character");
     }
 
-    next = cctrlTokenPeek(cc);
+    Lexeme *next = cctrlTokenPeek(cc);
     if (tokenPunctIs(next,'[')) {
         cctrlTokenRewind(cc);
-        tok = cctrlTokenGet(cc);
+        tok = cctrlAsmTokenGet(cc);
         prsAsmOffset(cc,buf,tok);
     }
 }
 
-static void maybePutRegister(Cctrl *cc, aoStr *buf, aoStr *maybe_register) {
-    if (strMapGetLen(cc->x86_registers,
-                maybe_register->data,maybe_register->len) != NULL) {
-        aoStrCatPrintf(buf,"%%%s",maybe_register->data);
-    } else {
-        aoStrCatLen(buf,maybe_register->data,maybe_register->len);
-    }
-}
-
 /* Custom assembly to AT&T */
-Ast *prsAsmToATT(Cctrl *cc) {
+Ast *prsAsmToATT(Cctrl *cc, int parse_one) {
     aoStr *op1 = NULL, *op2 = NULL, *op3 = NULL, *asm_code = NULL, *curblock = NULL, *stdfunc = NULL, *curfunc = NULL;
     List *asm_functions;
     Ast *asm_function, *asm_block;
@@ -163,12 +164,12 @@ Ast *prsAsmToATT(Cctrl *cc) {
     int isbol = 0, count = 0;
 
     asm_functions = listNew();
-    curblock = NULL;
     asm_code = aoStrNew();
+    curblock = parse_one ? asm_code : NULL;
     memset(asm_code->data,'\0',asm_code->capacity-1);
 
     cctrlTokenExpect(cc, '{');
-    tok = cctrlTokenGet(cc);
+    tok = cctrlAsmTokenGet(cc);
 
     while (!tokenPunctIs(tok, '}')) {
         switch (tok->tk_type) {
@@ -189,10 +190,31 @@ Ast *prsAsmToATT(Cctrl *cc) {
                 break;
             }
 
+            case TK_KEYWORD: {
+                if (tok->i64 == KW_SIZEOF) {
+                    Ast *sizeof_ast = parseSizeof(cc);
+                    unsigned long size = (unsigned long)sizeof_ast->i64;
+                    switch (count) {
+                        case 1:
+                            count++;
+                            op2 = aoStrPrintf("$%zu",size);
+                            break;
+                        case 2:
+                            count++;
+                            op3 = aoStrPrintf("$%zu",size);
+                            break;
+                    }
+                } else {
+                    cctrlRaiseException(cc, "\nCannot Handle keyword: %.*s in this context", tok->len, tok->start);
+                }
+                break;
+            }    
+
+
             case TK_IDENT: {
                 next = cctrlTokenPeek(cc);
                 if (tokenPunctIs(next, TK_DBL_COLON) || tokenPunctIs(next,':')) {
-                    cctrlTokenGet(cc);
+                    cctrlAsmTokenGet(cc);
                     cctrlTokenExpect(cc, '\n');
 
                     if (curblock == NULL) {
@@ -217,10 +239,19 @@ Ast *prsAsmToATT(Cctrl *cc) {
                     curfunc = aoStrDupRaw(tok->start,tok->len);
                     /* Save the name for pasting labels */
                     cc->tmp_asm_fname = curfunc;
-                    tok = cctrlTokenGet(cc);
+                    tok = cctrlAsmTokenGet(cc);
                     isbol = 1;
                     continue;
-                }
+                } 
+
+                else if (!isbol && count != 1 && tokenPunctIs(next, '[')) {
+                    /* Possibly loading a global */
+                    op3 = aoStrDupRaw(tok->start,tok->len);
+                    cctrlAsmTokenGet(cc);
+                    next = cctrlAsmTokenGet(cc);
+                    aoStrCatFmt(op3, "(%.*s)",next->len, next->start);
+                    cctrlAsmTokenGet(cc);
+                } else
                 if (isbol) {
                     op1 = aoStrDupRaw(tok->start,tok->len);
                     isbol = 0;
@@ -253,10 +284,10 @@ Ast *prsAsmToATT(Cctrl *cc) {
                                 if (strMapGetLen(cc->libc_functions,
                                             op1->data,op1->len) != NULL) {
                                     stdfunc = astNormaliseFunctionName(op1->data);
-                                    aoStrCatPrintf(curblock,"%s\n",stdfunc->data);
+                                    aoStrCatFmt(curblock,"%S\n",stdfunc);
                                     aoStrRelease(stdfunc);
                                 } else {
-                                    aoStrCatPrintf(curblock,"%s\n",op1->data);
+                                    aoStrCatFmt(curblock,"%S\n",op1);
                                 }
                                 aoStrRelease(op1);
                                 break;
@@ -264,20 +295,28 @@ Ast *prsAsmToATT(Cctrl *cc) {
                             case 2: {
                                 aoStrToLowerCase(op1);
                                 aoStrCatPrintf(curblock,"\t%s%s",op1->data,getTabs(op1));
+                                int is_call = op1->len == 4 && !strncasecmp(op1->data,str_lit("call"));
 
-                                if (op1->len == 4 && !memcmp(op1->data,"call",4)) {
-                                    if (strMapGetLen(cc->libc_functions,
-                                                op2->data,op2->len) != NULL) { 
+                                if (is_call) {
+                                    if (strMapGetAoStr(cc->global_env, op2) != NULL || 
+                                        strMapGetAoStr(cc->libc_functions, op2) != NULL) {
                                         stdfunc = astNormaliseFunctionName(op2->data);
-                                        aoStrCatPrintf(curblock,"%s\n",stdfunc->data);
+                                        aoStrCatFmt(curblock,"%S\n",stdfunc);
                                         aoStrRelease(stdfunc);
                                     } else {
-                                        aoStrCatPrintf(curblock,"%s\n",op2->data);
+                                        if (op2->data[0] == '%') {
+                                            aoStrPutChar(curblock,'*');
+                                        }
+                                        aoStrCatFmt(curblock,"%S\n",op2);
                                     }
                                 } else {
+                                  int is_jump = op1->len == 3 && 
+                                                !strncasecmp(op1->data,str_lit("jmp"));
+                                    if (is_jump && op2->data[0] == '%') {
+                                        aoStrPutChar(curblock,'*');
+                                    }
                                     aoStrToLowerCase(op2);
-                                    maybePutRegister(cc,curblock,op2);
-                                    aoStrPutChar(curblock,'\n');
+                                    aoStrCatFmt(curblock,"%S\n",op2);
                                 }
                                 aoStrRelease(op1);
                                 aoStrRelease(op2);
@@ -286,16 +325,10 @@ Ast *prsAsmToATT(Cctrl *cc) {
 
                             case 3:
                                 aoStrToLowerCase(op1);
-                                aoStrToLowerCase(op2);
-                                aoStrToLowerCase(op3);
 
-                                aoStrCatPrintf(curblock,"\t%s%s", op1->data,getTabs(op1));
+                                aoStrCatFmt(curblock,"\t%S%s", op1,getTabs(op1));
 
-                                maybePutRegister(cc,curblock,op3);
-                                aoStrCatLen(curblock, ", ", 2);
-
-                                maybePutRegister(cc,curblock,op2);
-                                aoStrPutChar(curblock,'\n');
+                                aoStrCatFmt(curblock,"%S, %S\n",op3, op2);
 
                                 aoStrRelease(op1);
                                 aoStrRelease(op2);
@@ -303,8 +336,8 @@ Ast *prsAsmToATT(Cctrl *cc) {
                                 break;
                             default:
                                 cctrlRaiseException(cc,"Unexpected number of arguments for"
-                                        " x86 transpilation: %d"" Expression",
-                                        count);
+                                        " x86 transpilation: %d %s %s",
+                                        count,op1->data,op2->data);
                         }
                         isbol = 1;
                         count = 0;
@@ -334,7 +367,7 @@ Ast *prsAsmToATT(Cctrl *cc) {
             }
 
         }
-        tok = cctrlTokenGet(cc);
+        tok = cctrlAsmTokenGet(cc);
     }
 
     if (curfunc) {
@@ -352,8 +385,8 @@ Ast *prsAsmToATT(Cctrl *cc) {
 }
 
 /* The next token is expected to be '{' so the parser has just seen 'asm' */
-Ast *prsAsm(Cctrl *cc) {
-    return prsAsmToATT(cc);
+Ast *prsAsm(Cctrl *cc, int parse_one) {
+    return prsAsmToATT(cc, parse_one);
 }
 
 #ifdef PRSASM_TEST
@@ -398,11 +431,11 @@ int main(int argc, char **argv) {
     tokens = lexToLexemes(cc->macro_defs, &l);
     cctrlInitTokenIter(cc, tokens);
 
-    while ((tok = cctrlTokenGet(cc)) != NULL) {
+    while ((tok = cctrlAsmTokenGet(cc)) != NULL) {
         if (tokenIdentIs(tok,"asm",3)) {
             peek = cctrlTokenPeek(cc);
             if (tokenPunctIs(peek,'{')) {
-                asm_block = prsAsm(cc);
+                asm_block = prsAsm(cc,0);
                 printf("%s\n", asm_block->asm_stmt->data);
             }
         }

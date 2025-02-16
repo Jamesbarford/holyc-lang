@@ -171,7 +171,11 @@ Cctrl *cctrlNew(void) {
     int len;
     aoStr **str_array = aoStrSplit(x86_registers,',',&len);
     for (int i = 0; i < len; ++i) {
+        aoStr *upper_reg = aoStrDup(str_array[i]);
+        aoStrToUpperCase(upper_reg);
         char *reg = aoStrMove(str_array[i]);
+        strMapAdd(cc->x86_registers,reg,reg);
+        reg = aoStrMove(upper_reg);
         strMapAdd(cc->x86_registers,reg,reg);
     }
     free(str_array);
@@ -395,6 +399,30 @@ Lexeme *cctrlTokenGet(Cctrl *cc) {
         return cctrlMaybeExpandToken(cc, token);
     }
     return NULL;
+}
+
+/* Should this be at the lexer level? */   
+Lexeme *cctrlAsmTokenGet(Cctrl *cc) {
+    Lexeme *token = cctrlTokenGet(cc);
+    if (token) {
+        /* If the token is a register as defined by the string at the top of 
+         * this file we may it AT&T syntax `RAX` -> `%rax`. Which saves a 
+         * massive headache in prsasm.c */
+        char *x86_register = NULL;
+        if ((x86_register = strMapGetLen(cc->x86_registers,token->start,token->len))) {
+            char *reg = mprintFmt("%%%s",x86_register);
+            char *ptr = reg;
+            while (*ptr) {
+                *ptr = tolower(*ptr);
+                ptr++;
+            }
+            int register_len = strlen(reg);
+            token->start = reg;
+            token->len = register_len;
+            return token;
+        }
+    }
+    return token;
 }
 
 aoStr *cctrlSeverityMessage(int severity) {

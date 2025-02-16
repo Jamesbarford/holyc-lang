@@ -25,6 +25,7 @@ void aoStrRelease(aoStr *buf);
 
 int aoStrExtendBuffer(aoStr *buf, size_t additional);
 void aoStrToLowerCase(aoStr *buf);
+void aoStrToUpperCase(aoStr *buf);
 void aoStrPutChar(aoStr *buf, char ch);
 void aoStrRepeatChar(aoStr *buf, char ch, int times);
 int aoStrCmp(aoStr *b1, aoStr *b2);
@@ -46,6 +47,7 @@ aoStr *aoStrEncode(aoStr *buf);
 void aoStrArrayRelease(aoStr **arr, int count);
 aoStr **aoStrSplit(char *to_split, char delimiter, int *count);
 char *mprintf(const char *fmt, ...);
+char *mprintFmt(const char *fmt, ...);
 char *mprintVa(const char *fmt, va_list ap, ssize_t *_len);
 aoStr *aoStrError(void);
 aoStr *aoStrIntToHumanReadableBytes(long bytes);

@@ -418,7 +418,7 @@ Ast *findFunctionDecl(Cctrl *cc, char *fname, int len) {
     if ((decl = strMapGetLen(cc->global_env,fname,len)) != NULL) {
         if (decl->kind == AST_FUNC ||
             decl->kind == AST_EXTERN_FUNC ||
-            decl->kind == AST_FUN_PROTO) {
+            decl->kind == AST_FUN_PROTO || decl->kind == AST_ASM_FUNC_BIND) {
             return decl;
         }
     } else if (cc->localenv && (decl = strMapGetLen(cc->localenv,fname,len)) != NULL) {
@@ -557,6 +557,12 @@ Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
     if (maybe_fn) {
         rettype = maybe_fn->type->rettype;
         if (maybe_fn->flags & AST_FLAG_INLINE && !(cc->flags & CCTRL_TRANSPILING)) {
+            if (maybe_fn->kind == AST_ASM_FUNC_BIND || maybe_fn->kind == AST_ASM_FUNCDEF) {
+                Ast *call = astAsmFunctionCall(maybe_fn->type->rettype,
+                        aoStrDup(maybe_fn->asmfname),ptrVecNew());
+                call->flags |= maybe_fn->flags;
+                return call;
+            }
             return parseInlineFunctionCall(cc, maybe_fn, argv);
         }
     }
@@ -638,6 +644,12 @@ static Ast *parseIdentifierOrFunction(Cctrl *cc,
                 tokenPunctIs(tok,')'))  
                     && parseIsFunction(ast)) {
                 if (ast->flags & AST_FLAG_INLINE && !(cc->flags & CCTRL_TRANSPILING)) {
+                    if (ast->kind == AST_ASM_FUNC_BIND || ast->kind == AST_ASM_FUNCDEF) {
+                        Ast *call = astAsmFunctionCall(ast->type->rettype,
+                                aoStrDup(ast->asmfname),ptrVecNew());
+                        call->flags |= ast->flags;
+                        return call;
+                    }
                     return parseInlineFunctionCall(cc,ast,ptrVecNew());
                 }
                 if (ast->kind == AST_ASM_FUNC_BIND || ast->kind == AST_ASM_FUNCDEF) {
@@ -1034,7 +1046,7 @@ static Ast *parseCast(Cctrl *cc) {
     return ast;
 }
 
-static Ast *parseSizeof(Cctrl *cc) {
+Ast *parseSizeof(Cctrl *cc) {
     Lexeme *tok = cctrlTokenGet(cc);
     Lexeme *peek = cctrlTokenPeek(cc);
     AstType *type = NULL;
