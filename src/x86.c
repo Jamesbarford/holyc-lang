@@ -2077,6 +2077,7 @@ void asmInitialiseEmptyGlobal(aoStr *buf, Ast *global, int zerofill) {
                 (int)log2((double)size));
     } else {
 #endif
+        (void)zerofill; /* Unused on linux */
         aoStrCatFmt(buf,".globl %S\n\t.comm %S, %i, %u\n\t", label, label,
                         size,
                         roundUpToNextPowerOf2((unsigned long)size));
