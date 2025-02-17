@@ -34,6 +34,7 @@ aoStr *aoStrNew(void) {
 }
 
 void aoStrRelease(aoStr *buf) {
+    (void)buf;
     return;
 }
 
@@ -75,6 +76,12 @@ static int aoStrExtendBufferIfNeeded(aoStr *buf, size_t additional) {
 void aoStrToLowerCase(aoStr *buf) {
     for (size_t i = 0; i < buf->len; ++i) {
         buf->data[i] = tolower(buf->data[i]);
+    }
+}
+
+void aoStrToUpperCase(aoStr *buf) {
+    for (size_t i = 0; i < buf->len; ++i) {
+        buf->data[i] = toupper(buf->data[i]);
     }
 }
 
@@ -413,18 +420,18 @@ void aoStrCatPrintf(aoStr *b, const char *fmt, ...) {
     va_end(ap);
 }
 
-
-/* For the happy path of strings this is very fast */
-void aoStrCatFmt(aoStr *buf, const char *fmt, ...) {
-    va_list ap;
+char *mprintFmtVa(const char *fmt, va_list ap, size_t *_len, size_t *_allocated) {
+    aoStr _buf = { .data = aoStrBufferAlloc(256), .len = 0, .capacity = 256 };
+    aoStr *buf = &_buf;
     const char *ptr = fmt;
-    va_start(ap,fmt);
 
     while (*ptr) {
         switch (*ptr) {
             case '%': {
                 ptr++;
-                if (*ptr == '\0') return;
+                if (*ptr == '\0') {
+                    goto done;
+                }
                 switch (*ptr) {
                     case 's': {
                         char *str = va_arg(ap,char*);
@@ -492,6 +499,7 @@ void aoStrCatFmt(aoStr *buf, const char *fmt, ...) {
                         aoStrCatAoStr(buf,ast_str);
                         break;
                     }
+                    
                     default: {
                         /* Put the character, probably a %% */
                         aoStrPutChar(buf,*ptr);
@@ -507,6 +515,30 @@ void aoStrCatFmt(aoStr *buf, const char *fmt, ...) {
         }
         ptr++;
     }
+
+done:
+    if (_len)       *_len = buf->len;
+    if (_allocated) *_allocated = buf->capacity;
+    return buf->data;
+}
+
+/* For the happy path of strings this is very fast */
+void aoStrCatFmt(aoStr *buf, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap,fmt);
+    size_t buffer_len = 0;
+    size_t buffer_capacity = 0;
+    char *buffer = mprintFmtVa(fmt,ap,&buffer_len,&buffer_capacity);
+    aoStrCatLen(buf,buffer,buffer_len);
+    va_end(ap);
+}
+
+char *mprintFmt(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    char *buffer = mprintFmtVa(fmt,ap,NULL,NULL);
+    va_end(ap);
+    return buffer;
 }
 
 aoStr *aoStrPrintf(const char *fmt, ...) {

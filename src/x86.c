@@ -51,7 +51,7 @@ static int has_initialisers = 0;
 void asmExpression(Cctrl *cc, aoStr *buf, Ast *ast);
 
 #define asmGetGlabel(gvar) \
-    gvar->is_static ? gvar->glabel->data : gvar->gname->data
+    gvar->is_static ? gvar->glabel : gvar->gname
 
 uint64_t ieee754(double _f64) {
     if (_f64 == 0.0) return 0;  // Handle zero value explicitly
@@ -286,12 +286,13 @@ void asmGLoad(aoStr *buf, AstType *type, aoStr *label, int offset) {
 
     if (type->kind == AST_TYPE_ARRAY) {
         if (offset) {
-            aoStrCatPrintf(buf, "lea    %s+%d(%%rip), %%rax\n\t",
-                    label->data, offset);
+            aoStrCatFmt(buf, "lea    %S+%d(%%rip), %%rax\n\t", label, offset);
         } else {
-            aoStrCatPrintf(buf, "lea    %s(%%rip), %%rax\n\t",
-                    label->data);
+            aoStrCatFmt(buf, "lea    %S(%%rip), %%rax\n\t", label);
         }
+        return;
+    } else if (type->kind == AST_TYPE_POINTER && type->ptr->kind == AST_TYPE_CHAR) {
+        aoStrCatFmt(buf, "lea    %S(%%rip), %%rax\n\t", label);
         return;
     }
 
@@ -647,8 +648,8 @@ void asmAssign(Cctrl *cc, aoStr *buf, Ast *variable) {
         break;
 
     case AST_GVAR: {
-        char *label = asmGetGlabel(variable);
-        asmGSave(buf,label,variable->type,0);
+        aoStr *label = asmGetGlabel(variable);
+        asmGSave(buf,label->data,variable->type,0);
         break;
     }
     default:
@@ -1554,8 +1555,20 @@ void asmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
         asmGLoad(buf,ast->type,ast->glabel,0);
         break;
 
+    case AST_ASM_FUNCALL: {
+        if (ast->flags & AST_FLAG_INLINE) {
+            asmFunCall(cc,buf,ast);
+            //Ast *asm_func_def = strMapGetLen(cc->asm_functions, ast->fname->data, ast->fname->len);
+            //if (!asm_func_def) {
+            //    loggerPanic("Cannot call inline assembly code\n");
+            //}
+            //astPrint(asm_func_def);
+            //printf("%s\n",asm_func_def->body->asm_stmt->data);
+            //aoStrCatFmt(buf, "%S", asm_func_def->body->asm_stmt);
+            break;
+        }
+    }
     case AST_FUNPTR_CALL:
-    case AST_ASM_FUNCALL:
     case AST_FUNCALL: {
         asmFunCall(cc,buf,ast);
         break;
@@ -2051,11 +2064,33 @@ void asmDataInternal(aoStr *buf, Ast *data) {
     }
 }
 
+void asmInitialiseEmptyGlobal(aoStr *buf, Ast *global, int zerofill) {
+    aoStr *label = asmGetGlabel(global);
+    int size = global->type->size;
+
+#if IS_MACOS
+    if (zerofill) {
+        aoStrCatFmt(buf,".globl %S\n\t", label);
+        aoStrCatFmt(buf, ".zerofill __DATA,__common,%S,%i,%i\n\t",
+                label,
+                size,
+                (int)log2((double)size));
+    } else {
+#endif
+        (void)zerofill; /* Unused on linux */
+        aoStrCatFmt(buf,".globl %S\n\t.comm %S, %i, %u\n\t", label, label,
+                        size,
+                        roundUpToNextPowerOf2((unsigned long)size));
+#if IS_MACOS
+    }
+#endif
+}
+
 void asmGlobalVar(StrMap *seen_globals, aoStr *buf, Ast* ast) {
     Ast *declvar = ast->declvar;
     Ast *declinit = ast->declinit;
     aoStr *varname = declvar->gname;
-    char *label = asmGetGlabel(declvar);
+    aoStr *label = asmGetGlabel(declvar);
 
     if (strMapGetLen(seen_globals,varname->data,varname->len)) {
         return;
@@ -2071,20 +2106,29 @@ void asmGlobalVar(StrMap *seen_globals, aoStr *buf, Ast* ast) {
         (declinit->kind == AST_ARRAY_INIT || 
          declinit->kind == AST_LITERAL || declinit->kind == AST_STRING))
     {
-        if (!ast->is_static) {
-            aoStrCatPrintf(buf,".global %s\n",label);
-            aoStrCatPrintf(buf,".data\n");
+        if (declinit->kind == AST_STRING) {
+            aoStrCatFmt(buf,
+                    "%S:\n\t"
+                    ".asciz \"%S\"\n\t",
+                    declvar->gname, declinit->sval);
+            return;
         } else {
-            aoStrCatPrintf(buf,".data\n");
-        }
-        if (declinit->kind == AST_ARRAY_INIT) {
-            Ast *head = (Ast *)declinit->arrayinit->next->value;
-            if (head->kind == AST_STRING) {
-                aoStrCatPrintf(buf,".align 4\n");
+            if (!declvar->is_static) {
+                aoStrCatFmt(buf,".globl %S\n",label);
+                aoStrCatPrintf(buf,".data\n");
+            } else {
+                aoStrCatPrintf(buf,".data\n");
+            }
+            if (declinit->kind == AST_ARRAY_INIT) {
+                Ast *head = (Ast *)declinit->arrayinit->next->value;
+                if (head->kind == AST_STRING) {
+                    aoStrCatPrintf(buf,".align 4\n");
+                }
             }
         }
 
-        aoStrCatPrintf(buf,"%s:\n\t",label);
+
+        aoStrCatFmt(buf,"%S:\n\t",label);
 
         if (declinit->kind == AST_ARRAY_INIT) {
             listForEach(declinit->arrayinit) {
@@ -2095,7 +2139,16 @@ void asmGlobalVar(StrMap *seen_globals, aoStr *buf, Ast* ast) {
             asmDataInternal(buf,declinit);
         }
     } else {
-        aoStrCatPrintf(buf,".lcomm %s, %d\n\t",label,declvar->type->size);
+        if (declvar->is_static) {
+            aoStrCatFmt(buf,".lcomm %S, %i\n\t",label,declvar->type->size);
+        } else {
+            if (label->len == 4 && (!strncmp(label->data, str_lit("argc")) || 
+                        !strncmp(label->data, str_lit("argv")))) {
+                asmInitialiseEmptyGlobal(buf,declvar,0);
+            } else {
+                asmInitialiseEmptyGlobal(buf,declvar,1);
+            }
+        }
     }
 }
 
@@ -2369,6 +2422,7 @@ aoStr *asmGenerate(Cctrl *cc) {
     if (!listEmpty(cc->initalisers)) {
         has_initialisers = 1;
     }
+
     asmPasteAsmBlocks(asmbuf,cc);
     asmDataSection(cc,asmbuf);
 

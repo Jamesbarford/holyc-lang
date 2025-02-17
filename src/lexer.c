@@ -725,7 +725,7 @@ char *lexString(Lexer *l, char terminator, long *_real_len, int *_buffer_len) {
             l->lineno++;
         }
 
-        if (len + 3 >= capacity) {
+        if ((unsigned int)(len + 3) >= capacity) {
             buffer = lexerReAllocBuffer(buffer, len, capacity * 2);
             capacity *= 2;
         }

@@ -742,6 +742,10 @@ void *strMapGetLen(StrMap *map, char *key, long key_len) {
     return NULL;
 }
 
+void *strMapGetAoStr(StrMap *map, aoStr *key) {
+    return strMapGetLen(map,key->data,key->len);
+}
+
 void *strMapGet(StrMap *map, char *key) {
     long key_len = strlen(key);
     return strMapGetLen(map,key,key_len);
