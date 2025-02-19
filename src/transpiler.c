@@ -512,7 +512,6 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
 
     ssize_t saved_indent = 0;
     List *node;
-    aoStr *escaped;
 
     switch(ast->kind) {
     case AST_LITERAL: {
@@ -1073,7 +1072,6 @@ aoStr *transpileParamsList(PtrVec *params, TranspileCtx *ctx) {
     aoStr *decl = NULL;
     for (int i = 0; i < params->size; ++i) {
         Ast *param = params->entries[i];
-        aoStr *var = transpileLValue(param, ctx);
         if (param->kind == AST_DEFAULT_PARAM) {
             decl = transpileVarDecl(ctx, param->declvar->type,
                     param->declvar->lname->data);

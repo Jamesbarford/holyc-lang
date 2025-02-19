@@ -1,103 +1,12 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdarg.h>
 #include <string.h>
 #include <errno.h>
 #include <pthread.h>
 
+#include "aostr.h"
+#include "util.h"
 #include "mempool.h"
-
-typedef struct _MemString {
-    unsigned int len;
-    unsigned int capacity;
-    char *buf;
-} _MemString;
-
-__attribute__((noreturn)) void memPanic(const char *fmt, ...) {
-    char buffer[BUFSIZ];
-    va_list ap;
-    va_start(ap,fmt);
-    long len = vsnprintf(buffer,sizeof(buffer),fmt,ap);
-    buffer[len] = '\0';
-    fprintf(stderr,"Error: %s",buffer);
-    va_end(ap);
-    exit(EXIT_FAILURE);
-}
-
-_MemString *memStringNew(unsigned int capacity) {
-    _MemString *str = (_MemString *)malloc(sizeof(_MemString));
-    str->len = 0;
-    str->capacity = capacity;
-    str->buf = (char *)malloc(sizeof(char)*capacity);
-    return str;
-}
-
-void memStringRelease(_MemString *str) {
-    if (str) {
-        free(str->buf);
-        free(str);
-    }
-}
-
-void memStringCatPrintf(_MemString *str, const char *fmt, ...) {
-    va_list ap, copy;
-    va_start(ap,fmt);
-
-    unsigned int fmt_len = strlen(fmt);
-    unsigned int bufferlen = 1024;
-    unsigned int len = 0;
-
-    if (fmt_len > bufferlen) {
-        bufferlen = fmt_len;
-    }
-
-    /* Probably big enough */
-    char *buf = (char *)malloc(sizeof(char) * bufferlen+1);
-
-    while (1) {
-        va_copy(copy, ap);
-        len = vsnprintf(buf, bufferlen, fmt, copy);
-        va_end(copy);
-
-        if (len < 0) {
-            free(buf);
-            return;
-        }
-
-        if (((size_t)len) >= bufferlen) {
-            free(buf);
-            bufferlen = ((size_t)len) + 2;
-            buf = (char *)malloc(bufferlen);
-            if (buf == NULL) {
-                return;
-            }
-            continue;
-        }
-        break;
-    }
-
-    if (str->len + len >= str->capacity) {
-        unsigned int new_capacity = (str->capacity*2)+len;
-        char *tmp = (char *)realloc(str->buf,sizeof(char)*new_capacity);
-        if (tmp == NULL) {
-            memPanic("Failed to reallocated _MemString\n");
-        }
-        str->buf = tmp;
-        str->capacity = new_capacity;
-    }
-
-    memcpy(str->buf+str->len,buf,len);
-    str->len += len;
-    str->buf[str->len] = '\0';
-    free(buf);
-    va_end(ap);
-}
-
-char *memStringMove(_MemString *str) {
-    char *buf = str->buf;
-    free(str);
-    return buf;
-}
 
 const char *memPoolErrorToString(MemPool *pool) {
     switch (pool->error) {
@@ -111,20 +20,22 @@ const char *memPoolErrorToString(MemPool *pool) {
             return "MEMPOOL_ALLOCATION_NEW_SEGMENT_ERR";
         case MEMPOOL_ALLOCATION_SEGMENT_ALLOC_ERR:
             return "MEMPOOL_ALLOCATION_SEGMENT_ALLOC_ERR";
+        default:
+            loggerPanic("Unexpected memory pool exception; %d\n", pool->error);
     }
 }
 
 char *memSegmentToString(MemSegment *segment) {
-    _MemString *str = memStringNew(128);
-    memStringCatPrintf(str,
+    aoStr *str = aoStrNew();
+    aoStrCatPrintf(str,
             "MemSegment {\n  id = %u;\n  buffer = %p;\n  allocated = %u;\n}",
             segment->id,segment->buffer,segment->allocated);
-    return memStringMove(str);
+    return aoStrMove(str);
 }
 
 char *memChunkToString(MemChunk *chunk) {
-    _MemString *str = memStringNew(128);
-    memStringCatPrintf(str,
+    aoStr *str = aoStrNew();
+    aoStrCatPrintf(str,
             "MemChunk {\n"
             "  segment_id = %u;\n"
             "  address = %p;\n"
@@ -133,16 +44,16 @@ char *memChunkToString(MemChunk *chunk) {
             "  free = %d;\n}",
             chunk->segment_id,chunk,
             chunk->size, chunk->next, chunk->free);
-    return memStringMove(str);
+    return aoStrMove(str);
 }
 
 /* This is a messy implmentation but good enough as it is for debugging not 
  * really for actual use. */
 char *memPoolToString(MemPool *pool) {
     pthread_mutex_lock(&pool->mutex);
-    _MemString *str = memStringNew(2048);
+    aoStr *str = aoStrAlloc(2048);
 
-    memStringCatPrintf(str,"MemPool {\n  segment_count = %u;\n"
+    aoStrCatPrintf(str,"MemPool {\n  segment_count = %u;\n"
                            "  segment_capacity = %u;\n"
                            "  error = %s;\n"
                            "  segments = [",
@@ -153,7 +64,7 @@ char *memPoolToString(MemPool *pool) {
     for (unsigned int i = 0; i < pool->segment_count; ++i) {
         MemSegment *segment = pool->segments[i];
         MemChunk *chunk = segment->list;
-        memStringCatPrintf(str,
+        aoStrCatPrintf(str,
                 "\n"
                 "    MemSegment {\n"
                 "      id = %u;\n"
@@ -163,7 +74,7 @@ char *memPoolToString(MemPool *pool) {
                 segment->id, segment, segment->allocated);
 
         while (chunk) {
-            memStringCatPrintf(str,
+            aoStrCatPrintf(str,
                     "\n"
                     "        MemChunk {\n"
                     "          segment_id = %u;\n"
@@ -176,17 +87,17 @@ char *memPoolToString(MemPool *pool) {
                     chunk->size,
                     chunk->free);
             if (chunk->next != NULL) {
-                memStringCatPrintf(str,",");
+                aoStrCatPrintf(str,",");
             }
             chunk = chunk->next;
         }
 
-        memStringCatPrintf(str, "\n    ]");
+        aoStrCatPrintf(str, "\n    ]");
     }
 
-    memStringCatPrintf(str, "\n  ]\n}");
+    aoStrCatPrintf(str, "\n  ]\n}");
     pthread_mutex_unlock(&pool->mutex);
-    return memStringMove(str);
+    return aoStrMove(str);
 }
 
 /* Align to 8 bytes */
@@ -216,13 +127,13 @@ void memPoolInit(MemPool *pool, unsigned int bytes) {
 
     MemSegment **segments_array = (MemSegment **)malloc(sizeof(MemSegment *) * segments_array_capacity);
     if (!segments_array) {
-        memPanic("Failed to allocate segments array\n");
+        loggerPanic("Failed to allocate segments array\n");
     }
     
     MemSegment *segment = memSegmentAlloc(bytes, pool->segment_count);
 
     if (!segment) {
-        memPanic("Failed to allocate initial segment\n");
+        loggerPanic("Failed to allocate initial segment\n");
     }
 
     pool->segments_array_capacity = segments_array_capacity;
@@ -235,7 +146,7 @@ void memPoolInit(MemPool *pool, unsigned int bytes) {
     pool->deallocate = NULL;
 
     if (pthread_mutex_init(&pool->mutex, NULL) != 0) {
-        memPanic("Failed to initialise Mutex\n");
+        loggerPanic("Failed to initialise Mutex\n");
     }
 }
 
@@ -382,7 +293,7 @@ void *memPoolTryAlloc(MemPool *pool, unsigned int size) {
     void *ptr = memPoolAlloc(pool, size);
     if (ptr == NULL) {
         unsigned int max_allocation_size = pool->segment_capacity - sizeof(MemChunk);
-        memPanic("Failed to allocate %u bytes, max allocation size = %u - %s\n",
+        loggerPanic("Failed to allocate %u bytes, max allocation size = %u - %s\n",
                 size, max_allocation_size, memPoolErrorToString(pool));
     }
     return ptr;
@@ -453,7 +364,7 @@ void memPoolRelease(MemPool *pool, char free_pool) {
 MemPoolIterator *memPoolIteratorNew(MemPool *pool) {
     MemPoolIterator *iter = (MemPoolIterator *)malloc(sizeof(MemPoolIterator));
     if (iter == NULL) {
-        memPanic("Failed to allocated memory for MemPoolIterator\n");
+        loggerPanic("Failed to allocated memory for MemPoolIterator\n");
     }
     iter->pool = pool;
     iter->segment_id = 0;

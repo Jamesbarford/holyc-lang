@@ -138,9 +138,6 @@ static LexerTypes lexer_types[] = {
 #define isNum(ch) ((ch) >= '0' && (ch) <= '9')
 #define isHex(ch) \
     (isNum(ch) || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F'))
-#define toInt(ch)   (ch - '0')
-#define toUpper(ch) ((ch >= 'a' && ch <= 'z') ? (ch - 'a' + 'A') : ch)
-#define toHex(ch)   (toUpper(ch) - 'A' + 10)
 #define isNumTerminator(ch) (!isNum(ch) && !isHex(ch) && ch != '.' && ch != 'x' \
         && ch != 'X' && ch != '\\')
 
@@ -684,22 +681,11 @@ static int countNumberLen(Lexer *l, char *ptr, int *isfloat, int *ishex,
 
 int lexIdentifier(Lexer *l, char ch) {
     int i = 0;
-    while (1) {
-        switch (ch) {
-        case 'a' ... 'z':
-        case 'A' ... 'Z':
-        case '0' ... '9':
-        case '$':
-        case '_':
-            i++;
-            break;
-        default:
-            goto finish;
-        }
+    while (ch && (isalnum(ch) || ch == '_' ||  ch == '$')) {
+        i++;
         ch = lexNextChar(l);
     }
 
-finish:
     l->cur_strlen = i;
     if (ch != '\0') {
         lexRewindChar(l);
@@ -927,262 +913,45 @@ int lex(Lexer *l, Lexeme *le) {
         start = l->start;
 
         switch (ch) {
-        case '\r':
-        case '\n':
-            l->lineno++;
-            if (l->flags & (CCF_ACCEPT_NEWLINES|CCF_ACCEPT_WHITESPACE)) {
-                lexemeAssignOp(le,start,1,ch,l->lineno);
-                return 1;
-            }
-            break;
-
-        case ' ':
-            if (l->flags & (CCF_ACCEPT_WHITESPACE)) {
-                lexemeAssignOp(le,start,1,ch,l->lineno);
-                return 1;
-            }
-            break;
-
-
-        case '\0':
-            return 0;
-
-        case 'a' ... 'z':
-        case 'A' ... 'Z':
-        case '_':
-            if ((tk_type = lexIdentifier(l, ch)) == -1) {
-                loggerPanic("line %d: Lex error while lexing lexIdentifier\n",
-                        l->lineno);
-                goto error;
-            }
-
-            le->start = start;
-            le->len = l->cur_strlen;
-            le->tk_type = tk_type;
-            le->line = l->lineno;
-
-            if ((type = strMapGetLen(l->symbol_table,le->start,le->len)) != NULL) {
-                le->tk_type = TK_KEYWORD;
-                le->i64 = type->kind;
-                type = NULL;
-            }
-            return 1;
-
-        case '0' ... '9':
-            if ((tk_type = lexNumeric(l,0)) == -1) {
-                loggerPanic("line %d: Lex error while lexing lexNumeric\n",
-                        l->lineno);
-                goto error;
-            }
-            le->len = l->cur_strlen;
-            le->tk_type = tk_type;
-            le->line = l->lineno;
-            le->start = start;
-            if (tk_type == TK_F64) {
-                le->f64 = l->cur_f64;
-            } else {
-                le->i64 = l->cur_i64;
-            }
-            le->ishex = l->ishex;
-            l->ishex = 0;
-            return 1;
-
-        case '\"': {
-            le->len = 0;
-            le->i64 = 0;
-            le->start = lexString(l,'"',&le->i64,&le->len);
-            le->tk_type = TK_STR;
-            le->line = l->lineno;
-            l->cur_str = NULL;
-            l->cur_strlen = 0;
-            return 1;
-        }
-
-        case '\'':
-            lexCharConst(l);
-            le->start = start+1;
-            le->len = l->cur_strlen;
-            le->i64 = l->cur_i64;
-            le->tk_type = TK_CHAR_CONST;
-            l->cur_str = NULL;
-            l->cur_strlen = 0;
-            le->line = l->lineno;
-            return 1;
-
-        case '/':
-            if (*l->ptr == '/' || *l->ptr == '*') {
-                start = l->ptr-1;
-                lexSkipCodeComment(l);
-                ssize_t lineno = l->lineno;
-                if (l->flags & CCF_ACCEPT_COMMENTS) {
-                    ssize_t len = l->ptr-start;
-                    le->start = start;
-                    le->len = len;
-                    le->line = lineno;
-                    le->tk_type = TK_COMMENT;
-                    return 1;
-                }
-            } else {
-                if (lexPeekMatch(l,'=')) {
-                    lexNextChar(l);
-                    lexemeAssignOp(le,start,2,TK_DIV_EQU,l->lineno);
-                    return 1;
-                } else {
-                /* Divide */
+            case '\r':
+            case '\n':
+                l->lineno++;
+                if (l->flags & (CCF_ACCEPT_NEWLINES|CCF_ACCEPT_WHITESPACE)) {
                     lexemeAssignOp(le,start,1,ch,l->lineno);
                     return 1;
                 }
-            }
-            break;
+                break;
 
-        case '=':
-            /* Check for equality */
-            if (lexPeekMatch(l,'=')) {
-                lexNextChar(l);
-                lexemeAssignOp(le,start,2,TK_EQU_EQU,l->lineno);
-            } else {
-                lexemeAssignOp(le,start,1,ch,l->lineno);
-            }
-            return 1;
-        
-        case '<':
-            if (lexPeekMatch(l,'=')) {
-                lexNextChar(l);
-                lexemeAssignOp(le,start,2,TK_LESS_EQU,l->lineno);
-            } else if (lexPeekMatch(l, '<')) {
-                lexNextChar(l);
-                if (lexPeekMatch(l, '=')) {
-                    lexNextChar(l);
-                    lexemeAssignOp(le,start,2,TK_SHL_EQU,l->lineno);
-                } else {
-                    lexemeAssignOp(le,start,2,TK_SHL,l->lineno);
+            case ' ':
+                if (l->flags & (CCF_ACCEPT_WHITESPACE)) {
+                    lexemeAssignOp(le,start,1,ch,l->lineno);
+                    return 1;
                 }
-            } else {
-                lexemeAssignOp(le,start,1,ch,l->lineno);
-            }
-            return 1;
-        
-        case '>':
-            if (lexPeekMatch(l,'=')) {
-                lexNextChar(l);
-                lexemeAssignOp(le,start,2,TK_GREATER_EQU,l->lineno);
-            } else if (lexPeekMatch(l, '>')) {
-                lexNextChar(l);
-                if (lexPeekMatch(l, '=')) {
-                    lexNextChar(l);
-                    lexemeAssignOp(le,start,2,TK_SHR_EQU,l->lineno);
-                } else {
-                    lexemeAssignOp(le,start,2,TK_SHR,l->lineno);
-                }
-            } else {
-                lexemeAssignOp(le,start,1,ch,l->lineno);
-            }
-            return 1;
+                break;
 
-        case '+':
-            if (lexPeekMatch(l,'+')) {
-                lexNextChar(l);
-                lexemeAssignOp(le,start,2,TK_PLUS_PLUS,l->lineno);
-            } else if (lexPeekMatch(l, '=')) {
-                lexNextChar(l);
-                lexemeAssignOp(le,start,2,TK_ADD_EQU,l->lineno);
-            } else {
-                lexemeAssignOp(le,start,1,ch,l->lineno);
-            }
-            return 1;
 
-        case '-':
-            if (lexPeekMatch(l,'-')) {
-                lexNextChar(l);
-                lexemeAssignOp(le,start,2,TK_MINUS_MINUS,l->lineno);
-            } else if (lexPeekMatch(l, '>')) {
-                lexNextChar(l);
-                lexemeAssignOp(le,start,2,TK_ARROW,l->lineno);
-            } else if (lexPeekMatch(l, '=')) {
-                lexNextChar(l);
-                lexemeAssignOp(le,start,2,TK_SUB_EQU,l->lineno);
-            } else {
-                lexemeAssignOp(le,start,1,ch,l->lineno);
-            }
-            return 1;
-        
-        case '!':
-            if (lexPeekMatch(l,'=')) {
-                lexNextChar(l);
-                lexemeAssignOp(le,start,2,TK_NOT_EQU,l->lineno);
-            } else {
-                lexemeAssignOp(le,start,1,ch,l->lineno);
-            }
-            return 1;
+            case '\0':
+                return 0;
 
-        case '&':
-            if (lexPeekMatch(l,'&')) {
-                lexNextChar(l);
-                lexemeAssignOp(le,start,2,TK_AND_AND,l->lineno);
-            } else if (lexPeekMatch(l, '=')) {
-                lexNextChar(l);
-                lexemeAssignOp(le,start,2,TK_AND_EQU,l->lineno);
-            } else {
-                lexemeAssignOp(le,start,1,ch,l->lineno);
-            }
-            return 1;
-
-        case '|':
-            if (lexPeekMatch(l,'|')) {
-                lexNextChar(l);
-                lexemeAssignOp(le,start,2,TK_OR_OR,l->lineno);
-            } else if (lexPeekMatch(l, '=')) {
-                lexNextChar(l);
-                lexemeAssignOp(le,start,2,TK_OR_EQU,l->lineno);
-            } else {
-                lexemeAssignOp(le,start,1,ch,l->lineno);
-            }
-            return 1;
-
-        case '*':
-            if (lexPeekMatch(l, '=')) {
-                lexNextChar(l);
-                lexemeAssignOp(le,start,2,TK_MUL_EQU,l->lineno);
-            } else {
-                lexemeAssignOp(le,start,1,ch,l->lineno);
-            }
-            return 1;
-
-        case '%':
-            if (lexPeekMatch(l, '=')) {
-                lexNextChar(l);
-                lexemeAssignOp(le,start,2,TK_MOD_EQU,l->lineno);
-            } else {
-                lexemeAssignOp(le,start,1,ch,l->lineno);
-            }
-            return 1;
-        
-        case '^':
-            if (lexPeekMatch(l, '=')) {
-                lexNextChar(l);
-                lexemeAssignOp(le,start,2,TK_XOR_EQU,l->lineno);
-            } else {
-                lexemeAssignOp(le,start,1,ch,l->lineno);
-            }
-            return 1;
-
-        case '$':
-        case '@':
-            if (l->flags & CCF_ASM_BLOCK) {
-                lexemeAssignOp(le,start,1,ch,l->lineno);
-                return 1;
-            }
-            break;
-        case '.':
-            if (isNum(lexPeek(l))) {
+            case '0':
+            case '1':
+            case '2':
+            case '3':
+            case '4':
+            case '5':
+            case '6':
+            case '7':
+            case '8':
+            case '9':
                 if ((tk_type = lexNumeric(l,0)) == -1) {
                     loggerPanic("line %d: Lex error while lexing lexNumeric\n",
                             l->lineno);
                     goto error;
                 }
-                le->len = l->ptr - start;
+                le->len = l->cur_strlen;
                 le->tk_type = tk_type;
                 le->line = l->lineno;
+                le->start = start;
                 if (tk_type == TK_F64) {
                     le->f64 = l->cur_f64;
                 } else {
@@ -1191,48 +960,276 @@ int lex(Lexer *l, Lexeme *le) {
                 le->ishex = l->ishex;
                 l->ishex = 0;
                 return 1;
-            } else if (lexPeekMatch(l,'.')) {
-                lexNextChar(l);
-                if (lexPeekMatch(l,'.')) {
-                    lexNextChar(l);
-                    lexemeAssignOp(le,start,3,TK_ELLIPSIS,l->lineno);
-                    return 1;
-                }
-                loggerPanic("line %d: .. is an invalid token sequence\n",
-                        l->lineno);
-            }
-            
-            lexemeAssignOp(le,start,1,ch,l->lineno);
-            return 1;
 
-        case '\\':
-            lexemeAssignOp(le,start,1,'\\',l->lineno);
-            return 1;
-
-        case '#': {
-            type = lexPreProcDirective(l);
-            le->tk_type = TK_KEYWORD;
-            le->i64 = type->kind;
-            return 1;
-        }
-
-        case '~':
-        case '(':
-        case ')':
-        case ',':
-        case ';':
-        case ':':
-            if (l->flags & CCF_MULTI_COLON && lexPeekMatch(l,':')) {
-                lexNextChar(l);
-                lexemeAssignOp(le,start,2,TK_DBL_COLON,l->lineno);
+            case '\"': {
+                le->len = 0;
+                le->i64 = 0;
+                le->start = lexString(l,'"',&le->i64,&le->len);
+                le->tk_type = TK_STR;
+                le->line = l->lineno;
+                l->cur_str = NULL;
+                l->cur_strlen = 0;
                 return 1;
             }
-        case '[':
-        case ']':
-        case '{':
-        case '}':
-            lexemeAssignOp(le,start,1,ch,l->lineno);
-            return 1;
+
+            case '\'':
+                lexCharConst(l);
+                le->start = start+1;
+                le->len = l->cur_strlen;
+                le->i64 = l->cur_i64;
+                le->tk_type = TK_CHAR_CONST;
+                l->cur_str = NULL;
+                l->cur_strlen = 0;
+                le->line = l->lineno;
+                return 1;
+
+            case '/':
+                if (*l->ptr == '/' || *l->ptr == '*') {
+                    start = l->ptr-1;
+                    lexSkipCodeComment(l);
+                    ssize_t lineno = l->lineno;
+                    if (l->flags & CCF_ACCEPT_COMMENTS) {
+                        ssize_t len = l->ptr-start;
+                        le->start = start;
+                        le->len = len;
+                        le->line = lineno;
+                        le->tk_type = TK_COMMENT;
+                        return 1;
+                    }
+                } else {
+                    if (lexPeekMatch(l,'=')) {
+                        lexNextChar(l);
+                        lexemeAssignOp(le,start,2,TK_DIV_EQU,l->lineno);
+                        return 1;
+                    } else {
+                    /* Divide */
+                        lexemeAssignOp(le,start,1,ch,l->lineno);
+                        return 1;
+                    }
+                }
+                break;
+
+            case '=':
+                /* Check for equality */
+                if (lexPeekMatch(l,'=')) {
+                    lexNextChar(l);
+                    lexemeAssignOp(le,start,2,TK_EQU_EQU,l->lineno);
+                } else {
+                    lexemeAssignOp(le,start,1,ch,l->lineno);
+                }
+                return 1;
+            
+            case '<':
+                if (lexPeekMatch(l,'=')) {
+                    lexNextChar(l);
+                    lexemeAssignOp(le,start,2,TK_LESS_EQU,l->lineno);
+                } else if (lexPeekMatch(l, '<')) {
+                    lexNextChar(l);
+                    if (lexPeekMatch(l, '=')) {
+                        lexNextChar(l);
+                        lexemeAssignOp(le,start,2,TK_SHL_EQU,l->lineno);
+                    } else {
+                        lexemeAssignOp(le,start,2,TK_SHL,l->lineno);
+                    }
+                } else {
+                    lexemeAssignOp(le,start,1,ch,l->lineno);
+                }
+                return 1;
+            
+            case '>':
+                if (lexPeekMatch(l,'=')) {
+                    lexNextChar(l);
+                    lexemeAssignOp(le,start,2,TK_GREATER_EQU,l->lineno);
+                } else if (lexPeekMatch(l, '>')) {
+                    lexNextChar(l);
+                    if (lexPeekMatch(l, '=')) {
+                        lexNextChar(l);
+                        lexemeAssignOp(le,start,2,TK_SHR_EQU,l->lineno);
+                    } else {
+                        lexemeAssignOp(le,start,2,TK_SHR,l->lineno);
+                    }
+                } else {
+                    lexemeAssignOp(le,start,1,ch,l->lineno);
+                }
+                return 1;
+
+            case '+':
+                if (lexPeekMatch(l,'+')) {
+                    lexNextChar(l);
+                    lexemeAssignOp(le,start,2,TK_PLUS_PLUS,l->lineno);
+                } else if (lexPeekMatch(l, '=')) {
+                    lexNextChar(l);
+                    lexemeAssignOp(le,start,2,TK_ADD_EQU,l->lineno);
+                } else {
+                    lexemeAssignOp(le,start,1,ch,l->lineno);
+                }
+                return 1;
+
+            case '-':
+                if (lexPeekMatch(l,'-')) {
+                    lexNextChar(l);
+                    lexemeAssignOp(le,start,2,TK_MINUS_MINUS,l->lineno);
+                } else if (lexPeekMatch(l, '>')) {
+                    lexNextChar(l);
+                    lexemeAssignOp(le,start,2,TK_ARROW,l->lineno);
+                } else if (lexPeekMatch(l, '=')) {
+                    lexNextChar(l);
+                    lexemeAssignOp(le,start,2,TK_SUB_EQU,l->lineno);
+                } else {
+                    lexemeAssignOp(le,start,1,ch,l->lineno);
+                }
+                return 1;
+            
+            case '!':
+                if (lexPeekMatch(l,'=')) {
+                    lexNextChar(l);
+                    lexemeAssignOp(le,start,2,TK_NOT_EQU,l->lineno);
+                } else {
+                    lexemeAssignOp(le,start,1,ch,l->lineno);
+                }
+                return 1;
+
+            case '&':
+                if (lexPeekMatch(l,'&')) {
+                    lexNextChar(l);
+                    lexemeAssignOp(le,start,2,TK_AND_AND,l->lineno);
+                } else if (lexPeekMatch(l, '=')) {
+                    lexNextChar(l);
+                    lexemeAssignOp(le,start,2,TK_AND_EQU,l->lineno);
+                } else {
+                    lexemeAssignOp(le,start,1,ch,l->lineno);
+                }
+                return 1;
+
+            case '|':
+                if (lexPeekMatch(l,'|')) {
+                    lexNextChar(l);
+                    lexemeAssignOp(le,start,2,TK_OR_OR,l->lineno);
+                } else if (lexPeekMatch(l, '=')) {
+                    lexNextChar(l);
+                    lexemeAssignOp(le,start,2,TK_OR_EQU,l->lineno);
+                } else {
+                    lexemeAssignOp(le,start,1,ch,l->lineno);
+                }
+                return 1;
+
+            case '*':
+                if (lexPeekMatch(l, '=')) {
+                    lexNextChar(l);
+                    lexemeAssignOp(le,start,2,TK_MUL_EQU,l->lineno);
+                } else {
+                    lexemeAssignOp(le,start,1,ch,l->lineno);
+                }
+                return 1;
+
+            case '%':
+                if (lexPeekMatch(l, '=')) {
+                    lexNextChar(l);
+                    lexemeAssignOp(le,start,2,TK_MOD_EQU,l->lineno);
+                } else {
+                    lexemeAssignOp(le,start,1,ch,l->lineno);
+                }
+                return 1;
+            
+            case '^':
+                if (lexPeekMatch(l, '=')) {
+                    lexNextChar(l);
+                    lexemeAssignOp(le,start,2,TK_XOR_EQU,l->lineno);
+                } else {
+                    lexemeAssignOp(le,start,1,ch,l->lineno);
+                }
+                return 1;
+
+            case '$':
+            case '@':
+                if (l->flags & CCF_ASM_BLOCK) {
+                    lexemeAssignOp(le,start,1,ch,l->lineno);
+                    return 1;
+                }
+                break;
+            case '.':
+                if (isNum(lexPeek(l))) {
+                    if ((tk_type = lexNumeric(l,0)) == -1) {
+                        loggerPanic("line %d: Lex error while lexing lexNumeric\n",
+                                l->lineno);
+                        goto error;
+                    }
+                    le->len = l->ptr - start;
+                    le->tk_type = tk_type;
+                    le->line = l->lineno;
+                    if (tk_type == TK_F64) {
+                        le->f64 = l->cur_f64;
+                    } else {
+                        le->i64 = l->cur_i64;
+                    }
+                    le->ishex = l->ishex;
+                    l->ishex = 0;
+                    return 1;
+                } else if (lexPeekMatch(l,'.')) {
+                    lexNextChar(l);
+                    if (lexPeekMatch(l,'.')) {
+                        lexNextChar(l);
+                        lexemeAssignOp(le,start,3,TK_ELLIPSIS,l->lineno);
+                        return 1;
+                    }
+                    loggerPanic("line %d: .. is an invalid token sequence\n",
+                            l->lineno);
+                }
+                
+                lexemeAssignOp(le,start,1,ch,l->lineno);
+                return 1;
+
+            case '\\':
+                lexemeAssignOp(le,start,1,'\\',l->lineno);
+                return 1;
+
+            case '#': {
+                type = lexPreProcDirective(l);
+                le->tk_type = TK_KEYWORD;
+                le->i64 = type->kind;
+                return 1;
+            }
+
+            case '~':
+            case '(':
+            case ')':
+            case ',':
+            case ';':
+            case ':':
+                if (l->flags & CCF_MULTI_COLON && lexPeekMatch(l,':')) {
+                    lexNextChar(l);
+                    lexemeAssignOp(le,start,2,TK_DBL_COLON,l->lineno);
+                    return 1;
+                }
+            case '[':
+            case ']':
+            case '{':
+            case '}':
+                lexemeAssignOp(le,start,1,ch,l->lineno);
+                return 1;
+            
+            default: {
+                if (isalpha(ch) || ch == '_') {
+                    if ((tk_type = lexIdentifier(l, ch)) == -1) {
+                        loggerPanic("line %d: Lex error while lexing lexIdentifier\n",
+                                l->lineno);
+                        goto error;
+                    }
+
+                    le->start = start;
+                    le->len = l->cur_strlen;
+                    le->tk_type = tk_type;
+                    le->line = l->lineno;
+
+                    if ((type = strMapGetLen(l->symbol_table,le->start,le->len)) != NULL) {
+                        le->tk_type = TK_KEYWORD;
+                        le->i64 = type->kind;
+                        type = NULL;
+                    }
+                    return 1;
+                }
+                break;
+            }
         }
     }
 error:

@@ -1164,7 +1164,6 @@ void _astToString(aoStr *str, Ast *ast, int depth) {
 
     Ast *param;
     List *node;
-    aoStr *escaped;
     char *tmp;
 
     switch(ast->kind) {
@@ -1840,7 +1839,6 @@ static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
             break;
 
         case AST_STRING: {
-            aoStr *str_formatted = aoStrNew();
             aoStr *encoded = NULL;
             char *quote = "\"";
             if (lexeme_flags & LEXEME_GRAPH_VIZ_ENCODE_PUNCT) {
