@@ -289,8 +289,8 @@ int main(int argc, char **argv) {
     CliArgs args;
     cliArgsInit(&args);
     /* now parse cli options */
-    cliParseArgs(&args,argc,argv);
     args.install_dir = INSTALL_PREFIX;
+    cliParseArgs(&args,argc,argv);
 
     if (args.assemble) {
         assemble(&args);
