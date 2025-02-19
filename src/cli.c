@@ -108,26 +108,11 @@ static size_t longestCommand(void) {
 }
 
 aoStr *gitGetHash(void) {
-    char tmp[64];
-    aoStr *hash = aoStrAlloc(64);
-    FILE *fp = popen("git rev-parse main", "r");
-
-    if (fp == NULL) {
-        aoStrCatFmt(hash, "no git hash");
-    } else {
-        if (fgets(tmp, sizeof(tmp), fp) == NULL) {
-            aoStrCatFmt(hash, "git hash retrival failed");
-        } else {
-            size_t len = strlen(tmp);
-            if (tmp[len-1] == '\n') {
-                len--;
-            }
-            aoStrCatFmt(hash,"%.*s",(int)len,tmp);
-        } 
-    }
-
-    pclose(fp);
-    return hash;
+#ifdef HCC_GIT_HASH
+    return aoStrDupRaw(str_lit(HCC_GIT_HASH));
+#else
+    return aoStrPrintf("git hash retrival failed");
+#endif
 }
 
 const char *getBuildModeStr(void) {
@@ -161,7 +146,7 @@ __noreturn void cliPanic(const char *fmt, ...) {
     cliPanicGeneric("Error: ", fmt, ap);
 }
 
-__noreturn void cliVersionPrint(void) {
+__noreturn void cliVersionPrint(CliArgs *args) {
     aoStr *git_hash = gitGetHash();
     aoStr *buffer = aoStrNew();
     if (is_terminal) {
@@ -170,10 +155,11 @@ __noreturn void cliVersionPrint(void) {
         aoStrCatFmt(buffer, "hcc %s\n", cctrlGetVersion());
     }
     aoStrCatFmt(buffer,
-            "binary: hcc\n"
+            "binary: %s/hcc\n"
             "commit-hash: %s\n"
             "arch: %s %s\n"
             "build: %s\n",
+            args->install_dir,
             git_hash->data,
             OS_STR,
             ARCH_STR,
@@ -418,7 +404,7 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
             }
             case CLI_MEM_STATS: args->print_mem_stats = 1; break;
             case CLI_HELP:    cliPrintUsage(); break;
-            case CLI_VERSION: cliVersionPrint(); break;
+            case CLI_VERSION: cliVersionPrint(args); break;
             case CLI_TERRY:   cliTerryInfo(); break;
         }
     }

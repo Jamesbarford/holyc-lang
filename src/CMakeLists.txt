@@ -26,6 +26,14 @@ if (HCC_LINK_SQLITE3)
     add_compile_definitions(HCC_LINK_SQLITE3)
 endif()
 
+execute_process(
+  COMMAND git rev-parse main
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  OUTPUT_VARIABLE HCC_GIT_HASH
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+
+add_compile_definitions(HCC_GIT_HASH="${HCC_GIT_HASH}")
 
 # Optionally, add more flags or options depending on the build type
 # For example, optimization flags for Release builds:
