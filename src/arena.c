@@ -16,7 +16,7 @@ static ArenaBlock *arenaBlockNew(unsigned int capacity) {
 static void arenaBlockRelease(ArenaBlock *block) {
     if (block) {
         /* Need to go to the start address */
-        free(block->mem - block->used);
+        free(((char *)block->mem) - block->used);
         free(block);
     }
 }
@@ -65,17 +65,14 @@ void *arenaAlloc(Arena *arena, unsigned int size) {
             block->next = arena->tail;
             arena->tail = block;
             arena->head = new_block;
-            void *memory = new_block->mem;
-            new_block->used = allocation_size;
-            new_block->mem += allocation_size;
-            return memory;
-        } else {
-            /* The simple path! */
-            void *memory = block->mem;
-            block->used += allocation_size;
-            block->mem += allocation_size;
-            return memory;
+            /* Set block to the new block */
+            block = new_block;
         }
+
+        void *memory = block->mem;
+        block->used += allocation_size;
+        block->mem = ((char *)block->mem) + allocation_size;
+        return memory;
     }
 }
 
