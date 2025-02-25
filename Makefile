@@ -1,4 +1,9 @@
-C_COMPILER     ?= gcc
+
+ifeq ($(OS), Windows_NT)
+    C_COMPILER     ?= gcc.exe
+else
+    C_COMPILER     ?= gcc
+endif
 BUILD_TYPE     ?= Release
 INSTALL_PREFIX ?= /usr/local
 CFLAGS         ?= '-Wextra -Wall -Wpedantic -Wno-implicit-fallthrough'

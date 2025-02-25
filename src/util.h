@@ -24,7 +24,9 @@
 #define ESC_BOLD   "\x1b[1m"
 #define ESC_CLEAR_BOLD "\x1b[0m"
 
+#ifndef min
 #define min(x,y) (((x) < (y) ? (x) : (y)))
+#endif
 
 extern int is_terminal;
 

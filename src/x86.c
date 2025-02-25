@@ -28,7 +28,7 @@
  * Fifth Argument: %r8
  * Sixth Argument: %r9
  */
-static char *REGISTERS[] = {"rdi", "rsi", "rdx", "rcx",
+static char *SYSTEM_V_REGISTERS[] = {"rdi", "rsi", "rdx", "rcx",
     "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"};
 /**
  * the first 8 are function args
@@ -1187,7 +1187,7 @@ int asmPlaceArgs(Cctrl *cc, aoStr *buf, List *argv, int reverse) {
 void asmPopIntArgs(aoStr *buf, List *argv) {
     int count = listCount(argv);
     for (int i = count - 1; i >= 0; --i) {
-        asmPop(buf, REGISTERS[i]);
+        asmPop(buf, SYSTEM_V_REGISTERS[i]);
     }
 }
 
@@ -2180,7 +2180,7 @@ void asmStoreParam(aoStr *buf, int *_ireg, int *_arg, int offset) {
         *_arg = arg;
     } else {
         aoStrCatPrintf(buf, "movq   %%%s, %d(%%rbp)\n\t",
-                REGISTERS[ireg++], -offset);
+                SYSTEM_V_REGISTERS[ireg++], -offset);
         *_ireg = ireg;
     }
 }
@@ -2257,9 +2257,15 @@ int asmFunctionInit(Cctrl *cc, aoStr *buf, Ast *func) {
         }
     }
 
+#ifdef _WIN32
+    /* Windows wants a minium of 32 bytes stack space, because - Windows*/
+    int stack_space = 32;
+#else
     int stack_space = 0;
-    if (locals) {
-        stack_space = align(locals, 16);
+#endif
+
+    if (locals || stack_space) {
+        stack_space += align(locals, 16);
         aoStrCatPrintf(buf, "subq   $%d, %%rsp #STACK LOCAL COUNT %d\n\t", 
                 stack_space, listCount(func->locals));
         stack_pointer = stack_space;

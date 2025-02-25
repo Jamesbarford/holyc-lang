@@ -14,6 +14,7 @@
 #include "cli.h"
 #include "compile.h"
 #include "config.h"
+#include "io.h"
 #include "lexer.h"
 #include "list.h"
 #include "memory.h"
@@ -87,7 +88,7 @@ int hccLibInit(hccLib *lib, CliArgs *args, char *name) {
             lib->dylib_version_name,
             lib->dylib_name);
 
-#elif IS_LINUX
+#elif IS_LINUX || IS_WINDOWS
     snprintf(lib->stylib_name,LIB_BUFSIZ,"%s.a",name);
     snprintf(lib->dylib_name,LIB_BUFSIZ,"%s.so",name);
     snprintf(lib->dylib_version_name,LIB_BUFSIZ,"%s.so.0.0.1",name);
@@ -101,7 +102,9 @@ int hccLibInit(hccLib *lib, CliArgs *args, char *name) {
             "cp -pPR ./%s "INSTALL_PREFIX"/lib/lib%s",
             lib->stylib_name,lib->stylib_name);
 #else
+
 #error "System not supported"
+
 #endif
     aoStrCatPrintf(stylib_cmd,"ar rcs %s %s",lib->stylib_name,args->obj_outfile);
     lib->install_cmd = aoStrMove(installcmd);
@@ -112,35 +115,7 @@ int hccLibInit(hccLib *lib, CliArgs *args, char *name) {
 }
 
 int writeAsmToTmp(aoStr *asmbuf) {
-    int fd;
-    ssize_t written = 0;
-    size_t towrite = 0;
-    char *ptr;
-    ptr = asmbuf->data;
-
-    if ((fd = open(ASM_TMP_FILE,O_RDWR|O_TRUNC|O_CREAT,0644)) == -1) {
-        loggerPanic("Failed to create file for intermediary assembly: %s\n",
-                strerror(errno));
-    }
-
-    towrite = asmbuf->len;
-    ptr = asmbuf->data;
-
-    while (towrite > 0) {
-        written = write(fd,ptr,towrite);
-        if (written < 0) {
-            if (written == EINTR) {
-                continue;
-            }
-            close(fd);
-            loggerPanic("Failed to create file for intermediary assembly: %s\n",
-                    strerror(errno));
-        }
-        towrite -= written;
-        ptr += written;
-    }
-    close(fd);
-    return 1;
+    return ioWriteFile(ASM_TMP_FILE,asmbuf->data,asmbuf->len);
 } 
 
 void emitFile(aoStr *asmbuf, CliArgs *args) {
@@ -166,12 +141,7 @@ void emitFile(aoStr *asmbuf, CliArgs *args) {
             loggerPanic("Failed to open '%s' - %s\n",
                 args->asm_outfile, strerror(errno));
         }
-        ssize_t written = write(fd,asmbuf->data,asmbuf->len);
-        if (written != (ssize_t)asmbuf->len) {
-            loggerPanic("Failed to write data expected %ld got %ld\n",
-                    (ssize_t)asmbuf->len, written);
-        }
-        close(fd);
+        ioWriteToFileDescriptor(fd,0,asmbuf->data,asmbuf->len);
     } else if (args->emit_dylib) {
         writeAsmToTmp(asmbuf);
         hccLibInit(&lib,args,args->lib_name);
@@ -231,14 +201,15 @@ void assemble(CliArgs *args) {
     aoStr *run_cmd = aoStrNew();
 
     if (args->run) {
-        ssize_t len = 0;
-        char *buffer = lexReadfile(args->infile,&len);
+        unsigned long len = 0;
+        char *buffer = ioReadWholeFile(args->infile,&len);
         aoStr asm_buf = {
             .data = buffer,
             .len = len,
             .capacity = len,
         };
         writeAsmToTmp(&asm_buf);
+        
         aoStrCatPrintf(run_cmd,"gcc -L"INSTALL_PREFIX"/lib %s "CLIBS" && ./a.out && rm ./a.out",
                 ASM_TMP_FILE);
         free(buffer);

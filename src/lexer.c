@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <pwd.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <assert.h>
@@ -11,6 +10,7 @@
 #include "ast.h"
 #include "arena.h"
 #include "cctrl.h"
+#include "io.h"
 #include "map.h"
 #include "lexer.h"
 #include "list.h"
@@ -534,40 +534,12 @@ static char lexPeek(Lexer *l) {
     return *l->ptr;
 }
 
-/* Read an entire file to a mallocated buffer */
-char *lexReadfile(char *path, ssize_t *_len) {
-    int fd;
-    if ((fd = open(path, O_RDONLY, 0644)) == -1) {
-        loggerPanic("Failed to open file: %s\n", path);
-    }
- 
-    int len = lseek(fd, 0, SEEK_END);
-    lseek(fd, 0, SEEK_SET);
-
-    /* Add a `+1` for `\0` */
-    char *buf = (char *)malloc((sizeof(char) * len)+1);
-    int size = 0;
-    int rbytes = 0;
-    while ((rbytes = read(fd,buf,len)) != 0) {
-        size += rbytes;
-    }
-
-    if (size != len) {
-        loggerPanic("Failed to read whole file\n");
-    }
-
-    *_len = len;
-    buf[len] = '\0';
-    close(fd);
-    return buf;
-}
-
 void lexPushFile(Lexer *l, aoStr *filename) {
     /* We need to save what we are currently lexing and 
      * make the file we've just seen the file we want to lex */
     LexFile *f = (LexFile *)malloc(sizeof(LexFile));
-    ssize_t file_len = 0;
-    char *src = lexReadfile(filename->data, &file_len);
+    unsigned long file_len = 0;
+    char *src = ioReadWholeFile(filename->data, &file_len);
     aoStr *src_code = aoStrNew();
     src_code->data = src;
     src_code->len = file_len;

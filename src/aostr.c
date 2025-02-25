@@ -38,6 +38,18 @@ void aoStrRelease(aoStr *buf) {
     return;
 }
 
+#ifdef _WIN32
+char *strndup(const char *s, size_t n) {
+    size_t len = strnlen(s, n);
+    char *new_str = (char *)malloc(len + 1);
+    if (!new_str) return NULL;
+
+    memcpy(new_str, s, len);
+    new_str[len] = '\0';
+    return new_str;
+}
+#endif
+
 /* Get the underlying string, we do not free the `aoStr`... it will get 
  * collected later. This means we don't need to manually keep track of this 
  * buffer */

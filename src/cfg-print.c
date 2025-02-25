@@ -11,6 +11,7 @@
 #include "ast.h"
 #include "cfg.h"
 #include "cfg-print.h"
+#include "io.h"
 #include "lexer.h"
 #include "memory.h"
 #include "util.h"
@@ -692,18 +693,7 @@ static void cfgCreateGraphViz(CfgGraphVizBuilder *builder, CFG *cfg) {
 
 void cfgBuilderWriteToFile(CfgGraphVizBuilder *builder, char *filename) {
     aoStr *cfg_string = builder->viz;
-    int fd = open(filename,O_CREAT|O_TRUNC|O_RDWR,0644);
-    if (fd == -1) {
-        loggerPanic("Failed to open file '%s': %s\n",
-                filename,strerror(errno));
-    }
-
-    ssize_t written = write(fd, cfg_string->data, cfg_string->len);
-    if (written != (ssize_t)cfg_string->len) {
-        loggerPanic("Failed to write CFG '%s'\n", filename);
-    }
-    fsync(fd);
-    close(fd);
+    ioWriteAndSyncFile(filename,cfg_string->data,cfg_string->len);
 }
 
 void cfgToFile(CFG *cfg, char *filename) {

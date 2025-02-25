@@ -48,6 +48,7 @@ set(SOURCES
     cfg.c
     cli.c
     compile.c
+    io.c
     lexer.c
     list.c
     main.c
@@ -71,6 +72,7 @@ set(HEADERS
     cfg.h
     cli.h
     compile.h
+    io.h
     config.h
     lexer.h
     list.h

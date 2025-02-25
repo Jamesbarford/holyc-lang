@@ -19,6 +19,10 @@ typedef struct aoStr {
     size_t capacity;
 } aoStr;
 
+#ifdef _WIN32
+char *strndup(const char *s, size_t n);
+#endif
+
 aoStr *aoStrAlloc(size_t capacity);
 aoStr *aoStrNew(void);
 void aoStrRelease(aoStr *buf);

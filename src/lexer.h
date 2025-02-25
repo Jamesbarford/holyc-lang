@@ -201,7 +201,6 @@ int tokenIdentIs(Lexeme *tok, char *ident, int len);
 void lexemeFree(void *_le);
 char *lexerReportLine(Lexer *l, ssize_t lineno);
 int lexemeEq(Lexeme *l1, Lexeme *l2);
-char *lexReadfile(char *path, ssize_t *_len);
 
 
 #endif // !LEXER_H

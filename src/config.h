@@ -9,10 +9,17 @@
         defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 #define IS_BSD 1
 #define IS_LINUX 0
+#define IS_WINDOWS 0
 #elif defined(__linux__)
 #define OS_STR "Linux"
 #define IS_LINUX 1
 #define IS_BSD 0
+#define IS_WINDOWS 0
+#elif defined(_WIN32)
+#define OS_STR "Windows"
+#define IS_LINUX 0
+#define IS_BSD 0
+#define IS_WINDOWS 1
 #endif
 
 #if defined(__x86_64__)

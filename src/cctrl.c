@@ -660,8 +660,8 @@ aoStr *cctrlCreateErrorLine(Cctrl *cc,
     aoStr *buf = aoStrNew();
     long char_pos = cctrlGetCharErrorIdx(cc,cur_tok, line_buffer);
 
-    long offset = -1;
-    long tok_len = -1;
+    ssize_t offset = -1;
+    ssize_t tok_len = -1;
 
     cctrlFileAndLine(cc,buf,cur_tok->line,char_pos,msg,severity);
     cctrlCreateColoredLine(cc, buf, lineno, 1, suggestion,
@@ -860,8 +860,8 @@ aoStr *cctrlRaiseFromTo(Cctrl *cc, int severity, char *suggestion, char from,
     long from_idx = cctrlGetErrorIdx(cc,cur_tok->line,from, line_buffer);
     long to_idx = cctrlGetErrorIdx(cc,cur_tok->line,to, line_buffer);
 
-    long offset = -1;
-    long tok_len = -1;
+    ssize_t offset = -1;
+    ssize_t tok_len = -1;
 
     cctrlFileAndLine(cc,buf,cur_tok->line,char_pos,bold_msg->data,severity);
     cctrlCreateColoredLine(cc, buf, cur_tok->line, 0, NULL, char_pos, &offset, &tok_len, 

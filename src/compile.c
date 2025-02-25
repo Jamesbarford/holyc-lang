@@ -71,7 +71,7 @@ void compileToTokens(Cctrl *cc, CliArgs *args, int lexer_flags) {
 
 int compileToAst(Cctrl *cc, CliArgs *args, int lexer_flags) {
     Lexer *l = (Lexer *)globalArenaAllocate(sizeof(Lexer));
-    aoStr *builtin_path = aoStrPrintf("%s/include/tos.HH", args->install_dir);
+ //    aoStr *builtin_path = aoStrPrintf("%s/include/tos.HH", args->install_dir);
     char *root_dir = mprintf("%s/include/", args->install_dir);
 
     lexInit(l,NULL,CCF_PRE_PROC|lexer_flags);
@@ -81,7 +81,7 @@ int compileToAst(Cctrl *cc, CliArgs *args, int lexer_flags) {
     lexPushFile(l,aoStrDupRaw(args->infile,strlen(args->infile)));
     /* library files */
     /* the structure is a so this will get popped first */
-    lexPushFile(l,builtin_path);
+  //  lexPushFile(l,builtin_path);
 
     cctrlInitParse(cc,l);
 
