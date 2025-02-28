@@ -342,7 +342,11 @@ int main(int argc, char **argv) {
         goto success;
     }
 
-    irLowerAst(cc);
+    if (args.dump_ir) {
+        irLowerAst(cc);
+        goto success;
+    }
+
     asmbuf = compileToAsm(cc);
 
     emitFile(asmbuf, &args);

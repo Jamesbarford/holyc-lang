@@ -175,6 +175,7 @@ typedef struct Ast {
             /* asm function binding */
             aoStr *asmfname;
             aoStr *fname;
+            aoStr *tmp_fnptr_name;
             PtrVec *args;
             PtrVec *params;
 

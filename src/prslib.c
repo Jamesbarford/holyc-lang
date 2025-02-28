@@ -584,8 +584,20 @@ Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
 
     switch (maybe_fn->kind) {
         case AST_LVAR:
-        case AST_FUNPTR:
-            return astFunctionPtrCall(rettype,fname,len,argv,maybe_fn);
+        case AST_FUNPTR: {
+            Ast *ast_fnptr = strMapGetLen(cc->localenv,fname,len);
+            aoStr *tmp_name = NULL;
+            if (ast_fnptr) {
+                if (ast_fnptr->kind == AST_LVAR) {
+                    tmp_name = ast_fnptr->tmp_var_name;
+                } else {
+                    tmp_name = ast_fnptr->tmp_fnptr_name;
+                }
+            }
+            Ast *fnptr_call = astFunctionPtrCall(rettype,fname,len,argv,maybe_fn);
+            fnptr_call->tmp_fnptr_name = tmp_name;
+            return fnptr_call;
+        }
 
         case AST_ASM_FUNCDEF:
         case AST_ASM_FUNC_BIND:

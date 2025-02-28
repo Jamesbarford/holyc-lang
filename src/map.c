@@ -680,12 +680,37 @@ int strMapAddLen(StrMap *map, char *key, long key_len, void *value) {
     }
 }
 
+/* Perform a linear scan of the hashtable to try and find an element */
+StrMapNode *strMapFindByValue(StrMap *map,
+                              void *value,
+                              int (*is_match)(void *v1, StrMapNode *_entry))
+{
+    if (map->size == 0) {
+        return NULL;
+    }
+    StrMapIterator *it = strMapIteratorNew(map);
+    StrMapNode *entry;
+    StrMapNode *found = NULL;
+    while ((entry = strMapNext(it)) != NULL) {
+        if (is_match(value, entry)) {
+            found = entry;
+            break;
+        }
+    }
+    strMapIteratorRelease(it);
+    return found;
+}
+
+int strMapAddAoStr(StrMap *map, aoStr *key, void *value) {
+    return strMapAddLen(map,key->data,key->len,value);
+}
+
 int strMapAdd(StrMap *map, char *key, void *value) {
     long key_len = strlen(key);
     return strMapAddLen(map,key,key_len,value);
 }
 
-int strMapAddOrErr(StrMap *map, char *key, void *value) {
+int strMapAddLenOrErr(StrMap *map, char *key, long key_len, void *value) {
     int is_free;
 
     if (map->size >= map->threashold) {
@@ -695,7 +720,6 @@ int strMapAddOrErr(StrMap *map, char *key, void *value) {
         }
     }
 
-    long key_len = strlen(key);
     unsigned long idx = strMapGetNextIdx(map, key, key_len, &is_free);
 
     if (is_free) {
@@ -707,6 +731,15 @@ int strMapAddOrErr(StrMap *map, char *key, void *value) {
     } else {
         return 0;
     }
+}
+
+int strMapAddOrErr(StrMap *map, char *key, void *value) {
+    long key_len = strlen(key);
+    return strMapAddLenOrErr(map,key,key_len,value);
+}
+
+int strMapAddAoStrOrErr(StrMap *map, aoStr *key, void *value) {
+    return strMapAddLenOrErr(map,key->data,key->len,value);
 }
 
 int strMapRemove(StrMap *map, char *key) {
@@ -787,6 +820,57 @@ StrMapNode *strMapNext(StrMapIterator *it) {
     return NULL;
 }
 
+char *strMapToString(StrMap *map, char *(*stringify_value)(void *)) {
+    aoStr *str = aoStrNew();
+    unsigned long map_size = map->size;
+
+    if (map_size == 0) {
+        aoStrCatLen(str,"{}",2);
+        return aoStrMove(str);
+    }
+
+    unsigned long i = 0;
+    StrMapIterator *it = strMapIteratorNew(map);
+    StrMapNode *entry;
+    aoStrPutChar(str,'{');
+    while ((entry = strMapNext(it)) != NULL) {
+        char *value_string = stringify_value(entry->value);
+        if ((i + 1) == map_size) {
+            aoStrCatPrintf(str,"[%s] => %s}",entry->key,value_string);
+        } else {
+            aoStrCatPrintf(str,"[%s] => %s, ",entry->key,value_string);
+        }
+        free(value_string);
+        i++;
+    }
+    strMapIteratorRelease(it);
+    return aoStrMove(str);
+}
+
+char *strMapKeysToString(StrMap *map) {
+    aoStr *str = aoStrNew();
+    unsigned long map_size = map->size;
+
+    if (map_size == 0) {
+        aoStrCatLen(str,"{}",2);
+        return aoStrMove(str);
+    }
+
+    unsigned long i = 0;
+    StrMapIterator *it = strMapIteratorNew(map);
+    StrMapNode *entry;
+    aoStrPutChar(str,'{');
+    while ((entry = strMapNext(it)) != NULL) {
+        if ((i + 1) == map_size) {
+            aoStrCatPrintf(str,"%s}",entry->key);
+        } else {
+            aoStrCatPrintf(str,"%s, ",entry->key);
+        }
+        i++;
+    }
+    strMapIteratorRelease(it);
+    return aoStrMove(str);
+}
 
 IntSet *intSetNew(unsigned long capacity) {
     IntSet *iset = (IntSet *)malloc(sizeof(IntSet));

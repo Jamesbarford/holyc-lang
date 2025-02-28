@@ -715,9 +715,12 @@ aoStr *cctrlMessagVnsPrintF(Cctrl *cc, char *fmt, va_list ap, int severity) {
         aoStrCatFmt(bold_msg, "%s", msg);
     }
     Lexeme *cur_tok = cctrlTokenPeek(cc);
-    aoStr *buf = cctrlCreateErrorLine(cc,cur_tok->line,bold_msg->data,severity,NULL);
-    aoStrRelease(bold_msg);
-    return buf;
+    if (cur_tok) {
+        aoStr *buf = cctrlCreateErrorLine(cc,cur_tok->line,bold_msg->data,severity,NULL);
+        aoStrRelease(bold_msg);
+        return buf;
+    }
+    return bold_msg;
 }
 
 aoStr *cctrlMessagVnsPrintFWithSuggestion(Cctrl *cc, char *fmt, va_list ap, 
@@ -937,12 +940,16 @@ Ast *cctrlGetVar(Cctrl *cc, char *varname, int len) {
             return astI64Type(tok->i64);
         case TK_F64:
             if (cc->flags & CCTRL_PASTE_DEFINES) {
-                return astLVar(ast_float_type, varname, len);
+                return astLVar(ast_float_type,
+                               varname,
+                               len);
             }
             return astF64Type(tok->f64);
         case TK_STR: {
             if (cc->flags & CCTRL_PASTE_DEFINES) {
-                return astLVar(astMakePointerType(ast_u8_type), varname, len);
+                return astLVar(astMakePointerType(ast_u8_type),
+                               varname,
+                               len);
             }
             return cctrlGetOrSetString(cc, tok->start, tok->len, tok->i64);
         }

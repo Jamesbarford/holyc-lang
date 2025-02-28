@@ -121,9 +121,16 @@ StrMap *strMapNewWithParent(unsigned long capacity, StrMap *parent);
 void *strMapGetLen(StrMap *map, char *key, long key_len);
 void *strMapGetAoStr(StrMap *map, aoStr *key);
 void *strMapGet(StrMap *map, char *key);
-int strMapAddLen(StrMap *map, char *key, long key_len, void *value);
+
 int strMapAdd(StrMap *map, char *key, void *value);
+int strMapAddLen(StrMap *map, char *key, long key_len, void *value);
+int strMapAddAoStr(StrMap *map, aoStr *key, void *value);
+
+/* Return an error rather than updating a value in the map with the same key */
 int strMapAddOrErr(StrMap *map, char *key, void *value);
+int strMapAddLenOrErr(StrMap *map, char *key, long key_len, void *value);
+int strMapAddAoStrOrErr(StrMap *map, aoStr *key, void *value);
+
 int strMapHas(StrMap *map, char *key);
 int strMapRemove(StrMap *map, char *key);
 void strMapRelease(StrMap *map);
@@ -133,9 +140,16 @@ void strMapSetFreeKey(StrMap *map, void (*_free_key)(void *key));
 void strMapMerge(StrMap *map1, StrMap *map2);
 void strMapRemoveKeys(StrMap *map1, StrMap *map2);
 
+StrMapNode *strMapFindByValue(StrMap *map,
+                              void *value,
+                              int (*is_match)(void *v1, StrMapNode *_entry));
+
 StrMapIterator *strMapIteratorNew(StrMap *map);
 void strMapIteratorRelease(StrMapIterator *it);
 StrMapNode *strMapNext(StrMapIterator *it);
+
+char *strMapToString(StrMap *map, char *(*stringify_value)(void *));
+char *strMapKeysToString(StrMap *map);
 
 
 typedef struct IntSet {

@@ -252,6 +252,7 @@ Ast *astFunctionPtr(AstType *type, char *fname, int len, PtrVec *params) {
     ast->type = type;
     ast->kind = AST_FUNPTR;
     ast->fname = aoStrDupRaw(fname, len);
+    ast->tmp_fnptr_name = aoStrPrintf("%%fnptr%d", ast_tmp_variable_counter++);
     ast->params = params;
     ast->default_fn = NULL;
     return ast;
@@ -1729,6 +1730,7 @@ char *astKindToString(int kind) {
     case AST_CAST:       return "AST_CAST";
     case AST_JUMP:       return "AST_JUMP";
     case AST_ASM_FUNC_BIND: return "AST_ASM_FUNC_BIND";
+    case AST_FUNPTR_CALL: return "AST_FUNPTR_CALL";
 
     case AST_SWITCH:        return "AST_SWITCH";
     case AST_CASE:          return "AST_CASE";

@@ -22,6 +22,7 @@ enum CliArgType {
     CLI_EMIT_DYLIB,
     CLI_EMIT_OBJECT,
     CLI_RUN,
+    CLI_DUMP_IR,
     CLI_ASSEMBLE,
     CLI_TRANSPILE,
     CLI_TO_STDOUT,
@@ -62,6 +63,7 @@ typedef struct CliArgs {
     int cfg_create_png;
     int cfg_create_svg;
     int asm_debug_comments;
+    int dump_ir;
     int assemble_only;
     int emit_dylib;
     int emit_object;

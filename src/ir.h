@@ -11,14 +11,23 @@ typedef enum IrOpcode {
     IR_OP_STORE,       /* Store to memory */
     IR_OP_GEP,         /* Get element pointer (array/struct indexing) */
     
-    /* Arithmetic operations */
-    IR_OP_ADD,         /* Addition */
-    IR_OP_SUB,         /* Subtraction */
-    IR_OP_MUL,         /* Multiplication */
-    IR_OP_DIV,         /* Division */
-    IR_OP_REM,         /* Remainder (modulo) */
-    IR_OP_NEG,         /* Negation */
-    
+    /* Integer Arithmetic operations */
+    IR_OP_IADD,         /* Addition */
+    IR_OP_ISUB,         /* Subtraction */
+    IR_OP_IMUL,         /* Multiplication */
+    IR_OP_IDIV,         /* Division */
+    IR_OP_UDIV,         /* Unsigned Division */
+    IR_OP_IREM,         /* Remainder (modulo) */
+    IR_OP_UREM,         /* Unsigned Remainder (modulo) */
+    IR_OP_INEG,         /* Negation */
+
+    /* Floading point arithmetic */
+    IR_OP_FADD,         /* Float Addition */
+    IR_OP_FSUB,         /* Float Subtraction */
+    IR_OP_FMUL,         /* Float Multiplication */
+    IR_OP_FDIV,         /* Float Division */
+    IR_OP_FNEG,         /* Float Negation */
+
     /* Bitwise operations */
     IR_OP_AND,         /* Bitwise AND */
     IR_OP_OR,          /* Bitwise OR */
@@ -139,11 +148,6 @@ typedef struct IrValue {
         IrInstr *phi;
 
         struct {
-            /* Function call arguments */
-            PtrVec *fn_args;
-        };
-
-        struct {
             aoStr *str;
             int str_real_len;
         };
@@ -161,6 +165,11 @@ typedef struct IrInstr {
     IrBlock *fallthrough_block; /* For conditional flow */
     union {
       IrCmpKind cmp_kind;
+
+      struct {
+          /* Function call arguments */
+          PtrVec *fn_args;
+      };
     } extra;
 } InInstr;
 
