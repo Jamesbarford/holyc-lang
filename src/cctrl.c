@@ -157,6 +157,7 @@ Cctrl *cctrlNew(void) {
     cc->ast_list = listNew();
     cc->initalisers = listNew();
     cc->initaliser_locals = listNew();
+    cc->ir_vector = ptrVecNew();
     /* These are temoraries that the parser will allocate and 
      * NULL out between parses of classes and functions */
     cc->localenv = NULL;

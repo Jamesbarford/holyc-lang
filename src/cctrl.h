@@ -83,6 +83,9 @@ typedef struct Cctrl {
     /* The Ast Tree */
     List *ast_list;
 
+    /* Vector of Ir Functions */
+    PtrVec *ir_vector;
+
     /* Current function return type */
     AstType *tmp_rettype;
 

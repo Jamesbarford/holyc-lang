@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define static_size(x) (sizeof((x)) / sizeof((x[0])))
 #define cast(type, value) (((type)(value)))
@@ -59,10 +60,18 @@ extern int is_terminal;
         exit(EXIT_FAILURE);                                                \
     } while (0)
 
+/* This is objectively horrible but having massively long filenames is worse */
 #define loggerWarning(...)                                                 \
     do {                                                                   \
-        fprintf(stderr, "\033[0;35m%s:%d:%s\t\033[0m", __FILE__, __LINE__, \
-                __func__);                                                 \
+        size_t __file_len__ = strlen(__FILE__);                            \
+        char *__endptr__ = __FILE__;                                       \
+        __file_len__--;                                                    \
+        while (__file_len__ && __endptr__[__file_len__] != '/') {          \
+          __file_len__--;                                                  \
+        }                                                                  \
+        __file_len__++;                                                    \
+        fprintf(stderr, "\033[0;35m%s:%d:%s\t\033[0m",                     \
+            __endptr__+__file_len__, __LINE__, __func__);                  \
         fprintf(stderr, __VA_ARGS__);                                      \
     } while (0)
 

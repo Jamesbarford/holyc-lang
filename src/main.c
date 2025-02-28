@@ -14,6 +14,7 @@
 #include "cli.h"
 #include "compile.h"
 #include "config.h"
+#include "ir.h"
 #include "lexer.h"
 #include "list.h"
 #include "memory.h"
@@ -251,16 +252,17 @@ void assemble(CliArgs *args) {
     aoStrRelease(run_cmd);
 }
 
-
 void memoryInit(void) {
     astMemoryInit();
     lexemeMemoryInit();
+    irArenaInit(2048);
     globalArenaInit(4096*10);
 }
 
 void memoryRelease(void) {
     astMemoryRelease();
     lexemeMemoryRelease();
+    irMemoryRelease();
     globalArenaRelease();
 }
 
@@ -269,6 +271,8 @@ void memoryPrintStats(void) {
     lexemeMemoryStats();
     printf("\n\n");
     astMemoryStats();
+    printf("\n\n");
+    irMemoryStats();
     printf("\n\n");
     globalArenaPrintStats();
     printf("=========== Arena Stats End ==========\n");
@@ -338,6 +342,7 @@ int main(int argc, char **argv) {
         goto success;
     }
 
+    irLowerAst(cc);
     asmbuf = compileToAsm(cc);
 
     emitFile(asmbuf, &args);
