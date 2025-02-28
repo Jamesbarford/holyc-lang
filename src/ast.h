@@ -136,6 +136,7 @@ typedef struct Ast {
 
         /* Local variable */
         struct {
+            aoStr *tmp_var_name;
             aoStr *lname;
         };
 
@@ -297,6 +298,8 @@ extern Ast *ast_forever_sentinal;
 void astMemoryInit(void);
 void astMemoryRelease(void);
 void astMemoryStats(void);
+
+void astResetVariableCounter(void);
 
 AstType *astTypeCopy(AstType *type);
 void astVectorRelease(PtrVec *vec);

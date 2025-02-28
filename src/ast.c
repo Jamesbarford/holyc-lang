@@ -67,6 +67,12 @@ Ast *ast_forever_sentinal = &(Ast){ .kind = AST_LITERAL,
 void _astToString(aoStr *str, Ast *ast, int depth);
 char *_astToStringRec(Ast *ast, int depth);
 
+static int ast_tmp_variable_counter = 0;
+
+void astResetVariableCounter(void) {
+    ast_tmp_variable_counter = 0;
+}
+
 Ast *astNew(void) {
     Ast *ast = astAlloc();
     memset(ast,0,sizeof(Ast));
@@ -182,6 +188,7 @@ Ast *astLVar(AstType *type, char *name, int len) {
     ast->kind = AST_LVAR;
     ast->type = type;
     ast->lname = aoStrDupRaw(name, len);
+    ast->tmp_var_name = aoStrPrintf("%%t%d", ast_tmp_variable_counter++);
     return ast;
 }
 

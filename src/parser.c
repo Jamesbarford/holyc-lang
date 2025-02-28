@@ -1662,6 +1662,8 @@ Ast *parseFunctionOrDef(Cctrl *cc, AstType *rettype, char *fname, int len, int i
     cc->localenv = strMapNewWithParent(32, cc->localenv);
     cc->tmp_locals = listNew();
 
+    astResetVariableCounter();
+
     PtrVec *params = parseParams(cc,')',&has_var_args,1);
     Lexeme *tok = cctrlTokenGet(cc);
     if (tokenPunctIs(tok, '{')) {

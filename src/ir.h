@@ -114,6 +114,7 @@ typedef enum IrValueKind {
 typedef struct IrInstr IrInstr;
 typedef struct IrBlock IrBlock;
 typedef struct IrFunction IrFunction;
+typedef struct IrProgram IrProgram;
 
 typedef struct IrBlock {
     aoStr *label;         /* Identifier for the block */
@@ -136,6 +137,16 @@ typedef struct IrValue {
         aoStr *name;
         int reg;
         IrInstr *phi;
+
+        struct {
+            /* Function call arguments */
+            PtrVec *fn_args;
+        };
+
+        struct {
+            aoStr *str;
+            int str_real_len;
+        };
     };
     int version;
 } IrValue;
@@ -157,6 +168,7 @@ typedef struct IrFunction {
     IrValue *return_type; /* Not sure if this is needed but for printing as a 
                            * string it looks pretty! */
     aoStr *name;          /* Function name */
+    IrProgram *program;   /* A pointer to the program */
     PtrVec *params;       /* Parameter list, PtrVec<IrValue *> */
     PtrVec *blocks;       /* Basic blocks, PtrVec<IrInstr *> */
     IrBlock *entry_block; /* Entry */

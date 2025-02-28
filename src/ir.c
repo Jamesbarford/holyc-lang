@@ -56,6 +56,72 @@ int irOpIsCmp(IrOpcode opcode) {
     return 0;
 }
 
+int irIsFloat(IrValueType ir_value_type) {
+    return ir_value_type == IR_TYPE_F64;
+}
+
+int irIsInt(IrValueType ir_value_type) {
+    return ir_value_type == IR_TYPE_I8 ||
+           ir_value_type == IR_TYPE_I16 ||
+           ir_value_type == IR_TYPE_I32 ||
+           ir_value_type == IR_TYPE_I64;
+}
+
+int irAreCompatibleCmpTypes(IrValueType t1, IrValueType t2) {
+    if (t1 == t2) return 1;
+    if (irIsInt(t1) & irIsInt(t2)) return 1;
+    if (irIsFloat(t1) & irIsFloat(t2)) return 1;
+
+    if ((t1 == IR_TYPE_PTR && irIsInt(t2)) || (t2 == IR_TYPE_PTR && irIsInt(t1)))
+        return 1;
+
+    return 0;
+}
+
+int irBlockHasBlock(PtrVec *blocks_vector, IrBlock *needle) {
+    for (int i = 0; i < blocks_vector->size; ++i) {
+        IrBlock *block = vecGet(IrBlock *,blocks_vector,i);
+        if (aoStrCmp(block->label,needle->label)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+IrValueType irConvertType(Cctrl *cc, AstType *type) {
+    switch (type->kind) {
+        case AST_TYPE_VOID: return IR_TYPE_VOID;
+        case AST_TYPE_INT: {
+            switch (type->size) {
+                case 1: return IR_TYPE_I8;
+                case 2: return IR_TYPE_I16;
+                case 4: return IR_TYPE_I32;
+                case 8: return IR_TYPE_I64;
+                default:
+                    cctrlIce(cc,"Invalid integer size `%d` for type\n",
+                            astTypeToString(type),
+                            type->size);
+            }
+        }
+        case AST_TYPE_FLOAT:   return IR_TYPE_F64;
+        case AST_TYPE_CHAR:    return IR_TYPE_I8;
+        case AST_TYPE_ARRAY:   return IR_TYPE_ARRAY;
+        case AST_TYPE_POINTER: return IR_TYPE_PTR;
+        case AST_TYPE_FUNC:    return IR_TYPE_FUNCTION;
+        case AST_TYPE_CLASS:   return IR_TYPE_STRUCT;
+        case AST_TYPE_UNION:   return IR_TYPE_STRUCT;
+        case AST_TYPE_VIS_MODIFIER:
+            cctrlIce(cc, "Type visibility modifier is not a type!\n");
+        case AST_TYPE_INLINE:
+            cctrlIce(cc, "Type `inline` is not a type!\n");
+        case AST_TYPE_AUTO:
+            cctrlIce(cc, "Type `auto` failed to infer it's runtime type\n");
+        default:
+            cctrlIce(cc, "Type `%s` unhandled\n",astTypeToString(type));
+    }
+}
+
+
 /*==================== IR STRING REPRESENTATIONS ============================ */
 const char *irValueTypeToString(IrValueType ir_value_type) {
     switch (ir_value_type) {
@@ -92,7 +158,10 @@ aoStr *irValueToString(IrValue *ir_value) {
     }
 
     const char *ir_value_type_str = irValueTypeToString(ir_value->type);
-    aoStrCatFmt(buf," %s",ir_value_type_str);
+    if (!ir_value_type_str) {
+        aoStrPutChar(buf,' ');
+    }
+    aoStrCatFmt(buf,"%s",ir_value_type_str);
 
     return buf;
 }
@@ -178,7 +247,7 @@ aoStr *irInstrToString(IrInstr *ir_instr) {
     };
     aoStr *buf = aoStrNew();
     const char *op = irOpcodeToString(ir_instr->opcode);
-    aoStrCatFmt(buf, "%s", op);
+    aoStrCatFmt(buf, "%-8s", op);
 
     for (int i = 0; i < (int)static_size(ir_values); i++) {
         IrValue *ir_value = ir_values[i];
@@ -270,11 +339,58 @@ IrBlock *irBlockNew(aoStr *label) {
     return ir_block;
 }
 
+IrProgram *irProgramNew(void) {
+    IrProgram *program = (IrProgram *)irArenaAlloc(sizeof(IrProgram));
+    program->functions = ptrVecNew();
+    program->global_variables = strMapNew(16);
+    program->strings = strMapNew(16);
+    program->types = strMapNew(16);
+    return program;
+}
+
 IrValue *irValueNew(IrValueType ir_type, IrValueKind ir_kind) {
     IrValue *ir_value = (IrValue *)irArenaAlloc(sizeof(IrValue));
     ir_value->type = ir_type;
     ir_value->kind = ir_kind;
     ir_value->version = 1;
+    return ir_value;
+}
+
+/* We will reset this after each function has been created */
+static int ir_tmp_variable_count = 0;
+
+IrValue *irTmpVariable(IrValueType ir_value_type) {
+    IrValue *ir_value = irValueNew(ir_value_type, IR_VALUE_TEMP);
+    ir_value->name = aoStrPrintf("%%tmp%03d",ir_tmp_variable_count++);
+    return ir_value;
+}
+
+IrValue *irGetAllocaVar(IrInstr *ir_alloca) {
+    assert(ir_alloca->opcode == IR_OP_ALLOCA);
+    return ir_alloca->op1;
+}
+
+IrValue *irConstInt(IrValueType ir_value_type, long i64) {
+    IrValue *ir_value = irValueNew(ir_value_type, IR_VALUE_CONST_INT);
+    ir_value->i64 = i64;
+    return ir_value;
+}
+
+IrValue *irConstFloat(IrValueType ir_value_type, double f64) {
+    IrValue *ir_value = irValueNew(ir_value_type, IR_VALUE_CONST_FLOAT);
+    ir_value->f64 = f64;
+    return ir_value;
+}
+
+IrValue *irGlobalString(IrProgram *ir_program, Ast *ast) {
+    IrValue *ir_value = strMapGetAoStr(ir_program->strings, ast->slabel);
+    if (!ir_value) {
+        /* A string is an array of characters */
+        ir_value = irValueNew(IR_TYPE_ARRAY, IR_VALUE_CONST_STR);
+        ir_value->str = ast->sval;
+        ir_value->str_real_len = ast->real_len;
+        strMapAdd(ir_program->strings, ast->slabel->data, ir_value);
+    }
     return ir_value;
 }
 
@@ -290,47 +406,47 @@ IrInstr *irInstrNew(IrOpcode opcode) {
     return ir_instr;
 }
 
-/* We will reset this after each function has been created */
-static int ir_tmp_variable_count = 0;
-
-IrValue *irTmpVariable(void) {
-    IrValue *ir_value = irValueNew(IR_TYPE_LABEL, IR_VALUE_TEMP);
-    ir_value->name = aoStrPrintf("%%tmp%d",ir_tmp_variable_count++);
-    return ir_value;
+static int ir_block_count = 0;
+void irBlockCountReset(void) {
+    ir_block_count = 0;
 }
 
-IrValue *irGetAllocaVar(IrInstr *ir_alloca) {
-    assert(ir_alloca->opcode == IR_OP_ALLOCA);
-    return ir_alloca->op1;
-}
-
-IrValue *irConstInt(long i64) {
-    IrValue *ir_value = irValueNew(IR_TYPE_I64, IR_VALUE_CONST_INT);
-    ir_value->i64 = i64;
-    return ir_value;
+aoStr *irBlockName(void) {
+    return aoStrPrintf("bb%03d", ir_block_count++);
 }
 
 
 /* Where `ir_value` is always a constant int so we know how much stack space
  * we require. We _may_ want type info for of the thing we are storing? */
-IrInstr *irAlloca(long size) {
-    IrInstr *ir_instr = irInstrNew(IR_OP_ALLOCA);
-    IrValue *ir_alloca_size = irConstInt(size);
-    IrValue *ir_temporary_variable = irTmpVariable();
-    ir_instr->op1 = ir_temporary_variable;
-    ir_instr->op2 = ir_alloca_size;
-    return ir_instr;
+IrInstr *irAlloca(IrBlock *ir_block, long size) {
+    IrInstr *ir_alloca_instr = irInstrNew(IR_OP_ALLOCA);
+    IrValue *ir_alloca_size = irConstInt(IR_TYPE_I64, size);
+    IrValue *ir_temporary_variable = irTmpVariable(IR_TYPE_I64);
+    ir_alloca_instr->op1 = ir_temporary_variable;
+    ir_alloca_instr->op2 = ir_alloca_size;
+    ptrVecPush(block->instructions, ir_alloca_instr);
+    return ir_alloca_instr;
 }
 
 /* op1 is where we are storing something and op2 is the thing we are storing 
  * I think op1 could/shoule have an offset as it is either going to be the 
  * stack or it is going to be a struct/pointer offset? */
-IrInstr *irStore(IrValue *ir_dest, IrValue *ir_value) {
-    IrInstr *ir_instr = irInstrNew(IR_OP_STORE);
-    ir_instr->op1 = ir_dest;
-    ir_instr->op2 = ir_value;
-    return ir_instr;
+IrInstr *irStore(IrBlock *block, IrValue *ir_dest, IrValue *ir_value) {
+    IrInstr *ir_store_instr = irInstrNew(IR_OP_STORE);
+    ir_store_instr->op1 = ir_dest;
+    ir_store_instr->op2 = ir_value;
+    ptrVecPush(block->instructions, ir_store_instr);
+    return ir_store_instr;
 }
+
+IrInstr *irLoad(IrBlock *block, IrValue *ir_dest, IrValue *ir_value) {
+    IrInstr *ir_load_instr = irInstrNew(IR_OP_LOAD);
+    ir_load_instr->op1 = ir_dest;
+    ir_load_instr->op2 = ir_value;
+    ptrVecPush(block->instructions, ir_load_instr);
+    return ir_load_instr;
+}
+
 
 IrFunction *irFunctionNew(aoStr *name) {
     IrFunction *ir_function = (IrFunction *)irArenaAlloc(sizeof(IrFunction));
@@ -343,41 +459,333 @@ IrFunction *irFunctionNew(aoStr *name) {
     return ir_function;
 }
 
-void irLower(Cctrl *cc, IrFunction *ir_function, Ast *ast) {
-    return;
+/*==================== IR AST PARSING ======================================= */
+IrInstr *irJump(IrBlock *block, IrBlock *target);
+IrInstr *irCmp(IrBlock *block, IrValue *result, IrValue *op1, IrValue *op2,
+               IrCmpKind kind);
+IrInstr *irICmp(IrBlock *block, IrValue *result, IrCmpKind kind, IrValue *op1, 
+                IrValue *op2);
+IrInstr *irFCmp(IrBlock *block, IrValue *result, IrCmpKind kind, IrValue *op1, 
+                IrValue *op2);
+IrInstr *irJump(IrBlock *block, IrBlock *target);
+IrInstr *irBranch(IrBlock *block, IrValue *cond, IrBlock *true_block,
+              IrBlock *false_block);
+
+IrValue *irExpression(Cctrl *cc, IrFunction *func, IrBlock **current_block, Ast *ast);
+IrValue *irStatememt(Cctrl *cc, IrFunction *func, IrBlock **current_block, Ast *ast);
+
+IrInstr *irCmp(IrBlock *block, IrValue *result, IrValue *op1, IrValue *op2,
+               IrCmpKind kind)
+{
+    if (result->type != IR_TYPE_I8) {
+        loggerPanic("Result can only be a boolean type\n");
+    }
+
+    int is_float_cmp = irIsFloat(op1->type) || irIsFloat(op2->type);
+    IrInstr *instr  = irInstrNew(is_float_cmp ? IR_OP_FCMP : IR_OP_ICMP);
+
+    if (is_float_cmp) {
+        if (op1->type != op2->type) {
+            loggerPanic("Operand types do not match `op1%s` and `op2%s`",
+                    irValueTypeToString(op1->type),
+                    irValueTypeToString(op2->type));
+        }
+
+        switch (kind) {
+            case IR_CMP_EQ: kind = IR_CMP_OEQ; break; /* ordered equal */
+            case IR_CMP_NE: kind = IR_CMP_ONE; break; /* ordered not equal */
+            case IR_CMP_LT: kind = IR_CMP_OLT; break; /* ordered less than */
+            case IR_CMP_LE: kind = IR_CMP_OLE; break; /* ordered less or equal */
+            case IR_CMP_GT: kind = IR_CMP_OGT; break; /* ordered greater than */
+            case IR_CMP_GE: kind = IR_CMP_OGE; break; /* ordered greater or equal */
+            default: break;
+        }
+    } else {
+        /* Ensure that we can compare these types */
+        if (!irAreCompatibleCmpTypes(op1->type, op2->type)) {
+            loggerPanic("Operand types cannot be compared `op1%s` and `op2%s`",
+                    irValueTypeToString(op1->type),
+                    irValueTypeToString(op2->type));
+        }
+    }
+
+    instr->result = result;
+    instr->op1 = op1;
+    instr->op2 = op2;
+    instr->extra.cmp_kind = kind;
+    ptrVecPush(block->instructions, instr);
+
+    return instr;
 }
 
-IrValueType irConvertType(Cctrl *cc, AstType *type) {
-    switch (type->kind) {
-        case AST_TYPE_VOID: return IR_TYPE_VOID;
-        case AST_TYPE_INT: {
-            switch (type->size) {
-                case 1: return IR_TYPE_I8;
-                case 2: return IR_TYPE_I16;
-                case 4: return IR_TYPE_I32;
-                case 8: return IR_TYPE_I64;
+IrInstr *irICmp(IrBlock *block, IrValue *result, IrCmpKind kind, IrValue *op1, 
+                IrValue *op2)
+{
+    if (op1->type == IR_TYPE_PTR || op2->type == IR_TYPE_PTR) {
+        if      (kind == IR_CMP_LT) kind = IR_CMP_ULT;
+        else if (kind == IR_CMP_LE) kind = IR_CMP_ULE;
+        else if (kind == IR_CMP_GT) kind = IR_CMP_UGT;
+        else if (kind == IR_CMP_GE) kind = IR_CMP_UGE;
+    }
+
+    IrInstr *instr = irInstrNew(IR_OP_ICMP);
+    instr->result = result;
+    instr->op1 = op1;
+    instr->op2 = op2;
+    instr->extra.cmp_kind = kind;
+
+    ptrVecPush(block->instructions, instr);
+    return instr;
+}
+
+IrInstr *irFCmp(IrBlock *block, IrValue *result, IrCmpKind kind, IrValue *op1, 
+                IrValue *op2)
+{
+    IrInstr *instr = irInstrNew(IR_OP_FCMP);
+    instr->result = result;
+    instr->op1 = op1;
+    instr->op2 = op2;
+    instr->extra.cmp_kind = kind;
+
+    ptrVecPush(block->instructions, instr);
+    return instr;
+}
+
+IrInstr *irBranch(IrBlock *block, IrValue *cond, IrBlock *true_block,
+              IrBlock *false_block)
+{
+    if (!block || !cond || !true_block || !false_block) {
+        loggerPanic("irBranch: NULL parameter provided\n");
+    }
+
+    if (cond->type != IR_TYPE_I8) {
+        IrValue *zero = irConstInt(IR_TYPE_I8, 0);
+        IrValue *bool_cond = irTmpVariable(IR_TYPE_I8);
+        irICmp(block, bool_cond, IR_CMP_NE, cond, zero);
+        cond = bool_cond;
+    }
+
+    IrInstr *instr = irInstrNew(IR_OP_BR);
+    instr->op1 = cond;
+    instr->target_block = true_block;
+    instr->fallthrough_block = false_block;
+
+    ptrVecPush(block->instructions, instr);
+    block->sealed = 1;
+
+    if (!irBlockHasBlock(true_block->predecessors, block)) {
+        ptrVecPush(true_block->predecessors, block);
+    }
+
+    if (!irBlockHasBlock(false_block->predecessors, block)) {
+        ptrVecPush(false_block->predecessors, block);
+    }
+
+    if (!irBlockHasBlock(block->successors, true_block)) {
+        ptrVecPush(block->successors, true_block);
+    }
+
+    if (!irBlockHasBlock(block->successors, false_block)) {
+        ptrVecPush(block->successors, false_block);
+    }
+
+    return instr;
+}
+
+IrInstr *irJump(IrBlock *block, IrBlock *target) {
+    if (!block || !target) {
+        loggerPanic("NULL param\n");
+    }
+
+    if (block->sealed) {
+        loggerWarning("Tried to add a jump to a sealed block: %s\n",
+                block->label->data);
+        return NULL;
+    }
+
+    IrInstr *instr = irInstrNew(IR_OP_JMP);
+    instr->target_block = target;
+    instr->fallthrough_block = NULL;
+
+    /* Add to the current blocks instructions */
+    ptrVecPush(block->instructions, instr);
+
+    /* This block is done */
+    block->sealed = 1;
+
+    /* Now update the control flow graph */
+    if (!irBlockHasBlock(block->successors, target)) {
+        ptrVecPush(block->successors, target);
+    }
+
+    if (!irBlockHasBlock(target->predecessors, block)) {
+        ptrVecPush(target->predecessors, block);
+    }
+
+    return instr;
+}
+
+IrValue *irExpression(Cctrl *cc, IrFunction *func, IrBlock **current_block, Ast *ast) {
+    IrBlock *ir_block = *current_block;
+
+    switch (ast->kind) {
+        case AST_LITERAL: {
+            switch (ast->type->kind) {
+                case AST_TYPE_INT:
+                case AST_TYPE_CHAR:
+                    return irConstInt(ast->i64, irConvertType(cc, ast->type));
+                case AST_TYPE_FLOAT:
+                    return irConstFloat(ast->f64, IR_TYPE_F64);
                 default:
-                    cctrlIce(cc,"Invalid integer size `%d` for type\n",
-                            astTypeToString(type),
-                            type->size);
+                    cctrlIce(cc, "Unknown literal: %s\n",
+                             astKindToString(ast->type->kind));
+            }
+            break;
+        }
+        
+        case AST_STRING: {
+            return irGlobalString(func->program, ast);
+        }
+
+        case AST_LVAR: {
+            IrValue *local_var = strMapGetAoStr(func->variables,
+                                                ast->tmp_var_name);
+            if (!var) {
+                cctrlIce(cc, "Variable %s not found\n", astToString(ast));
+            }
+            
+            IrValueType = ir_value_type = irConvertType(ast->type);
+            IrValue *result = irTmpVariable(ir_value_type);
+            irLoad(ir_block, result, local_var);
+            return var;               
+        }
+
+        case AST_DEREF: {
+            IrValue *ir_ptr = irExpression(func, current_block, ast->left);
+
+            if (ir_ptr->type != IR_TYPE_PTR) {
+                cctrlIce(cc, "Attempted to dereference a non-pointer: %s\n",
+                        astToString(ast->left));
+            }
+
+            IrValue *ir_tmp_var = irTmpVariable(ptr->type);
+            irLoad(ir_block, ir_tmp_var, ptr);
+            return ir_tmp_var;
+        }
+
+        case '=': {
+            IrValue *rhs = irExpression(cc, func, current_blockm ast->right);
+
+            if (ast->left->kind == AST_LVAR) {
+                IrValue *ir_local = strMapGetAoStr(func->variables,
+                                                   ast->left->tmp_var_name);
+                irStore(ir_block, ir_local, rhs);
+                /* Assignments return the value */
+                return rhs;
+            } else if (ast->left->kind == AST_GVAR) {
+                IrValue *ir_global = strMapGet(func->program->globals_variables,
+                                              ast->left->gname);
+
+                irStore(ir_block, ir_global, rhs);
+                return rhs; 
+            } else if (ast->left->kind == AST_DEREF) {
+                IrValue *ptr = irExpression(func, current_block, ast->left->left);
+                irStore(block, ptr, rhs);
+                return rhs;
+            } else {
+                cctrlIce(cc, "Unsupported LHS assignment %s\n",
+                        astToString(ast->left);
             }
         }
-        case AST_TYPE_FLOAT:   return IR_TYPE_F64;
-        case AST_TYPE_CHAR:    return IR_TYPE_I8;
-        case AST_TYPE_ARRAY:   return IR_TYPE_ARRAY;
-        case AST_TYPE_POINTER: return IR_TYPE_PTR;
-        case AST_TYPE_FUNC:    return IR_TYPE_FUNCTION;
-        case AST_TYPE_CLASS:   return IR_TYPE_STRUCT;
-        case AST_TYPE_UNION:   return IR_TYPE_STRUCT;
-        case AST_TYPE_VIS_MODIFIER:
-            cctrlIce(cc, "Type visibility modifier is not a type!\n");
-        case AST_TYPE_INLINE:
-            cctrlIce(cc, "Type `inline` is not a type!\n");
-        case AST_TYPE_AUTO:
-            cctrlIce(cc, "Type `auto` failed to infer it's runtime type\n");
-        default:
-            cctrlIce(cc, "Type `%s` unhandled\n",astTypeToString(type));
+
+        case AST_FUNCALL: {
+            IrValue *ir_fn = NULL;
+            
+            if (ast->left->kind == AST_GVAR) {
+            
+            }
+
+            if (ast->args) {
+                for (int i = 0; i < ast->args->size; ++i) {
+                    Ast *ast_arg = vecGet(Ast *, ast->args, i);
+                    
+                } 
+            }
+        }
     }
+
+    return NULL;
+}
+
+void irStatement(Cctrl *cc, IrFunction *func, IrBlock **current_block, Ast *ast) {
+    if (!ast) return;
+
+    switch (ast->kind) {
+        case AST_COMPOUND_STMT: {
+            listForEach(ast->stms) {
+                Ast *next = (Ast *)it->value;
+                irStatement(cc, func, current_block, next);
+                if ((*current_block)->sealed) break;
+            }
+            break;
+        }
+
+        case AST_IF: {
+            IrValue *ir_cond = irExpression(cc, func, current_block, ast->cond);
+
+            IrBlock *ir_then = irBlockNew(irBlockName());
+            IrBlock *ir_else = ast->els ? irBlockNew(irBlockName()) : NULL;
+            IrBlock *ir_end_block = irBlockNew(irBlockName());
+
+            if (ir_else) {
+                irBranch(*current_block, ir_cond, ir_then, ir_else);
+            } else {
+                irBranch(*current_block, ir_cond, ir_then, ir_end_block);
+            }
+
+            *current_block = ir_then;
+
+            irStatement(cc, func, current_block, ast->then);
+            if (!(*current_block)->sealed) {
+                irJump(*current_block, ir_end_block);
+            }
+
+            if (ir_else) {
+                *current_block = ir_else;
+                irStatement(cc, func, current_block, ast->els);
+                if (!(*current_block)->sealed) {
+                    irJump(*current_block, ir_end_block);
+                }
+            }
+
+            /* Update the current block we are pointing to */
+            *current_block = ir_end_block;
+            break;
+        }
+
+        case AST_DECL: {
+            IrInstr *ir_local = irAlloca(*current_block, ast->declvar->type->size);
+            IrValue *ir_local_var = irGetAllocaVar(ir_local);
+
+            strMapAddLen(func->variables,
+                    ast->declvar->tmp_var_name->data, 
+                    ast->declvar->tmp_var_name->len, 
+                    ir_local_var);
+
+            if (ast->declinit) {
+                IrValue *ir_init = irExpression(cc,func,current_block,
+                                                ast->declinit);
+                irStore(ir_local_var, ir_init);  
+                ptrVecPush((*current_block)->instructions, ir_init);
+            }
+            break;
+        }
+
+        default:
+            astKindPrint(ast->kind);
+            break;
+    }
+
 }
 
 /*==================== IR LOWERING ========================================== */
@@ -387,14 +795,10 @@ IrValueType irConvertType(Cctrl *cc, AstType *type) {
 static void irBlockStore(IrBlock *ir_block, IrValue *ir_value, long size) {
     /* Allocate on the stack an amount of space big enough to hold the value 
      * and get the location for where we are storing something. */
-    IrInstr *ir_alloca = irAlloca(size);
+    IrInstr *ir_alloca = irAlloca(ir_block, size);
     IrValue *ir_tmp_var = irGetAllocaVar(ir_alloca);
     /* Now create the instruction to store */
-    IrInstr *ir_store = irStore(ir_tmp_var, ir_value);
-
-    /* Push the allocation and the store in the instructions vector */
-    ptrVecPush(ir_block->instructions, ir_alloca);
-    ptrVecPush(ir_block->instructions, ir_store);
+    irStore(ir_block, ir_tmp_var, ir_value);
 }
 
 /* Function parameters can only be a one of a few different types, thus this is
@@ -403,7 +807,7 @@ IrValue *irConvertAstFuncParam(Cctrl *cc, Ast *ast_param) {
     IrValueType ir_type = irConvertType(cc, ast_param->type);
     IrValue *ir_value = irValueNew(ir_type, IR_VALUE_PARAM);
     if (ast_param->kind == AST_LVAR) {
-        ir_value->name = ast_param->lname;
+        ir_value->name = ast_param->tmp_var_name;
     } else if (ast_param->kind == AST_FUNPTR) {
         ir_value->name = ast_param->fname;
     } else {
@@ -414,13 +818,16 @@ IrValue *irConvertAstFuncParam(Cctrl *cc, Ast *ast_param) {
     return ir_value;
 }
 
-IrFunction *irLowerFunction(Cctrl *cc, Ast *ast_function) {
-    Ast *body = ast_function->body;
+IrFunction *irLowerFunction(Cctrl *cc, IrProgram *program, Ast *ast_function) {
+    irBlockCountReset();
     IrFunction *ir_function = irFunctionNew(ast_function->fname);
     IrBlock *ir_entry_block = irBlockNew(aoStrDupRaw(str_lit("entry")));
 
+    ir_function->program = program;
+
     IrValueType ir_type = irConvertType(cc, ast_function->type->rettype);
     IrValue *ir_value = irValueNew(ir_type, IR_VALUE_UNDEFINED);
+    /* I'm not sure if this is needed */
     ir_function->return_type = ir_value;
 
     for (int i = 0; i < ast_function->params->size; ++i) {
@@ -436,15 +843,17 @@ IrFunction *irLowerFunction(Cctrl *cc, Ast *ast_function) {
     }
 
     ir_function->entry_block = ir_entry_block;
+    irStatement(cc, ir_function, &ir_function->entry_block, ast_function->body);
 
     return ir_function;
 }
 
 void irLowerAst(Cctrl *cc) {
+    IrProgram *ir_program = irProgramNew();
     listForEach(cc->ast_list) {
         Ast *ast = (Ast *)it->value;
         if (ast->kind == AST_FUNC) {
-            IrFunction *ir_func = irLowerFunction(cc, ast);
+            IrFunction *ir_func = irLowerFunction(cc, ir_program, ast);
             aoStr *ir_func_str = irFunctionToString(ir_func);
             printf("%s\n",ir_func_str->data);
 
