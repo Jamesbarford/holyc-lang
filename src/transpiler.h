@@ -5,5 +5,7 @@
 #include "cctrl.h"
 
 aoStr *transpileToC(Cctrl *cc, CliArgs *args);
+void astPrintCType(AstType *type);
+void astPrintHolyCType(AstType *type);
 
 #endif // TRANSPILER_H

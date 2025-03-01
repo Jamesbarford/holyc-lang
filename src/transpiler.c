@@ -18,6 +18,8 @@
 
 #define TRANSPILE_FLAG_SWITCH_CHAR (1<<0)
 #define TRANSPILE_FLAG_ISATTY      (1<<1)
+/* Hack to preserve holyc type declarations */
+#define TRANSPILE_KEEP_HOLYC_TYPES (1<<2)
 
 typedef struct TranspilationMapping {
     char *name;
@@ -1113,93 +1115,95 @@ typedef struct TypeInfo {
     aoStr *array_init_label;
 } TypeInfo;
 
+
+const char *transpileGetTypeStr(AstType *type, unsigned int flags) {
+    if (flags & TRANSPILE_KEEP_HOLYC_TYPES) {
+        switch (type->kind) {
+            case AST_TYPE_VOID: return "U0";
+            case AST_TYPE_AUTO: return "auto";
+            case AST_TYPE_CHAR: return type->issigned ? "I8" : "U8";
+            case AST_TYPE_INT: {
+                switch (type->size) {
+                    case 0: return "U0";
+                    case 1: return type->issigned ? "I8" : "U8";
+                    case 2: return type->issigned ? "I16" : "U16";
+                    case 4: return type->issigned ? "I32" : "U32";
+                    case 8: return type->issigned ? "I64" : "U64";
+                    default: loggerPanic("Unknown integer size: %d\n", type->size);
+                }
+            }
+            case AST_TYPE_FLOAT: return "F64";
+            default: loggerPanic("Function can only handle primatives got %s\n",
+                             astTypeToString(type));
+        }
+    } else {
+        switch (type->kind) {
+            case AST_TYPE_VOID: return "void";
+            case AST_TYPE_CHAR: return type->issigned ? "char" : "unsigned char";
+            case AST_TYPE_INT: {
+                switch (type->size) {
+                    case 0: return "U0";
+                    case 1: return type->issigned ? "char"  : "unsigned char";
+                    case 2: return type->issigned ? "short" : "unsigned short";
+                    case 4: return type->issigned ? "int"   : "unsigned int";
+                    case 8: return type->issigned ? "long"  : "unsigned long";
+                    default: loggerPanic("Unknown integer size: %d\n", type->size);
+                }
+            }
+            case AST_TYPE_FLOAT: return "double";
+            default: loggerPanic("Function can only handle primatives got %s\n",
+                             astTypeToString(type));
+        }
+    }
+}
+
 static void transpileTypeInternal(TranspileCtx *ctx, AstType *type, TypeInfo *info) {
     switch (type->kind) {
-    case AST_TYPE_VOID: {
-        info->base_name = aoStrPrintf("void");
-        break;
-    }
-    
-    case AST_TYPE_INT: {
-        aoStr *type_str= aoStrNew();
-        switch (type->size) {
-            case 0:
-                aoStrCatFmt(type_str, "void");
-                break;
-            case 1:
-                if (type->issigned) aoStrCatFmt(type_str, "char");
-                else                aoStrCatFmt(type_str, "unsigned char");
-                break;
-            case 2:
-                if (type->issigned) aoStrCatFmt(type_str, "short");
-                else                aoStrCatFmt(type_str, "unsigned short");
-                break;
-            case 4:
-                if (type->issigned) aoStrCatFmt(type_str, "int");
-                else                aoStrCatFmt(type_str, "unsigned int");
-                break;
-            case 8:
-                if (type->issigned) aoStrCatFmt(type_str, "long");
-                else                aoStrCatFmt(type_str, "unsigned long");
-                break;
-            default: loggerPanic("Unknown integer size: %d\n", type->size);
+        case AST_TYPE_AUTO:
+        case AST_TYPE_FLOAT:
+        case AST_TYPE_VOID:
+        case AST_TYPE_CHAR:
+        case AST_TYPE_INT: {
+            info->base_name = aoStrPrintf("%s", transpileGetTypeStr(type, ctx->flags));
+            break;
         }
-        info->base_name = type_str;
-        break;
-    }
-    
-    case AST_TYPE_CHAR: {
-        aoStr *type_str= aoStrNew();
-        if (type->issigned) aoStrCatFmt(type_str, "char");
-        else                aoStrCatFmt(type_str, "unsigned char");
-        info->base_name = type_str;
-        break;
-    }
+      
+      case AST_TYPE_POINTER: {
+          info->stars++;
+          transpileTypeInternal(ctx,type->ptr,info);
+          break;
+      }
 
-    case AST_TYPE_FLOAT:
-        info->base_name = aoStrPrintf("double");
-        break;
+      case AST_TYPE_ARRAY: {
+          transpileTypeInternal(ctx, type->ptr, info);
+          if (type->size == -1 && type->ptr->clsname != NULL) {
+              info->array_init_label = type->ptr->clsname;
+          } else {
+              info->array_dimensions = type->size;
+          }
+          break;
+      }
 
-    case AST_TYPE_POINTER: {
-        info->stars++;
-        transpileTypeInternal(ctx,type->ptr,info);
-        break;
-    }
+      case AST_TYPE_UNION: {
+          if (type->clsname) {
+              info->base_name = aoStrPrintf("%s", type->clsname->data);
+          }
+          break;
+      }
 
-    case AST_TYPE_ARRAY: {
-        transpileTypeInternal(ctx, type->ptr, info);
-        if (type->size == -1 && type->ptr->clsname != NULL) {
-            info->array_init_label = type->ptr->clsname;
-        } else {
-            info->array_dimensions = type->size;
-        }
-        break;
-    }
+      case AST_TYPE_CLASS: {
+          if (type->clsname) {
+              info->base_name = aoStrPrintf("%s", type->clsname->data);
+          }
+          break;
+      }
 
-    case AST_TYPE_UNION: {
-        if (type->clsname) {
-            info->base_name = aoStrPrintf("%s", type->clsname->data);
-        }
-        break;
-    }
-
-    case AST_TYPE_CLASS: {
-        if (type->clsname) {
-            info->base_name = aoStrPrintf("%s", type->clsname->data);
-        }
-        break;
-    }
-
-    case AST_TYPE_FUNC: {
-        transpileTypeInternal(ctx, type->rettype, info);
-        aoStr *params = transpileParamsList(type->params, ctx);
-        info->params = params;
-        break;
-    }
-
-    case AST_TYPE_AUTO:
-        info->base_name = aoStrPrintf("auto");
-        break;
+      case AST_TYPE_FUNC: {
+          transpileTypeInternal(ctx, type->rettype, info);
+          aoStr *params = transpileParamsList(type->params, ctx);
+          info->params = params;
+          break;
+      }
 
     default:
         loggerPanic("Unknown type: %d\n", type->kind);
@@ -1208,12 +1212,15 @@ static void transpileTypeInternal(TranspileCtx *ctx, AstType *type, TypeInfo *in
 
 aoStr *transpileVarDeclInfo(TranspileCtx *ctx, TypeInfo *info, char *name) {
     aoStr *str = aoStrNew();
-    if (ctx->flags & TRANSPILE_FLAG_ISATTY) {
+    if (is_terminal) {
         aoStrCatFmt(str,ESC_WHITE"%S"ESC_RESET,info->base_name);
     } else {
         aoStrCatFmt(str, "%S",info->base_name);
     }
-    strMapAdd(ctx->used_types,info->base_name->data,info->base_name);
+
+    if (ctx->used_types) {
+      strMapAdd(ctx->used_types,info->base_name->data,info->base_name);
+    }
 
     if (name || info->stars > 0) {
         aoStrPutChar(str,' ');
@@ -1257,6 +1264,26 @@ aoStr *transpileVarDecl(TranspileCtx *ctx, AstType *type, char *name) {
     memset(&info,0,sizeof(TypeInfo));
     transpileTypeInternal(ctx,type,&info);
     return transpileVarDeclInfo(ctx,&info,name);
+}
+
+static void transpilerPrintType(AstType *type, unsigned long flags) {
+    TypeInfo info;
+    TranspileCtx ctx;
+    memset(&info,0,sizeof(TypeInfo));
+    memset(&ctx,0,sizeof(TranspileCtx));
+    ctx.flags = flags;
+    transpileTypeInternal(&ctx,type,&info);
+    aoStr *type_decl = transpileVarDeclInfo(&ctx,&info,NULL);
+    printf("%s\n",type_decl->data);
+    aoStrRelease(type_decl);
+}
+
+void astPrintCType(AstType *type) {
+    transpilerPrintType(type, 0);
+}
+
+void astPrintHolyCType(AstType *type) {
+    transpilerPrintType(type, TRANSPILE_KEEP_HOLYC_TYPES);
 }
 
 aoStr *transpileFunctionProto(TranspileCtx *ctx, AstType *type, char *name) {
