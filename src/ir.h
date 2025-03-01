@@ -10,7 +10,7 @@ typedef enum IrOpcode {
     IR_OP_LOAD,        /* Load from memory */
     IR_OP_STORE,       /* Store to memory */
     IR_OP_GEP,         /* Get element pointer (array/struct indexing) */
-    
+
     /* Integer Arithmetic operations */
     IR_OP_IADD,         /* Addition */
     IR_OP_ISUB,         /* Subtraction */
@@ -59,6 +59,7 @@ typedef enum IrOpcode {
     IR_OP_RET,         /* Return from function */
     IR_OP_BR,          /* Conditional branch */
     IR_OP_JMP,         /* Unconditional jump */
+    IR_OP_LOOP,        /* Unconditional jump, but identified as a loop for ease */
     IR_OP_SWITCH,      /* Switch statement */
     IR_OP_CALL,        /* Function call */
     IR_OP_PHI,         /* SSA phi node */
@@ -174,7 +175,7 @@ typedef struct IrInstr {
 } InInstr;
 
 typedef struct IrFunction {
-    IrValue *return_type; /* Not sure if this is needed but for printing as a 
+    IrValue *return_value; /* Not sure if this is needed but for printing as a 
                            * string it looks pretty! */
     aoStr *name;          /* Function name */
     IrProgram *program;   /* A pointer to the program */
