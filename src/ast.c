@@ -278,6 +278,9 @@ Ast *astDecl(Ast *var, Ast *init) {
     ast->kind = AST_DECL;
     ast->type = NULL;
     ast->declvar = var;
+    if (init) {
+        init->type = var->type;
+    }
     ast->declinit = init;
     return ast;
 }
