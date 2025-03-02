@@ -689,6 +689,11 @@ IrInstr *irFCmp(IrBlock *block, IrValue *result, IrCmpKind kind, IrValue *op1,
 IrInstr *irJump(IrBlock *block, IrBlock *target);
 IrInstr *irBranch(IrBlock *block, IrValue *cond, IrBlock *true_block,
               IrBlock *false_block);
+IrValue *irLoadClassRef(IrCtx *ctx,
+                        IrFunction *func,
+                        Ast *cls,
+                        AstType *field,
+                        int offset);
 
 IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast);
 void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast);
@@ -1031,9 +1036,12 @@ IrValue *irLoadAddr(IrCtx *ctx, IrFunction *func, Ast *ast) {
             if (operand->type->kind == AST_TYPE_POINTER) {
                 /* XXX: this feels extremely hacky */
                 switch (operand->type->ptr->kind) {
+                    case AST_TYPE_CLASS:
+                        loggerWarning("here\n");
+                        return irLoadClassRef(ctx, func, operand->cls, operand->type, 0);
+             //           break;
                     case AST_TYPE_ARRAY:
                     case AST_TYPE_CHAR:
-                    case AST_TYPE_CLASS:
                         irGetElementPointer(ctx->current_block, ir_dest, ir_value);
                         break;
                     default:
@@ -1054,7 +1062,8 @@ IrValue *irLoadAddr(IrCtx *ctx, IrFunction *func, Ast *ast) {
 
         case AST_CLASS_REF: {
             loggerWarning("AST_CLASS_REF -> ir bugged\n");
-            return irExpression(ctx, func, operand->operand);
+            return irLoadClassRef(ctx, func, operand->cls, operand->type, 0);
+            // return irExpression(ctx, func, operand->operand);
             if (operand->operand->kind == AST_LVAR ||
                 operand->operand->kind == AST_DEREF)
             {
@@ -1246,7 +1255,6 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
         
         case AST_CLASS_REF: {
             IrValue *ir_value = irLoadClassRef(ctx, func, ast->cls, ast->type, 0); 
-            loggerWarning("%s\n",irValueToString(ir_value)->data);
             return ir_value;
         }
 
@@ -1478,9 +1486,7 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
                 ir_fn_call->name = ast->fname;
             } else if (ast->kind == AST_ASM_FUNCALL) {
                 ir_fn_call = irValueNew(IR_TYPE_FUNCTION, IR_VALUE_GLOBAL);
-                astPrint(ast);
                 ir_fn_call->name = ast->fname;
-                printf("%s\n",ast->fname->data);
             }
 
             IrInstr *ir_call = irInstrNew(IR_OP_CALL);
