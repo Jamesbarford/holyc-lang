@@ -1734,13 +1734,16 @@ char *astKindToString(int kind) {
     case AST_JUMP:       return "AST_JUMP";
     case AST_ASM_FUNC_BIND: return "AST_ASM_FUNC_BIND";
     case AST_FUNPTR_CALL: return "AST_FUNPTR_CALL";
+    case AST_ASM_FUNCALL: return "AST_ASM_FUNCALL";
+
+    case AST_BREAK: return "AST_BREAK";
+    case AST_CONTINUE: return "AST_CONTINUE";
 
     case AST_SWITCH:        return "AST_SWITCH";
     case AST_CASE:          return "AST_CASE";
     case AST_DEFAULT:       return "AST_DEFAULT";
     case AST_COMMENT:       return "AST_COMMENT";
     case AST_SIZEOF:        return "AST_SIZEOF";
-
 
     case TK_AND_AND:         return "&&";
     case TK_OR_OR:           return "||";
