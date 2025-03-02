@@ -2,7 +2,10 @@
 #define IR_H__
 
 #include "aostr.h"
+#include "cctrl.h"
 #include "map.h"
+
+#define IR_CTX_FLAG_IN_LOOP (1<<0)
 
 typedef enum IrOpcode {
     /* Memory operations */
@@ -197,6 +200,25 @@ typedef struct IrProgram {
     StrMap *types;            /* @TODO: StrMap<?> I feel this one needs
                                * a bit more thought */
 } IrProgram;
+
+typedef struct IrCtx {
+    unsigned long flags;      /* Flags for parsing */
+    IrFunction *func;         /* The current function being lowered to IR */
+    IrBlock *current_block;   /* The current block being parsed */
+    IrBlock *exit_block;       /* Block that will be the return statement */
+
+    /* These allow us to more easily do break/continues */
+    IrBlock *loop_head_block; /* Head block for a while/do_while/for, 
+                               * allows us to make continue blocks */
+
+    IrBlock *cond_end_block;  /* This will either be the block after an 
+                               * `if/else/else_if` */
+
+    IrBlock *loop_end_block;  /* This will either be the block after a
+                               * `while/do_while/for` */
+
+    IrBlock *switch_end_block; /* Block after a switch statement */
+} IrCtx;
 
 void irArenaInit(unsigned int capacity);
 void irMemoryRelease(void);
