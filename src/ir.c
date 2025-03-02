@@ -269,6 +269,8 @@ const char *irOpcodeToString(IrInstr *ir_instr) {
     }
 }
 
+aoStr *irBlockToString(IrBlock *ir_block);
+
 /* Convert an instruction to a string. */
 aoStr *irInstrToString(IrInstr *ir_instr) {
     IrValue *ir_values[4] = {
@@ -315,6 +317,38 @@ aoStr *irInstrToString(IrInstr *ir_instr) {
         case IR_OP_LOOP:
         case IR_OP_JMP: {
             aoStrCatFmt(buf, "%s %S", op, ir_instr->target_block->label);
+            break;
+        }
+
+        case IR_OP_PHI: {
+            aoStr *phi_values_str = aoStrPrintf("[");
+            aoStr *phi_blocks_str = aoStrPrintf("[");
+
+            for (int i = 0; i < ir_instr->extra.phi.values->size; ++i) {
+                IrValue *ir_value = vecGet(IrValue *,
+                                           ir_instr->extra.phi.values,i);
+                aoStr *ir_value_str = irValueToString(ir_value);
+                aoStrCatFmt(phi_values_str, "%S", ir_value_str);
+                aoStrRelease(ir_value_str);
+                if (i + 1 ==  ir_instr->extra.phi.values->size) {
+                    aoStrCatLen(phi_values_str, str_lit(", "));
+                }
+            }
+            aoStrPutChar(phi_values_str, ']');
+
+            for (int i = 0; i < ir_instr->extra.phi.blocks->size; ++i) {
+                IrBlock *ir_block = vecGet(IrBlock *,
+                                           ir_instr->extra.phi.blocks,i);
+                aoStr *ir_block_str = irBlockToString(ir_block);
+                aoStrCatFmt(phi_blocks_str, "%S", ir_block_str);
+                aoStrRelease(ir_block_str);
+                if (i + 1 ==  ir_instr->extra.phi.blocks->size) {
+                    aoStrCatLen(phi_blocks_str, str_lit(", "));
+                }
+            }
+            aoStrPutChar(phi_blocks_str, ']');
+            loggerWarning("yes\n");
+            aoStrCatFmt(buf,"%s %S %S",op,phi_values_str,phi_blocks_str);
             break;
         }
 
@@ -595,6 +629,26 @@ IrInstr *irInstrNew(IrOpcode opcode) {
     return ir_instr;
 }
 
+IrInstr *irPhi(IrBlock *block, IrValue *result) {
+    IrInstr *ir_phi_instr = irInstrNew(IR_OP_PHI);
+    ir_phi_instr->result = result;
+    ir_phi_instr->extra.phi.num_incoming = 0;
+    ir_phi_instr->extra.phi.values = ptrVecNew();
+    ir_phi_instr->extra.phi.blocks = ptrVecNew();
+
+    ptrVecPush(block->instructions, ir_phi_instr);
+    return ir_phi_instr;
+}
+
+void irAddPhiIncoming(IrInstr *ir_phi_instr,
+                      IrValue *ir_value, 
+                      IrBlock *ir_block)
+{
+    ptrVecPush(ir_phi_instr->extra.phi.values, ir_value);
+    ptrVecPush(ir_phi_instr->extra.phi.blocks, ir_block);
+    ir_phi_instr->extra.phi.num_incoming++;
+}
+
 static int ir_block_count = 0;
 void irBlockCountReset(void) {
     ir_block_count = 0;
@@ -824,6 +878,9 @@ IrInstr *irINeg(IrBlock *block, IrValue *ir_result, IrValue *ir_expr) {
     return instr;
 }
 
+/*==================== IR MATHS ============================================= */
+// Reasonably these could be refactored to one function with an opcode
+
 IrInstr *irFSub(IrBlock *block,
                 IrValue *ir_result,
                 IrValue *left,
@@ -940,6 +997,82 @@ IrInstr *irURem(IrBlock *block,
     ptrVecPush(block->instructions, instr);
     return instr;
 }
+
+IrInstr *irBitAnd(IrBlock *block,
+                IrValue *ir_result,
+                IrValue *left,
+                IrValue *right)
+{
+    IrInstr *instr = irInstrNew(IR_OP_AND);
+    instr->result = ir_result;
+    instr->op1 = left;
+    instr->op2 = right;
+    ptrVecPush(block->instructions, instr);
+    return instr;
+}
+
+IrInstr *irBitOr(IrBlock *block,
+                IrValue *ir_result,
+                IrValue *left,
+                IrValue *right)
+{
+    IrInstr *instr = irInstrNew(IR_OP_OR);
+    instr->result = ir_result;
+    instr->op1 = left;
+    instr->op2 = right;
+    ptrVecPush(block->instructions, instr);
+    return instr;
+}
+
+IrInstr *irBitNot(IrBlock *block,
+                  IrValue *ir_result,
+                  IrValue *left)
+{
+    IrInstr *instr = irInstrNew(IR_OP_NOT);
+    instr->result = ir_result;
+    instr->op1 = left;
+    ptrVecPush(block->instructions, instr);
+    return instr;
+}
+
+IrInstr *irXor(IrBlock *block,
+                IrValue *ir_result,
+                IrValue *left,
+                IrValue *right)
+{
+    IrInstr *instr = irInstrNew(IR_OP_XOR);
+    instr->result = ir_result;
+    instr->op1 = left;
+    instr->op2 = right;
+    ptrVecPush(block->instructions, instr);
+    return instr;
+}
+
+IrInstr *irSHL(IrBlock *block,
+                IrValue *ir_result,
+                IrValue *left,
+                IrValue *right)
+{
+    IrInstr *instr = irInstrNew(IR_OP_SHL);
+    instr->result = ir_result;
+    instr->op1 = left;
+    instr->op2 = right;
+    ptrVecPush(block->instructions, instr);
+    return instr;
+}
+
+IrInstr *irSHR(IrBlock *block,
+               IrValue *ir_result,
+               IrValue *left,
+               IrValue *right)
+{
+    IrInstr *instr = irInstrNew(IR_OP_SHR);
+    instr->result = ir_result;
+    instr->op1 = left;
+    instr->op2 = right;
+    ptrVecPush(block->instructions, instr);
+    return instr;
+}
         
 IrInstr *irBranch(IrBlock *block,
                   IrValue *cond,
@@ -1037,7 +1170,6 @@ IrValue *irLoadAddr(IrCtx *ctx, IrFunction *func, Ast *ast) {
                 /* XXX: this feels extremely hacky */
                 switch (operand->type->ptr->kind) {
                     case AST_TYPE_CLASS:
-                        loggerWarning("here\n");
                         return irLoadClassRef(ctx, func, operand->cls, operand->type, 0);
              //           break;
                     case AST_TYPE_ARRAY:
@@ -1284,6 +1416,127 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
             return irAssign(ctx, func, ast);
         }
 
+        case TK_MOD_EQU: {
+            IrValue *lhs = irExpression(ctx, func, ast->left);
+            IrValue *rhs = irExpression(ctx, func, ast->right);
+            IrValue *ir_result = irTmpVariable(irConvertType(ast->type));
+
+            if (irIsFloat(irConvertType(ast->type))) {
+                irFDiv(ir_block, ir_result, lhs, rhs);
+            } else {
+                if (ast->type->issigned) {
+                    irSRem(ctx->current_block, ir_result, lhs, rhs);
+                } else {
+                    irURem(ctx->current_block, ir_result, lhs, rhs);
+                }
+            }
+            irAssign(ctx, func, ast);
+            return ir_result;
+        }
+
+        case TK_MUL_EQU: {
+            IrValue *lhs = irExpression(ctx, func, ast->left);
+            IrValue *rhs = irExpression(ctx, func, ast->right);
+            IrValue *ir_result = irTmpVariable(irConvertType(ast->type));
+
+            if (irIsFloat(irConvertType(ast->type))) {
+                irFMul(ir_block, ir_result, lhs, rhs);
+            } else {
+                irIMul(ir_block, ir_result, lhs, rhs);
+            }
+            irAssign(ctx, func, ast);
+            return ir_result;
+        }
+
+        case TK_DIV_EQU: {
+            IrValue *lhs = irExpression(ctx, func, ast->left);
+            IrValue *rhs = irExpression(ctx, func, ast->right);
+            IrValue *ir_result = irTmpVariable(irConvertType(ast->type));
+
+            if (irIsFloat(irConvertType(ast->type))) {
+                irFDiv(ir_block, ir_result, lhs, rhs);
+            } else {
+                if (ast->type->issigned) {
+                    irSDiv(ctx->current_block, ir_result, lhs, rhs);
+                } else {
+                    irUDiv(ctx->current_block, ir_result, lhs, rhs);
+                }
+            }
+            irAssign(ctx, func, ast);
+            return ir_result;
+        }
+
+        case TK_SUB_EQU: {
+            IrValue *lhs = irExpression(ctx, func, ast->left);
+            IrValue *rhs = irExpression(ctx, func, ast->right);
+            IrValue *ir_result = irTmpVariable(irConvertType(ast->type));
+            if (irIsFloat(irConvertType(ast->type))) {
+                irFSub(ir_block, ir_result, lhs, rhs);
+            } else {
+                irISub(ir_block, ir_result, lhs, rhs);
+            }
+            irAssign(ctx, func, ast);
+            return ir_result;
+        }
+
+        case TK_ADD_EQU: {
+            IrValue *lhs = irExpression(ctx, func, ast->left);
+            IrValue *rhs = irExpression(ctx, func, ast->right);
+            IrValue *ir_result = irTmpVariable(irConvertType(ast->type));
+            if (irIsFloat(irConvertType(ast->type))) {
+                irFAdd(ir_block, ir_result, lhs, rhs);
+            } else {
+                irIAdd(ir_block, ir_result, lhs, rhs);
+            }
+            irAssign(ctx, func, ast);
+            return ir_result;
+        }
+
+        case TK_XOR_EQU: {
+            IrValue *lhs = irExpression(ctx, func, ast->left);
+            IrValue *rhs = irExpression(ctx, func, ast->right);
+            IrValue *ir_result = irTmpVariable(irConvertType(ast->type));
+            irXor(ir_block, ir_result, lhs, rhs);
+            irAssign(ctx, func, ast);
+            return ir_result;
+        }
+
+        case TK_AND_EQU: {
+            IrValue *lhs = irExpression(ctx, func, ast->left);
+            IrValue *rhs = irExpression(ctx, func, ast->right);
+            IrValue *ir_result = irTmpVariable(irConvertType(ast->type));
+            irBitAnd(ir_block, ir_result, lhs, rhs);
+            irAssign(ctx, func, ast);
+            return ir_result;
+        }
+
+        case TK_OR_EQU: {
+            IrValue *lhs = irExpression(ctx, func, ast->left);
+            IrValue *rhs = irExpression(ctx, func, ast->right);
+            IrValue *ir_result = irTmpVariable(irConvertType(ast->type));
+            irBitOr(ir_block, ir_result, lhs, rhs);
+            irAssign(ctx, func, ast);
+            return ir_result;
+        }
+
+        case TK_SHR_EQU: {
+            IrValue *lhs = irExpression(ctx, func, ast->left);
+            IrValue *rhs = irExpression(ctx, func, ast->right);
+            IrValue *ir_result = irTmpVariable(irConvertType(ast->type));
+            irSHR(ir_block, ir_result, lhs, rhs);
+            irAssign(ctx, func, ast);
+            return ir_result;
+        }
+
+        case TK_SHL_EQU: {
+            IrValue *lhs = irExpression(ctx, func, ast->left);
+            IrValue *rhs = irExpression(ctx, func, ast->right);
+            IrValue *ir_result = irTmpVariable(irConvertType(ast->type));
+            irSHL(ir_block, ir_result, lhs, rhs);
+            irAssign(ctx, func, ast);
+            return ir_result;
+        }
+
         /* @TODO: Pre and post increment/decrement
          * Not sure what the difference in IR is yet and this is functional
          * for both. This should be split out when I've figured that out */
@@ -1296,13 +1549,14 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
                 ir_value = irFunctionGetLocal(func, ast->operand);
             } else if (ast->operand->kind == AST_GVAR) {
                 ir_value = irFunctionGetGlobal(func, ast->operand);
-            } else if (ast->operand->kind == AST_DEREF) {
+            } else if (ast->operand->kind == AST_DEREF ||
+                       ast->operand->kind == AST_CLASS_REF) {
                 /* This would be the result of derefencing, for example, a 
                  * struct member, pointer ...*/
                 ir_value = irExpression(ctx, func, ast->operand);
             } else {
                 loggerPanic("Unsupported LHS assignment %s\n",
-                        astToString(ast->left));
+                        astKindToString(ast->operand->kind));
             }
 
             IrValueType ir_value_type = irConvertType(ast->operand->type);
@@ -1419,6 +1673,86 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
                 irURem(ctx->current_block, ir_result, left, right);
             }
             return ir_result;
+        }
+
+        case '^': {
+            IrValue *left = irExpression(ctx, func, ast->left);
+            IrValue *right = irExpression(ctx, func, ast->right);
+            IrValue *ir_result = irTmpVariable(irConvertType(ast->type));
+
+            irXor(ctx->current_block, ir_result, left, right);
+            return ir_result;
+        }
+
+        case '~': {
+            IrValue *ir_expr = irExpression(ctx, func, ast->left);
+            IrValue *ir_result = irTmpVariable(irConvertType(ast->type));
+
+            irBitNot(ctx->current_block, ir_result, ir_expr);
+            return ir_result;
+        }
+
+        case '&': {
+            IrValue *left = irExpression(ctx, func, ast->left);
+            IrValue *right = irExpression(ctx, func, ast->right);
+            IrValue *ir_result = irTmpVariable(irConvertType(ast->type));
+
+            irBitAnd(ctx->current_block, ir_result, left, right);
+            return ir_result;
+        }
+
+        case '|': {
+            IrValue *left = irExpression(ctx, func, ast->left);
+            IrValue *right = irExpression(ctx, func, ast->right);
+            IrValue *ir_result = irTmpVariable(irConvertType(ast->type));
+
+            irBitOr(ctx->current_block, ir_result, left, right);
+            return ir_result;
+        }
+
+        case TK_SHL: {
+            IrValue *left = irExpression(ctx, func, ast->left);
+            IrValue *right = irExpression(ctx, func, ast->right);
+            IrValue *ir_result = irTmpVariable(irConvertType(ast->type));
+
+            irSHL(ctx->current_block, ir_result, left, right);
+            return ir_result;
+        }
+
+        case TK_SHR: {
+            IrValue *left = irExpression(ctx, func, ast->left);
+            IrValue *right = irExpression(ctx, func, ast->right);
+            IrValue *ir_result = irTmpVariable(irConvertType(ast->type));
+
+            irSHR(ctx->current_block, ir_result, left, right);
+            return ir_result;
+        }
+
+        case TK_AND_AND: {
+            /* Bugged */
+            /* This needs to branch and create a phi node */
+            IrBlock *ir_block = ctx->current_block;
+            IrBlock *ir_then = irBlockNew(irBlockName());
+            IrBlock *ir_end_block = irBlockNew(irBlockName());
+
+            IrValue *left = irExpression(ctx, func, ast->left);
+            IrValue *ir_result = irTmpVariable(IR_TYPE_I8);
+
+            irBranch(ir_block, left, ir_then, ir_end_block);
+            irCtxSetCurrentBlock(ctx, ir_then);
+            IrValue *right = irExpression(ctx, func, ast->right);
+
+            irJump(ctx->current_block, ir_end_block);
+            irCtxSetCurrentBlock(ctx, ir_end_block);
+
+            IrInstr *phi_instr = irPhi(ir_end_block, ir_result);
+            irAddPhiIncoming(phi_instr, irConstInt(0, IR_TYPE_I8), ir_block);
+            irAddPhiIncoming(phi_instr, right, ir_then);
+            break;
+        }
+
+        case TK_OR_OR: {
+            loggerPanic("Unimplemented TK_OR_OR\n");
         }
 
         case '<': 
@@ -1585,9 +1919,10 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
             ptrVecPush(func->blocks, ir_while_cond);
 
             IrValue *ir_while_cond_expr = irExpression(ctx, func, ast->whilecond);
-            irBranch(ctx->current_block, ir_while_cond_expr,
-                                         ir_while_body, 
-                                         ir_while_end);
+            irBranch(ctx->current_block, 
+                     ir_while_cond_expr,
+                     ir_while_body, 
+                     ir_while_end);
 
             irCtxSetCurrentBlock(ctx, ir_while_body);
 

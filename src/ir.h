@@ -174,6 +174,12 @@ typedef struct IrInstr {
           /* Function call arguments */
           PtrVec *fn_args;
       };
+
+      struct {
+          int num_incoming;   /* Number of incoming edges */
+          PtrVec *values; /* PtrVec<IrValue *> */
+          PtrVec *blocks; /* PtrVec<IrBlock *> */
+      } phi;
     } extra;
 } InInstr;
 
