@@ -1354,6 +1354,7 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
             return ir_result;
         }
 
+        case AST_ASM_FUNCALL:
         case AST_FUNPTR_CALL:
         case AST_FUNCALL: {
             IrValue *ir_fn_call = NULL;
@@ -1362,9 +1363,12 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
                 ir_fn_call = irValueNew(IR_TYPE_FUNCTION, IR_VALUE_LOCAL);
                 IrValue *fn_ptr_var = irFunctionGetLocalFnPtr(func, ast);
                 ir_fn_call->name = fn_ptr_var->name;
-            } else {
+            } else if (ast->kind == AST_FUNCALL) {
                 ir_fn_call = irValueNew(IR_TYPE_FUNCTION, IR_VALUE_GLOBAL);
                 ir_fn_call->name = ast->fname;
+            } else if (ast->kind == AST_ASM_FUNCALL) {
+                ir_fn_call = irValueNew(IR_TYPE_FUNCTION, IR_VALUE_GLOBAL);
+                ir_fn_call->name = ast->asmfname;
             }
 
             IrInstr *ir_call = irInstrNew(IR_OP_CALL);
