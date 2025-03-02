@@ -654,6 +654,20 @@ IrInstr *irGetElementPointer(IrBlock *ir_block,
     return ir_getelementptr_instr;
 }
 
+IrInstr *irGetAtIdx(IrBlock *ir_block,
+                    IrValue *ir_dest,
+                    IrValue *ir_value,
+                    long offset)
+{
+    IrInstr *ir_getelementptr_instr = irInstrNew(IR_OP_GEP);
+    IrValue *ir_offset = irConstInt(IR_TYPE_I64, offset);
+    ir_getelementptr_instr->op1 = ir_dest;
+    ir_getelementptr_instr->op2 = ir_value;
+    ir_getelementptr_instr->op3 = ir_offset;
+    ptrVecPush(ir_block->instructions, ir_getelementptr_instr);
+    return ir_getelementptr_instr;
+}
+
 IrFunction *irFunctionNew(aoStr *name) {
     IrFunction *ir_function = (IrFunction *)irArenaAlloc(sizeof(IrFunction));
     ir_function->name = name;
@@ -1008,7 +1022,6 @@ IrInstr *irLoop(IrBlock *block, IrBlock *target) {
 
 /* Get Element Pointer */
 IrValue *irLoadAddr(IrCtx *ctx, IrFunction *func, Ast *ast) {
-    /* This is gross */
     Ast *operand = ast->operand;
     IrValue *ir_dest = irTmpVariable(IR_TYPE_PTR);
 
@@ -1071,6 +1084,115 @@ IrValue *irLoadAddr(IrCtx *ctx, IrFunction *func, Ast *ast) {
     return ir_dest;
 }
 
+IrValue *irAssignClassRef(IrCtx *ctx, IrFunction *func, Ast *cls, AstType *field, IrValue *rhs, int offset) {
+    switch (cls->kind) {
+        case AST_LVAR: {
+            /* Load the offset into a variable and then assign */
+            IrValue *ir_local = irFunctionGetLocal(func, cls);
+            IrValue *ir_dest = irTmpVariable(IR_TYPE_PTR);
+            (void)irGetAtIdx(ctx->current_block,
+                             ir_dest,
+                             ir_local,
+                             field->offset + offset);
+            irStore(ctx->current_block,ir_dest,rhs);
+            return ir_dest;
+        }
+
+        case AST_GVAR:
+            // loggerPanic("Global variables unimplemented: %s\n", astToString(cls));
+            // total_offset = field->offset + offset;
+            // asmGSave(buf,cls->clsname->data,field,total_offset);
+            break;
+
+        case AST_CLASS_REF:
+            break;
+
+        case AST_DEREF: {
+            IrValue *ir_expr = irExpression(ctx, func, cls->operand);
+            IrValue *ir_dest = irTmpVariable(IR_TYPE_PTR);
+            (void)irGetAtIdx(ctx->current_block,
+                             ir_dest,
+                             ir_expr,
+                             field->offset + offset);
+            irStore(ctx->current_block,ir_dest,rhs);
+            return ir_dest;
+        }
+        default:
+            loggerPanic("Failed to create ASM for: %s\n",
+                    astToString(cls));
+    }
+    loggerPanic("Unimplemented %s\n", astKindToString(cls->kind));
+    return NULL;
+}
+
+IrValue *irAssign(IrCtx *ctx, IrFunction *func, Ast *ast) {
+    IrValue *rhs = irExpression(ctx, func, ast->right);
+
+    if (ast->left->kind == AST_LVAR) {
+        IrValue *ir_local = irFunctionGetLocal(func, ast->left);
+        irStore(ctx->current_block, ir_local, rhs);
+        /* Assignments return the value */
+        return rhs;
+    } else if (ast->left->kind == AST_GVAR) {
+        IrValue *ir_global = irFunctionGetGlobal(func, ast->left);
+        irStore(ctx->current_block, ir_global, rhs);
+        return rhs; 
+    } else if (ast->left->kind == AST_DEREF) {
+        IrValue *ptr = irExpression(ctx, func, ast->left->left);
+        irStore(ctx->current_block, ptr, rhs);
+        return rhs;
+    } else if (ast->left->kind == AST_CLASS_REF) {
+        return irAssignClassRef(ctx, func, ast->left->cls, ast->left->type, rhs, 0);
+    } else {
+        loggerPanic("Unsupported LHS assignment %s\n",
+                astToString(ast->left));
+    }
+}
+
+IrValue *irLoadClassRef(IrCtx *ctx,
+                        IrFunction *func,
+                        Ast *cls,
+                        AstType *field,
+                        int offset)
+{
+    switch (cls->kind) {
+        case AST_LVAR: {
+            IrValueType ir_dest_type = irConvertType(cls->type->ptr);
+            IrValue *ir_dest = irTmpVariable(ir_dest_type);
+            IrValue *ir_local = irFunctionGetLocal(func, cls->left);
+            (void)irGetAtIdx(ctx->current_block,
+                             ir_dest,
+                             ir_local,
+                             field->offset + offset);
+            return ir_dest;
+        }
+
+        /* Call function again, this would be a nested struct or a union */
+        case AST_CLASS_REF:
+            return irLoadClassRef(ctx,
+                                 func,
+                                 cls->cls,
+                                 field,
+                                 offset + field->offset);
+
+        /* Load the `->` dereference */
+        case AST_DEREF: {
+            IrValue *ir_expr = irExpression(ctx, func, cls->operand);
+            IrValue *ir_dest = irTmpVariable(irConvertType(field));
+            (void)irGetAtIdx(ctx->current_block,
+                             ir_dest,
+                             ir_expr,
+                             field->offset + offset);
+            return ir_dest;
+        }
+
+        case AST_GVAR:
+        default:
+            loggerPanic("Failed to create IR for: %s\n", astKindToString(cls->kind));
+
+    }
+}
+
 IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
     IrBlock *ir_block = ctx->current_block;
 
@@ -1121,6 +1243,12 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
             irLoad(ir_block, ir_tmp_var, ir_ptr);
             return ir_tmp_var;
         }
+        
+        case AST_CLASS_REF: {
+            IrValue *ir_value = irLoadClassRef(ctx, func, ast->cls, ast->type, 0); 
+            loggerWarning("%s\n",irValueToString(ir_value)->data);
+            return ir_value;
+        }
 
         case AST_ADDR: {
             return irLoadAddr(ctx, func, ast);
@@ -1145,25 +1273,7 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
         }
 
         case '=': {
-            IrValue *rhs = irExpression(ctx, func, ast->right);
-
-            if (ast->left->kind == AST_LVAR) {
-                IrValue *ir_local = irFunctionGetLocal(func, ast->left);
-                irStore(ir_block, ir_local, rhs);
-                /* Assignments return the value */
-                return rhs;
-            } else if (ast->left->kind == AST_GVAR) {
-                IrValue *ir_global = irFunctionGetGlobal(func, ast->left);
-                irStore(ir_block, ir_global, rhs);
-                return rhs; 
-            } else if (ast->left->kind == AST_DEREF) {
-                IrValue *ptr = irExpression(ctx, func, ast->left->left);
-                irStore(ir_block, ptr, rhs);
-                return rhs;
-            } else {
-                loggerPanic("Unsupported LHS assignment %s\n",
-                        astToString(ast->left));
-            }
+            return irAssign(ctx, func, ast);
         }
 
         /* @TODO: Pre and post increment/decrement
@@ -1368,7 +1478,9 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
                 ir_fn_call->name = ast->fname;
             } else if (ast->kind == AST_ASM_FUNCALL) {
                 ir_fn_call = irValueNew(IR_TYPE_FUNCTION, IR_VALUE_GLOBAL);
-                ir_fn_call->name = ast->asmfname;
+                astPrint(ast);
+                ir_fn_call->name = ast->fname;
+                printf("%s\n",ast->fname->data);
             }
 
             IrInstr *ir_call = irInstrNew(IR_OP_CALL);
