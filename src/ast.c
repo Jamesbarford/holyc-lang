@@ -273,6 +273,20 @@ Ast *astFunction(AstType *type, char *fname, int len, PtrVec *params, Ast *body,
     return ast;
 }
 
+/* @Bug, the type of `init` often times does not match `var` in that:
+ * ```
+ * I8 x = 3 + 500;
+ * ```
+ * Would decompose to:
+ * ```
+ * <decl> I8 x
+ *   <assign>
+ *     <add_op> 
+ *       <I64> 3 
+ *       <I64> 500
+ *```
+ * As there is no typechecking on the tree. This _will_ lead to weird bugs.
+ * */
 Ast *astDecl(Ast *var, Ast *init) {
     Ast *ast = astNew();
     ast->kind = AST_DECL;
