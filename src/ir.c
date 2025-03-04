@@ -323,14 +323,14 @@ aoStr *irInstrToString(IrInstr *ir_instr) {
         case IR_OP_PHI: {
             aoStr *phi_values_str = aoStrPrintf("[");
             aoStr *phi_blocks_str = aoStrPrintf("[");
+            aoStr *phi_result = irValueToString(ir_instr->result);
 
             for (int i = 0; i < ir_instr->extra.phi.values->size; ++i) {
-                IrValue *ir_value = vecGet(IrValue *,
-                                           ir_instr->extra.phi.values,i);
+                IrValue *ir_value = vecGet(IrValue *, ir_instr->extra.phi.values,i);
                 aoStr *ir_value_str = irValueToString(ir_value);
                 aoStrCatFmt(phi_values_str, "%S", ir_value_str);
                 aoStrRelease(ir_value_str);
-                if (i + 1 ==  ir_instr->extra.phi.values->size) {
+                if (i + 1 != ir_instr->extra.phi.values->size) {
                     aoStrCatLen(phi_values_str, str_lit(", "));
                 }
             }
@@ -340,15 +340,15 @@ aoStr *irInstrToString(IrInstr *ir_instr) {
                 IrBlock *ir_block = vecGet(IrBlock *,
                                            ir_instr->extra.phi.blocks,i);
                 aoStr *ir_block_str = irBlockToString(ir_block);
-                aoStrCatFmt(phi_blocks_str, "%S", ir_block_str);
+                aoStrCatFmt(phi_blocks_str, "%S", ir_block->label);
                 aoStrRelease(ir_block_str);
-                if (i + 1 ==  ir_instr->extra.phi.blocks->size) {
+                if (i + 1 !=  ir_instr->extra.phi.blocks->size) {
                     aoStrCatLen(phi_blocks_str, str_lit(", "));
                 }
             }
+
             aoStrPutChar(phi_blocks_str, ']');
-            loggerWarning("yes\n");
-            aoStrCatFmt(buf,"%s %S %S",op,phi_values_str,phi_blocks_str);
+            aoStrCatFmt(buf,"%s %S %S %S",op,phi_result,phi_values_str,phi_blocks_str);
             break;
         }
 
@@ -1739,16 +1739,19 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
             IrValue *ir_result = irTmpVariable(IR_TYPE_I8);
 
             irBranch(ir_block, left, ir_then, ir_end_block);
+            ptrVecPush(func->blocks, ir_then);
             irCtxSetCurrentBlock(ctx, ir_then);
+
             IrValue *right = irExpression(ctx, func, ast->right);
 
             irJump(ctx->current_block, ir_end_block);
             irCtxSetCurrentBlock(ctx, ir_end_block);
+            ptrVecPush(func->blocks, ir_end_block);
 
             IrInstr *phi_instr = irPhi(ir_end_block, ir_result);
-            irAddPhiIncoming(phi_instr, irConstInt(0, IR_TYPE_I8), ir_block);
+            irAddPhiIncoming(phi_instr, irConstInt(IR_TYPE_I8, 0), ir_block);
             irAddPhiIncoming(phi_instr, right, ir_then);
-            break;
+            return ir_result;
         }
 
         case TK_OR_OR: {
