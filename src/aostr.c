@@ -421,70 +421,12 @@ void aoStrCatPrintf(aoStr *b, const char *fmt, ...) {
     va_end(ap);
 }
 
-static void aoStrCatVaArg(aoStr *buf, char type, va_list ap) {
-    switch (type) {
-        case 'U': {
-            size_t uint_ = va_arg(ap, size_t);
-            aoStrCatPrintf(buf,"%zu",uint_);
-            break;
-        }
-
-        case 'u': {
-            unsigned int uint_ = va_arg(ap, unsigned int);
-            aoStrCatPrintf(buf,"%u",uint_);
-            break;
-        }
-
-        case 'I': {
-            ssize_t int_ = va_arg(ap, ssize_t);
-            aoStrCatPrintf(buf,"%lld",int_);
-            break;
-        }
-
-        case 'i': {
-            int int_ = va_arg(ap, int);
-            aoStrCatPrintf(buf,"%d",int_);
-            break;
-        }
-
-        case 'X': {
-            size_t uint_ = va_arg(ap, size_t);
-            aoStrCatPrintf(buf,"0x%X",uint_);
-            break;
-        }
-
-        case 'f': {
-            double float_ = va_arg(ap, double);
-            aoStrCatPrintf(buf,"%g",float_);
-            break;
-        }
-
-        case 'c': {
-            char ch = (char)va_arg(ap, int);
-            aoStrPutChar(buf,ch);
-            break;
-        }
-
-        case 's': {
-            char *str = va_arg(ap,char*);
-            aoStrCat(buf, str);
-            break;
-        }
-
-        case 'S': {
-            aoStr *str = va_arg(ap, aoStr*);
-            aoStrCatLen(buf, str->data, str->len);
-            break;
-        }
-        default: loggerPanic("Unhandled format char '%c'\n", type);
-    }
-}
-
 char *mprintFmtVa(const char *fmt, va_list ap, size_t *_len, size_t *_allocated) {
     aoStr _buf = { .data = aoStrBufferAlloc(256), .len = 0, .capacity = 256 };
     aoStr *buf = &_buf;
     const char *ptr = fmt;
     size_t padding = 0;
+    size_t prev_len = 0;
     int is_zero_padding = 0;
 
     while (*ptr) {
@@ -494,39 +436,82 @@ char *mprintFmtVa(const char *fmt, va_list ap, size_t *_len, size_t *_allocated)
                 if (*ptr == '\0') {
                     goto done;
                 }
-                switch (*ptr) {
-                    case '0':
-                        is_zero_padding = 1;
-                    case '-': {
-                        padding = 0;
-                        size_t prev_len = buf->len;
-                        ptr++;
-                        while (isdigit(*ptr)) {
-                            padding = padding * 10 + *ptr-'0';
-                            ptr++;
-                        }
-                        aoStrCatVaArg(buf,*ptr,ap);
-                        size_t diff = buf->len - prev_len;
-                        /* We now have the length of the element we concatinated 
-                         * */
-                        if (diff > padding) {
-                            padding = 0;
-                        } else {
-                            padding -= diff;
-                        }
 
+                if (*ptr == '-') {
+                    prev_len = buf->len;
+                    ptr++;
+                    while (isdigit(*ptr)) {
+                        padding = padding * 10 + *ptr-'0';
+                        ptr++;
+                    }
+
+                    if (*(ptr + 1) == '0') {
+                        is_zero_padding = 1;
+                        ptr++;
+                    }
+
+                    size_t diff = buf->len - prev_len;
+                    /* We now have the length of the element we concatinated 
+                     * */
+                    if (diff > padding) {
+                        padding = 0;
+                    } else {
+                        padding -= diff;
+                    }
+                }
+
+                switch (*ptr) {
+                    case 'U': {
+                        size_t uint_ = va_arg(ap, size_t);
+                        aoStrCatPrintf(buf,"%zu",uint_);
                         break;
                     }
 
-                    case 'U':
-                    case 'u':
-                    case 'I':
-                    case 'i':
-                    case 'f':
-                    case 'c':
-                    case 's':
+                    case 'u': {
+                        unsigned int uint_ = va_arg(ap, unsigned int);
+                        aoStrCatPrintf(buf,"%u",uint_);
+                        break;
+                    }
+
+                    case 'I': {
+                        ssize_t int_ = va_arg(ap, ssize_t);
+                        aoStrCatPrintf(buf,"%lld",int_);
+                        break;
+                    }
+
+                    case 'i': {
+                        int int_ = va_arg(ap, int);
+                        aoStrCatPrintf(buf,"%d",int_);
+                        break;
+                    }
+
+                    case 'X': {
+                        size_t uint_ = va_arg(ap, size_t);
+                        aoStrCatPrintf(buf,"0x%X",uint_);
+                        break;
+                    }
+
+                    case 'f': {
+                        double float_ = va_arg(ap, double);
+                        aoStrCatPrintf(buf,"%g",float_);
+                        break;
+                    }
+
+                    case 'c': {
+                        char ch = (char)va_arg(ap, int);
+                        aoStrPutChar(buf,ch);
+                        break;
+                    }
+
+                    case 's': {
+                        char *str = va_arg(ap,char*);
+                        aoStrCat(buf, str);
+                        break;
+                    }
+
                     case 'S': {
-                        aoStrCatVaArg(buf,*ptr,ap);
+                        aoStr *str = va_arg(ap, aoStr *);
+                        aoStrCatAoStr(buf,str);
                         break;
                     }
 
@@ -542,7 +527,6 @@ char *mprintFmtVa(const char *fmt, va_list ap, size_t *_len, size_t *_allocated)
                         break;
                     }
 
-
                     case 'A': {
                         Ast *ast = va_arg(ap, Ast*);
                         aoStr *ast_str = astLValueToAoStr(ast,0);
@@ -550,7 +534,6 @@ char *mprintFmtVa(const char *fmt, va_list ap, size_t *_len, size_t *_allocated)
                         break;
                     }
 
-                    
                     default: {
                         /* Put the character, probably a %% */
                         aoStrPutChar(buf,*ptr);
@@ -564,7 +547,14 @@ char *mprintFmtVa(const char *fmt, va_list ap, size_t *_len, size_t *_allocated)
                 break;
             }
         }
+
         if (padding) {
+            size_t diff = buf->len - prev_len;
+            /* We now have the length of the element we concatinated, figure
+             * out how much padding it needs*/
+            if (diff > padding) padding = 0;
+            else padding -= diff;
+
             char ch = ' ';
             if (is_zero_padding) {
                 ch = '0';
@@ -574,7 +564,6 @@ char *mprintFmtVa(const char *fmt, va_list ap, size_t *_len, size_t *_allocated)
                 padding--;
             }
             is_zero_padding = 0;
-
         }
         ptr++;
     }
