@@ -1767,6 +1767,17 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
             return ir_result;
         }
 
+        case '!': {
+            IrValue *ir_expr = irExpression(ctx, func, ast->left);
+            IrValue *ir_result = irTmpVariable(IR_TYPE_I8);
+
+            /* Create NOT operation - a comparison against 0 */
+            IrValue *zero = irConstInt(ir_expr->type, 0);
+            irICmp(ctx->current_block, ir_result, IR_CMP_EQ, ir_expr, zero);
+
+            return ir_result;
+        }
+
         case '<': 
         case '>': 
         case TK_LESS_EQU:
@@ -1949,6 +1960,69 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
             ctx->flags = ctx_prev_flags;
             /* We are now out of the scope of the while loop so reset the 
              * end block to what it was previously */
+            irCtxSetLoopEndBlock(ctx, ir_previous_end_block);
+            irCtxSetLoopHeadBlock(ctx, ir_previous_head_block);
+            break;
+        }
+
+        case AST_FOR: {
+            IrBlock *ir_for_cond = ast->forcond ? irBlockNew(irBlockName()) : NULL;
+            IrBlock *ir_for_body = irBlockNew(irBlockName());
+            IrBlock *ir_for_step = ast->forstep ? irBlockNew(irBlockName()) : NULL;
+            IrBlock *ir_for_head = ir_for_cond ? ir_for_cond : ir_for_body;
+            IrBlock *ir_for_end = irBlockNew(irBlockName());
+
+            IrBlock *ir_previous_end_block = ctx->loop_end_block;
+            IrBlock *ir_previous_head_block = ctx->loop_head_block;
+
+            unsigned long ctx_prev_flags = ctx->flags;
+            ctx->flags |= IR_CTX_FLAG_IN_LOOP;
+
+            /* Initaliser belongs to the current block */
+            if (ast->forinit) {
+                irStatement(ctx, func, ast->forinit);
+            }
+
+            /* Update the current end block */
+            irCtxSetLoopHeadBlock(ctx, ir_for_cond ? ir_for_cond : ir_for_body);
+            irCtxSetLoopEndBlock(ctx, ir_for_end);
+
+            if (ir_for_cond) {
+                irJump(ctx->current_block, ir_for_cond);
+                irCtxSetCurrentBlock(ctx, ir_for_cond);
+                ptrVecPush(func->blocks, ir_for_cond);
+
+                IrValue *ir_for_cond_expr = irExpression(ctx, func, ast->forcond);
+                irBranch(ctx->current_block, 
+                         ir_for_cond_expr,
+                         ir_for_body, 
+                         ir_for_end);
+            }
+
+            irCtxSetCurrentBlock(ctx, ir_for_body);
+
+            ptrVecPush(func->blocks, ir_for_body);
+            irStatement(ctx, func, ast->forbody);
+
+            /* If there is a step we want to add it to the current block */
+            if (ir_for_step) {
+                irJump(ctx->current_block, ir_for_step);
+                irCtxSetCurrentBlock(ctx, ir_for_step);
+                ptrVecPush(func->blocks, ir_for_step);
+                irExpression(ctx, func, ast->forstep);
+
+                irLoop(ctx->current_block, ir_for_head);
+            } else {
+                if (!ctx->current_block->sealed) {
+                    irLoop(ctx->current_block, ir_for_head);
+                }
+            }
+
+            ptrVecPush(func->blocks, ir_for_end);
+            irCtxSetCurrentBlock(ctx, ir_for_end);
+
+            /* Restore */
+            ctx->flags = ctx_prev_flags;
             irCtxSetLoopEndBlock(ctx, ir_previous_end_block);
             irCtxSetLoopHeadBlock(ctx, ir_previous_head_block);
             break;
