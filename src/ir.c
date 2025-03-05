@@ -270,6 +270,11 @@ const char *irOpcodeToString(IrInstr *ir_instr) {
 }
 
 aoStr *irBlockToString(IrBlock *ir_block);
+void irPhiPairToString(aoStr *buf, IrPhiPair *ir_phi_pair) {
+    aoStr *ir_value_str = irValueToString(ir_phi_pair->ir_value);
+    /* <Value, block> */
+    aoStrCatFmt(buf, "[ %S, %S ]", ir_value_str, ir_phi_pair->ir_block->label);
+}
 
 /* Convert an instruction to a string. */
 aoStr *irInstrToString(IrInstr *ir_instr) {
@@ -321,34 +326,16 @@ aoStr *irInstrToString(IrInstr *ir_instr) {
         }
 
         case IR_OP_PHI: {
-            aoStr *phi_values_str = aoStrPrintf("[");
-            aoStr *phi_blocks_str = aoStrPrintf("[");
-            aoStr *phi_result = irValueToString(ir_instr->result);
-
-            for (int i = 0; i < ir_instr->extra.phi.values->size; ++i) {
-                IrValue *ir_value = vecGet(IrValue *, ir_instr->extra.phi.values,i);
-                aoStr *ir_value_str = irValueToString(ir_value);
-                aoStrCatFmt(phi_values_str, "%S", ir_value_str);
-                aoStrRelease(ir_value_str);
-                if (i + 1 != ir_instr->extra.phi.values->size) {
-                    aoStrCatLen(phi_values_str, str_lit(", "));
+            aoStr *phi_pairs_str = aoStrNew();
+            for (int i = 0; i < ir_instr->extra.phi.pairs->size; ++i) {
+                IrPhiPair *ir_phi_pair = vecGet(IrPhiPair *,
+                                                ir_instr->extra.phi.pairs, i);
+                irPhiPairToString(phi_pairs_str, ir_phi_pair);
+                if (i + 1 != ir_instr->extra.phi.pairs->size) {
+                    aoStrPutChar(phi_pairs_str, ' ');;
                 }
             }
-            aoStrPutChar(phi_values_str, ']');
-
-            for (int i = 0; i < ir_instr->extra.phi.blocks->size; ++i) {
-                IrBlock *ir_block = vecGet(IrBlock *,
-                                           ir_instr->extra.phi.blocks,i);
-                aoStr *ir_block_str = irBlockToString(ir_block);
-                aoStrCatFmt(phi_blocks_str, "%S", ir_block->label);
-                aoStrRelease(ir_block_str);
-                if (i + 1 !=  ir_instr->extra.phi.blocks->size) {
-                    aoStrCatLen(phi_blocks_str, str_lit(", "));
-                }
-            }
-
-            aoStrPutChar(phi_blocks_str, ']');
-            aoStrCatFmt(buf,"%s %S %S %S",op,phi_result,phi_values_str,phi_blocks_str);
+            aoStrCatFmt(buf,"%s %S",op, phi_pairs_str);
             break;
         }
 
@@ -629,12 +616,17 @@ IrInstr *irInstrNew(IrOpcode opcode) {
     return ir_instr;
 }
 
+IrPhiPair *irPhiPair(IrBlock *ir_block, IrValue *ir_value) {
+    IrPhiPair *ir_phi_pair = (IrPhiPair *)irArenaAlloc(sizeof(IrPhiPair));
+    ir_phi_pair->ir_value = ir_value;
+    ir_phi_pair->ir_block = ir_block;
+    return ir_phi_pair;
+}
+
 IrInstr *irPhi(IrBlock *block, IrValue *result) {
     IrInstr *ir_phi_instr = irInstrNew(IR_OP_PHI);
     ir_phi_instr->result = result;
-    ir_phi_instr->extra.phi.num_incoming = 0;
-    ir_phi_instr->extra.phi.values = ptrVecNew();
-    ir_phi_instr->extra.phi.blocks = ptrVecNew();
+    ir_phi_instr->extra.phi.pairs = ptrVecNew();
 
     ptrVecPush(block->instructions, ir_phi_instr);
     return ir_phi_instr;
@@ -644,9 +636,8 @@ void irAddPhiIncoming(IrInstr *ir_phi_instr,
                       IrValue *ir_value, 
                       IrBlock *ir_block)
 {
-    ptrVecPush(ir_phi_instr->extra.phi.values, ir_value);
-    ptrVecPush(ir_phi_instr->extra.phi.blocks, ir_block);
-    ir_phi_instr->extra.phi.num_incoming++;
+    IrPhiPair *ir_phi_pair = irPhiPair(ir_block, ir_value);
+    ptrVecPush(ir_phi_instr->extra.phi.pairs, ir_phi_pair);
 }
 
 static int ir_block_count = 0;
@@ -1729,18 +1720,16 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
         }
 
         case TK_AND_AND: {
-            /* Bugged */
-            /* This needs to branch and create a phi node */
             IrBlock *ir_block = ctx->current_block;
-            IrBlock *ir_then = irBlockNew(irBlockName());
+            IrBlock *ir_right_block = irBlockNew(irBlockName());
             IrBlock *ir_end_block = irBlockNew(irBlockName());
 
             IrValue *left = irExpression(ctx, func, ast->left);
             IrValue *ir_result = irTmpVariable(IR_TYPE_I8);
 
-            irBranch(ir_block, left, ir_then, ir_end_block);
-            ptrVecPush(func->blocks, ir_then);
-            irCtxSetCurrentBlock(ctx, ir_then);
+            irBranch(ir_block, left, ir_right_block, ir_end_block);
+            ptrVecPush(func->blocks, ir_right_block);
+            irCtxSetCurrentBlock(ctx, ir_right_block);
 
             IrValue *right = irExpression(ctx, func, ast->right);
 
@@ -1750,12 +1739,32 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
 
             IrInstr *phi_instr = irPhi(ir_end_block, ir_result);
             irAddPhiIncoming(phi_instr, irConstInt(IR_TYPE_I8, 0), ir_block);
-            irAddPhiIncoming(phi_instr, right, ir_then);
+            irAddPhiIncoming(phi_instr, right, ir_right_block);
             return ir_result;
         }
 
         case TK_OR_OR: {
-            loggerPanic("Unimplemented TK_OR_OR\n");
+            IrBlock *ir_block = ctx->current_block;
+            IrBlock *ir_right_block = irBlockNew(irBlockName());
+            IrBlock *ir_end_block = irBlockNew(irBlockName());
+
+            IrValue *left = irExpression(ctx, func, ast->left);
+            IrValue *ir_result = irTmpVariable(IR_TYPE_I8);
+
+            irBranch(ir_block, left, ir_end_block, ir_right_block);
+            ptrVecPush(func->blocks, ir_right_block);
+            irCtxSetCurrentBlock(ctx, ir_right_block);
+
+            IrValue *right = irExpression(ctx, func, ast->right);
+
+            irJump(ctx->current_block, ir_end_block);
+            irCtxSetCurrentBlock(ctx, ir_end_block);
+            ptrVecPush(func->blocks, ir_end_block);
+
+            IrInstr *phi_instr = irPhi(ir_end_block, ir_result);
+            irAddPhiIncoming(phi_instr, irConstInt(IR_TYPE_I8, 1), ir_block);
+            irAddPhiIncoming(phi_instr, right, ir_right_block);
+            return ir_result;
         }
 
         case '<': 

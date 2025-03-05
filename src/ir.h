@@ -159,6 +159,13 @@ typedef struct IrValue {
     int version;
 } IrValue;
 
+/* The value and which block it came from, easier to keep track of than
+ * 2 vectors */
+typedef struct IrPhiPair {
+    IrValue *ir_value;
+    IrBlock *ir_block;
+} IrPhiPair;
+
 typedef struct IrInstr {
     IrOpcode opcode;            /* Operation type */
     IrValue *result;            /* Destination if any */
@@ -176,10 +183,9 @@ typedef struct IrInstr {
       };
 
       struct {
-          int num_incoming;   /* Number of incoming edges */
-          PtrVec *values; /* PtrVec<IrValue *> */
-          PtrVec *blocks; /* PtrVec<IrBlock *> */
+          PtrVec *pairs; /* PtrVec<IrPhiPair *> */
       } phi;
+
     } extra;
 } InInstr;
 
