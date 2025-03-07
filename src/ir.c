@@ -1965,6 +1965,61 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
             break;
         }
 
+        case AST_DO_WHILE: {
+            /**
+             * jump to body
+             * Body block
+             * 
+             * jump to condition
+             * Condition block
+             * jump to body or end;
+             *
+             * End block
+             */
+            IrBlock *ir_dowhile_body = irBlockNew(irBlockName());
+            IrBlock *ir_dowhile_cond = irBlockNew(irBlockName());
+            IrBlock *ir_dowhile_end = irBlockNew(irBlockName());
+
+            IrBlock *ir_previous_end_block = ctx->loop_end_block;
+            IrBlock *ir_previous_head_block = ctx->loop_head_block;
+
+            unsigned long ctx_prev_flags = ctx->flags;
+            ctx->flags |= IR_CTX_FLAG_IN_LOOP;
+
+            /* this seems weird as a continue would not hit the condition 
+             * which is what would happen with a for loop. Though this is 
+             * "correct" it simply seems a bit odd */
+            irCtxSetLoopHeadBlock(ctx, ir_dowhile_body);
+            irCtxSetLoopEndBlock(ctx, ir_dowhile_end);
+
+            /* Jump into the body and prepare IR for the body */
+            irJump(ctx->current_block, ir_dowhile_body);
+            irCtxSetCurrentBlock(ctx, ir_dowhile_body);
+            ptrVecPush(func->blocks, ir_dowhile_body);
+            irStatement(ctx, func, ast->whilebody);
+
+            /* Jump into the conditio and prepare IR for the branch */
+            irJump(ctx->current_block, ir_dowhile_cond);
+            irCtxSetCurrentBlock(ctx, ir_dowhile_cond);
+            ptrVecPush(func->blocks, ir_dowhile_cond);
+            IrValue *ir_dowhile_cond_expr = irExpression(ctx, func,
+                                                         ast->whilecond);
+            irBranch(ctx->current_block,
+                     ir_dowhile_cond_expr,
+                     ir_dowhile_body,
+                     ir_dowhile_end);
+            irLoop(ctx->current_block, ir_dowhile_body);
+
+            ptrVecPush(func->blocks, ir_dowhile_end);
+            irCtxSetCurrentBlock(ctx, ir_dowhile_end);
+
+            /* Restore previous state */
+            ctx->flags = ctx_prev_flags;
+            irCtxSetLoopEndBlock(ctx, ir_previous_end_block);
+            irCtxSetLoopHeadBlock(ctx, ir_previous_head_block);
+            break;
+        }
+
         case AST_FOR: {
             IrBlock *ir_for_cond = ast->forcond ? irBlockNew(irBlockName()) : NULL;
             IrBlock *ir_for_body = irBlockNew(irBlockName());
