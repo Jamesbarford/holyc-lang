@@ -377,7 +377,11 @@ Ast *astSwitch(Ast *cond, PtrVec *cases, Ast *case_default,
     return ast;
 }
 
-Ast *astCase(aoStr *case_label, long case_begin, long case_end, List *case_asts) {
+Ast *astCase(aoStr *case_label,
+             long case_begin,
+             long case_end,
+             List *case_asts)
+{
     Ast *ast = astNew();
     ast->type = ast_int_type;
     ast->kind = AST_CASE;
@@ -403,8 +407,13 @@ Ast *astJump(char *name, int len) {
     return ast;
 }
 
-Ast *astFor(Ast *init, Ast *cond, Ast *step, Ast *body, aoStr *for_begin,
-        aoStr *for_middle, aoStr *for_end)
+Ast *astFor(Ast *init,
+            Ast *cond,
+            Ast *step,
+            Ast *body,
+            aoStr *for_begin,
+            aoStr *for_middle,
+            aoStr *for_end)
 {
     Ast *ast = astNew();
     ast->type = NULL;
@@ -419,8 +428,10 @@ Ast *astFor(Ast *init, Ast *cond, Ast *step, Ast *body, aoStr *for_begin,
     return ast;
 }
 
-Ast *astDoWhile(Ast *whilecond, Ast *whilebody, aoStr *while_begin, 
-        aoStr *while_end)
+Ast *astDoWhile(Ast *whilecond,
+                Ast *whilebody,
+                aoStr *while_begin, 
+                aoStr *while_end)
 {
     Ast *ast = astNew();
     ast->type = NULL;
@@ -432,8 +443,10 @@ Ast *astDoWhile(Ast *whilecond, Ast *whilebody, aoStr *while_begin,
     return ast;
 }
 
-Ast *astWhile(Ast *whilecond, Ast *whilebody, aoStr *while_begin, 
-        aoStr *while_end)
+Ast *astWhile(Ast *whilecond,
+              Ast *whilebody,
+              aoStr *while_begin, 
+              aoStr *while_end)
 {
     Ast *ast = astNew();
     ast->type = NULL;
@@ -1736,7 +1749,6 @@ char *astKindToString(int kind) {
     case AST_LITERAL:    return "AST_LITERAL";
     case AST_ARRAY_INIT: return "AST_ARRAY_INIT";
     case AST_IF:         return "AST_IF";
-    case AST_FOR:        return "AST_FOR";
     case AST_GOTO:       return "AST_GOTO";
     case AST_LABEL:      return "AST_LABEL";
     case AST_RETURN:     return "AST_RETURN";
@@ -1750,7 +1762,11 @@ char *astKindToString(int kind) {
     case AST_FUNPTR_CALL: return "AST_FUNPTR_CALL";
     case AST_ASM_FUNCALL: return "AST_ASM_FUNCALL";
 
-    case AST_BREAK: return "AST_BREAK";
+    /* The different types of loop */
+    case AST_FOR:      return "AST_FOR";
+    case AST_WHILE:    return "AST_WHILE";
+    case AST_DO_WHILE: return "AST_DO_WHILE";
+    case AST_BREAK:    return "AST_BREAK";
     case AST_CONTINUE: return "AST_CONTINUE";
 
     case AST_SWITCH:        return "AST_SWITCH";
