@@ -144,6 +144,62 @@ void ptrVecRelease(PtrVec *vec) {
     vectorRelease(vec);
 }
 
+void ptrVecClear(PtrVec *vec, void (*free_entry_fnptr)(void *value)) {
+    if (free_entry_fnptr) {
+        while (vec->size) {
+            void *entry = vec->entries[vec->size - 1];
+            free_entry_fnptr(entry);
+            vec->size--;
+        }
+    } else {
+        vec->size = 0;
+    }
+}
+
+/* Return the element for the user to handle. We do our removes */
+void *ptrVecRemoveIdx(PtrVec *vec, int idx) {
+    if (idx < 0 || idx >= vec->size) {
+#ifdef DEBUG
+        loggerPanic("Vector idx out of bounds: >= 0 %d <= %d does not hold\n",
+                     idx, vec->size);
+#endif
+        return NULL;
+    }
+    /**
+     *     v
+     * [1, 2, 3, 4]
+     *     v    
+     * [1, 2, 3, 4]
+     */
+    void *entry = vec->entries[idx];
+
+    /* The previous entry is the current entry */
+    for (int cur = idx + 1; cur < vec->size -1; ++cur) {
+        vec->entries[cur - 1] = vec->entries[cur];
+    }
+    return entry;
+}
+
+void *ptrVecRemove(PtrVec *vec,
+                   void *match_param,
+                   int (*entry_match_fnptr)(void *map_entry, void *match_param))
+{
+    /* Find the matching index then call `ptrVecRemoveIdx(...)` to remove
+     * the element or return NULL if there is no match */
+    int idx = -1;
+    for (int i = 0; i < vec->size; ++i) {
+        void *needle = vec->entries[i];
+        if (entry_match_fnptr(needle, match_param)) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx != -1) {
+        return ptrVecRemoveIdx(vec, idx);
+    }
+    return NULL;
+}
+
 static unsigned long intMapHashFunction(long key, unsigned long mask) {
     return key & mask;
 }

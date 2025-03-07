@@ -39,6 +39,10 @@ typedef struct PtrVec {
 PtrVec *ptrVecNew(void);
 void ptrVecPush(PtrVec *vec, void *value);
 void *ptrVecGet(PtrVec *vec, int idx);
+void *ptrVecRemoveIdx(PtrVec *vec, int idx);
+void *ptrVecRemove(PtrVec *vec, void *entry, 
+                   int (*entry_match_fnptr)(void *map_entry, void *match_param));
+void ptrVecClear(PtrVec *vec, void (*free_entry_fnptr)(void *value));
 void ptrVecRelease(PtrVec *vec);
 
 typedef struct IntMapNode {
@@ -134,6 +138,7 @@ int strMapAddAoStrOrErr(StrMap *map, aoStr *key, void *value);
 int strMapHas(StrMap *map, char *key);
 int strMapRemove(StrMap *map, char *key);
 void strMapRelease(StrMap *map);
+void strMapClear(StrMap *map);
 int strMapResize(StrMap *map);
 void strMapSetFreeValue(StrMap *map, void (*_free_value)(void *value));
 void strMapSetFreeKey(StrMap *map, void (*_free_key)(void *key));
