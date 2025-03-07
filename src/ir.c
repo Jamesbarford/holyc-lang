@@ -49,6 +49,27 @@ static void *irArenaAlloc(unsigned int size) {
     return arenaAlloc(&ir_memory_arena,size);
 }
 
+/*==================== IR PROTOTYPES ======================================== */
+IrUnresolvedBlock *irUnresolvedGotoNew(IrValue *goto_label, IrBlock *ir_source_block);
+IrUnresolvedBlock *irUnresolvedLabelNew(IrValue *label, IrBlock *ir_destination_block);
+IrInstr *irCmp(IrBlock *block, IrValue *result, IrValue *op1, IrValue *op2,
+               IrCmpKind kind);
+IrInstr *irICmp(IrBlock *block, IrValue *result, IrCmpKind kind, IrValue *op1, 
+                IrValue *op2);
+IrInstr *irFCmp(IrBlock *block, IrValue *result, IrCmpKind kind, IrValue *op1, 
+                IrValue *op2);
+IrInstr *irJump(IrBlock *block, IrBlock *target);
+IrInstr *irBranch(IrBlock *block, IrValue *cond, IrBlock *true_block,
+                  IrBlock *false_block);
+IrValue *irLoadClassRef(IrCtx *ctx,
+                        IrFunction *func,
+                        Ast *cls,
+                        AstType *field,
+                        int offset);
+
+IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast);
+void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast);
+
 
 /*==================== IR HELPERS =========================================== */
 /* Is what we are looking at a comparison? */
@@ -89,6 +110,20 @@ int irBlockHasBlock(PtrVec *blocks_vector, IrBlock *needle) {
         }
     }
     return 0;
+}
+
+int irBlockMatch(void *_ir_block, void *_block_label) {
+    IrBlock *ir_block = (IrBlock *)_ir_block;
+    aoStr *ir_label_to_match = (aoStr *)_block_label;
+    return aoStrCmp(ir_block->label, ir_label_to_match);
+}
+
+void irBlockRemovePredecessor(IrBlock *ir_block, aoStr *label) {
+    (void)ptrVecRemove(ir_block->predecessors, (void *)label, &irBlockMatch);
+}
+
+void irBlockRemoveSuccessor(IrBlock *ir_block, aoStr *label) {
+    (void)ptrVecRemove(ir_block->successors, (void *)label, &irBlockMatch);
 }
 
 IrValueType irConvertType(AstType *type) {
@@ -471,6 +506,26 @@ IrBlock *irBlockNew(aoStr *label) {
     return ir_block;
 }
 
+IrUnresolvedBlock *irUnresolvedGotoNew(IrValue *ir_goto,
+                                       IrBlock *ir_source_block)
+{
+    IrUnresolvedBlock *ir_unresolved = (IrUnresolvedBlock *)irArenaAlloc(
+                                                     sizeof(IrUnresolvedBlock));
+    ir_unresolved->goto_.ir_value = ir_goto;
+    ir_unresolved->goto_.ir_block = ir_source_block;
+    return ir_unresolved;
+}
+
+IrUnresolvedBlock *irUnresolvedLabelNew(IrValue *ir_label,
+                                        IrBlock *ir_destination_block)
+{
+    IrUnresolvedBlock *ir_unresolved = (IrUnresolvedBlock *)irArenaAlloc(
+                                                     sizeof(IrUnresolvedBlock));
+    ir_unresolved->label_.ir_value = ir_label;
+    ir_unresolved->label_.ir_block = ir_destination_block;
+    return ir_unresolved;
+}
+
 IrProgram *irProgramNew(void) {
     IrProgram *program = (IrProgram *)irArenaAlloc(sizeof(IrProgram));
     program->functions = ptrVecNew();
@@ -496,11 +551,21 @@ void irCtxReset(IrCtx *ctx) {
     ctx->loop_end_block = NULL;
     ctx->loop_head_block = NULL;
     ctx->switch_end_block = NULL;
+    if (ctx->unresolved_gotos) {
+        ptrVecClear(ctx->unresolved_gotos, NULL);
+    }
+    if (ctx->unresolved_labels) {
+        strMapClear(ctx->unresolved_labels);
+    }
 }
 
 IrCtx *irCtxNew(void) {
     IrCtx *ctx = (IrCtx *)xmalloc(sizeof(IrCtx));
+    ctx->unresolved_gotos = NULL;
+    ctx->unresolved_labels = NULL;
     irCtxReset(ctx);
+    ctx->unresolved_gotos = ptrVecNew();
+    ctx->unresolved_labels = strMapNew(8);
     return ctx;
 }
 
@@ -530,6 +595,32 @@ static void irCtxSetLoopHeadBlock(IrCtx *ctx, IrBlock *ir_block) {
 
 static void irCtxSetSwitchEndBlock(IrCtx *ctx, IrBlock *ir_block) {
     ctx->switch_end_block = ir_block;
+}
+
+/* Push the goto along with the block it is attached to the to the vector 
+ * of unresolved gotos */
+static void irCtxAddUnresolvedGoto(IrCtx *ctx, IrValue *ir_goto) {
+    IrUnresolvedBlock *ir_unresolved_goto;
+    ir_unresolved_goto = irUnresolvedGotoNew(ir_goto, ctx->current_block);
+    /* There can be many different goto / source block combinations so 
+     * we do not want a set. */
+    ptrVecPush(ctx->unresolved_gotos, ir_unresolved_goto);
+}
+
+/* Add the label along with the block it is attached to the to the hashtable.
+ * We panic if we already have seen the label as label names need to be unique.
+ * */
+static void irCtxAddUnresolvedLabel(IrCtx *ctx, IrValue *ir_label) {
+    IrUnresolvedBlock *ir_unresolved_label;
+    ir_unresolved_label = irUnresolvedLabelNew(ir_label, ctx->current_block);
+
+    int ok = strMapAddAoStrOrErr(ctx->unresolved_labels,
+                                 ir_label->name,
+                                 ir_unresolved_label);
+    if (!ok) {
+        loggerPanic("Label %s has already been seen in IR block %s\n", 
+                ir_label->name->data, ctx->current_block->label->data);
+    }
 }
 
 /* We will reset this after each function has been created */
@@ -724,24 +815,8 @@ IrFunction *irFunctionNew(aoStr *name) {
     return ir_function;
 }
 
-/*==================== IR AST PARSING ======================================= */
-IrInstr *irCmp(IrBlock *block, IrValue *result, IrValue *op1, IrValue *op2,
-               IrCmpKind kind);
-IrInstr *irICmp(IrBlock *block, IrValue *result, IrCmpKind kind, IrValue *op1, 
-                IrValue *op2);
-IrInstr *irFCmp(IrBlock *block, IrValue *result, IrCmpKind kind, IrValue *op1, 
-                IrValue *op2);
-IrInstr *irJump(IrBlock *block, IrBlock *target);
-IrInstr *irBranch(IrBlock *block, IrValue *cond, IrBlock *true_block,
-              IrBlock *false_block);
-IrValue *irLoadClassRef(IrCtx *ctx,
-                        IrFunction *func,
-                        Ast *cls,
-                        AstType *field,
-                        int offset);
 
-IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast);
-void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast);
+/*==================== IR AST PARSING ======================================= */
 
 IrInstr *irCmp(IrBlock *block, IrValue *result, IrValue *op1, IrValue *op2,
                IrCmpKind kind)
@@ -1859,7 +1934,21 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
                 ir_call->extra.fn_args = NULL;
             }
             ptrVecPush(ctx->current_block->instructions, ir_call);
-            break;
+            return ir_fn_call;
+        }
+
+        case AST_LABEL: {
+            IrValue *ir_label_value = irValueNew(IR_TYPE_LABEL, IR_VALUE_LABEL);
+            ir_label_value->name = ast->slabel;
+            irCtxAddUnresolvedLabel(ctx, ir_label_value);
+            return ir_label_value;
+        }
+
+        case AST_GOTO: {
+            IrValue *ir_goto_value = irValueNew(IR_TYPE_LABEL, IR_VALUE_LABEL);
+            ir_goto_value->name = ast->slabel;
+            irCtxAddUnresolvedGoto(ctx, ir_goto_value);
+            return ir_goto_value;
         }
 
         default:
@@ -1923,6 +2012,7 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
             break;
         }
 
+        /* LOOP IR start =====================================================*/
         case AST_WHILE: {
             IrBlock *ir_while_cond = irBlockNew(irBlockName());
             IrBlock *ir_while_body = irBlockNew(irBlockName());
@@ -2082,6 +2172,7 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
             irCtxSetLoopHeadBlock(ctx, ir_previous_head_block);
             break;
         }
+        /* LOOP IR end =======================================================*/
 
         case AST_CONTINUE: {
             if (ctx->flags & IR_CTX_FLAG_IN_LOOP) {
@@ -2136,6 +2227,36 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
     }
 }
 
+void irResolveGotos(IrCtx *ctx) {
+    PtrVec *ir_goto_vec = ctx->unresolved_gotos;
+    for (int i = 0; i < ir_goto_vec->size; ++i) {
+        IrUnresolvedBlock *ir_ugoto = vecGet(IrUnresolvedBlock *,ir_goto_vec,i);
+        aoStr *goto_label = ir_ugoto->goto_.ir_value->name;
+
+        IrUnresolvedBlock *ir_ulabel = strMapGetAoStr(ctx->unresolved_labels,
+                                                      goto_label);
+
+        if (!ir_ulabel) {
+            loggerPanic("Goto points to label `%s` which does not exist\n",
+                    goto_label->data);
+        }
+
+        aoStr *dest_label = ir_ulabel->label_.ir_value->name;
+        IrBlock *ir_src = ir_ugoto->goto_.ir_block;
+        IrBlock *ir_dest = ir_ugoto->label_.ir_block;
+
+        if (aoStrCmp(ir_src->label, ir_dest->label)) {
+            /* Do we need to do anything?... filter out all of the instructions
+             * in between the goto and the label? */
+        } else {
+            /* We are looking at two different blocks; either create, detacht or 
+             * merge? */
+        }
+
+        
+    }
+}
+
 /*==================== IR LOWERING ========================================== */
 
 /* Function parameters can only be a one of a few different types, thus this is
@@ -2155,10 +2276,7 @@ IrValue *irConvertAstFuncParam(Ast *ast_param) {
     return ir_value;
 }
 
-IrFunction *irLowerFunction(IrCtx *ctx, 
-                            IrProgram *program, 
-                            Ast *ast_function)
-{
+IrFunction *irLowerFunction(IrCtx *ctx, IrProgram *program, Ast *ast_function) {
     irBlockCountReset();
     IrFunction *ir_function = irFunctionNew(ast_function->fname);
     IrBlock *ir_entry_block = irBlockNew(aoStrDupRaw(str_lit("entry")));
@@ -2212,7 +2330,12 @@ IrFunction *irLowerFunction(IrCtx *ctx,
     irCtxSetCurrentBlock(ctx, ir_entry_block);
     irCtxSetExitBlock(ctx, ir_exit_block);
 
+    /* The function now has everything lowered to IR */
     irStatement(ctx, ir_function, ast_function->body);
+
+    if (ctx->unresolved_gotos->size) {
+        irResolveGotos(ctx);
+    }
 
     ptrVecPush(ir_function->blocks, ir_exit_block);
     irRet(ir_function->exit_block, ir_function->return_value);

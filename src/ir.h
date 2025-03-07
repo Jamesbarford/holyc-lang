@@ -128,6 +128,7 @@ typedef struct IrInstr IrInstr;
 typedef struct IrBlock IrBlock;
 typedef struct IrFunction IrFunction;
 typedef struct IrProgram IrProgram;
+typedef union IrUnresolvedBlock IrUnresolvedBlock;
 
 typedef struct IrBlock {
     aoStr *label;         /* Identifier for the block */
@@ -213,6 +214,22 @@ typedef struct IrProgram {
                                * a bit more thought */
 } IrProgram;
 
+/* This seems a little daft having this but goto's wreck havoc with control 
+ * flow. We need to find when we have seen a label and when we have seen a 
+ * goto that goes to a label. This needs to be resolved after we have made the 
+ * rest of the blocks and thus resolved all labels. */
+typedef union IrUnresolvedBlock {
+    struct {
+        IrValue *ir_value;
+        IrBlock *ir_block;
+    } goto_;
+
+    struct {
+        IrValue *ir_value;
+        IrBlock *ir_block;
+    } label_;
+} IrUnresolvedBlock;
+
 typedef struct IrCtx {
     unsigned long flags;      /* Flags for parsing */
     IrFunction *func;         /* The current function being lowered to IR */
@@ -230,6 +247,16 @@ typedef struct IrCtx {
                                * `while/do_while/for` */
 
     IrBlock *switch_end_block; /* Block after a switch statement */
+
+    PtrVec *unresolved_gotos;  /* PtrVec<IrUnresolvedBlock *>
+                                * When we see a goto we need to save it till we 
+                                * have finished off the function. */
+
+    StrMap *unresolved_labels;  /* StrMap<IrUnresolvedBlock *>
+                                 * When we see a label we want to add it to the 
+                                 * hashtable for later resolution. We will 
+                                 * iterate over the gotos and index this 
+                                 * hashtable */
 } IrCtx;
 
 void irArenaInit(unsigned int capacity);
