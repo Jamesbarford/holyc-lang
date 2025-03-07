@@ -52,21 +52,20 @@
 #define AST_CAST           285
 #define AST_FUN_PROTO      286
 #define AST_CASE           287
-#define AST_JUMP           288
-#define AST_EXTERN_FUNC    289
-#define AST_DO_WHILE       290
-#define AST_PLACEHOLDER    291
-#define AST_SWITCH         292
-#define AST_DEFAULT        293
-#define AST_SIZEOF         294
-#define AST_COMMENT        295
+#define AST_EXTERN_FUNC    288
+#define AST_DO_WHILE       289
+#define AST_PLACEHOLDER    290
+#define AST_SWITCH         291
+#define AST_DEFAULT        292
+#define AST_SIZEOF         293
+#define AST_COMMENT        294
 
 /* @Cleanup
  * Urgently get rid of this, we do not need `n` ways of setting a label on 
  * an AST it is extremely confusing */
 #define astHackedGetLabel(ast) \
     ((ast)->kind == AST_GOTO || (ast)->kind == AST_LABEL ? ((ast)->slabel ? (ast)->slabel : (ast)->sval) : \
-    ((ast)->kind == AST_JUMP ? (ast)->jump_label : (ast)->kind == AST_CASE ? (ast)->case_label : NULL))
+    ((ast)->kind == AST_CASE ? (ast)->case_label : NULL))
 
 
 typedef struct AstType AstType;
@@ -274,10 +273,6 @@ typedef struct Ast {
             Ast **jump_table_order;
             PtrVec *cases;
             aoStr *case_end_label;
-        };
-
-        struct {
-            aoStr *jump_label;
         };
     };
 } Ast;

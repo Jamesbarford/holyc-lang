@@ -873,14 +873,6 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
         break;
     }
 
-    case AST_JUMP: {
-        char *label = ast->jump_label->data;
-        if (*label == '.') label++;
-        char *_goto = transpileKeyWordHighlight(ctx, KW_GOTO);
-        aoStrCatFmt(buf, "%s %s;\n", _goto, label);
-        break;
-    }
-
     case AST_GOTO: {
         char *label = ast->slabel->data;
         if (*label == '.') label++;

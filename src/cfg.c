@@ -977,7 +977,6 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
         case AST_GOTO:         cfgHandleGoto(builder,ast);   break;
         case AST_LABEL:        cfgHandleLabel(builder,ast);  break;
         case AST_RETURN:       cfgHandleReturn(builder,ast); break;
-        case AST_JUMP:         cfgHandleGoto(builder,ast);   break;
 
         case AST_CASE: {
             loggerPanic("Case should be handled by switch function\n");
@@ -1668,7 +1667,7 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
 
         for (int i = 0; i < bb_goto->ast_array->size; ++i) {
             ast = (Ast *)bb_goto->ast_array->entries[i];
-            if (ast->kind == AST_GOTO || ast->kind == AST_JUMP) {
+            if (ast->kind == AST_GOTO) {
                 break;
             }
         }
@@ -1676,7 +1675,7 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
         aoStr *goto_label = astHackedGetLabel(ast);
         aoStr *dest_label = astHackedGetLabel(ast);
 
-        assert(ast->kind == AST_GOTO || ast->kind == AST_JUMP);
+        assert(ast->kind == AST_GOTO);
 
         bb_dest = strMapGetLen(builder->resolved_labels,dest_label->data,
                 dest_label->len);

@@ -400,13 +400,6 @@ Ast *astDefault(aoStr *case_label, List *case_asts) {
     return ast;
 }
 
-Ast *astJump(char *name, int len) {
-    Ast *ast = astNew();
-    ast->kind = AST_JUMP;
-    ast->jump_label = aoStrDupRaw(name,len);
-    return ast;
-}
-
 Ast *astFor(Ast *init,
             Ast *cond,
             Ast *step,
@@ -1628,10 +1621,6 @@ void _astToString(aoStr *str, Ast *ast, int depth) {
                     astTypeToString(ast->type));
             break;
 
-        case AST_JUMP:
-            aoStrCatPrintf(str, "<jump> %s\n", ast->jump_label->data);
-            break;
-
         case AST_CASE: {
             if (ast->case_begin == ast->case_end) {
                 aoStrCatPrintf(str, "<case> %d %s:\n", ast->case_begin,
@@ -1750,14 +1739,15 @@ char *astKindToString(int kind) {
     case AST_ARRAY_INIT: return "AST_ARRAY_INIT";
     case AST_IF:         return "AST_IF";
     case AST_GOTO:       return "AST_GOTO";
+
     case AST_LABEL:      return "AST_LABEL";
     case AST_RETURN:     return "AST_RETURN";
+
     case AST_COMPOUND_STMT: return "AST_COMPOUND_STMT";
     case AST_CLASS_REF:  return "AST_CLASS_REF";
     case AST_DEFAULT_PARAM: return "AST_DEFAULT_PARAM";
     case AST_VAR_ARGS:   return "AST_VAR_ARGS";
     case AST_CAST:       return "AST_CAST";
-    case AST_JUMP:       return "AST_JUMP";
     case AST_ASM_FUNC_BIND: return "AST_ASM_FUNC_BIND";
     case AST_FUNPTR_CALL: return "AST_FUNPTR_CALL";
     case AST_ASM_FUNCALL: return "AST_ASM_FUNCALL";
@@ -2138,7 +2128,6 @@ const char *astKindToHumanReadable(Ast *ast) {
         case AST_GVAR: return "global variable";
         case AST_GOTO: return "goto statement";
         case AST_LABEL: return "label";
-        case AST_JUMP: return "jump";
         case AST_LVAR: return "local variable";
         case AST_EXTERN_FUNC: return "external function";
         case AST_FUN_PROTO: return "function prototype";

@@ -760,7 +760,8 @@ void asmBinaryOpIntArithmetic(Cctrl *cc,aoStr *buf, Ast *ast, int reverse) {
     }
 
     int ok = 1;
-    ssize_t result = evalIntArithmeticOrErr(ast,&ok);
+    ssize_t result = 1; // evalIntArithmeticOrErr(ast,&ok);
+    ok = 0;
     if (!ok) {
         ok = 1;
         result = evalOneIntExprOrErr(LHS,RHS,ast->kind,&ok);
@@ -1719,10 +1720,6 @@ void asmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
         }
         break;
     }
-
-    case AST_JUMP:
-         aoStrCatPrintf(buf, "jmp    %s\n\t", ast->jump_label->data);
-         break;
 
     case AST_GOTO:
     case AST_BREAK:
