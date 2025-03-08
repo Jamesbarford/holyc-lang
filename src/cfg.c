@@ -240,7 +240,7 @@ char *bbToString(BasicBlock *bb) {
 }
 
 char *bbPreviousBlockNumbersToString(BasicBlock *bb) {
-    return intMapKeysToString(bb->prev_blocks);
+    return aoStrMove(intMapKeysToString(bb->prev_blocks));
 }
 
 char *bbToJSON(BasicBlock *bb) {
@@ -1077,7 +1077,7 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
          * label */
         for (int i = 0; i < dest_ast_array->size; ++i) {
             Ast *needle = dest_ast_array->entries[i];
-            if (needle->kind == AST_LABEL && aoStrCmp(goto_label,
+            if (needle->kind == AST_LABEL && aoStrEq(goto_label,
                         astHackedGetLabel(needle))) {
                 break;
             } else {

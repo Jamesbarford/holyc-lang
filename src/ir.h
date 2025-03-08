@@ -130,15 +130,12 @@ typedef struct IrFunction IrFunction;
 typedef struct IrProgram IrProgram;
 typedef union IrUnresolvedBlock IrUnresolvedBlock;
 
+/* We keep the successors and predecessors on the function in a graph as it 
+ * is easier to keep track of the mappings between the blocks. */
 typedef struct IrBlock {
-    aoStr *label;         /* Identifier for the block */
-    PtrVec *instructions; /* Vector of ir instructions belonging to the block */
-    PtrVec *predecessors; /* Blocks that flow into this one 
-                           * PtrVec<IrBlock *> */
-
-    PtrVec *successors;   /* Blocks that this can flow into 
-                           * PtrVec<IrBlock *>*/
+    int id;               /* Identifier for the block */
     int sealed;
+    PtrVec *instructions; /* Vector of ir instructions belonging to the block */
     StrMap *ssa_values;
 } IrBlock;
 
@@ -190,6 +187,12 @@ typedef struct IrInstr {
     } extra;
 } InInstr;
 
+typedef struct IrBlockMapping {
+    int id;
+    IntSet *successors;
+    IntSet *predecessors;
+} IrBlockMapping;
+
 typedef struct IrFunction {
     IrValue *return_value; /* Not sure if this is needed but for printing as a 
                            * string it looks pretty! */
@@ -200,6 +203,8 @@ typedef struct IrFunction {
     IrBlock *entry_block; /* Entry */
     IrBlock *exit_block;  /* Exit */
     StrMap *variables;    /* The functions local variables StrMap<IrValue *> */
+    IntMap *cfg;          /* The interconnectivity between nodes: 
+                           * IntMap<IrBlockMapping> [id] => {id, id...} */
 } IrFunction;
 
 typedef struct IrProgram {

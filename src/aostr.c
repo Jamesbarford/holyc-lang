@@ -98,7 +98,7 @@ void aoStrRepeatChar(aoStr *buf, char ch, int times) {
     }
 }
 
-int aoStrCmp(aoStr *b1, aoStr *b2) {
+int aoStrEq(aoStr *b1, aoStr *b2) {
     size_t l1 = b1->len;
     size_t l2 = b2->len;
     return l1==l2&&!memcmp(b1->data, b2->data, l1);

@@ -373,7 +373,7 @@ StrMap *parseClassOffsets(Cctrl *cc,
             if (field->kind == AST_TYPE_POINTER && 
                     (field->ptr->kind == AST_TYPE_CLASS || field->ptr->kind == AST_TYPE_UNION)) {
                 if (clsname && field->ptr->clsname) {
-                    if (aoStrCmp(field->ptr->clsname, clsname)) {
+                    if (aoStrEq(field->ptr->clsname, clsname)) {
                         field->fields = fields_dict;
                     }
                 }

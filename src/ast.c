@@ -960,7 +960,7 @@ int astIsUnionPointer(AstType *type) {
 
 int astIsLabelMatch(Ast *ast, aoStr *goto_label) {
     return ast->kind == AST_LABEL &&
-           aoStrCmp(goto_label, astHackedGetLabel(ast));
+           aoStrEq(goto_label, astHackedGetLabel(ast));
 }
 
 static aoStr *astTypeToAoStrInternal(AstType *type) {

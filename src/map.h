@@ -3,6 +3,8 @@
 
 #include <limits.h>
 
+#include "aostr.h"
+
 #define HT_LOAD    0.60
 #define HT_DELETED LONG_MAX
 #define HT_VACANT  LONG_MAX-1
@@ -82,8 +84,8 @@ void intMapSetFreeValue(IntMap *map, void (*_free_value)(void *value));
 void intMapClear(IntMap *map);
 void intMapRelease(IntMap *map);
 int intMapResize(IntMap *map);
-char *intMapToString(IntMap *map, char *(*stringify_value)(void *));
-char *intMapKeysToString(IntMap *map);
+aoStr *intMapToString(IntMap *map, char *delimiter, aoStr *(*stringify_value)(void *));
+aoStr *intMapKeysToString(IntMap *map);
 
 IntMapIterator *intMapIteratorNew(IntMap *map);
 void intMapIteratorRelease(IntMapIterator *it);
@@ -181,6 +183,6 @@ void intSetRelease(IntSet *iset);
 IntSetIterator *intSetIteratorNew(IntSet *iset);
 long intSetNext(IntSetIterator *it);
 void intSetIteratorRelease(IntSetIterator *it);
-char *intSetToString(IntSet *iset);
+aoStr *intSetToString(IntSet *iset);
 
 #endif

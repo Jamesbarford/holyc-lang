@@ -28,7 +28,7 @@ void aoStrToLowerCase(aoStr *buf);
 void aoStrToUpperCase(aoStr *buf);
 void aoStrPutChar(aoStr *buf, char ch);
 void aoStrRepeatChar(aoStr *buf, char ch, int times);
-int aoStrCmp(aoStr *b1, aoStr *b2);
+int aoStrEq(aoStr *b1, aoStr *b2);
 aoStr *aoStrDupRaw(char *s, size_t len);
 aoStr *aoStrDup(aoStr *buf);
 

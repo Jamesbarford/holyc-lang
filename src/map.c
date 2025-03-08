@@ -454,56 +454,56 @@ int intMapHas(IntMap *map, long key) {
     return idx != HT_DELETED;
 }
 
-char *intMapToString(IntMap *map, char *(*stringify_value)(void *)) {
-    aoStr *str = aoStrNew();
+aoStr *intMapToString(IntMap *map, char *delimiter, aoStr *(*stringify_value)(void *)) {
+    aoStr *buf = aoStrNew();
     unsigned long map_size = map->size;
 
     if (map_size == 0) {
-        aoStrCatLen(str,"{}",2);
-        return aoStrMove(str);
+        aoStrCatLen(buf,"{}",2);
+        return buf;
     }
 
     unsigned long i = 0;
     IntMapIterator *it = intMapIteratorNew(map);
     IntMapNode *entry;
-    aoStrPutChar(str,'{');
     while ((entry = intMapNext(it)) != NULL) {
-        char *value_string = stringify_value(entry->value);
+        aoStr *value_string = stringify_value(entry->value);
         if ((i + 1) == map_size) {
-            aoStrCatPrintf(str,"[%ld] => %s}",entry->key,value_string);
+            aoStrCatFmt(buf,"[%I] => %S",entry->key,value_string);
         } else {
-            aoStrCatPrintf(str,"[%ld] => %s, ",entry->key,value_string);
+            aoStrCatFmt(buf,"[%I] => %S%s",entry->key,value_string,delimiter);
         }
-        free(value_string);
+        aoStrRelease(value_string);
         i++;
     }
     intMapIteratorRelease(it);
-    return aoStrMove(str);
+    return buf;
 }
 
-char *intMapKeysToString(IntMap *map) {
-    aoStr *str = aoStrNew();
+aoStr *intMapKeysToString(IntMap *map) {
+    aoStr *buf = aoStrNew();
     unsigned long map_size = map->size;
 
     if (map_size == 0) {
-        aoStrCatLen(str,"{}",2);
-        return aoStrMove(str);
+        aoStrCatLen(buf,"{}",2);
+        return buf;
     }
 
     unsigned long i = 0;
     IntMapIterator *it = intMapIteratorNew(map);
     IntMapNode *entry;
-    aoStrPutChar(str,'{');
+    aoStrPutChar(buf,'{');
     while ((entry = intMapNext(it)) != NULL) {
         if ((i + 1) == map_size) {
-            aoStrCatPrintf(str,"%ld}",entry->key);
+            aoStrCatPrintf(buf,"%ld",entry->key);
         } else {
-            aoStrCatPrintf(str,"%ld, ",entry->key);
+            aoStrCatPrintf(buf,"%ld, ",entry->key);
         }
         i++;
     }
+    aoStrPutChar(buf,'}');
     intMapIteratorRelease(it);
-    return aoStrMove(str);
+    return buf;
 }
 
 unsigned long strMapHashFunction(char *key, long key_len, unsigned long mask) {
@@ -1098,27 +1098,28 @@ void intSetIteratorRelease(IntSetIterator *it) {
     if (it) free(it);
 }
 
-char *intSetToString(IntSet *iset) {
-    aoStr *str = aoStrNew();
+aoStr *intSetToString(IntSet *iset) {
+    aoStr *buf = aoStrNew();
     unsigned long set_size = iset->size;
 
     if (set_size == 0) {
-        aoStrCatLen(str,"{}",2);
-        return aoStrMove(str);
+        aoStrCatLen(buf,str_lit("{}"));
+        return buf;
     }
 
     unsigned long i = 0;
     long key;
     IntSetIterator *it = intSetIteratorNew(iset);
-    aoStrPutChar(str,'{');
+    aoStrPutChar(buf,'{');
     while ((key = intSetNext(it)) != HT_DELETED) {
         if ((i + 1) == set_size) {
-            aoStrCatPrintf(str,"%ld}",key);
+            aoStrCatFmt(buf,"%i",key);
         } else {
-            aoStrCatPrintf(str,"%ld, ",key);
+            aoStrCatFmt(buf,"%i, ",key);
         }
         i++;
     }
+    aoStrPutChar(buf,'}');
     intSetIteratorRelease(it);
-    return aoStrMove(str);
+    return buf;
 }
