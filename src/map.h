@@ -52,7 +52,6 @@ typedef struct IntMapNode {
     void *value;
 } IntMapNode;
 
-
 typedef struct IntMap {
     unsigned long size;     /* How many entries are in the hashtable */
     unsigned long capacity; /* How much capacity we have in the entries array */
@@ -77,6 +76,7 @@ typedef struct IntMapIterator {
 int intMapAdd(IntMap *map, long key, void *value);
 void *intMapGet(IntMap *map, long key);
 void *intMapGetAt(IntMap *map, long index);
+void *intMapGetFirst(IntMap *map);
 int intMapDelete(IntMap *map, long key);
 int intMapHas(IntMap *map, long key);
 IntMap *intMapNew(unsigned long capacity);

@@ -423,8 +423,9 @@ int intMapDelete(IntMap *map, long key) {
     unsigned long idx = intMapGetIdx(map,key);
     if (idx != HT_DELETED) {
         IntMapNode *n = map->entries[idx];
-        if (map->_free_value)
+        if (map->_free_value) {
             map->_free_value(n->value);
+        }
         n->key = HT_DELETED;
         map->size--;
         return 1;
@@ -445,6 +446,18 @@ void *intMapGet(IntMap *map, long key) {
 void *intMapGetAt(IntMap *map, long index) {
     long idx = intVecGet(map->indexes,index);
     return map->entries[idx]->value;
+}
+
+/* Get the first non-deleted item from the map */
+void *intMapGetFirst(IntMap *map) {
+    for (int i = 0; i < map->indexes->size; ++i) {
+        long idx = map->indexes->entries[i];
+        IntMapNode *node = map->entries[idx];
+        if (node->key != HT_DELETED) {
+            return node->value;
+        }
+    }
+    return NULL;
 }
 
 /* While seemingly an overkill this means that we can use the map as a set 
@@ -494,10 +507,9 @@ aoStr *intMapKeysToString(IntMap *map) {
     IntMapNode *entry;
     aoStrPutChar(buf,'{');
     while ((entry = intMapNext(it)) != NULL) {
-        if ((i + 1) == map_size) {
-            aoStrCatPrintf(buf,"%ld",entry->key);
-        } else {
-            aoStrCatPrintf(buf,"%ld, ",entry->key);
+        aoStrCatFmt(buf,"%I",entry->key);
+        if ((i + 1) != map_size) {
+            aoStrCatLen(buf, str_lit(", "));
         }
         i++;
     }
