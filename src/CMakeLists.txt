@@ -59,6 +59,7 @@ set(SOURCES
     prsasm.c
     prslib.c
     prsutil.c
+    uniq-list.c
     transpiler.c
     x86.c
 )
@@ -83,6 +84,7 @@ set(HEADERS
     prsasm.h
     prslib.h
     prsutil.h
+    uniq-list.h
     util.h
     transpiler.h
     version.h

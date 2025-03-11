@@ -204,8 +204,8 @@ typedef struct IrFunction {
                            * string it looks pretty! */
     aoStr *name;          /* Function name */
     IrProgram *program;   /* A pointer to the program */
-    PtrVec *params;       /* Parameter list, PtrVec<IrValue *> */
-    List *blocks;         /* Basic blocks, List<IrInstr *> */
+    PtrVec *params;       /* Parameter list, `PtrVec<IrValue *>` */
+    List *blocks;         /* Basic blocks, `List<IrBlock *>` */
     IrBlock *entry_block; /* Entry */
     IrBlock *exit_block;  /* Exit */
     StrMap *variables;    /* The functions local variables StrMap<IrValue *> */
@@ -219,8 +219,8 @@ typedef struct IrProgram {
      * the strings and types do... These are presumably Ast structs which 
      * is kinds nasty having both an Ast and Ir later in the codegen phase.
      */
-    StrMap *global_variables; /* StrMap<IrValue *> */
-    StrMap *strings;          /* StrMap<IrValue *> */
+    StrMap *global_variables; /* `StrMap<IrValue *>` */
+    StrMap *strings;          /* `StrMap<IrValue *>` */
     StrMap *types;            /* @TODO: StrMap<?> I feel this one needs
                                * a bit more thought */
 } IrProgram;

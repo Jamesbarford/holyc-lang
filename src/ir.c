@@ -15,10 +15,12 @@
 #include "arena.h"
 #include "cctrl.h"
 #include "ir.h"
+#include "list.h"
 #include "lexer.h"
 #include "map.h"
 #include "memory.h"
 #include "transpiler.h"
+#include "uniq-list.h"
 #include "util.h"
 
 static Arena ir_memory_arena;
@@ -2451,9 +2453,35 @@ int irBlocksHaveSingleLink(IrFunction *func, IrBlock *next, IrBlock *prev) {
     return 0;
 }
 
+/* @THINK
+ * This function takes a `List<IrBlock *>` node and returns what is essentially;
+ * `list->value->id`, as we queue the actual list nodes in the work queue as 
+ * opposed to just the blocks. */
+int irBlockListIdAccessor(void *_ir_list_block) {
+    return ((IrBlock *)((List *)_ir_list_block)->value)->id;
+}
+
 void irSimplifyBlocks(IrFunction *func) {
+    UniqList *work_queue = uniqListNew(&irBlockListIdAccessor);
+
+    /** 
+     * @THINK
+     * We append the list nodes themeselves as opposed to the `IrBlock *` as this
+     * allows for easier delinking from the actual `IrFunction *`'s blocks. Though
+     * it is _slightly_ annoying having to cast the value, seems like a reasinable
+     * compromise, 
+     *
+     * Maybe we keep a hashtable of nodes that we need to delete from the blocks
+     * and do it in one pass. Doing it as we go seems extremely problematic as
+     * you'd keep doing passes of the list. */
     listForEach(func->blocks) {
-        IrBlock *block = (IrBlock *)it->value;
+        uniqListAppend(work_queue, it);
+    }
+
+    while (!uniqListEmpty(work_queue)) {
+        /* We kind of have a list of lists */
+        List *it = uniqListDequeue(work_queue);
+        IrBlock *block = listValue(IrBlock *, it);
         IrBlockMapping *mapping = intMapGet(func->cfg, block->id);
 
         if (block == func->exit_block) continue;
