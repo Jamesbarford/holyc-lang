@@ -77,7 +77,7 @@ extern int is_terminal;
           __file_len__--;                                                  \
         }                                                                  \
         __file_len__++;                                                    \
-        fprintf(stderr, "\033[0;35m%s:%d:%s  \033[0m",                     \
+        fprintf(stderr, "\033[0;35mWARNING %s:%d:%s  \033[0m",             \
             __endptr__+__file_len__, __LINE__, __func__);                  \
         fprintf(stderr, __VA_ARGS__);                                      \
     } while (0)
