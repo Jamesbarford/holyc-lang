@@ -50,8 +50,8 @@ static void *irArenaAlloc(unsigned int size) {
 }
 
 /*==================== IR PROTOTYPES ======================================== */
-IrUnresolvedBlock *irUnresolvedGotoNew(IrValue *goto_label, IrBlock *ir_source_block);
-IrUnresolvedBlock *irUnresolvedLabelNew(IrValue *label, IrBlock *ir_destination_block);
+IrUnresolvedBlock *irUnresolvedGotoNew(List *list_node, IrBlock *ir_source_block);
+IrUnresolvedBlock *irUnresolvedLabelNew(List *list_node, IrBlock *ir_destination_block);
 IrInstr *irCmp(IrBlock *block, IrValue *result, IrValue *op1, IrValue *op2,
                IrCmpKind kind);
 IrInstr *irICmp(IrBlock *block, IrValue *result, IrCmpKind kind, IrValue *op1, 
@@ -76,8 +76,8 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast);
 
 IrValue *irFunctionGetLocalFnPtr(IrFunction *ir_function, Ast *ast);
 IrBlockMapping *irFunctionGetBlockMapping(IrFunction *func, IrBlock *ir_block);
-IntSet *irFunctionGetSuccessors(IrFunction *func, IrBlock *ir_block);
-IntSet *irFunctionGetPredecessors(IrFunction *func, IrBlock *ir_block);
+IntMap *irFunctionGetSuccessors(IrFunction *func, IrBlock *ir_block);
+IntMap *irFunctionGetPredecessors(IrFunction *func, IrBlock *ir_block);
 
 /*==================== IR HELPERS =========================================== */
 /* Is what we are looking at a comparison? */
@@ -182,6 +182,7 @@ aoStr *irValueToString(IrValue *ir_value) {
         case IR_VALUE_PHI:         aoStrCatFmt(buf, "phi"); break;
         case IR_VALUE_LABEL:       aoStrCatFmt(buf, "%S", ir_value->name); break;
         case IR_VALUE_UNDEFINED:   aoStrCatFmt(buf, "undefined"); break;
+        case IR_VALUE_UNRESOLVED:  aoStrCatFmt(buf, "unresolved"); break;
         default: loggerPanic("Unhandled IrValueKind: %d\n", ir_value->kind);
     }
 
@@ -275,6 +276,7 @@ const char *irOpcodeToString(IrInstr *ir_instr) {
         case IR_OP_SWITCH:   ir_op_str = "switch"; break;
         case IR_OP_CALL:     ir_op_str = "call"; break;
         case IR_OP_PHI:      ir_op_str = "phi"; break;
+        case IR_OP_LABEL:    ir_op_str = "label"; break;
         case IR_OP_SELECT:   ir_op_str = "select"; break;
         case IR_OP_VA_ARG:   ir_op_str = "va_arg"; break;
         case IR_OP_VA_START: ir_op_str = "va_start"; break;
@@ -287,8 +289,6 @@ const char *irOpcodeToString(IrInstr *ir_instr) {
         return mprintf("%-8s",ir_op_str);
     }
 }
-
-
 
 void irPhiPairToString(aoStr *buf, IrPhiPair *ir_phi_pair) {
     aoStr *ir_value_str = irValueToString(ir_phi_pair->ir_value);
@@ -343,7 +343,12 @@ aoStr *irInstrToString(IrInstr *ir_instr) {
 
         case IR_OP_LOOP:
         case IR_OP_JMP: {
-            aoStrCatFmt(buf, "%s bb%I", op, ir_instr->target_block->id);
+            /* This is for unresolved gotos */
+            if (ir_instr->target_block == NULL) {
+                aoStrCatFmt(buf, "%s ???", op);
+            } else {
+                aoStrCatFmt(buf, "%s bb%I", op, ir_instr->target_block->id);
+            }
             break;
         }
 
@@ -388,8 +393,8 @@ aoStr *irInstrToString(IrInstr *ir_instr) {
 aoStr *irBlockToString(IrFunction *func, IrBlock *ir_block) {
     aoStr *buf = aoStrNew();
 
-    IntSet *successors = irFunctionGetSuccessors(func, ir_block);
-    IntSet *predecessors = irFunctionGetPredecessors(func, ir_block);
+    IntMap *successors = irFunctionGetSuccessors(func, ir_block);
+    IntMap *predecessors = irFunctionGetPredecessors(func, ir_block);
 
     if (is_terminal) {
         aoStrCatFmt(buf, ESC_BOLD"  bb%i"ESC_CLEAR_BOLD" -> ", ir_block->id);
@@ -398,7 +403,7 @@ aoStr *irBlockToString(IrFunction *func, IrBlock *ir_block) {
     }
 
     if (predecessors) {
-        aoStr *predecessors_str = intSetToString(predecessors);
+        aoStr *predecessors_str = intMapKeysToString(predecessors);
         aoStrCatFmt(buf, "predecessors: %S  ", predecessors_str);
         aoStrRelease(predecessors_str);
     } else {
@@ -406,7 +411,7 @@ aoStr *irBlockToString(IrFunction *func, IrBlock *ir_block) {
     }
 
     if (successors) {
-        aoStr *successors_str = intSetToString(successors);
+        aoStr *successors_str = intMapKeysToString(successors);
         aoStrCatFmt(buf, "successors: %S", successors_str);
         aoStrRelease(successors_str);
     } else {
@@ -414,8 +419,8 @@ aoStr *irBlockToString(IrFunction *func, IrBlock *ir_block) {
     }
 
     aoStrPutChar(buf, '\n');
-    for (int j = 0; j < ir_block->instructions->size; ++j) {
-        IrInstr *ir_instr = vecGet(IrInstr *, ir_block->instructions, j);
+    listForEach(ir_block->instructions) {
+        IrInstr *ir_instr = (IrInstr *)it->value;
         aoStr *ir_instr_str = irInstrToString(ir_instr);
         aoStrCatFmt(buf, "    %S\n", ir_instr_str);
         aoStrRelease(ir_instr_str);
@@ -454,8 +459,8 @@ aoStr *irFunctionToString(IrFunction *ir_func) {
     aoStrCatFmt(buf, "%S\n",ir_entry_block_str);
     aoStrRelease(ir_entry_block_str);
 
-    for (int i = 0; i < ir_func->blocks->size; ++i) {
-        IrBlock *ir_block = vecGet(IrBlock *, ir_func->blocks, i);
+    listForEach(ir_func->blocks) {
+        IrBlock *ir_block = (IrBlock *)it->value;
         aoStr *ir_block_str = irBlockToString(ir_func, ir_block);
         aoStrCatFmt(buf, "%S\n", ir_block_str);
         aoStrRelease(ir_block_str);
@@ -478,28 +483,52 @@ void irPrintFunction(IrFunction *ir_function) {
 IrBlock *irBlockNew(int id) {
     IrBlock *ir_block = (IrBlock *)irArenaAlloc(sizeof(IrBlock));
     ir_block->id = id;
-    ir_block->instructions = ptrVecNew();
+    ir_block->instructions = listNew();
     ir_block->sealed = 0;
     ir_block->ssa_values = strMapNew(8);
     return ir_block;
 }
 
-IrUnresolvedBlock *irUnresolvedGotoNew(IrValue *ir_goto,
-                                       IrBlock *ir_source_block)
+IrUnresolvedBlock *irUnresolvedGotoNew(List *list_node,
+                                        IrBlock *ir_source_block)
 {
     IrUnresolvedBlock *ir_unresolved = (IrUnresolvedBlock *)irArenaAlloc(
                                                      sizeof(IrUnresolvedBlock));
-    ir_unresolved->goto_.ir_value = ir_goto;
+    ir_unresolved->goto_.list_node = list_node;
     ir_unresolved->goto_.ir_block = ir_source_block;
     return ir_unresolved;
 }
 
-IrUnresolvedBlock *irUnresolvedLabelNew(IrValue *ir_label,
+static int ir_block_count = 0;
+void irBlockCountReset(void) {
+    ir_block_count = 0;
+}
+
+int irBlockId(void) {
+    return ir_block_count++;
+}
+
+aoStr *irBlockName(void) {
+    return aoStrPrintf("bb%d", ir_block_count++);
+}
+
+void irBlockAddInstruction(IrBlock *block, IrInstr *ir_instr) {
+    listAppend(block->instructions, ir_instr);
+}
+
+/* Check to see if the instruction is the last one in the list */
+int irBlockIsLastInstruction(IrBlock *block, IrInstr *ir_instr) {
+    List *last = block->instructions->prev;
+    IrInstr *ir_last_instr = (IrInstr *)last->value;
+    return ir_last_instr == ir_instr;
+}
+
+IrUnresolvedBlock *irUnresolvedLabelNew(List *list_node,
                                         IrBlock *ir_destination_block)
 {
     IrUnresolvedBlock *ir_unresolved = (IrUnresolvedBlock *)irArenaAlloc(
                                                      sizeof(IrUnresolvedBlock));
-    ir_unresolved->label_.ir_value = ir_label;
+    ir_unresolved->label_.list_node = list_node;
     ir_unresolved->label_.ir_block = ir_destination_block;
     return ir_unresolved;
 }
@@ -507,8 +536,8 @@ IrUnresolvedBlock *irUnresolvedLabelNew(IrValue *ir_label,
 IrBlockMapping *irBlockMappingNew(int id) {
     IrBlockMapping *mapping = (IrBlockMapping *)irArenaAlloc(sizeof(IrBlockMapping));
     mapping->id = id;
-    mapping->successors = intSetNew(8);
-    mapping->predecessors = intSetNew(8);
+    mapping->successors = intMapNew(8);
+    mapping->predecessors = intMapNew(8);
     return mapping;
 }
 
@@ -581,32 +610,6 @@ static void irCtxSetLoopHeadBlock(IrCtx *ctx, IrBlock *ir_block) {
 
 static void irCtxSetSwitchEndBlock(IrCtx *ctx, IrBlock *ir_block) {
     ctx->switch_end_block = ir_block;
-}
-
-/* Push the goto along with the block it is attached to the to the vector 
- * of unresolved gotos */
-static void irCtxAddUnresolvedGoto(IrCtx *ctx, IrValue *ir_goto) {
-    IrUnresolvedBlock *ir_unresolved_goto;
-    ir_unresolved_goto = irUnresolvedGotoNew(ir_goto, ctx->current_block);
-    /* There can be many different goto / source block combinations so 
-     * we do not want a set. */
-    ptrVecPush(ctx->unresolved_gotos, ir_unresolved_goto);
-}
-
-/* Add the label along with the block it is attached to the to the hashtable.
- * We panic if we already have seen the label as label names need to be unique.
- * */
-static void irCtxAddUnresolvedLabel(IrCtx *ctx, IrValue *ir_label) {
-    IrUnresolvedBlock *ir_unresolved_label;
-    ir_unresolved_label = irUnresolvedLabelNew(ir_label, ctx->current_block);
-
-    int ok = strMapAddAoStrOrErr(ctx->unresolved_labels,
-                                 ir_label->name,
-                                 ir_unresolved_label);
-    if (!ok) {
-        loggerPanic("Label %s has already been seen in IR block %d\n", 
-                ir_label->name->data, ctx->current_block->id);
-    }
 }
 
 /* We will reset this after each function has been created */
@@ -688,7 +691,7 @@ IrBlockMapping *irFunctionGetBlockMapping(IrFunction *func, IrBlock *ir_block) {
     return ir_block_mapping;
 }
 
-IntSet *irFunctionGetSuccessors(IrFunction *func, IrBlock *ir_block) {
+IntMap *irFunctionGetSuccessors(IrFunction *func, IrBlock *ir_block) {
     IrBlockMapping *ir_block_mapping = irFunctionGetBlockMapping(func, ir_block);
     if (ir_block_mapping) {
         return ir_block_mapping->successors;
@@ -696,7 +699,7 @@ IntSet *irFunctionGetSuccessors(IrFunction *func, IrBlock *ir_block) {
     return NULL;
 }
 
-IntSet *irFunctionGetPredecessors(IrFunction *func, IrBlock *ir_block) {
+IntMap *irFunctionGetPredecessors(IrFunction *func, IrBlock *ir_block) {
     IrBlockMapping *ir_block_mapping = irFunctionGetBlockMapping(func, ir_block);
     if (ir_block_mapping) {
         return ir_block_mapping->predecessors;
@@ -711,7 +714,7 @@ void irFunctionAddSuccessor(IrFunction *func, IrBlock *src, IrBlock *dest) {
         ir_block_mapping = irBlockMappingNew(src->id);
         intMapAdd(func->cfg, src->id, ir_block_mapping);
     }
-    intSetAdd(ir_block_mapping->successors, dest->id);
+    intMapAdd(ir_block_mapping->successors, dest->id, dest);
 }
 
 void irFunctionAddPredecessor(IrFunction *func, IrBlock *src, IrBlock *prev) {
@@ -720,19 +723,42 @@ void irFunctionAddPredecessor(IrFunction *func, IrBlock *src, IrBlock *prev) {
         ir_block_mapping = irBlockMappingNew(src->id);
         intMapAdd(func->cfg, src->id, ir_block_mapping);
     }
-    intSetAdd(ir_block_mapping->predecessors, prev->id);
+    intMapAdd(ir_block_mapping->predecessors, prev->id, prev);
+}
+
+void irFunctionRemoveSuccessor(IrFunction *func, IrBlock *src, IrBlock *dest) {
+    IrBlockMapping *ir_block_mapping = (IrBlockMapping *)intMapGet(func->cfg, src->id);
+    if (ir_block_mapping) {
+        intMapDelete(ir_block_mapping->successors, dest->id);
+    }
+}
+
+void irFunctionRemovePredecessor(IrFunction *func, IrBlock *src, IrBlock *prev) {
+    IrBlockMapping *ir_block_mapping = (IrBlockMapping *)intMapGet(func->cfg, src->id);
+    if (ir_block_mapping) {
+        intMapDelete(ir_block_mapping->predecessors, prev->id);
+    }
 }
 
 /* Add `dest` to the `src`'s successor set AND add `src` to `dest`'s 
  * predecessor set */
-void irFunctionAddMappping(IrFunction *func, IrBlock *src, IrBlock *dest) {
+void irFunctionAddMapping(IrFunction *func, IrBlock *src, IrBlock *dest) {
     irFunctionAddSuccessor(func, src, dest);
     irFunctionAddPredecessor(func, dest, src);
 }
 
+void irFunctionRemoveMapping(IrFunction *func, IrBlock *src, IrBlock *dest) {
+    irFunctionRemoveSuccessor(func, src, dest);
+    irFunctionRemovePredecessor(func, dest, src);
+}
+
+void irFunctionAddBlock(IrFunction *func, IrBlock *block) {
+    listAppend(func->blocks, block);
+}
+
 IrBlock *irFunctionFindBlock(IrFunction *func, int id) {
-    for (int i = 0; i < func->blocks->size; ++i) {
-        IrBlock *ir_block = vecGet(IrBlock *,func->blocks, i);
+    listForEach(func->blocks) {
+        IrBlock *ir_block = (IrBlock *)it->value;
         if (ir_block->id == id) {
             return ir_block;
         }
@@ -746,8 +772,8 @@ IrBlock *irFunctionFindBlock(IrFunction *func, int id) {
 aoStr *irBlockMappingToStringCallback(void *_ir_block_mapping) {
     IrBlockMapping *ir_block_mapping = (IrBlockMapping *)_ir_block_mapping;
     aoStr *buf = aoStrNew();
-    aoStr *successor_str = intSetToString(ir_block_mapping->successors);
-    aoStr *predecessor_str = intSetToString(ir_block_mapping->predecessors);
+    aoStr *successor_str = intMapKeysToString(ir_block_mapping->successors);
+    aoStr *predecessor_str = intMapKeysToString(ir_block_mapping->predecessors);
     aoStrCatFmt(buf, "{\n"
                 "    P: %S\n"
                 "    S: %S\n  }",
@@ -790,7 +816,7 @@ IrInstr *irPhi(IrBlock *block, IrValue *result) {
     ir_phi_instr->result = result;
     ir_phi_instr->extra.phi.pairs = ptrVecNew();
 
-    ptrVecPush(block->instructions, ir_phi_instr);
+    irBlockAddInstruction(block, ir_phi_instr);
     return ir_phi_instr;
 }
 
@@ -802,19 +828,6 @@ void irAddPhiIncoming(IrInstr *ir_phi_instr,
     ptrVecPush(ir_phi_instr->extra.phi.pairs, ir_phi_pair);
 }
 
-static int ir_block_count = 0;
-void irBlockCountReset(void) {
-    ir_block_count = 0;
-}
-
-int irBlockId(void) {
-    return ir_block_count++;
-}
-
-aoStr *irBlockName(void) {
-    return aoStrPrintf("bb%d", ir_block_count++);
-}
-
 /* Where `ir_value` is always a constant int so we know how much stack space
  * we require. We _may_ want type info for of the thing we are storing? */
 IrInstr *irAlloca(IrBlock *ir_block, AstType *ast_type) {
@@ -824,7 +837,7 @@ IrInstr *irAlloca(IrBlock *ir_block, AstType *ast_type) {
     IrValue *ir_temporary_variable = irTmpVariable(ir_value_type);
     ir_alloca_instr->op1 = ir_temporary_variable;
     ir_alloca_instr->op2 = ir_alloca_size;
-    ptrVecPush(ir_block->instructions, ir_alloca_instr);
+    irBlockAddInstruction(ir_block, ir_alloca_instr);
     return ir_alloca_instr;
 }
 
@@ -835,7 +848,7 @@ IrInstr *irStore(IrBlock *ir_block, IrValue *ir_dest, IrValue *ir_value) {
     IrInstr *ir_store_instr = irInstrNew(IR_OP_STORE);
     ir_store_instr->op1 = ir_dest;
     ir_store_instr->op2 = ir_value;
-    ptrVecPush(ir_block->instructions, ir_store_instr);
+    irBlockAddInstruction(ir_block, ir_store_instr);
     return ir_store_instr;
 }
 
@@ -843,14 +856,14 @@ IrInstr *irLoad(IrBlock *ir_block, IrValue *ir_dest, IrValue *ir_value) {
     IrInstr *ir_load_instr = irInstrNew(IR_OP_LOAD);
     ir_load_instr->op1 = ir_dest;
     ir_load_instr->op2 = ir_value;
-    ptrVecPush(ir_block->instructions, ir_load_instr);
+    irBlockAddInstruction(ir_block, ir_load_instr);
     return ir_load_instr;
 }
 
 IrInstr *irRet(IrBlock *ir_block, IrValue *ir_value) {
     IrInstr *ir_return_instr = irInstrNew(IR_OP_RET);
     ir_return_instr->op1 = ir_value;
-    ptrVecPush(ir_block->instructions, ir_return_instr);
+    irBlockAddInstruction(ir_block, ir_return_instr);
     return ir_return_instr;
 }
 
@@ -861,7 +874,7 @@ IrInstr *irGetElementPointer(IrBlock *ir_block,
     IrInstr *ir_getelementptr_instr = irInstrNew(IR_OP_GEP);
     ir_getelementptr_instr->op1 = ir_dest;
     ir_getelementptr_instr->op2 = ir_value;
-    ptrVecPush(ir_block->instructions, ir_getelementptr_instr);
+    irBlockAddInstruction(ir_block, ir_getelementptr_instr);
     return ir_getelementptr_instr;
 }
 
@@ -875,7 +888,7 @@ IrInstr *irGetAtIdx(IrBlock *ir_block,
     ir_getelementptr_instr->op1 = ir_dest;
     ir_getelementptr_instr->op2 = ir_value;
     ir_getelementptr_instr->op3 = ir_offset;
-    ptrVecPush(ir_block->instructions, ir_getelementptr_instr);
+    irBlockAddInstruction(ir_block, ir_getelementptr_instr);
     return ir_getelementptr_instr;
 }
 
@@ -883,7 +896,7 @@ IrFunction *irFunctionNew(aoStr *name) {
     IrFunction *ir_function = (IrFunction *)irArenaAlloc(sizeof(IrFunction));
     ir_function->name = name;
     ir_function->params = ptrVecNew();
-    ir_function->blocks = ptrVecNew();
+    ir_function->blocks = listNew();
     ir_function->entry_block = NULL;
     ir_function->exit_block = NULL;
     ir_function->variables = strMapNew(16);
@@ -933,7 +946,7 @@ IrInstr *irCmp(IrBlock *block, IrValue *result, IrValue *op1, IrValue *op2,
     instr->op1 = op1;
     instr->op2 = op2;
     instr->extra.cmp_kind = kind;
-    ptrVecPush(block->instructions, instr);
+    irBlockAddInstruction(block, instr);
 
     return instr;
 }
@@ -957,7 +970,7 @@ IrInstr *irICmp(IrBlock *block,
     instr->op2 = op2;
     instr->extra.cmp_kind = kind;
 
-    ptrVecPush(block->instructions, instr);
+    irBlockAddInstruction(block, instr);
     return instr;
 }
 
@@ -973,7 +986,7 @@ IrInstr *irFCmp(IrBlock *block,
     instr->op2 = op2;
     instr->extra.cmp_kind = kind;
 
-    ptrVecPush(block->instructions, instr);
+    irBlockAddInstruction(block, instr);
     return instr;
 }
 
@@ -987,7 +1000,7 @@ IrInstr *irFAdd(IrBlock *block,
     instr->op1 = left;
     instr->op2 = right;
 
-    ptrVecPush(block->instructions, instr);
+    irBlockAddInstruction(block, instr);
     return instr;
 }
 
@@ -1000,7 +1013,7 @@ IrInstr *irIAdd(IrBlock *block,
     instr->result = ir_result;
     instr->op1 = left;
     instr->op2 = right;
-    ptrVecPush(block->instructions, instr);
+    irBlockAddInstruction(block, instr);
     return instr;
 }
 
@@ -1008,7 +1021,7 @@ IrInstr *irFNeg(IrBlock *block, IrValue *ir_result, IrValue *ir_expr) {
     IrInstr *instr = irInstrNew(IR_OP_FNEG);
     instr->result = ir_result;
     instr->op1 = ir_expr;
-    ptrVecPush(block->instructions, instr);
+    irBlockAddInstruction(block, instr);
     return instr;
 }
 
@@ -1016,7 +1029,7 @@ IrInstr *irINeg(IrBlock *block, IrValue *ir_result, IrValue *ir_expr) {
     IrInstr *instr = irInstrNew(IR_OP_INEG);
     instr->result = ir_result;
     instr->op1 = ir_expr;
-    ptrVecPush(block->instructions, instr);
+    irBlockAddInstruction(block, instr);
     return instr;
 }
 
@@ -1032,7 +1045,7 @@ IrInstr *irFSub(IrBlock *block,
     instr->result = ir_result;
     instr->op1 = left;
     instr->op2 = right;
-    ptrVecPush(block->instructions, instr);
+    irBlockAddInstruction(block, instr);
     return instr;
 }
 
@@ -1045,7 +1058,7 @@ IrInstr *irISub(IrBlock *block,
     instr->result = ir_result;
     instr->op1 = left;
     instr->op2 = right;
-    ptrVecPush(block->instructions, instr);
+    irBlockAddInstruction(block, instr);
     return instr;
 }
 
@@ -1058,7 +1071,7 @@ IrInstr *irFMul(IrBlock *block,
     instr->result = ir_result;
     instr->op1 = left;
     instr->op2 = right;
-    ptrVecPush(block->instructions, instr);
+    irBlockAddInstruction(block, instr);
     return instr;
 }
 
@@ -1071,7 +1084,7 @@ IrInstr *irIMul(IrBlock *block,
     instr->result = ir_result;
     instr->op1 = left;
     instr->op2 = right;
-    ptrVecPush(block->instructions, instr);
+    irBlockAddInstruction(block, instr);
     return instr;
 }
 
@@ -1084,7 +1097,7 @@ IrInstr *irFDiv(IrBlock *block,
     instr->result = ir_result;
     instr->op1 = left;
     instr->op2 = right;
-    ptrVecPush(block->instructions, instr);
+    irBlockAddInstruction(block, instr);
     return instr;
 }
 
@@ -1097,7 +1110,7 @@ IrInstr *irSDiv(IrBlock *block,
     instr->result = ir_result;
     instr->op1 = left;
     instr->op2 = right;
-    ptrVecPush(block->instructions, instr);
+    irBlockAddInstruction(block, instr);
     return instr;
 }
 
@@ -1110,7 +1123,7 @@ IrInstr *irUDiv(IrBlock *block,
     instr->result = ir_result;
     instr->op1 = left;
     instr->op2 = right;
-    ptrVecPush(block->instructions, instr);
+    irBlockAddInstruction(block, instr);
     return instr;
 }
 
@@ -1123,7 +1136,7 @@ IrInstr *irSRem(IrBlock *block,
     instr->result = ir_result;
     instr->op1 = left;
     instr->op2 = right;
-    ptrVecPush(block->instructions, instr);
+    irBlockAddInstruction(block, instr);
     return instr;
 }
 
@@ -1136,7 +1149,7 @@ IrInstr *irURem(IrBlock *block,
     instr->result = ir_result;
     instr->op1 = left;
     instr->op2 = right;
-    ptrVecPush(block->instructions, instr);
+    irBlockAddInstruction(block, instr);
     return instr;
 }
 
@@ -1149,7 +1162,7 @@ IrInstr *irBitAnd(IrBlock *block,
     instr->result = ir_result;
     instr->op1 = left;
     instr->op2 = right;
-    ptrVecPush(block->instructions, instr);
+    irBlockAddInstruction(block, instr);
     return instr;
 }
 
@@ -1162,7 +1175,7 @@ IrInstr *irBitOr(IrBlock *block,
     instr->result = ir_result;
     instr->op1 = left;
     instr->op2 = right;
-    ptrVecPush(block->instructions, instr);
+    irBlockAddInstruction(block, instr);
     return instr;
 }
 
@@ -1173,7 +1186,7 @@ IrInstr *irBitNot(IrBlock *block,
     IrInstr *instr = irInstrNew(IR_OP_NOT);
     instr->result = ir_result;
     instr->op1 = left;
-    ptrVecPush(block->instructions, instr);
+    irBlockAddInstruction(block, instr);
     return instr;
 }
 
@@ -1186,7 +1199,7 @@ IrInstr *irXor(IrBlock *block,
     instr->result = ir_result;
     instr->op1 = left;
     instr->op2 = right;
-    ptrVecPush(block->instructions, instr);
+    irBlockAddInstruction(block, instr);
     return instr;
 }
 
@@ -1199,7 +1212,7 @@ IrInstr *irSHL(IrBlock *block,
     instr->result = ir_result;
     instr->op1 = left;
     instr->op2 = right;
-    ptrVecPush(block->instructions, instr);
+    irBlockAddInstruction(block, instr);
     return instr;
 }
 
@@ -1212,7 +1225,7 @@ IrInstr *irSHR(IrBlock *block,
     instr->result = ir_result;
     instr->op1 = left;
     instr->op2 = right;
-    ptrVecPush(block->instructions, instr);
+    irBlockAddInstruction(block, instr);
     return instr;
 }
         
@@ -1238,11 +1251,11 @@ IrInstr *irBranch(IrFunction *func,
     instr->target_block = true_block;
     instr->fallthrough_block = false_block;
 
-    ptrVecPush(block->instructions, instr);
+    irBlockAddInstruction(block, instr);
     block->sealed = 1;
 
-    irFunctionAddMappping(func, block, true_block);
-    irFunctionAddMappping(func, block, false_block);
+    irFunctionAddMapping(func, block, true_block);
+    irFunctionAddMapping(func, block, false_block);
 
     return instr;
 }
@@ -1267,13 +1280,13 @@ IrInstr *irJumpInternal(IrFunction *func,
     instr->fallthrough_block = NULL;
 
     /* Add to the current blocks instructions */
-    ptrVecPush(block->instructions, instr);
+    irBlockAddInstruction(block, instr);
 
     /* This block is done */
     block->sealed = 1;
 
     /* Now update the control flow graph */
-    irFunctionAddMappping(func, block, target);
+    irFunctionAddMapping(func, block, target);
 
     return instr;
 }
@@ -1284,6 +1297,48 @@ IrInstr *irJump(IrFunction *func, IrBlock *block, IrBlock *target) {
 
 IrInstr *irLoop(IrFunction *func, IrBlock *block, IrBlock *target) {
     return irJumpInternal(func, block,target,IR_OP_LOOP);
+}
+
+IrInstr *irTmpGoto(IrCtx *ctx, aoStr *label) {
+    IrInstr *ir_instr = irInstrNew(IR_OP_JMP);
+    ir_instr->target_block = NULL;
+    ir_instr->extra.unresolved_label = label;
+
+    irBlockAddInstruction(ctx->current_block, ir_instr);
+
+    List *list_node = ctx->current_block->instructions->prev;
+
+    IrUnresolvedBlock *ir_unresolved_goto = irUnresolvedGotoNew(list_node,
+                                                            ctx->current_block);
+    /* There can be many different goto / source block combinations so 
+     * we do not want a set. */
+    ptrVecPush(ctx->unresolved_gotos, ir_unresolved_goto);
+
+    return ir_instr;
+}
+
+/* I think a label should possibly be the start of a new basic block  */
+IrInstr *irTmpGotoLabel(IrCtx *ctx, aoStr *label) {
+    IrInstr *ir_instr = irInstrNew(IR_OP_LABEL);
+    ir_instr->result = irValueNew(IR_TYPE_LABEL, IR_VALUE_UNRESOLVED);
+    ir_instr->result->name = label;
+    ir_instr->target_block = NULL;
+    ir_instr->extra.unresolved_label = label;
+
+    irBlockAddInstruction(ctx->current_block, ir_instr);
+    List *list_node = ctx->current_block->instructions->prev;
+
+    IrUnresolvedBlock *ir_unresolved_label = irUnresolvedLabelNew(list_node,
+                                                            ctx->current_block);
+    int ok = strMapAddAoStrOrErr(ctx->unresolved_labels,
+                                 label,
+                                 ir_unresolved_label);
+    if (!ok) {
+        loggerPanic("Label %s has already been seen in IR block %d\n", 
+                label->data, ctx->current_block->id);
+    }
+
+    return ir_instr;
 }
 
 /* Get Element Pointer */
@@ -1865,14 +1920,14 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
             IrValue *ir_result = irTmpVariable(IR_TYPE_I8);
 
             irBranch(func, ir_block, left, ir_right_block, ir_end_block);
-            ptrVecPush(func->blocks, ir_right_block);
+            irFunctionAddBlock(func, ir_right_block);
             irCtxSetCurrentBlock(ctx, ir_right_block);
 
             IrValue *right = irExpression(ctx, func, ast->right);
 
             irJump(func, ctx->current_block, ir_end_block);
             irCtxSetCurrentBlock(ctx, ir_end_block);
-            ptrVecPush(func->blocks, ir_end_block);
+            irFunctionAddBlock(func, ir_end_block);
 
             IrInstr *phi_instr = irPhi(ir_end_block, ir_result);
             irAddPhiIncoming(phi_instr, irConstInt(IR_TYPE_I8, 0), ir_block);
@@ -1889,14 +1944,14 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
             IrValue *ir_result = irTmpVariable(IR_TYPE_I8);
 
             irBranch(func, ir_block, left, ir_end_block, ir_right_block);
-            ptrVecPush(func->blocks, ir_right_block);
+            irFunctionAddBlock(func, ir_right_block);
             irCtxSetCurrentBlock(ctx, ir_right_block);
 
             IrValue *right = irExpression(ctx, func, ast->right);
 
             irJump(func, ctx->current_block, ir_end_block);
             irCtxSetCurrentBlock(ctx, ir_end_block);
-            ptrVecPush(func->blocks, ir_end_block);
+            irFunctionAddBlock(func, ir_end_block);
 
             IrInstr *phi_instr = irPhi(ir_end_block, ir_result);
             irAddPhiIncoming(phi_instr, irConstInt(IR_TYPE_I8, 1), ir_block);
@@ -1995,22 +2050,29 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
             } else {
                 ir_call->extra.fn_args = NULL;
             }
-            ptrVecPush(ctx->current_block->instructions, ir_call);
+            listAppend(ctx->current_block->instructions, ir_call);
             return ir_fn_call;
         }
 
+        /* Start a basic block */
         case AST_LABEL: {
-            IrValue *ir_label_value = irValueNew(IR_TYPE_LABEL, IR_VALUE_LABEL);
-            ir_label_value->name = ast->slabel;
-            irCtxAddUnresolvedLabel(ctx, ir_label_value);
-            return ir_label_value;
+            IrBlock *ir_block = irBlockNew(irBlockId());
+            irJump(func, ctx->current_block, ir_block);
+            irCtxSetCurrentBlock(ctx, ir_block);
+            irFunctionAddBlock(func, ir_block);
+            IrInstr *ir_instr = irTmpGotoLabel(ctx, ast->slabel);
+            return ir_instr->result;
         }
 
+        /* Ends a basic block */
         case AST_GOTO: {
-            IrValue *ir_goto_value = irValueNew(IR_TYPE_LABEL, IR_VALUE_LABEL);
-            ir_goto_value->name = ast->slabel;
-            irCtxAddUnresolvedGoto(ctx, ir_goto_value);
-            return ir_goto_value;
+            /* If the block is completely empty then we can just reuse it 
+             * else we should add a new block */
+            irTmpGoto(ctx, ast->slabel);
+            IrBlock *ir_block = irBlockNew(irBlockId());
+            irCtxSetCurrentBlock(ctx, ir_block);
+            irFunctionAddBlock(func, ir_block);
+            return NULL;
         }
 
         default:
@@ -2042,7 +2104,7 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
             IrBlock *ir_previous_end_block = ctx->cond_end_block;
 
             irCtxSetCondEndBlock(ctx, ir_end_block);
-            ptrVecPush(func->blocks, ir_then);
+            irFunctionAddBlock(func, ir_then);
 
             if (ir_else) {
                 irBranch(func, ctx->current_block, ir_cond, ir_then, ir_else);
@@ -2058,7 +2120,7 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
             }
 
             if (ir_else) {
-                ptrVecPush(func->blocks, ir_else);
+                irFunctionAddBlock(func, ir_else);
                 irCtxSetCurrentBlock(ctx, ir_else);
                 irStatement(ctx, func, ast->els);
                 if (!ctx->current_block->sealed) {
@@ -2066,7 +2128,7 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
                 }
             }
 
-            ptrVecPush(func->blocks, ir_end_block);
+            irFunctionAddBlock(func, ir_end_block);
 
             /* Update the current block we are pointing to */
             irCtxSetCurrentBlock(ctx, ir_end_block);
@@ -2091,7 +2153,7 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
             irJump(func, ctx->current_block, ir_while_cond);
 
             irCtxSetCurrentBlock(ctx, ir_while_cond);
-            ptrVecPush(func->blocks, ir_while_cond);
+            irFunctionAddBlock(func, ir_while_cond);
 
             IrValue *ir_while_cond_expr = irExpression(ctx, func, ast->whilecond);
             irBranch(func,
@@ -2102,13 +2164,13 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
 
             irCtxSetCurrentBlock(ctx, ir_while_body);
 
-            ptrVecPush(func->blocks, ir_while_body);
+            irFunctionAddBlock(func, ir_while_body);
             irStatement(ctx, func, ast->whilebody);
 
             if (!ctx->current_block->sealed) {
                 irLoop(func, ctx->current_block, ir_while_cond);
             }
-            ptrVecPush(func->blocks, ir_while_end);
+            irFunctionAddBlock(func, ir_while_end);
             irCtxSetCurrentBlock(ctx, ir_while_end);
             ctx->flags = ctx_prev_flags;
             /* We are now out of the scope of the while loop so reset the 
@@ -2148,13 +2210,13 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
             /* Jump into the body and prepare IR for the body */
             irJump(func, ctx->current_block, ir_dowhile_body);
             irCtxSetCurrentBlock(ctx, ir_dowhile_body);
-            ptrVecPush(func->blocks, ir_dowhile_body);
+            irFunctionAddBlock(func, ir_dowhile_body);
             irStatement(ctx, func, ast->whilebody);
 
             /* Jump into the conditio and prepare IR for the branch */
             irJump(func, ctx->current_block, ir_dowhile_cond);
             irCtxSetCurrentBlock(ctx, ir_dowhile_cond);
-            ptrVecPush(func->blocks, ir_dowhile_cond);
+            irFunctionAddBlock(func, ir_dowhile_cond);
             IrValue *ir_dowhile_cond_expr = irExpression(ctx, func,
                                                          ast->whilecond);
             irBranch(func,
@@ -2164,7 +2226,7 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
                      ir_dowhile_end);
             irLoop(func, ctx->current_block, ir_dowhile_body);
 
-            ptrVecPush(func->blocks, ir_dowhile_end);
+            irFunctionAddBlock(func, ir_dowhile_end);
             irCtxSetCurrentBlock(ctx, ir_dowhile_end);
 
             /* Restore previous state */
@@ -2199,7 +2261,7 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
             if (ir_for_cond) {
                 irJump(func, ctx->current_block, ir_for_cond);
                 irCtxSetCurrentBlock(ctx, ir_for_cond);
-                ptrVecPush(func->blocks, ir_for_cond);
+                irFunctionAddBlock(func, ir_for_cond);
 
                 IrValue *ir_for_cond_expr = irExpression(ctx, func, ast->forcond);
                 irBranch(func,
@@ -2211,14 +2273,14 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
 
             irCtxSetCurrentBlock(ctx, ir_for_body);
 
-            ptrVecPush(func->blocks, ir_for_body);
+            irFunctionAddBlock(func, ir_for_body);
             irStatement(ctx, func, ast->forbody);
 
             /* If there is a step we want to add it to the current block */
             if (ir_for_step) {
                 irJump(func, ctx->current_block, ir_for_step);
                 irCtxSetCurrentBlock(ctx, ir_for_step);
-                ptrVecPush(func->blocks, ir_for_step);
+                irFunctionAddBlock(func, ir_for_step);
                 irExpression(ctx, func, ast->forstep);
 
                 irLoop(func, ctx->current_block, ir_for_head);
@@ -2228,7 +2290,7 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
                 }
             }
 
-            ptrVecPush(func->blocks, ir_for_end);
+            irFunctionAddBlock(func, ir_for_end);
             irCtxSetCurrentBlock(ctx, ir_for_end);
 
             /* Restore */
@@ -2292,11 +2354,13 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
     }
 }
 
-void irResolveGotos(IrCtx *ctx) {
+void irResolveGotos(IrCtx *ctx, IrFunction *func) {
     PtrVec *ir_goto_vec = ctx->unresolved_gotos;
     for (int i = 0; i < ir_goto_vec->size; ++i) {
         IrUnresolvedBlock *ir_ugoto = vecGet(IrUnresolvedBlock *,ir_goto_vec,i);
-        aoStr *goto_label = ir_ugoto->goto_.ir_value->name;
+        List *goto_list_node = ir_ugoto->goto_.list_node;
+        IrInstr *goto_instr = (IrInstr *)goto_list_node->value;
+        aoStr *goto_label = (aoStr *)goto_instr->extra.unresolved_label;
 
         IrUnresolvedBlock *ir_ulabel = strMapGetAoStr(ctx->unresolved_labels,
                                                       goto_label);
@@ -2306,17 +2370,15 @@ void irResolveGotos(IrCtx *ctx) {
                     goto_label->data);
         }
 
-        aoStr *dest_label = ir_ulabel->label_.ir_value->name;
         IrBlock *ir_src = ir_ugoto->goto_.ir_block;
-        IrBlock *ir_dest = ir_ugoto->label_.ir_block;
+        IrBlock *ir_dest = ir_ulabel->label_.ir_block;
 
-        if (ir_src->id == ir_dest->id) {
-            /* Do we need to do anything?... filter out all of the instructions
-             * in between the goto and the label? */
-        } else {
-            /* We are looking at two different blocks; either create, detacht or 
-             * merge? */
-        }
+        /* We remove the temporary label, do we even need to add it in the 
+         * first place. While developing this, it is nice to see it being 
+         * printed but this can be removed once the feature is built. */
+        listDeque(ir_dest->instructions);
+        goto_instr->target_block = ir_dest;
+        irFunctionAddMapping(func, ir_src, ir_dest);
     }
 }
 
@@ -2337,6 +2399,153 @@ IrValue *irConvertAstFuncParam(Ast *ast_param) {
         loggerPanic("Unhandled Ast: %s\n", astToString(ast_param));
     }
     return ir_value;
+}
+
+/* Remove `delete_block` from all predecessor and successor maps */
+void irFunctionDelinkBlock(IrFunction *func, IrBlock *delete_block) {
+    listForEach(func->blocks) {
+        IrBlock *block = listValue(IrBlock *, it);
+        irFunctionRemoveSuccessor(func, block, delete_block);
+        irFunctionRemovePredecessor(func, block, delete_block);
+    }
+}
+
+/* Of the fallthrough id is the destination id and the destination target is 
+ * the same as the target, then we can remove the branch */
+int irBranchFallsbackToSameBlock(IrInstr *src, InInstr *destination, IrBlock *block) {
+    if (src->opcode == IR_OP_BR) {
+        return src->fallthrough_block->id == block->id &&
+               src->target_block->id == destination->target_block->id;
+    }
+    return 0;
+}
+
+/* Merge target to the end of block */
+void irBlocksMerge(IrFunction *func, IrBlock *block, IrBlock *target) {
+    /* We now also need to unlick `target` which is kind of tricky as we use a 
+     * linked list... */
+    irFunctionRemoveSuccessor(func, block, target);
+    irFunctionRemovePredecessor(func, block, target);
+    listMergeAppend(block->instructions, target->instructions);
+    /* A `NULL` list of instructions means it can be deleted */
+    target->instructions = NULL;
+}
+
+int irBlocksHaveSingleLink(IrFunction *func, IrBlock *next, IrBlock *prev) {
+    IrBlockMapping *prev_mapping = intMapGet(func->cfg, prev->id);
+    IrBlockMapping *next_mapping = intMapGet(func->cfg, next->id);
+    /* This should not happen */
+    if (!prev_mapping || !next_mapping) {
+        loggerPanic("Blocks have no mappings!\n");
+        return 0;
+    }
+
+    if (prev_mapping->successors->size == 1 && next_mapping->predecessors->size == 1) {
+        IrBlock *nexts_previous = intMapGetFirst(next_mapping->predecessors);
+        IrBlock *previous_next = intMapGetFirst(prev_mapping->successors);
+
+        if (previous_next->id == next->id && next->id == previous_next->id) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void irSimplifyBlocks(IrFunction *func) {
+    listForEach(func->blocks) {
+        IrBlock *block = (IrBlock *)it->value;
+        IrBlockMapping *mapping = intMapGet(func->cfg, block->id);
+
+        if (block == func->exit_block) continue;
+
+        if (listEmpty(block->instructions)) {
+            loggerWarning("C0 - KILLED %d!\n", block->id);
+            listUnlink(func->blocks, it);
+            irFunctionDelinkBlock(func, block);
+        } else if (!mapping) {
+            loggerWarning("C1 - KILLED %d!\n", block->id);
+            listUnlink(func->blocks, it);
+        } else if (mapping->predecessors->size == 0) {
+            loggerWarning("C2 - KILLED %d!\n", block->id);
+            /* This means that nothing links to it. However... Things can 
+             * reference this node so we need to traverse all blocks removing 
+             * it. Doing this is extremely slow */
+            listUnlink(func->blocks, it);
+            irFunctionDelinkBlock(func, block);
+        } else if (listIsOne(block->instructions) && 
+                   mapping->predecessors->size == 1 && 
+                   mapping->successors->size == 1)
+        {
+            /* If we are looking at a block that has one previous block and 
+             * is an unconditional jump, we can simplify it */
+            IrInstr *ir_instr = listValue(IrInstr *, block->instructions->next);
+            printf("block: %d %s %s\n", block->id,
+                    intMapKeysToString(mapping->predecessors)->data,
+                    intMapKeysToString(mapping->successors)->data);
+
+            if (ir_instr->opcode == IR_OP_JMP) {
+                IrBlock *ir_prev_block = intMapGetFirst(mapping->predecessors);
+                IrBlock *ir_next_block = intMapGetFirst(mapping->successors);
+
+                if (!ir_prev_block) {
+                    loggerWarning("Connection from %d to non-existant block\n", 
+                            block->id);
+                } else {
+                    IrInstr *prev_last_instr = listValue(IrInstr *,ir_prev_block->instructions->prev);
+
+                    if (prev_last_instr->opcode == IR_OP_JMP) {
+                        loggerWarning("C3 - KILLED %d!\n", block->id);
+                        irFunctionRemoveSuccessor(func, ir_prev_block, block);
+                        irFunctionRemovePredecessor(func, ir_next_block, block);
+                        irFunctionAddMapping(func, ir_prev_block, ir_next_block);
+                        prev_last_instr->target_block = ir_next_block; 
+                        listUnlink(func->blocks, it);
+                    } else if (prev_last_instr->opcode == IR_OP_BR) {
+                        if (prev_last_instr->target_block->id == block->id) {
+                            loggerWarning("C4 - KILLED %d!\n", block->id);
+
+                            prev_last_instr->target_block = ir_next_block;
+                            /* This should now mean that the block minimally 
+                             * has not predecessors */
+                            irFunctionRemoveSuccessor(func, ir_prev_block, block);
+                            irFunctionRemovePredecessor(func, ir_next_block, block);
+                            irFunctionAddMapping(func, ir_prev_block, ir_next_block);
+                            listUnlink(func->blocks, it);
+
+                            if (prev_last_instr->target_block->id == prev_last_instr->fallthrough_block->id) {
+                                prev_last_instr->opcode = IR_OP_JMP;
+                                // prev_last_instr->target_block = ;
+                                printf("Pointless branch: %d %d\n",
+                                        prev_last_instr->fallthrough_block->id, 
+                                        prev_last_instr->target_block->id);
+
+                                /* This is now a completely pointless branch */
+
+                            }
+                        } else if (irBranchFallsbackToSameBlock(prev_last_instr, ir_instr, block)) {
+                            listPop(ir_prev_block->instructions);
+                            listPop(ir_prev_block->instructions);
+                            irFunctionRemoveSuccessor(func, ir_prev_block, block);
+                            irFunctionRemovePredecessor(func, ir_next_block, block);
+                            listUnlink(func->blocks, it);
+
+                            if (irBlocksHaveSingleLink(func, ir_next_block, ir_prev_block))  {
+                                irBlocksMerge(func, ir_prev_block, ir_next_block);
+                            }
+                        }
+                    } else {
+                        printf("?\n");
+                    }
+                }
+            } else {
+                loggerDebug("Not quite sure %s\n", irOpcodeToString(ir_instr));
+            }
+        } else {
+            printf("block: %d %s %s\n", block->id,
+                    intMapKeysToString(mapping->predecessors)->data,
+                    intMapKeysToString(mapping->successors)->data);
+        }
+    }
 }
 
 IrFunction *irLowerFunction(IrCtx *ctx, IrProgram *program, Ast *ast_function) {
@@ -2396,12 +2605,15 @@ IrFunction *irLowerFunction(IrCtx *ctx, IrProgram *program, Ast *ast_function) {
     /* The function now has everything lowered to IR */
     irStatement(ctx, ir_function, ast_function->body);
 
+    irFunctionAddBlock(ir_function, ir_exit_block);
+    irRet(ir_function->exit_block, ir_function->return_value);
+
     if (ctx->unresolved_gotos->size) {
-        irResolveGotos(ctx);
+        irResolveGotos(ctx, ir_function);
     }
 
-    ptrVecPush(ir_function->blocks, ir_exit_block);
-    irRet(ir_function->exit_block, ir_function->return_value);
+    irSimplifyBlocks(ir_function);
+
     return ir_function;
 }
 

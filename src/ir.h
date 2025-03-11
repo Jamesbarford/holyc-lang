@@ -66,6 +66,7 @@ typedef enum IrOpcode {
     IR_OP_SWITCH,      /* Switch statement */
     IR_OP_CALL,        /* Function call */
     IR_OP_PHI,         /* SSA phi node */
+    IR_OP_LABEL,       /* Not used for code gen, temporary while resolving unconditional jumps */
     
     /* Other operations */
     IR_OP_SELECT,      /* Select between two values based on condition */
@@ -108,7 +109,7 @@ typedef enum IrValueType {
     IR_TYPE_ARRAY,      /* Array type (with element type and length) */
     IR_TYPE_STRUCT,     /* Structure type (with field types) */
     IR_TYPE_FUNCTION,   /* Function type (with return and param types) */
-    IR_TYPE_LABEL       /* Label reference type */
+    IR_TYPE_LABEL,      /* Label reference type */
 } IrValueType;
 
 typedef enum IrValueKind {
@@ -121,7 +122,9 @@ typedef enum IrValueKind {
     IR_VALUE_TEMP,         /* Temporary value (SSA) */
     IR_VALUE_PHI,          /* Phi node value (SSA) */
     IR_VALUE_LABEL,        /* Block label */
-    IR_VALUE_UNDEFINED     /* Undefined value */
+    IR_VALUE_UNDEFINED,    /* Undefined value */
+    IR_VALUE_UNRESOLVED    /* This is for GOTOs and Labels when we are
+                            * constructing the IR*/
 } IrValueKind;
 
 typedef struct IrInstr IrInstr;
@@ -133,9 +136,10 @@ typedef union IrUnresolvedBlock IrUnresolvedBlock;
 /* We keep the successors and predecessors on the function in a graph as it 
  * is easier to keep track of the mappings between the blocks. */
 typedef struct IrBlock {
-    int id;               /* Identifier for the block */
-    int sealed;
-    PtrVec *instructions; /* Vector of ir instructions belonging to the block */
+    int id;             /* Identifier for the block */
+    char sealed;        /* Block is done */
+    char removed;       /* Soft delete a block? */ 
+    List *instructions; /* List<IrInstr *> ir instructions belonging to the block */
     StrMap *ssa_values;
 } IrBlock;
 
@@ -174,9 +178,11 @@ typedef struct IrInstr {
     IrBlock *fallthrough_block; /* For conditional flow */
     union {
       IrCmpKind cmp_kind;
+      /* either an unresolved `goto label;` or a a `label:` */
+      aoStr *unresolved_label;
 
       struct {
-          /* Function call arguments */
+          /* Function call arguments PtrVec<IrValue *> */
           PtrVec *fn_args;
       };
 
@@ -189,8 +195,8 @@ typedef struct IrInstr {
 
 typedef struct IrBlockMapping {
     int id;
-    IntSet *successors;
-    IntSet *predecessors;
+    IntMap *successors;
+    IntMap *predecessors;
 } IrBlockMapping;
 
 typedef struct IrFunction {
@@ -199,7 +205,7 @@ typedef struct IrFunction {
     aoStr *name;          /* Function name */
     IrProgram *program;   /* A pointer to the program */
     PtrVec *params;       /* Parameter list, PtrVec<IrValue *> */
-    PtrVec *blocks;       /* Basic blocks, PtrVec<IrInstr *> */
+    List *blocks;         /* Basic blocks, List<IrInstr *> */
     IrBlock *entry_block; /* Entry */
     IrBlock *exit_block;  /* Exit */
     StrMap *variables;    /* The functions local variables StrMap<IrValue *> */
@@ -225,12 +231,12 @@ typedef struct IrProgram {
  * rest of the blocks and thus resolved all labels. */
 typedef union IrUnresolvedBlock {
     struct {
-        IrValue *ir_value;
+        List *list_node;
         IrBlock *ir_block;
     } goto_;
 
     struct {
-        IrValue *ir_value;
+        List *list_node;
         IrBlock *ir_block;
     } label_;
 } IrUnresolvedBlock;
