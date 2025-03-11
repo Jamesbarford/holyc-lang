@@ -1166,7 +1166,7 @@ int asmPlaceArgs(Cctrl *cc, aoStr *buf, List *argv, int reverse) {
     int r = 0;
     Ast *ast;
     if (reverse) {
-        for (List *it = argv->prev; it != argv; it = it->prev) {
+        listForEachReverse(argv) {
             ast = (Ast *)it->value;
             asmExpression(cc,buf,ast);
             if (astIsFloatType(ast->type)) asmPushXMM(buf,0);
@@ -1174,7 +1174,7 @@ int asmPlaceArgs(Cctrl *cc, aoStr *buf, List *argv, int reverse) {
             r += 8;
         }
     } else {
-        for (List *it = argv->next; it != argv; it = it->next) {
+        listForEach(argv) {
             ast = (Ast *)it->value;
             asmExpression(cc,buf,ast);
             if (astIsFloatType(ast->type)) asmPushXMM(buf,0);
