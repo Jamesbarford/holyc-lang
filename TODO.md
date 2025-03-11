@@ -7,11 +7,12 @@
 - [x] While loops
 - [x] Loop Break
 - [x] Loop Continue 
-- [ ] For loops
-- [ ] Do While loops
+- [x] For loops
+- [x] Do While loops
 - [x] Return
 - [ ] Switch 
-- [ ] Goto's
+- [ ] Goto's, we need to add place holders, store them in a 
+      vector and then index the instructions vector to remove them.
 
 # Expressions
 - [x] Pre Increment*
@@ -33,9 +34,9 @@
 - [x] Bitwise OR
 - [x] Bitwise NOT
 - [x] Bitwise XOR
-- [ ] Logical Not
-- [ ] Logical And
-- [ ] Logical Or
+- [x] Logical Not
+- [x] Logical And
+- [x] Logical Or
 - [ ] Taking address
 - [ ] Array referencing?
 - [ ] Struct referencing?
@@ -45,8 +46,8 @@
 - [ ] Truncate (larger to smaller)
 - [ ] Zero extend (smaller to larger)
 - [ ] Sign extend (smaller to larger)
-- [-] Floating point truncate
-- [-] Floating point extend
+- [-] Floating point truncate, may not need
+- [-] Floating point extend, may not need
 - [ ] Floating point -> unsigned int
 - [ ] Floating point -> signed int
 - [ ] Floating point -> int
