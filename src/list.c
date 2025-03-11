@@ -217,6 +217,11 @@ List *listCopy(List *l) {
     return cpy;
 }
 
+List *listTail(List *ll) {
+    if (listEmpty(ll)) return NULL;
+    return ll->prev;
+}
+
 #ifdef LIST_TEST
 
 typedef struct Int {

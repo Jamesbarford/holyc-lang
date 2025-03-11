@@ -9,6 +9,7 @@ UniqList *uniqListNew(uniqListGetKey *get_key) {
     uniq_list->work_queue = listNew();
     uniq_list->queued = intSetNew(16);
     uniq_list->get_key = get_key;
+    uniq_list->free_value = NULL;
     return uniq_list;
 }
 
@@ -33,4 +34,10 @@ void *uniqListDequeue(UniqList *uniq_list) {
         return value;
     }
     return NULL;
+}
+
+void uniqListRelease(UniqList *uniq_list) {
+    listRelease(uniq_list->work_queue, uniq_list->free_value);
+    intSetRelease(uniq_list->queued);
+    free(uniq_list);
 }

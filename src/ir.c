@@ -2457,12 +2457,27 @@ int irBlocksHaveSingleLink(IrFunction *func, IrBlock *next, IrBlock *prev) {
  * This function takes a `List<IrBlock *>` node and returns what is essentially;
  * `list->value->id`, as we queue the actual list nodes in the work queue as 
  * opposed to just the blocks. */
-int irBlockListIdAccessor(void *_ir_list_block) {
-    return ((IrBlock *)((List *)_ir_list_block)->value)->id;
+int irBlockListIdAccessor(void *_ir_block) {
+    return ((IrBlock *)_ir_block)->id;
+}
+
+IrInstr *irBlockLastInstr(IrBlock *block) {
+    List *tail = listTail(block->instructions);
+    if (!tail) return NULL;
+    return listValue(IrInstr *, tail);
+}
+
+int irLastInstructionIsJumpLike(IrBlock *block) {
+    IrInstr *ir_instr = irBlockLastInstr(block);
+    if (!ir_instr) return 0;
+    return ir_instr->opcode == IR_OP_LOOP ||
+           ir_instr->opcode == IR_OP_JMP  ||
+           ir_instr->opcode == IR_OP_BR;
 }
 
 void irSimplifyBlocks(IrFunction *func) {
     UniqList *work_queue = uniqListNew(&irBlockListIdAccessor);
+    IntSet *blocks_to_delete = intSetNew(16);
 
     /** 
      * @THINK
@@ -2475,31 +2490,27 @@ void irSimplifyBlocks(IrFunction *func) {
      * and do it in one pass. Doing it as we go seems extremely problematic as
      * you'd keep doing passes of the list. */
     listForEach(func->blocks) {
-        uniqListAppend(work_queue, it);
+        uniqListAppend(work_queue, listValue(IrBlock *, it));
     }
 
     while (!uniqListEmpty(work_queue)) {
         /* We kind of have a list of lists */
-        List *it = uniqListDequeue(work_queue);
-        IrBlock *block = listValue(IrBlock *, it);
+        IrBlock *block = (IrBlock *)uniqListDequeue(work_queue);
         IrBlockMapping *mapping = intMapGet(func->cfg, block->id);
 
         if (block == func->exit_block) continue;
+        if (intSetHas(blocks_to_delete, block->id)) continue;
 
+        /* No instructions in a node means it can be killed */
         if (listEmpty(block->instructions)) {
             loggerWarning("C0 - KILLED %d!\n", block->id);
-            listUnlink(func->blocks, it);
-            irFunctionDelinkBlock(func, block);
+            intSetAdd(blocks_to_delete, block->id);
         } else if (!mapping) {
             loggerWarning("C1 - KILLED %d!\n", block->id);
-            listUnlink(func->blocks, it);
+            intSetAdd(blocks_to_delete, block->id);
         } else if (mapping->predecessors->size == 0) {
             loggerWarning("C2 - KILLED %d!\n", block->id);
-            /* This means that nothing links to it. However... Things can 
-             * reference this node so we need to traverse all blocks removing 
-             * it. Doing this is extremely slow */
-            listUnlink(func->blocks, it);
-            irFunctionDelinkBlock(func, block);
+            intSetAdd(blocks_to_delete, block->id);
         } else if (listIsOne(block->instructions) && 
                    mapping->predecessors->size == 1 && 
                    mapping->successors->size == 1)
@@ -2527,7 +2538,9 @@ void irSimplifyBlocks(IrFunction *func) {
                         irFunctionRemovePredecessor(func, ir_next_block, block);
                         irFunctionAddMapping(func, ir_prev_block, ir_next_block);
                         prev_last_instr->target_block = ir_next_block; 
-                        listUnlink(func->blocks, it);
+                        uniqListAppend(work_queue, ir_prev_block);
+                        uniqListAppend(work_queue, ir_next_block);
+                        intSetAdd(blocks_to_delete, block->id);
                     } else if (prev_last_instr->opcode == IR_OP_BR) {
                         if (prev_last_instr->target_block->id == block->id) {
                             loggerWarning("C4 - KILLED %d!\n", block->id);
@@ -2538,27 +2551,29 @@ void irSimplifyBlocks(IrFunction *func) {
                             irFunctionRemoveSuccessor(func, ir_prev_block, block);
                             irFunctionRemovePredecessor(func, ir_next_block, block);
                             irFunctionAddMapping(func, ir_prev_block, ir_next_block);
-                            listUnlink(func->blocks, it);
+                            intSetAdd(blocks_to_delete, block->id);
 
+                            uniqListAppend(work_queue, ir_prev_block);
+                            uniqListAppend(work_queue, ir_next_block);
                             if (prev_last_instr->target_block->id == prev_last_instr->fallthrough_block->id) {
                                 prev_last_instr->opcode = IR_OP_JMP;
-                                // prev_last_instr->target_block = ;
-                                printf("Pointless branch: %d %d\n",
+                                loggerWarning("Pointless branch: %d %d\n",
                                         prev_last_instr->fallthrough_block->id, 
                                         prev_last_instr->target_block->id);
 
                                 /* This is now a completely pointless branch */
-
                             }
                         } else if (irBranchFallsbackToSameBlock(prev_last_instr, ir_instr, block)) {
                             listPop(ir_prev_block->instructions);
                             listPop(ir_prev_block->instructions);
                             irFunctionRemoveSuccessor(func, ir_prev_block, block);
                             irFunctionRemovePredecessor(func, ir_next_block, block);
-                            listUnlink(func->blocks, it);
+                            intSetAdd(blocks_to_delete, block->id);
 
                             if (irBlocksHaveSingleLink(func, ir_next_block, ir_prev_block))  {
                                 irBlocksMerge(func, ir_prev_block, ir_next_block);
+                                uniqListAppend(work_queue, ir_prev_block);
+                                uniqListAppend(work_queue, ir_next_block);
                             }
                         }
                     } else {
@@ -2568,12 +2583,50 @@ void irSimplifyBlocks(IrFunction *func) {
             } else {
                 loggerDebug("Not quite sure %s\n", irOpcodeToString(ir_instr));
             }
+        } else if (irLastInstructionIsJumpLike(block)) {
+            
         } else {
             printf("block: %d %s %s\n", block->id,
                     intMapKeysToString(mapping->predecessors)->data,
                     intMapKeysToString(mapping->successors)->data);
         }
     }
+
+    listForEach(func->blocks) {
+        IrBlock *block = it->value;
+        if (irLastInstructionIsJumpLike(block)) {
+            IrInstr *last_instr = irBlockLastInstr(block);
+            switch (last_instr->opcode) {
+                case IR_OP_JMP:
+                case IR_OP_LOOP:
+                    if (intSetHas(blocks_to_delete, last_instr->target_block->id)) {
+                        loggerWarning("case 1\n");
+                    }
+                    break;
+                case IR_OP_BR: {
+                    if (intSetHas(blocks_to_delete, last_instr->target_block->id)) {
+                        loggerWarning("case 2\n");
+                    }
+
+                    if (intSetHas(blocks_to_delete, last_instr->fallthrough_block->id)) {
+                        loggerWarning("case 3\n");
+                    }
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+
+        if (intSetHas(blocks_to_delete, block->id)) {
+            listUnlink(func->blocks, it);
+            /* This means that nothing links to it. However... Things can 
+             * reference this node so we need to traverse all blocks removing 
+             * it. Doing this is extremely slow */
+            irFunctionDelinkBlock(func, block);
+        }
+    }
+    
 }
 
 IrFunction *irLowerFunction(IrCtx *ctx, IrProgram *program, Ast *ast_function) {
