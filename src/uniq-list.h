@@ -5,7 +5,7 @@
 #include "map.h"
 
 typedef int uniqListGetKey(void *value);
-typedef int uniqListFreeValue(void *value);
+typedef void uniqListFreeValue(void *value);
 /* Keeping track of two structs in a function can be _really_ bug prone. 
  * so while this is a bit of an overkill in abstraction it is less to mentally
  * keep track of when there is already a lot going on. i.e the Basic block 

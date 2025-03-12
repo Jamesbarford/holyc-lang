@@ -243,15 +243,13 @@ IntMapNode *intMapNodeNew(long key, void *value) {
 
 static unsigned long intMapGetIdx(IntMap *map, long key) {
     unsigned long idx = intMapHashFunction(key, map->mask); 
-    unsigned long mask = map->mask;
-    IntMapNode **entries = map->entries;
-    IntMapNode *cur;
+    IntMapNode *cur = NULL;
 
-    while ((cur = entries[idx])) {
+    while ((cur = map->entries[idx])) {
         if (cur->key == key) {
             return idx;
         }
-        idx = (idx + 1) & mask;
+        idx = (idx + 1) & map->mask;
     }
     return HT_DELETED;
 }
@@ -413,6 +411,9 @@ int intMapAdd(IntMap *map, long key, void *value) {
         return 1;
     } else {
         IntMapNode *n = map->entries[idx];
+        if (n->key == HT_DELETED) {
+            map->size++;
+        }
         n->key = key;
         n->value = value;
         return 1;
@@ -508,7 +509,7 @@ aoStr *intMapKeysToString(IntMap *map) {
     aoStrPutChar(buf,'{');
     while ((entry = intMapNext(it)) != NULL) {
         aoStrCatFmt(buf,"%I",entry->key);
-        if ((i + 1) != map_size) {
+        if ((i + 1) != map->size) {
             aoStrCatLen(buf, str_lit(", "));
         }
         i++;
@@ -742,6 +743,11 @@ int strMapAddLen(StrMap *map, char *key, long key_len, void *value) {
     } else {
         StrMapNode *n = map->entries[idx];
         n->key = key;
+        /* Deleted nodes need to increment the size. This counts as adding 
+         * something to the hashtable despite a node existing in entries */
+        if (n->key == NULL) {
+            map->size++;
+        }
         n->key_len = key_len;
         n->value = value;
         return 1;
@@ -952,8 +958,10 @@ IntSet *intSetNew(unsigned long capacity) {
     return iset;
 }
 
-static unsigned long intSetGetNextIdx(long *entries, unsigned long mask,
-        long key, int *_is_free)
+static unsigned long intSetGetNextIdx(long *entries,
+                                      unsigned long mask,
+                                      long key,
+                                      int *_is_free)
 { 
     unsigned long idx = key & mask;
     long cur;
@@ -1124,10 +1132,9 @@ aoStr *intSetToString(IntSet *iset) {
     IntSetIterator *it = intSetIteratorNew(iset);
     aoStrPutChar(buf,'{');
     while ((key = intSetNext(it)) != HT_DELETED) {
-        if ((i + 1) == set_size) {
-            aoStrCatFmt(buf,"%i",key);
-        } else {
-            aoStrCatFmt(buf,"%i, ",key);
+        aoStrCatFmt(buf,"%I",key);
+        if ((i + 1) != set_size) {
+            aoStrCatLen(buf,str_lit(", "));
         }
         i++;
     }

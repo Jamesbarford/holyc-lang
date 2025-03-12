@@ -49,6 +49,7 @@ set(SOURCES
     cli.c
     compile.c
     ir.c
+    ir-interp.c
     lexer.c
     list.c
     main.c
@@ -75,6 +76,7 @@ set(HEADERS
     compile.h
     config.h
     ir.h
+    ir-interp.h
     lexer.h
     list.h
     map.h
