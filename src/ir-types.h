@@ -150,12 +150,18 @@ typedef struct IrValue {
     IrValueType type;
     IrValueKind kind;
     union {
-        long i64;
-        double f64;
-        aoStr *name;
-        int reg;
-        IrInstr *phi;
+        long i64;   /* For integer constants */
+        double f64; /* Float constants */
+        aoStr *name; /* Used for any arbitrary string */
 
+        int reg; /* As of yet unused */
+
+        IrInstr *phi; /* Notes that the value is a phi node, used for either
+                       * a logical `OR` or an `AND` */
+
+        /* A string literal, the `str` is an escaped string suitable for 
+         * putting in a file for an assembler to read, the `str_real_len` 
+         * is the length of the string without escape sequences. */
         struct {
             aoStr *str;
             int str_real_len;
@@ -166,10 +172,10 @@ typedef struct IrValue {
 
 /* The value and which block it came from, easier to keep track of than
  * 2 vectors */
-typedef struct IrPhiPair {
+typedef struct IrPair {
     IrValue *ir_value;
     IrBlock *ir_block;
-} IrPhiPair;
+} IrPair;
 
 typedef struct IrInstr {
     IrOpcode opcode;            /* Operation type */
@@ -180,19 +186,24 @@ typedef struct IrInstr {
     IrBlock *target_block;      /* For control flow instructions */
     IrBlock *fallthrough_block; /* For conditional flow */
     union {
-      IrCmpKind cmp_kind;
+        IrCmpKind cmp_kind;
       /* either an unresolved `goto label;` or a a `label:` */
-      aoStr *unresolved_label;
+        aoStr *unresolved_label;
 
-      struct {
+        struct {
           /* Function call arguments PtrVec<IrValue *> */
-          PtrVec *fn_args;
-      };
+            PtrVec *fn_args;
+        };
 
-      struct {
-          PtrVec *pairs; /* PtrVec<IrPhiPair *> */
-      } phi;
+        struct {
+            List *cases; /* `List<IrPair *>`
+                          * A switch statments cases in the form;
+                          * i64 <number>, label <block>, */
+        };
 
+        struct {
+            PtrVec *pairs; /* PtrVec<IrPair *> */
+        } phi;
     } extra;
 } InInstr;
 

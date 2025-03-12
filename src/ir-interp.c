@@ -126,7 +126,7 @@ int irBlockIsRedundant(IrFunction *func, IrBlock *block) {
     }
     /* There is nothing that points to this node and it is not the start 
      * block for the function */
-    else if (mapping->predecessors->size == 0) {// && block->id != 0) {
+    else if (mapping->predecessors->size == 0 && block->id != 0) {
         return 1;
     }
 

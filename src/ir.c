@@ -229,7 +229,7 @@ const char *irOpcodeToString(IrInstr *ir_instr) {
     }
 }
 
-void irPhiPairToString(aoStr *buf, IrPhiPair *ir_phi_pair) {
+void irPairToString(aoStr *buf, IrPair *ir_phi_pair) {
     aoStr *ir_value_str = irValueToString(ir_phi_pair->ir_value);
     /* <Value, block> */
     aoStrCatFmt(buf, "[ %S, bb%i ]", ir_value_str, ir_phi_pair->ir_block->id);
@@ -294,9 +294,9 @@ aoStr *irInstrToString(IrInstr *ir_instr) {
         case IR_OP_PHI: {
             aoStr *phi_pairs_str = aoStrNew();
             for (int i = 0; i < ir_instr->extra.phi.pairs->size; ++i) {
-                IrPhiPair *ir_phi_pair = vecGet(IrPhiPair *,
+                IrPair *ir_phi_pair = vecGet(IrPair *,
                                                 ir_instr->extra.phi.pairs, i);
-                irPhiPairToString(phi_pairs_str, ir_phi_pair);
+                irPairToString(phi_pairs_str, ir_phi_pair);
                 if (i + 1 != ir_instr->extra.phi.pairs->size) {
                     aoStrPutChar(phi_pairs_str, ' ');;
                 }
@@ -753,8 +753,8 @@ void irInstrRelease(IrInstr *ir_instr) {
     (void)ir_instr;
 }
 
-IrPhiPair *irPhiPair(IrBlock *ir_block, IrValue *ir_value) {
-    IrPhiPair *ir_phi_pair = (IrPhiPair *)irArenaAlloc(sizeof(IrPhiPair));
+IrPair *irPairNew(IrBlock *ir_block, IrValue *ir_value) {
+    IrPair *ir_phi_pair = (IrPair *)irArenaAlloc(sizeof(IrPair));
     ir_phi_pair->ir_value = ir_value;
     ir_phi_pair->ir_block = ir_block;
     return ir_phi_pair;
@@ -773,7 +773,7 @@ void irAddPhiIncoming(IrInstr *ir_phi_instr,
                       IrValue *ir_value, 
                       IrBlock *ir_block)
 {
-    IrPhiPair *ir_phi_pair = irPhiPair(ir_block, ir_value);
+    IrPair *ir_phi_pair = irPairNew(ir_block, ir_value);
     ptrVecPush(ir_phi_instr->extra.phi.pairs, ir_phi_pair);
 }
 
@@ -2245,6 +2245,54 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
             break;
         }
 
+        case AST_SWITCH: {
+            PtrVec *cases = ast->cases;
+            IrInstr *ir_switch = irInstrNew(IR_OP_SWITCH);
+
+            IrBlock *ir_prev_switch_end = ctx->switch_end_block;
+
+            Ast **jump_table = ast->jump_table_order;
+            int jump_table_size = cases->size;
+            Ast *case_ast_min = jump_table[0];
+            Ast *case_ast_max = jump_table[jump_table_size - 1];
+
+            IrValue *ir_cond = irExpression(ctx, func, ast->switch_cond);
+
+            IrBlock *ir_switch_default = ast->case_default ?
+                                         irBlockNew(irBlockId()) : NULL;
+            IrBlock *ir_switch_end = irBlockNew(irBlockId());
+
+            irCtxSetSwitchEndBlock(ctx, ir_switch_end);
+
+            ir_switch->op1 = ir_cond;
+            ir_switch->extra.cases = listNew();
+
+            for (int i = 0; i < cases->size; ++i) {
+                /* We want to create a const int and a block */
+                Ast *case_ = vecGet(Ast *,cases,i);
+                IrBlock *ir_case_block = irBlockNew(irBlockId());
+                IrValue *ir_case_value = irConstInt(IR_TYPE_I64, case_->case_begin);
+                IrPair *ir_pair = irPairNew(ir_case_block, ir_case_value);
+                /* @Mapping 
+                 * we should map the switch head to the case block so the 
+                 * switch has many succesors and the case has the switch block 
+                 * as the predecessor.
+                 *
+                 * also the switch end should have all of these as predecessors 
+                 * this means if the last instruction is a break we should jump 
+                 * that should be handled by the AST_BREAK case above and jump 
+                 * to the `ctx->switch_end_block` */
+                irCtxSetCurrentBlock(ctx, ir_case_block);
+                listForEach(case_->case_asts) {
+                    Ast *stmt = listValue(Ast *, it);
+                    irStatement(ctx, func, stmt);
+                }
+            }
+            irCtxSetSwitchEndBlock(ctx, ir_prev_switch_end);
+            irCtxSetCurrentBlock(ctx, ir_switch_end);
+            break;
+        }
+
         case AST_BREAK: {
             if (ctx->flags & IR_CTX_FLAG_IN_LOOP) {
                 irJump(func, ctx->current_block, ctx->loop_end_block);
@@ -2337,14 +2385,19 @@ IrValue *irConvertAstFuncParam(Ast *ast_param) {
 
 /* Remove `delete_block` from all predecessor and successor maps */
 void irFunctionDelinkBlock(IrFunction *func, IrBlock *delete_block) {
+    List *needle = NULL;
     listForEach(func->blocks) {
         IrBlock *block = listValue(IrBlock *, it);
         if (block->id == delete_block->id) {
-            listUnlink(func->blocks, it);
+            needle = it;
         }
         irFunctionRemoveSuccessor(func, block, delete_block);
         irFunctionRemovePredecessor(func, block, delete_block);
-        intMapDelete(func->cfg, delete_block->id);
+    }
+
+    intMapDelete(func->cfg, delete_block->id);
+    if (needle) {
+        listUnlink(func->blocks, needle);
     }
 }
 
@@ -2378,7 +2431,6 @@ int irBlocksHaveSingleLink(IrFunction *func, IrBlock *next, IrBlock *prev) {
     }
 
     if (prev_mapping->successors->size == 1 && next_mapping->predecessors->size == 1) {
-        IrBlock *nexts_previous = intMapGetFirst(next_mapping->predecessors);
         IrBlock *previous_next = intMapGetFirst(prev_mapping->successors);
 
         if (previous_next->id == next->id && next->id == previous_next->id) {
@@ -2549,20 +2601,23 @@ void irSimplifyBlocks(IrFunction *func) {
 
                 irFunctionRemoveSuccessor(func, block, ir_branch->fallthrough_block);
                 irFunctionRemovePredecessor(func, ir_branch->fallthrough_block, block);
-                irJump(func, block, jump_target);
+                if (!intSetHas(blocks_to_delete, jump_target->id)) {
+                    irJump(func, block, jump_target);
+                }
+
+                //irJump(func, block, jump_target);
 
             } else if (irBlockIsRedundantJump(func, block)) {
                 IrInstr *ir_jmp = irBlockLastInstr(block);
                 irFunctionRemoveSuccessor(func, block, ir_jmp->target_block);
                 irFunctionRemovePredecessor(func, ir_jmp->target_block, block);
+                listPop(block->instructions);
+                if (!intSetHas(blocks_to_delete, ir_jmp->target_block->id)) {
+                    irBlockMerge(func, block, ir_jmp->target_block);
+                }
                 intSetAdd(blocks_to_delete, ir_jmp->target_block->id);
-                irBlockMerge(func, block, ir_jmp->target_block);
                 loggerWarning("C? - Removed redundant Jump\n");
-            } else if (irLastInstructionIsJumpLike(block)) {
-                printf("Last is jumplike: %d\n", block->id);
-                printf("Jump like block: %d %s %s\n", block->id,
-                        intMapKeysToString(mapping->predecessors)->data,
-                        intMapKeysToString(mapping->successors)->data);
+
             } else {
                 printf("block: %d %s %s\n", block->id,
                         intMapKeysToString(mapping->predecessors)->data,
@@ -2572,9 +2627,6 @@ void irSimplifyBlocks(IrFunction *func) {
 
         listForEach(func->blocks) {
             IrBlock *block = it->value;
-            IrBlockMapping *mapping = intMapGet(func->cfg, block->id);
-
-            printf("block %d, mapping=%s\n", block->id,(mapping ? "YE" : "NO"));
 
             if (irLastInstructionIsJumpLike(block)) {
                 IrInstr *last_instr = irBlockLastInstr(block);
@@ -2613,9 +2665,9 @@ void irSimplifyBlocks(IrFunction *func) {
                 irFunctionDelinkBlock(func, block);
             }
 
-            if (!irBlockHasPredecessors(func, block)) {
-                irFunctionDelinkBlock(func, block);
+            if (!irBlockHasPredecessors(func, block) && block != func->exit_block) {
                 loggerWarning("No predecessors for block %d\n", block->id);
+                irFunctionDelinkBlock(func, block);
             }
 
             //if (mapping && mapping->successors->size == 0 && block != func->exit_block) {
@@ -2626,8 +2678,13 @@ void irSimplifyBlocks(IrFunction *func) {
     } /* While end */
 
     if (irBlockEntryCanMergeExit(func)) {
+        printf("doing htis\n");
         irBlockMerge(func, func->entry_block, func->exit_block);
-        listUnlink(func->blocks, listTail(func->blocks));
+        irFunctionDelinkBlock(func, func->exit_block);
+    }
+
+    if (irBlockIsRedundantJump(func, func->entry_block)) {
+        loggerWarning("YES\n");
     }
 
     uniqListRelease(work_queue);

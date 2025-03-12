@@ -132,6 +132,7 @@ int listCount(List *ll) {
  * l2 = nullptr
  */
 void listMergePrepend(List *l1, List *l2) {
+    if (listEmpty(l2)) return;
     List *h1 = l1->next;
 
     List *h2 = l2->next;
@@ -154,6 +155,7 @@ void listMergePrepend(List *l1, List *l2) {
  * l2 = nullptr
  * */
 void listMergeAppend(List *l1, List *l2) {
+    if (listEmpty(l2)) return;
     List *h1 = l1->next;
     List *t1 = l1->prev;
 
@@ -177,7 +179,6 @@ void listUnlink(List *list, List *node) {
     }
     /* We have at least one other entry in the list so can safely remove 
      * the node */
-    List *removed = node;
     node->next->prev = node->prev;
     node->prev->next = node->next;
 }
