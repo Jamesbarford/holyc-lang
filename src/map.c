@@ -17,13 +17,16 @@ void setAllLongs(long *array, unsigned long len, long value) {
     }
 }
 
+#ifndef DEBUG
+
 #define vectorNew(ret_type, entry_type)                               \
     ret_type *vec;                                                    \
     do {                                                              \
         vec = (ret_type *)malloc(sizeof(ret_type));                   \
         vec->size = 0;                                                \
         vec->capacity = VECTOR_INITIAL_CAPACITY;                      \
-        vec->entries = (entry_type *)malloc(sizeof(entry_type) * VECTOR_INITIAL_CAPACITY); \
+        vec->entries = (entry_type *)malloc(sizeof(entry_type) *      \
+                VECTOR_INITIAL_CAPACITY);                             \
     } while (0)
 
 #define vectorResize(vec, type)                           \
@@ -59,6 +62,40 @@ void setAllLongs(long *array, unsigned long len, long value) {
         }                                                                  \
     } while (0)
     
+#else 
+#define vectorNew(ret_type, entry_type)                               \
+    ret_type *vec;                                                    \
+    do {                                                              \
+        vec = (ret_type *)malloc(sizeof(ret_type));                   \
+        vec->size = 0;                                                \
+        vec->capacity = VEC_DEBUG_SIZE;                               \
+        memset(vec->entries,0,sizeof(vec->entries));                  \
+    } while (0)
+
+#define vectorPush(vec, type, value)                               \
+    do {                                                           \
+        if (vec->size + 1 >= VEC_DEBUG_SIZE) {                     \
+            loggerPanic("Vec size would be: %d\n", vec->size + 1); \
+        }                                                          \
+        vec->entries[vec->size++] = value;                         \
+    } while (0)
+
+#define vectorBoundsCheck(vec_size, idx)                                   \
+    do {                                                                   \
+        if (idx < 0 || idx >= vec_size) {                                  \
+            loggerPanic("idx '%d' is out of range for vector of size %d\n",\
+                    idx,vec->size);                                        \
+        }                                                                  \
+    } while (0)
+
+#define vectorRelease(vec)                                                 \
+    do {                                                                   \
+        if (vec) {                                                         \
+            free(vec);                                                     \
+        }                                                                  \
+    } while (0)
+
+#endif
 
 /* I feel combining all of these data structures into one file will lead 
  * to a more happy prosperous codebase */
@@ -333,26 +370,19 @@ void intMapRelease(IntMap *map) { // free the entire hashtable
 
 int intMapResize(IntMap *map) {
     // Resize the hashtable, will return false if OMM
-    unsigned long new_capacity, new_mask;
-    IntMapNode **new_entries, **old_entries;
-    long *new_indexes;
-    long *old_index_entries = map->indexes->entries;
-    int indexes_capacity = (int)map->indexes->size;
     int is_free;
+    unsigned long new_capacity = map->capacity << 1;
+    unsigned long new_mask = new_capacity - 1;
+    long *old_index_entries = map->indexes->entries;
+    int indexes_size = map->indexes->size;
+    IntMapNode **old_entries = old_entries = map->entries;
 
-    old_entries = map->entries;
-
-    new_capacity = map->capacity << 1;
-    new_mask = new_capacity - 1;
-
-    new_indexes = (long *)calloc(indexes_capacity, sizeof(long));
-    /* OOM */
+    long *new_indexes = (long *)calloc(indexes_size, sizeof(long));
     if (new_indexes == NULL) {
         return 0;
     }
 
-    new_entries = (IntMapNode **)calloc(new_capacity, sizeof(IntMapNode *));
-    /* OOM */
+    IntMapNode **new_entries = (IntMapNode **)calloc(new_capacity, sizeof(IntMapNode *));
     if (new_entries == NULL) {
         free(new_indexes);
         return 0;
@@ -367,7 +397,7 @@ int intMapResize(IntMap *map) {
      * the hashtable which 'dict.c' has to do on a resize thus this should in
      * theory be faster, but there are more array lookups however they should 
      * have good spatial locality */
-    for (long i = 0; i < indexes_capacity; ++i) {
+    for (int i = 0; i < indexes_size; ++i) {
         long idx = old_index_entries[i];
         IntMapNode *old = old_entries[idx];
         if (old->key != HT_DELETED) {
@@ -382,10 +412,16 @@ int intMapResize(IntMap *map) {
     }
 
     free(old_entries);
-    free(map->indexes->entries);
     map->indexes->size = new_size;
-    map->indexes->capacity = indexes_capacity;
+
+#ifdef DEBUG
+    memcpy(map->indexes->entries, new_indexes, new_size * sizeof(long));
+    free(new_indexes);
+#else
+    free(map->indexes->entries);
+    map->indexes->capacity = indexes_size;
     map->indexes->entries = new_indexes;
+#endif
 
     map->entries = new_entries;
     map->size = new_size;
@@ -664,24 +700,20 @@ void strMapRemoveKeys(StrMap *map1, StrMap *map2) {
 
 // Resize the hashtable, will return false if OMM
 int strMapResize(StrMap *map) {
-    unsigned long new_capacity, new_mask;
-    long *new_indexes;
-    long *old_index_entries = map->indexes->entries;
-    int indexes_capacity = (int)map->indexes->size;
-    StrMapNode **old_entries, **new_entries;
     int is_free;
+    unsigned long new_capacity = map->capacity << 1;
+    unsigned long new_mask = new_capacity - 1;
+    long *old_index_entries = map->indexes->entries;
+    StrMapNode **old_entries = map->entries;
+    int indexes_size = map->indexes->size;
 
-    new_capacity = map->capacity << 1;
-    new_mask = new_capacity - 1;
-    old_entries = map->entries;
-
-    new_indexes = (long *)calloc(new_capacity, sizeof(long));
+    long *new_indexes = (long *)calloc(indexes_size, sizeof(long));
     /* OOM */
     if (new_indexes == NULL) {
         return 0;
     }
 
-    new_entries = (StrMapNode **)calloc(new_capacity, sizeof(StrMapNode *));
+    StrMapNode **new_entries = (StrMapNode **)calloc(new_capacity, sizeof(StrMapNode *));
     /* OOM */
     if (new_entries == NULL) {
         free(new_indexes);
@@ -697,7 +729,7 @@ int strMapResize(StrMap *map) {
      * the hashtable which 'dict.c' has to do on a resize thus this should in
      * theory be faster, but there are more array lookups however they should 
      * have good spatial locality */
-    for (unsigned long i = 0; i < map->size; ++i) {
+    for (long i = 0; i < indexes_size; ++i) {
         long idx = old_index_entries[i];
         StrMapNode *old = old_entries[idx];
         if (old->key != NULL) {
@@ -712,10 +744,16 @@ int strMapResize(StrMap *map) {
     }
 
     free(old_entries);
-    free(map->indexes->entries);
     map->indexes->size = new_size;
-    map->indexes->capacity = indexes_capacity;
+
+#ifdef DEBUG
+    memcpy(map->indexes->entries, new_indexes, new_size * sizeof(long));
+    free(new_indexes);
+#else
+    free(map->indexes->entries);
+    map->indexes->capacity = indexes_size;
     map->indexes->entries = new_indexes;
+#endif
 
     map->size = new_size;
     map->threashold = (unsigned long)(new_capacity * HT_LOAD);
@@ -999,7 +1037,7 @@ int intSetResize(IntSet *iset) {
     unsigned long new_mask = new_capacity - 1;
     long *old_entries = iset->entries;
     long *old_index_entries = iset->indexes->entries;
-    int indexes_capacity = (int)iset->indexes->size;
+    int indexes_size = iset->indexes->size;
 
     long *new_entries = (long *)malloc(new_capacity * sizeof(long));
     /* OOM */
@@ -1007,7 +1045,7 @@ int intSetResize(IntSet *iset) {
         return 0;
     }
 
-    long *new_indexes = (long *)calloc(indexes_capacity, sizeof(long));
+    long *new_indexes = (long *)calloc(indexes_size, sizeof(long));
     /* OOM */
     if (new_indexes == NULL) {
         free(new_entries);
@@ -1022,7 +1060,7 @@ int intSetResize(IntSet *iset) {
 
     long new_size = 0;
     int is_free;
-    for (int i = 0; i < indexes_capacity; ++i) {
+    for (int i = 0; i < indexes_size; ++i) {
         long idx = old_index_entries[i];
         long old_key = old_entries[idx];
         if (old_key != HT_DELETED) {
@@ -1035,10 +1073,16 @@ int intSetResize(IntSet *iset) {
     } 
 
     free(old_entries);
-    free(iset->indexes->entries);
-    iset->indexes->capacity = indexes_capacity;
-    iset->indexes->entries = new_indexes;
     iset->indexes->size = new_size;
+
+#ifdef DEBUG
+    memcpy(iset->indexes->entries, new_indexes, new_size * sizeof(long));
+    free(new_indexes);
+#else
+    free(iset->indexes->entries);
+    iset->indexes->capacity = indexes_size;
+    iset->indexes->entries = new_indexes;
+#endif
 
     iset->size = new_size;
     iset->threashold = (unsigned long)(new_capacity * HT_LOAD);

@@ -6,9 +6,11 @@
  * including of header files. */
 
 #include "aostr.h"
+#include "list.h"
 #include "map.h"
 
-#define IR_CTX_FLAG_IN_LOOP (1<<0)
+#define IR_CTX_FLAG_IN_LOOP   (1<<0)
+#define IR_CTX_FLAG_IN_SWITCH (1<<1)
 
 typedef enum IrOpcode {
     /* Memory operations */
@@ -166,6 +168,12 @@ typedef struct IrValue {
             aoStr *str;
             int str_real_len;
         };
+
+        struct {
+            int length;
+            /* Do we want a vector of vector of */
+
+        } array_;
     };
     int version;
 } IrValue;
@@ -237,6 +245,7 @@ typedef struct IrProgram {
     StrMap *strings;          /* `StrMap<IrValue *>` */
     StrMap *types;            /* @TODO: StrMap<?> I feel this one needs
                                * a bit more thought */
+    StrMap *arrays;           /* @TODO decide on representation `StrMap<...>` */
 } IrProgram;
 
 /* This seems a little daft having this but goto's wreck havoc with control 
@@ -256,22 +265,17 @@ typedef union IrUnresolvedBlock {
 } IrUnresolvedBlock;
 
 typedef struct IrCtx {
+    IrProgram *ir_program;    /* The program being created */
     unsigned long flags;      /* Flags for parsing */
     IrFunction *func;         /* The current function being lowered to IR */
     IrBlock *current_block;   /* The current block being parsed */
-    IrBlock *exit_block;       /* Block that will be the return statement */
 
     /* These allow us to more easily do break/continues */
     IrBlock *loop_head_block; /* Head block for a while/do_while/for, 
                                * allows us to make continue blocks */
 
-    IrBlock *cond_end_block;  /* This will either be the block after an 
-                               * `if/else/else_if` */
-
-    IrBlock *loop_end_block;  /* This will either be the block after a
+    IrBlock *end_block;  /* This will either be the block after a
                                * `while/do_while/for` */
-
-    IrBlock *switch_end_block; /* Block after a switch statement */
 
     PtrVec *unresolved_gotos;  /* PtrVec<IrUnresolvedBlock *>
                                 * When we see a goto we need to save it till we 
@@ -283,4 +287,5 @@ typedef struct IrCtx {
                                  * iterate over the gotos and index this 
                                  * hashtable */
 } IrCtx;
+
 #endif

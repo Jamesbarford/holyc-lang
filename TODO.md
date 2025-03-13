@@ -10,8 +10,8 @@
 - [x] For loops
 - [x] Do While loops
 - [x] Return
-- [ ] Switch 
-- [ ] Goto's, we need to add place holders, store them in a 
+- [x] Switch 
+- [x] Goto's, we need to add place holders, store them in a
       vector and then index the instructions vector to remove them.
 
 # Expressions
@@ -37,7 +37,7 @@
 - [x] Logical Not
 - [x] Logical And
 - [x] Logical Or
-- [ ] Taking address
+- [x] Taking address
 - [ ] Array referencing?
 - [ ] Struct referencing?
 - [ ] Pointer referencing?
@@ -59,3 +59,10 @@
 - [ ] Assembly
 - [ ] Variable arguments
 - [ ] Default arguments
+
+# Ir
+- [ ] Removed un-needed jumps
+- [ ] Link to the return node if possible, this also requires tracking the
+      last instruction of a block to see if it is a jump or a branch and
+      if the target or fallback points to a block that got removed. That could
+      be the heuristic to determine that it should point at the return block.

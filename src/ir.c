@@ -277,6 +277,7 @@ aoStr *irInstrToString(IrInstr *ir_instr) {
                         ir_value_str,
                         ir_instr->target_block->id,
                         ir_instr->fallthrough_block->id);
+            aoStrRelease(ir_value_str);
             break;
         }
 
@@ -302,6 +303,27 @@ aoStr *irInstrToString(IrInstr *ir_instr) {
                 }
             }
             aoStrCatFmt(buf,"%s %S",op, phi_pairs_str);
+            aoStrRelease(phi_pairs_str);
+            break;
+        }
+
+        case IR_OP_SWITCH: {
+            aoStr *pairs_str = aoStrNew();
+            aoStr *ir_value_str = irValueToString(ir_instr->op1);
+            aoStrCatFmt(buf, "%s %S, label bb%i [\n",
+                        op,
+                        ir_value_str,
+                        ir_instr->target_block->id);
+
+            listForEach(ir_instr->extra.cases) {
+                IrPair *ir_pair = listValue(IrPair *, it);
+                aoStr *ir_value_str = irValueToString(ir_pair->ir_value);
+                aoStrCatFmt(buf, "      %S, bb%i\n", ir_value_str, ir_pair->ir_block->id);
+            }
+            aoStrCatLen(buf, str_lit("    ]"));
+
+            aoStrRelease(ir_value_str);
+            aoStrRelease(pairs_str);
             break;
         }
 
@@ -453,6 +475,16 @@ aoStr *irBlockName(void) {
     return aoStrPrintf("bb%d", ir_block_count++);
 }
 
+
+static int ir_array_count = 0;
+aoStr *irArrayName(IrFunction *func) {
+    return aoStrPrintf("array%d.%s",func->name->data);
+}
+
+void irArrayCountReset(void) {
+    ir_array_count = 0;
+}
+
 void irBlockAddInstruction(IrBlock *block, IrInstr *ir_instr) {
     listAppend(block->instructions, ir_instr);
 }
@@ -488,6 +520,7 @@ IrProgram *irProgramNew(void) {
     program->global_variables = strMapNew(16);
     program->strings = strMapNew(16);
     program->types = strMapNew(16);
+    program->arrays = strMapNew(16);
     return program;
 }
 
@@ -502,11 +535,8 @@ IrValue *irValueNew(IrValueType ir_type, IrValueKind ir_kind) {
 void irCtxReset(IrCtx *ctx) {
     ctx->flags = 0;
     ctx->current_block = NULL;
-    ctx->exit_block = NULL;
-    ctx->cond_end_block = NULL;
-    ctx->loop_end_block = NULL;
+    ctx->end_block = NULL;
     ctx->loop_head_block = NULL;
-    ctx->switch_end_block = NULL;
     if (ctx->unresolved_gotos) {
         ptrVecClear(ctx->unresolved_gotos, NULL);
     }
@@ -533,24 +563,12 @@ static void irCtxSetCurrentBlock(IrCtx *ctx, IrBlock *ir_block) {
     ctx->current_block = ir_block;
 }
 
-static void irCtxSetExitBlock(IrCtx *ctx, IrBlock *ir_block) {
-    ctx->exit_block = ir_block;
-}
-
-static void irCtxSetCondEndBlock(IrCtx *ctx, IrBlock *ir_block) {
-    ctx->cond_end_block = ir_block;
-}
-
-static void irCtxSetLoopEndBlock(IrCtx *ctx, IrBlock *ir_block) {
-    ctx->loop_end_block = ir_block;
+static void irCtxSetEndBlock(IrCtx *ctx, IrBlock *ir_block) {
+    ctx->end_block = ir_block;
 }
 
 static void irCtxSetLoopHeadBlock(IrCtx *ctx, IrBlock *ir_block) {
     ctx->loop_head_block = ir_block;
-}
-
-static void irCtxSetSwitchEndBlock(IrCtx *ctx, IrBlock *ir_block) {
-    ctx->switch_end_block = ir_block;
 }
 
 /* We will reset this after each function has been created */
@@ -1176,6 +1194,34 @@ IrInstr *irSHR(IrBlock *block,
     instr->op2 = right;
     irBlockAddInstruction(block, instr);
     return instr;
+}
+
+/* Compare two values that are integers and branch return a `List<IrInstr *>` */
+void irBuildIntCompareAndBranch(IrFunction *func,
+                                IrBlock *block,
+                                IrValue *var,
+                                IrValue *var2,
+                                IrCmpKind cmp_kind,
+                                IrBlock *true_block,
+                                IrBlock *false_block)
+{
+    IrValue *result = irTmpVariable(IR_TYPE_I8);
+    IrInstr *ir_cmp_instr = irInstrNew(IR_OP_ICMP);
+    ir_cmp_instr->result = result;
+    ir_cmp_instr->op1 = var;
+    ir_cmp_instr->op2 = var2;
+    ir_cmp_instr->extra.cmp_kind = cmp_kind;
+
+    IrInstr *ir_branch = irInstrNew(IR_OP_BR);
+    ir_branch->op1 = ir_cmp_instr->result;
+    ir_branch->target_block = true_block;
+    ir_branch->fallthrough_block = false_block;
+
+
+    irBlockAddInstruction(block, ir_cmp_instr);
+    irBlockAddInstruction(block, ir_branch);
+    irFunctionAddMapping(func, block, true_block);
+    irFunctionAddMapping(func, block, false_block);
 }
         
 IrInstr *irBranch(IrFunction *func,
@@ -2010,6 +2056,25 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
             return NULL;
         }
 
+        case AST_ARRAY_INIT: {
+            astPrint(ast);
+            /* This is a store of a constant amount of values each of the same 
+             * size 
+             *
+             * size = 4
+             * elements = 4
+             * [1, 2, 3, 4]
+             *
+             * size = 2
+             * elements = 3
+             * elements = 3
+             * [[1, 1, 1], [2, 2, 2]]
+             *
+             * */
+            loggerPanic("Unhandled AST_ARRAY_INIT\n");
+            break;
+        }
+
         default:
             loggerPanic("Unhandled Ast kind: %s\n", astKindToString(ast->kind));
     }
@@ -2036,9 +2101,7 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
             IrBlock *ir_then = irBlockNew(irBlockId());
             IrBlock *ir_else = ast->els ? irBlockNew(irBlockId()) : NULL;
             IrBlock *ir_end_block = irBlockNew(irBlockId());
-            IrBlock *ir_previous_end_block = ctx->cond_end_block;
 
-            irCtxSetCondEndBlock(ctx, ir_end_block);
             irFunctionAddBlock(func, ir_then);
 
             if (ir_else) {
@@ -2067,7 +2130,6 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
 
             /* Update the current block we are pointing to */
             irCtxSetCurrentBlock(ctx, ir_end_block);
-            irCtxSetCondEndBlock(ctx, ir_previous_end_block);
             break;
         }
 
@@ -2076,14 +2138,14 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
             IrBlock *ir_while_cond = irBlockNew(irBlockId());
             IrBlock *ir_while_body = irBlockNew(irBlockId());
             IrBlock *ir_while_end = irBlockNew(irBlockId());
-            IrBlock *ir_previous_end_block = ctx->loop_end_block;
+            IrBlock *ir_previous_end_block = ctx->end_block;
             IrBlock *ir_previous_head_block = ctx->loop_head_block;
             unsigned long ctx_prev_flags = ctx->flags;
             ctx->flags |= IR_CTX_FLAG_IN_LOOP;
 
             /* Update the current end block */
             irCtxSetLoopHeadBlock(ctx, ir_while_cond);
-            irCtxSetLoopEndBlock(ctx, ir_while_end);
+            irCtxSetEndBlock(ctx, ir_while_end);
 
             irJump(func, ctx->current_block, ir_while_cond);
 
@@ -2110,7 +2172,7 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
             ctx->flags = ctx_prev_flags;
             /* We are now out of the scope of the while loop so reset the 
              * end block to what it was previously */
-            irCtxSetLoopEndBlock(ctx, ir_previous_end_block);
+            irCtxSetEndBlock(ctx, ir_previous_end_block);
             irCtxSetLoopHeadBlock(ctx, ir_previous_head_block);
             break;
         }
@@ -2130,7 +2192,7 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
             IrBlock *ir_dowhile_cond = irBlockNew(irBlockId());
             IrBlock *ir_dowhile_end = irBlockNew(irBlockId());
 
-            IrBlock *ir_previous_end_block = ctx->loop_end_block;
+            IrBlock *ir_previous_end_block = ctx->end_block;
             IrBlock *ir_previous_head_block = ctx->loop_head_block;
 
             unsigned long ctx_prev_flags = ctx->flags;
@@ -2140,7 +2202,7 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
              * which is what would happen with a for loop. Though this is 
              * "correct" it simply seems a bit odd */
             irCtxSetLoopHeadBlock(ctx, ir_dowhile_body);
-            irCtxSetLoopEndBlock(ctx, ir_dowhile_end);
+            irCtxSetEndBlock(ctx, ir_dowhile_end);
 
             /* Jump into the body and prepare IR for the body */
             irJump(func, ctx->current_block, ir_dowhile_body);
@@ -2166,7 +2228,7 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
 
             /* Restore previous state */
             ctx->flags = ctx_prev_flags;
-            irCtxSetLoopEndBlock(ctx, ir_previous_end_block);
+            irCtxSetEndBlock(ctx, ir_previous_end_block);
             irCtxSetLoopHeadBlock(ctx, ir_previous_head_block);
             break;
         }
@@ -2178,7 +2240,7 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
             IrBlock *ir_for_head = ir_for_cond ? ir_for_cond : ir_for_body;
             IrBlock *ir_for_end = irBlockNew(irBlockId());
 
-            IrBlock *ir_previous_end_block = ctx->loop_end_block;
+            IrBlock *ir_previous_end_block = ctx->end_block;
             IrBlock *ir_previous_head_block = ctx->loop_head_block;
 
             unsigned long ctx_prev_flags = ctx->flags;
@@ -2191,7 +2253,7 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
 
             /* Update the current end block */
             irCtxSetLoopHeadBlock(ctx, ir_for_cond ? ir_for_cond : ir_for_body);
-            irCtxSetLoopEndBlock(ctx, ir_for_end);
+            irCtxSetEndBlock(ctx, ir_for_end);
 
             if (ir_for_cond) {
                 irJump(func, ctx->current_block, ir_for_cond);
@@ -2230,7 +2292,7 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
 
             /* Restore */
             ctx->flags = ctx_prev_flags;
-            irCtxSetLoopEndBlock(ctx, ir_previous_end_block);
+            irCtxSetEndBlock(ctx, ir_previous_end_block);
             irCtxSetLoopHeadBlock(ctx, ir_previous_head_block);
             break;
         }
@@ -2246,59 +2308,140 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
         }
 
         case AST_SWITCH: {
-            PtrVec *cases = ast->cases;
-            IrInstr *ir_switch = irInstrNew(IR_OP_SWITCH);
+            unsigned long prev_flags = ctx->flags;
+            IrBlock *ir_prev_end_block = ctx->end_block;
 
-            IrBlock *ir_prev_switch_end = ctx->switch_end_block;
+            ctx->flags |= IR_CTX_FLAG_IN_SWITCH;
 
+            /* Evaluate the switch condition `switch(<condition>)`, as we may 
+             * need to do a bounds check we create the instruction after 
+             * the possible bounds check but need the Value ahead of time */
+            IrValue *switch_var = irExpression(ctx, func, ast->switch_cond);
+            /* The block passsed the switch */
+            IrBlock *end_block = irBlockNew(irBlockId());
+            IrBlock *default_block = ast->case_default ? irBlockNew(irBlockId()) : NULL;
+            IrBlock *out_of_bounds_block = default_block ? default_block : end_block;
+
+            /* We want to use the orderd jump table */
             Ast **jump_table = ast->jump_table_order;
-            int jump_table_size = cases->size;
-            Ast *case_ast_min = jump_table[0];
-            Ast *case_ast_max = jump_table[jump_table_size - 1];
+            int jump_table_size = ast->cases->size;
 
-            IrValue *ir_cond = irExpression(ctx, func, ast->switch_cond);
+            /* If we have bounds checking we want to make sure that we are in
+             * range and either jump to the `default` case if there is one or 
+             * jump passed the switch */
+            if (ast->switch_bounds_checked) {
+                Ast *case_ast_min = jump_table[0];
+                Ast *case_ast_max = jump_table[jump_table_size - 1];
+                /* Create some temporaries for the minimum and maximum values of 
+                 * the jump table */
+                IrValue *min_var = irConstInt(switch_var->type, case_ast_min->case_begin);
+                IrValue *max_var = irConstInt(switch_var->type, case_ast_max->case_end);
 
-            IrBlock *ir_switch_default = ast->case_default ?
-                                         irBlockNew(irBlockId()) : NULL;
-            IrBlock *ir_switch_end = irBlockNew(irBlockId());
+                IrBlock *max_block = irBlockNew(irBlockId());
+                IrBlock *switch_jump_table = irBlockNew(irBlockId());
 
-            irCtxSetSwitchEndBlock(ctx, ir_switch_end);
+                /* Compare the minimum and jump to the max check, or to the 
+                 * out of bounds */
+                irBuildIntCompareAndBranch(func, ctx->current_block, switch_var,
+                        min_var, IR_CMP_LT, max_block, out_of_bounds_block);
 
-            ir_switch->op1 = ir_cond;
-            ir_switch->extra.cases = listNew();
+                irFunctionAddBlock(func, max_block);
+                irCtxSetCurrentBlock(ctx, max_block);
 
-            for (int i = 0; i < cases->size; ++i) {
-                /* We want to create a const int and a block */
-                Ast *case_ = vecGet(Ast *,cases,i);
-                IrBlock *ir_case_block = irBlockNew(irBlockId());
-                IrValue *ir_case_value = irConstInt(IR_TYPE_I64, case_->case_begin);
-                IrPair *ir_pair = irPairNew(ir_case_block, ir_case_value);
-                /* @Mapping 
-                 * we should map the switch head to the case block so the 
-                 * switch has many succesors and the case has the switch block 
-                 * as the predecessor.
-                 *
-                 * also the switch end should have all of these as predecessors 
-                 * this means if the last instruction is a break we should jump 
-                 * that should be handled by the AST_BREAK case above and jump 
-                 * to the `ctx->switch_end_block` */
+                /* Compare maximum and jump to the jump table condition or 
+                 * to out of bounds */
+                irBuildIntCompareAndBranch(func, ctx->current_block, switch_var, max_var,
+                        IR_CMP_GT, switch_jump_table, out_of_bounds_block);
+
+                irFunctionAddBlock(func, switch_jump_table);
+                irCtxSetCurrentBlock(ctx, switch_jump_table);
+            }
+
+            IrInstr *ir_switch_head = irInstrNew(IR_OP_SWITCH);
+            /* Setup the switch condition instruction */
+            ir_switch_head->op1 = switch_var;
+            ir_switch_head->target_block = end_block;
+            ir_switch_head->extra.cases = listNew();
+            irBlockAddInstruction(ctx->current_block, ir_switch_head);
+
+            IrBlock *switch_start = ctx->current_block;
+
+            /* Reserve the basic blocks for the case labels so we can do fall 
+             * throughs if needed. */
+            PtrVec *case_blocks = ptrVecNew();
+            for (int i = 0; i < jump_table_size; ++i) {
+                ptrVecPush(case_blocks, irBlockNew(irBlockId()));
+            }
+
+            for (int i = 0; i < jump_table_size; ++i) {
+                /* The next block is either the block after or the out of bounds 
+                 * block. This is for when the last instruction is not a break,
+                 * thus we create a jump to the next block. */
+                IrBlock *next_block = i+1 >= jump_table_size ?
+                                             out_of_bounds_block :
+                                             vecGet(IrBlock *,case_blocks,i+1);
+
+                Ast *case_ = jump_table[i];
+                IrBlock *ir_case_block = vecGet(IrBlock *,case_blocks,i);
+
                 irCtxSetCurrentBlock(ctx, ir_case_block);
+                /* @Redundant?
+                 * Consistently re-set the end block as it is possible inside 
+                 * the case there could be something that sets the end block 
+                 * that we are not intrested in. */
+                irCtxSetEndBlock(ctx, end_block);
+
+                /* Expand out the case ranges to multiple labels that point to 
+                 * the same block */
+                for (int case_number = case_->case_begin; case_number <= case_->case_end; ++case_number) {
+                    IrValue *ir_case_value = irConstInt(IR_TYPE_I64, case_number);
+                    IrPair *ir_pair = irPairNew(ir_case_block, ir_case_value);
+                    listAppend(ir_switch_head->extra.cases, ir_pair);
+                }
+
+                irFunctionAddMapping(func, switch_start, ir_case_block);
+                irFunctionAddBlock(func,ir_case_block);
+    
+                /* Evaluate the body of the case */
                 listForEach(case_->case_asts) {
                     Ast *stmt = listValue(Ast *, it);
                     irStatement(ctx, func, stmt);
                 }
+
+                IrInstr *last_instruction = irBlockLastInstr(ir_case_block);
+                if (!last_instruction || (last_instruction && last_instruction->opcode != IR_OP_JMP)) { 
+                    /* if the last operation in the block is not a jump then 
+                     * we need to add a jump from the case block to the next 
+                     * block
+                     * Or if we have stacked cases
+                     * */
+                    irJump(func, ir_case_block, next_block);
+                }
             }
-            irCtxSetSwitchEndBlock(ctx, ir_prev_switch_end);
-            irCtxSetCurrentBlock(ctx, ir_switch_end);
+
+            /* If we have a default block then evaluate the block */
+            if (default_block) {
+                irCtxSetEndBlock(ctx, end_block);
+                irCtxSetCurrentBlock(ctx, default_block);
+                irFunctionAddBlock(func,default_block);
+
+                listForEach(ast->case_default->case_asts) {
+                    Ast *stmt = listValue(Ast *, it);
+                    irStatement(ctx, func, stmt);
+                }
+            }
+
+            ptrVecRelease(case_blocks);
+            ctx->flags = prev_flags;
+            irFunctionAddBlock(func,end_block);
+            irCtxSetEndBlock(ctx, ir_prev_end_block);
+            irCtxSetCurrentBlock(ctx, end_block);
             break;
         }
 
         case AST_BREAK: {
-            if (ctx->flags & IR_CTX_FLAG_IN_LOOP) {
-                irJump(func, ctx->current_block, ctx->loop_end_block);
-            } else {
-                loggerPanic("IR SWITCH BREAKS NOT HANDLED\n");
-            }
+            assert(ctx->end_block);
+            irJump(func, ctx->current_block, ctx->end_block);
             break;
         }
 
@@ -2470,7 +2613,6 @@ void irSimplifyBlocks(IrFunction *func) {
      * the set of successors and predecessors */
     int i = 2;
     while (i--) {
-        printf("i=%d\n",i);
         /** 
          * @THINK
          * We append the list nodes themeselves as opposed to the `IrBlock *` as this
@@ -2745,7 +2887,6 @@ IrFunction *irLowerFunction(IrCtx *ctx, IrProgram *program, Ast *ast_function) {
     ir_function->exit_block = ir_exit_block;
     
     irCtxSetCurrentBlock(ctx, ir_entry_block);
-    irCtxSetExitBlock(ctx, ir_exit_block);
 
     /* The function now has everything lowered to IR */
     irStatement(ctx, ir_function, ast_function->body);
@@ -2765,6 +2906,7 @@ IrFunction *irLowerFunction(IrCtx *ctx, IrProgram *program, Ast *ast_function) {
 void irLowerAst(Cctrl *cc) {
     IrProgram *ir_program = irProgramNew();
     IrCtx *ctx = irCtxNew();
+    ctx->ir_program = ir_program;
 
     listForEach(cc->ast_list) {
         Ast *ast = (Ast *)it->value;

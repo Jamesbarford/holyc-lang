@@ -11,12 +11,20 @@
 #define HT_PROBE_1 1
 #define HT_PROBE_3 3
 
+#ifdef DEBUG
+    #define VEC_DEBUG_SIZE 512
+#endif
+
 /* This is very similar to the MapIndex struct, maybe we can repurpose it 
  * or repurpose this to be the index */
 typedef struct IntVec {
     int size;
     int capacity;
+#ifdef DEBUG
+    long entries[VEC_DEBUG_SIZE];
+#else
     long *entries;
+#endif
 } IntVec;
 
 IntVec *intVecNew(void);
@@ -30,7 +38,11 @@ long intVecPop(IntVec *vec, int *ok);
 typedef struct PtrVec {
     int size;
     int capacity;
+#ifdef DEBUG
+    void *entries[VEC_DEBUG_SIZE];
+#else
     void **entries;
+#endif
 } PtrVec;
 
 #define vecInBounds(vec, idx) ((idx >= 0) && idx < (vec)->size)
@@ -38,9 +50,6 @@ typedef struct PtrVec {
 #define vecEmpty(vec) ((vec)->size == 0)
 #define vecGet(type,vec,idx) ((type)((vec)->entries[idx]))
 #define vecTail(type,vec) ((type)((vec)->entries[(vec)->size-1]))
-#define vecFor(vec) \
-    for (int i = 0; i < vec->size; ++i)
-#define vecForGet(type, vec) vecGet(type,vec,i)
 
 PtrVec *ptrVecNew(void);
 void ptrVecPush(PtrVec *vec, void *value);
