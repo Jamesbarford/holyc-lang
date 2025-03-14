@@ -1391,8 +1391,8 @@ void asmFunCall(Cctrl *cc, aoStr *buf, Ast *ast) {
 /* This is also used for initalising classes as they are treated much in the 
  * same way as arrays */
 void asmArrayInit(Cctrl *cc, aoStr *buf, Ast *ast, AstType *type, int offset) {
-    listForEach(ast->arrayinit) {
-        Ast *tmp = (Ast *)it->value;
+    for (int i = 0; i < ast->arrayinit->size; ++i) {
+        Ast *tmp = vecGet(Ast *,ast->arrayinit, i);
         if (tmp->kind == AST_ARRAY_INIT) {
             asmArrayInit(cc,buf,tmp,type->ptr,offset);
             offset += type->ptr->size;
@@ -2038,8 +2038,8 @@ void asmDataInternal(aoStr *buf, Ast *data) {
      * We need to call this function again.
      * */
     if (data->kind == AST_ARRAY_INIT) {
-        listForEach(data->arrayinit) {
-            asmDataInternal(buf,(Ast *)it->value);
+        for (int i = 0; i < data->arrayinit->size; ++i) {
+            asmDataInternal(buf,vecGet(Ast *, data->arrayinit, i));
         }
         return;
     }
@@ -2117,7 +2117,7 @@ void asmGlobalVar(StrMap *seen_globals, aoStr *buf, Ast* ast) {
                 aoStrCatPrintf(buf,".data\n");
             }
             if (declinit->kind == AST_ARRAY_INIT) {
-                Ast *head = (Ast *)declinit->arrayinit->next->value;
+                Ast *head = vecGet(Ast *, declinit->arrayinit, 0);
                 if (head->kind == AST_STRING) {
                     aoStrCatPrintf(buf,".align 4\n");
                 }
@@ -2128,8 +2128,9 @@ void asmGlobalVar(StrMap *seen_globals, aoStr *buf, Ast* ast) {
         aoStrCatFmt(buf,"%S:\n\t",label);
 
         if (declinit->kind == AST_ARRAY_INIT) {
-            listForEach(declinit->arrayinit) {
-                asmDataInternal(buf,(Ast *)it->value);
+            for (int i = 0; i < declinit->arrayinit->size; ++i) {
+                Ast *array_value = vecGet(Ast *, declinit->arrayinit, 0);
+                asmDataInternal(buf, array_value);
             }
             return;
         } else {

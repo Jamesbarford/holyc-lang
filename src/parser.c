@@ -63,8 +63,6 @@ void parseTypeCheckClassFieldInitaliser(Cctrl *cc, AstType *cls_field_type, Ast 
 
 Ast *parseDeclArrayInitInt(Cctrl *cc, AstType *type) {
     Lexeme *tok = cctrlTokenGet(cc);
-    List *initlist;
-    Ast *init;
 
     if (type->ptr && type->ptr->kind == AST_TYPE_CHAR && tok->tk_type == TK_STR) {
         return cctrlGetOrSetString(cc,tok->start,tok->len,tok->i64);
@@ -75,7 +73,8 @@ Ast *parseDeclArrayInitInt(Cctrl *cc, AstType *type) {
                 (char)tok->i64);
     }
 
-    initlist = listNew();
+    Ast *init;
+    PtrVec *initlist = ptrVecNew();
     ssize_t i = 0;
     StrMap *cls_fields = NULL;
     if (type->kind == AST_TYPE_CLASS) {
@@ -91,10 +90,9 @@ Ast *parseDeclArrayInitInt(Cctrl *cc, AstType *type) {
         if (tokenPunctIs(tok,'{')) {
             init = parseDeclArrayInitInt(cc,type->ptr);
             tok = cctrlTokenGet(cc);
-            listAppend(initlist,init);
+            ptrVecPush(initlist,init);
             if (tokenPunctIs(tok,'}')) {
-                init = astArrayInit(initlist);
-                return init;
+                return astArrayInit(initlist);
             }
             continue;
         } else {
@@ -121,7 +119,7 @@ Ast *parseDeclArrayInitInt(Cctrl *cc, AstType *type) {
                 i++;
             }
         }
-        listAppend(initlist,init);
+        ptrVecPush(initlist,init);
 
         tok = cctrlTokenGet(cc);
         if (!tokenPunctIs(tok, ',')) {
@@ -530,7 +528,7 @@ Ast *parseVariableAssignment(Cctrl *cc, Ast *var, long terminator_flags) {
         if (init->kind == AST_STRING) {
             len = init->sval->len+1;
         } else {
-            len = listCount(init->arrayinit);
+            len = init->arrayinit->size;
         }
         if (var->type->len == -1) {
             var->type->len = len;
@@ -1086,7 +1084,8 @@ void parseRaiseCaseException(Cctrl *cc, Ast *case_expr) {
     char *exp = astLValueToString(case_expr,0);
     char *type = astTypeToString(case_expr->type);
     char *suggestion = mprintf("Invalid use of type %s", type);
-    cctrlRaiseExceptionFromTo(cc, suggestion, 'c', ':', "`case` must be followed by an integer constant got - %s", exp);
+    cctrlRaiseExceptionFromTo(cc, suggestion, 'c', ':',
+            "`case` must be followed by an integer constant got - %s", exp);
 }
 
 Ast *parseCaseLabel(Cctrl *cc, Lexeme *tok) {
@@ -1191,8 +1190,9 @@ Ast *parseDefaultStatement(Cctrl *cc) {
         if (stmt && stmt->kind != AST_CASE) {
             listAppend(stmts,stmt);
         }
-        if (stmt->kind == AST_COMPOUND_STMT || stmt->kind == AST_CASE || stmt->kind == AST_BREAK || stmt->kind == AST_RETURN
-                || stmt->kind == AST_GOTO) break;
+        if (stmt->kind == AST_COMPOUND_STMT || stmt->kind == AST_CASE || 
+            stmt->kind == AST_BREAK || stmt->kind == AST_RETURN ||
+            stmt->kind == AST_GOTO) break;
         peek = cctrlTokenPeek(cc);
         if (tokenPunctIs(peek,'}')) break;
     } while (1);

@@ -197,8 +197,8 @@ typedef struct Ast {
         };
 
         struct {
-            /* Array initialiser */
-            List *arrayinit;
+            /* Array initialiser `PtrVec<Ast *>` */
+            PtrVec *arrayinit;
         };
 
         /* If statement */
@@ -318,7 +318,7 @@ Ast *astLVar(AstType *type, char *name, int len);
 Ast *astGVar(AstType *type, char *name, int len, int is_static);
 
 /* More beefy data structures */
-Ast *astArrayInit(List *init);
+Ast *astArrayInit(PtrVec *init);
 Ast *astCompountStatement(List *stmts);
 
 /* Control */

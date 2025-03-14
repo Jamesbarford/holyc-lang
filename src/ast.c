@@ -299,7 +299,7 @@ Ast *astDecl(Ast *var, Ast *init) {
     return ast;
 }
 
-Ast *astArrayInit(List *init) {
+Ast *astArrayInit(PtrVec *init) {
     Ast *ast = astNew();
     ast->type = NULL;
     ast->kind = AST_ARRAY_INIT;
@@ -1194,7 +1194,6 @@ void _astToString(aoStr *str, Ast *ast, int depth) {
     }
 
     Ast *param;
-    List *node;
     char *tmp;
 
     switch(ast->kind) {
@@ -1439,14 +1438,13 @@ void _astToString(aoStr *str, Ast *ast, int depth) {
         }
 
         case AST_ARRAY_INIT:
-            node = ast->arrayinit->next;
             aoStrCatPrintf(str, "<array_initaliser>\n");
-            while (node != ast->arrayinit) {
-                _astToString(str, node->value, depth + 1);
-                if (node->next != ast->arrayinit) {
+            for (int i = 0; i < ast->arrayinit->size; ++i) {
+                Ast *array_value = (Ast *)ast->arrayinit->entries[i];
+                _astToString(str, array_value, depth + 1);
+                if (i + 1 != ast->arrayinit->size) {
                     astStringEndStmt(str);
                 }
-                node = node->next;
             }
             break;
 

@@ -511,9 +511,7 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
     }
 
     aoStr *buf = ctx->buf;
-
     ssize_t saved_indent = 0;
-    List *node;
 
     switch(ast->kind) {
     case AST_LITERAL: {
@@ -676,16 +674,15 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
     }
 
     case AST_ARRAY_INIT: {
-        node = ast->arrayinit->next;
         aoStrCatFmt(buf, "{");
         saved_indent = *indent;
         *indent = 0;
-        while (node != ast->arrayinit) {
-            transpileAstInternal(node->value, ctx, indent);
-            if (node->next != ast->arrayinit) {
+        for (int i = 0; i < ast->arrayinit->size; ++i) {
+            Ast *array_value = vecGet(Ast *,ast->arrayinit,i);
+            transpileAstInternal(array_value, ctx, indent);
+            if (i+1 != ast->arrayinit->size) {
                 aoStrCatLen(buf,str_lit(", "));
             }
-            node = node->next;
         }
         *indent = saved_indent;
         aoStrCatFmt(buf, "}");
