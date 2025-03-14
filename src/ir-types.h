@@ -112,6 +112,7 @@ typedef enum IrValueType {
     IR_TYPE_F64,        /* 64-bit float (double) */
     IR_TYPE_PTR,        /* Pointer type (with element type) */
     IR_TYPE_ARRAY,      /* Array type (with element type and length) */
+    IR_TYPE_ARRAY_INIT, /* Array initaliser type (with element type and length) */
     IR_TYPE_STRUCT,     /* Structure type (with field types) */
     IR_TYPE_FUNCTION,   /* Function type (with return and param types) */
     IR_TYPE_LABEL,      /* Label reference type */
@@ -170,9 +171,10 @@ typedef struct IrValue {
         };
 
         struct {
-            int length;
-            /* Do we want a vector of vector of */
-
+            aoStr *label;
+            int nesting;
+            int length_per_array;
+            PtrVec *values; /* `PtrVec<IrValue *>` recurisve array definition */
         } array_;
     };
     int version;
@@ -245,7 +247,7 @@ typedef struct IrProgram {
     StrMap *strings;          /* `StrMap<IrValue *>` */
     StrMap *types;            /* @TODO: StrMap<?> I feel this one needs
                                * a bit more thought */
-    StrMap *arrays;           /* @TODO decide on representation `StrMap<...>` */
+    StrMap *arrays;           /* @TODO decide on representation `StrMap<IrValue *>` */
 } IrProgram;
 
 /* This seems a little daft having this but goto's wreck havoc with control 
@@ -263,6 +265,14 @@ typedef union IrUnresolvedBlock {
         IrBlock *ir_block;
     } label_;
 } IrUnresolvedBlock;
+
+
+typedef struct IrArrayCtx {
+    PtrVec *init;
+    IrValueType type;
+    int nesting;
+    int length_per_array;
+} IrArrayCtx;
 
 typedef struct IrCtx {
     IrProgram *ir_program;    /* The program being created */
@@ -286,6 +296,11 @@ typedef struct IrCtx {
                                  * hashtable for later resolution. We will 
                                  * iterate over the gotos and index this 
                                  * hashtable */
+
+    /* For initialising an array, we need to recurse through multiple 
+     * function calls but actually want to flatten the array and keep track 
+     * of it's shape */
+    IrArrayCtx array_;
 } IrCtx;
 
 #endif

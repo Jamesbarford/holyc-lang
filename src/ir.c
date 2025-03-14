@@ -21,7 +21,6 @@
 #include "lexer.h"
 #include "map.h"
 #include "memory.h"
-#include "transpiler.h"
 #include "uniq-list.h"
 #include "util.h"
 
@@ -107,28 +106,70 @@ const char *irValueTypeToString(IrValueType ir_value_type) {
     }
 }
 
+/**
+ * @Bug - Non breaking as in principle the array will still work.
+ * Because we flatten something like: 
+ * 
+ * `I64 array[][2][2] = {{{1,1}, {2,2}}, {{3, 3}, {4, 4}}};`
+ *
+ * To; `i64 [1, 1, 2, 2, 3, 3, 4, 4]`
+ *
+ * We can't represent;
+ * `[i64 x 2 [i64 x 2 [i64 x 2]]]`
+ *
+ * We just have; `[i64 x 8]`
+ */
+void irArrayInitToString(aoStr *buf, IrValue *ir_value) {
+    aoStrCatFmt(buf,"[%i x ", ir_value->array_.values->size);
+    if (ir_value->array_.nesting == 1) {
+        IrValue *head = (IrValue *)ir_value->array_.values->entries[0];
+        aoStrCatFmt(buf,"%s]", irValueTypeToString(head->type));
+    } else {
+        PtrVec *ir_array = ir_value->array_.values;
+        IrValue *actual_value = NULL;
+        int bracket_count = 0;
+        for (int i = 0; i < ir_array->size; ++i) {
+            IrValue *tmp = (IrValue *)ir_value->array_.values->entries[i];
+            if (tmp->type == IR_TYPE_ARRAY_INIT) {
+                ir_array = tmp->array_.values;
+            } else {
+                actual_value = tmp;
+                bracket_count = i;
+                break;
+            }
+        }
+        bracket_count++;
+
+        aoStrCatFmt(buf,"%s",irValueTypeToString(actual_value->type));
+        aoStrCatRepeat(buf,"]",bracket_count);
+    }
+}
+
 aoStr *irValueToString(IrValue *ir_value) {
     aoStr *buf = aoStrNew();
 
-    switch (ir_value->kind) {
-        case IR_VALUE_CONST_INT:   aoStrCatFmt(buf, "%I", ir_value->i64); break;
-        case IR_VALUE_CONST_FLOAT: aoStrCatFmt(buf, "%f", ir_value->f64); break;
-        case IR_VALUE_CONST_STR:   aoStrCatFmt(buf, "\"%S\"", ir_value->name); break;
-        case IR_VALUE_GLOBAL:      aoStrCatFmt(buf, "%S", ir_value->name); break;
-        case IR_VALUE_PARAM:       aoStrCatFmt(buf, "%S", ir_value->name); break;
-        case IR_VALUE_LOCAL:       aoStrCatFmt(buf, "%S", ir_value->name); break;
-        case IR_VALUE_TEMP:        aoStrCatFmt(buf, "%S", ir_value->name); break;
-        case IR_VALUE_PHI:         aoStrCatFmt(buf, "phi"); break;
-        case IR_VALUE_LABEL:       aoStrCatFmt(buf, "%S", ir_value->name); break;
-        case IR_VALUE_UNDEFINED:   aoStrCatFmt(buf, "undefined"); break;
-        case IR_VALUE_UNRESOLVED:  aoStrCatFmt(buf, "unresolved"); break;
-        default: loggerPanic("Unhandled IrValueKind: %d\n", ir_value->kind);
+    if (ir_value->type == IR_TYPE_ARRAY_INIT) {
+        irArrayInitToString(buf,ir_value);
+    } else {
+        switch (ir_value->kind) {
+            case IR_VALUE_CONST_INT:   aoStrCatFmt(buf, "%I", ir_value->i64); break;
+            case IR_VALUE_CONST_FLOAT: aoStrCatFmt(buf, "%f", ir_value->f64); break;
+            case IR_VALUE_CONST_STR:   aoStrCatFmt(buf, "\"%S\"", ir_value->name); break;
+            case IR_VALUE_GLOBAL:      aoStrCatFmt(buf, "%S", ir_value->name); break;
+            case IR_VALUE_PARAM:       aoStrCatFmt(buf, "%S", ir_value->name); break;
+            case IR_VALUE_LOCAL:       aoStrCatFmt(buf, "%S", ir_value->name); break;
+            case IR_VALUE_TEMP:        aoStrCatFmt(buf, "%S", ir_value->name); break;
+            case IR_VALUE_PHI:         aoStrCatFmt(buf, "phi"); break;
+            case IR_VALUE_LABEL:       aoStrCatFmt(buf, "%S", ir_value->name); break;
+            case IR_VALUE_UNDEFINED:   aoStrCatFmt(buf, "undefined"); break;
+            case IR_VALUE_UNRESOLVED:  aoStrCatFmt(buf, "unresolved"); break;
+            default: loggerPanic("Unhandled IrValueKind: %d\n", ir_value->kind);
+        }
+
+        const char *ir_value_type_str = irValueTypeToString(ir_value->type);
+        aoStrPutChar(buf,' ');
+        aoStrCatFmt(buf,"%s",ir_value_type_str);
     }
-
-    const char *ir_value_type_str = irValueTypeToString(ir_value->type);
-    aoStrPutChar(buf,' ');
-    aoStrCatFmt(buf,"%s",ir_value_type_str);
-
     return buf;
 }
 
@@ -478,7 +519,7 @@ aoStr *irBlockName(void) {
 
 static int ir_array_count = 0;
 aoStr *irArrayName(IrFunction *func) {
-    return aoStrPrintf("array%d.%s",func->name->data);
+    return aoStrPrintf("array%d.%s",ir_array_count++,func->name->data);
 }
 
 void irArrayCountReset(void) {
@@ -532,11 +573,17 @@ IrValue *irValueNew(IrValueType ir_type, IrValueKind ir_kind) {
     return ir_value;
 }
 
+void irCtxResetArray(IrCtx *ctx) {
+    memset(&ctx->array_,0,sizeof(IrArrayCtx));
+}
+
 void irCtxReset(IrCtx *ctx) {
     ctx->flags = 0;
     ctx->current_block = NULL;
     ctx->end_block = NULL;
     ctx->loop_head_block = NULL;
+    irCtxResetArray(ctx);
+
     if (ctx->unresolved_gotos) {
         ptrVecClear(ctx->unresolved_gotos, NULL);
     }
@@ -1498,6 +1545,25 @@ IrValue *irLoadClassRef(IrCtx *ctx,
     }
 }
 
+/* Actually... we should push all values to one vector and then have the 
+ * shape of the vector as different properties on the struct */
+void irArrayInit(IrCtx *ctx, IrFunction *func, Ast *ast) {
+    int dimension_size = ast->arrayinit->size;
+    Ast *array_value = NULL;
+
+    /* Eventually that will be correct */
+    ctx->array_.length_per_array = dimension_size;
+
+    for (int i = 0; i < ast->arrayinit->size; ++i) {
+        array_value = (Ast *)ast->arrayinit->entries[i];
+        IrValue *ir_value = irExpression(ctx, func, array_value);
+        if (ir_value) {
+            ctx->array_.type = ir_value->type;
+            ptrVecPush(ctx->array_.init, ir_value);
+        }
+    }
+}
+
 IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
     IrBlock *ir_block = ctx->current_block;
 
@@ -2057,21 +2123,9 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
         }
 
         case AST_ARRAY_INIT: {
-            astPrint(ast);
-            /* This is a store of a constant amount of values each of the same 
-             * size 
-             *
-             * size = 4
-             * elements = 4
-             * [1, 2, 3, 4]
-             *
-             * size = 2
-             * elements = 3
-             * elements = 3
-             * [[1, 1, 1], [2, 2, 2]]
-             *
-             * */
-            loggerPanic("Unhandled AST_ARRAY_INIT\n");
+            /* If we reach here we are nesting an array */
+            ctx->array_.nesting++;
+            irArrayInit(ctx, func, ast);
             break;
         }
 
@@ -2458,7 +2512,23 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
                         ir_local_var->name->data);
             }
             if (ast->declinit) {
-                IrValue *ir_init = irExpression(ctx, func, ast->declinit);
+                IrValue *ir_init = NULL;
+                if (ast->declinit->kind == AST_ARRAY_INIT) {
+                    irCtxResetArray(ctx);
+                    PtrVec *ir_array = ptrVecNew();
+                    ctx->array_.init = ir_array;
+                    irArrayInit(ctx, func, ast->declinit);
+
+                    IrValue *head = (IrValue *)ir_array->entries[0];
+                    ir_init = irValueNew(IR_TYPE_ARRAY_INIT, head->kind);
+                    ir_init->array_.values = ir_array;
+                    ir_init->array_.nesting = ctx->array_.nesting;
+                    ir_init->array_.length_per_array = ctx->array_.length_per_array;
+                    ir_init->array_.label = irArrayName(func);
+                    strMapAddAoStr(ctx->ir_program->arrays, ir_init->array_.label, ir_init);
+                } else {
+                    ir_init = irExpression(ctx, func, ast->declinit);
+                }
                 irStore(ctx->current_block,ir_local_var,ir_init);  
             }
             break;

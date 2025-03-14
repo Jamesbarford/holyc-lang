@@ -38,7 +38,7 @@
 - [x] Logical And
 - [x] Logical Or
 - [x] Taking address
-- [ ] Array referencing?
+- [a] Array referencing?
 - [ ] Struct referencing?
 - [ ] Pointer referencing?
 
@@ -61,8 +61,8 @@
 - [ ] Default arguments
 
 # Ir
-- [ ] Removed un-needed jumps
-- [ ] Link to the return node if possible, this also requires tracking the
+- [x] Removed un-needed jumps
+- [x] Link to the return node if possible, this also requires tracking the
       last instruction of a block to see if it is a jump or a branch and
       if the target or fallback points to a block that got removed. That could
       be the heuristic to determine that it should point at the return block.
