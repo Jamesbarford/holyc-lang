@@ -292,9 +292,9 @@ Ast *astDecl(Ast *var, Ast *init) {
     ast->kind = AST_DECL;
     ast->type = NULL;
     ast->declvar = var;
-    if (init && init->kind == AST_LITERAL) {
-        init->type = var->type;
-    }
+    //if (init && init->kind == AST_LITERAL) {
+    //    init->type = var->type;
+    //}
     ast->declinit = init;
     return ast;
 }
@@ -1271,7 +1271,7 @@ void _astToString(aoStr *str, Ast *ast, int depth) {
         /* type declaration sorted */
         aoStrCatLen(str, str_lit("<decl> "));
 
-        if (ast->declvar->kind == AST_GVAR && ast->declvar->is_static) {
+        if (ast->declvar->is_static) {
             aoStrCatLen(str, str_lit("static "));
         }
 

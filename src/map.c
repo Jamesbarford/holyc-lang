@@ -136,7 +136,9 @@ void intVecClear(IntVec *vec) {
 
 void intVecRelease(IntVec *vec) {
     if (vec) {
+#ifndef DEBUG
         free(vec->entries);
+#endif
         free(vec);
     }
 }
