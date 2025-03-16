@@ -1924,13 +1924,27 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
             }
             Ast *ast_decl = astDecl(variable,NULL);
 
-            listAppend(cc->ast_list,ast_decl);
             strMapAdd(cc->global_env,variable->gname->data,variable);
             cctrlTokenRewind(cc);
 
-            Ast *ast_expr = parseExpr(cc,16); // parseVariableInitialiser(cc,variable,PUNCT_TERM_COMMA|PUNCT_TERM_SEMI);
+            Ast *ast_expr = parseExpr(cc,16);
 
-            if (ast_expr->right->kind != AST_STRING) {
+            /* @Bug
+             * Floats, Integers and strings are handled by the current backend 
+             * and make sense to have as global declarations IF they are literals.
+             * 
+             * However if it is not one of those we split the declaration from
+             * the initialiser and make a fake init function. This is quite
+             * fragile and the rules surrounding this are poorly documented,
+             * hard to understand and "incorrect". Incorrect in that we should
+             * be able to evaluate globals at compile time, but alas cannot.
+             *
+             * We could be smarter and do an evaluation of the tree, treating
+             * binary operations as compile time constants if it is composed of
+             * literals and other globals.
+             * */
+            if (ast_expr->right->kind != AST_STRING && ast_expr->right->kind != AST_LITERAL) {
+                listAppend(cc->ast_list,ast_decl);
                 *is_global = 1;
             } else {
                 ast_decl->declinit = ast_expr->right;
