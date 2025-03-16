@@ -96,7 +96,9 @@ AstType *parsePointerType(Cctrl *cc, AstType *type) {
 }
 
 AstType *parseFunctionPointerType(Cctrl *cc,
-        char **fnptr_name, int *fnptr_name_len, AstType *rettype)
+                                  char **fnptr_name,
+                                  int *fnptr_name_len,
+                                  AstType *rettype)
 {
     int has_var_args;
     Lexeme *fname;
@@ -1125,12 +1127,14 @@ Ast *parsePostFixExpr(Cctrl *cc) {
             } else if (ast->kind == AST_CLASS_REF) { 
                 int len = strlen(ast->field);
                 PtrVec *argv = parseArgv(cc,ast,')',ast->field,len);
+                aoStr *tmp_var_name = ast->operand->declvar->tmp_var_name;
                 ast = astFunctionPtrCall(
                         ast->type->rettype,
                         ast->field,
                         len,
                         argv,
                         ast);
+                ast->tmp_fnptr_name = tmp_var_name;
                 continue;
             }
         }

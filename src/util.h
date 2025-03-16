@@ -9,6 +9,10 @@
 #define cast(type, value) (((type)(value)))
 #define str_lit(s) s,sizeof(s)-1
 
+#ifndef __inline
+    #define __inline __attribute__((always_inline))
+#endif
+
 #define ESC_GREEN  "\033[0;32m"
 #define ESC_BLACK  "\033[0;30m"
 #define ESC_RED    "\033[0;31m"

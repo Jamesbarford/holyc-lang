@@ -1,17 +1,20 @@
 #ifndef IR_INTERP_H__
 #define IR_INTERP_H__
 
-#include "ir.h"
+#include "ast.h"
+#include "ir-types.h"
 
 int irOpIsCmp(IrOpcode opcode);
 int irIsFloat(IrValueType ir_value_type);
 int irIsInt(IrValueType ir_value_type);
+int irGetIntSize(IrValueType ir_value_type);
 int irIsConst(IrValueKind ir_value_kind);
 int irAreCompatibleCmpTypes(IrValueType t1, IrValueType t2);
 IrValueType irConvertType(AstType *type);
 int irBlockIsConstCompareAndBranch(IrBlock *block);
 IrBlock *irInstrEvalConstBranch(IrInstr *ir_cmp, IrInstr *ir_branch);
 
+int irBlocksPointToEachOther(IrFunction *func, IrBlock *prev_block, IrBlock *next_block);
 
 IrInstr *irBlockLastInstr(IrBlock *block);
 int irLastInstructionIsJumpLike(IrBlock *block);

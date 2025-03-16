@@ -115,6 +115,8 @@ typedef enum IrValueType {
     IR_TYPE_ARRAY_INIT, /* Array initaliser type (with element type and length) */
     IR_TYPE_STRUCT,     /* Structure type (with field types) */
     IR_TYPE_FUNCTION,   /* Function type (with return and param types) */
+    IR_TYPE_ASM_FUNCTION,/* Raw assembly function, just a function name and 
+                          * a string containing the assembly */
     IR_TYPE_LABEL,      /* Label reference type */
 } IrValueType;
 
@@ -134,6 +136,7 @@ typedef enum IrValueKind {
 } IrValueKind;
 
 typedef struct IrInstr IrInstr;
+typedef struct IrValue IrValue;
 typedef struct IrBlock IrBlock;
 typedef struct IrFunction IrFunction;
 typedef struct IrProgram IrProgram;
@@ -152,10 +155,14 @@ typedef struct IrBlock {
 typedef struct IrValue {
     IrValueType type;
     IrValueKind kind;
+    /* @Bug
+     * Used for any arbitrary string, this is not on the union as global needs
+     * a label/name and would conflict */
+    aoStr *name;
+
     union {
         long i64;   /* For integer constants */
         double f64; /* Float constants */
-        aoStr *name; /* Used for any arbitrary string */
 
         int reg; /* As of yet unused */
 
@@ -169,6 +176,11 @@ typedef struct IrValue {
             aoStr *str;
             int str_real_len;
         };
+
+        struct {
+            aoStr *gname;
+            IrValue *value;
+        } global;
 
         struct {
             aoStr *label;
@@ -235,14 +247,16 @@ typedef struct IrFunction {
     StrMap *variables;    /* The functions local variables StrMap<IrValue *> */
     IntMap *cfg;          /* The interconnectivity between nodes: 
                            * IntMap<IrBlockMapping> [id] => {id, id...} */
+    int has_var_args;
 } IrFunction;
 
 typedef struct IrProgram {
-    PtrVec *functions;        /* PtrVec<IrFunction *> */
+    PtrVec *functions;        /* `PtrVec<IrFunction *>` */
     /* Im not sure we need these as they exist on the Cctrl struct, certainly
      * the strings and types do... These are presumably Ast structs which 
      * is kinds nasty having both an Ast and Ir later in the codegen phase.
      */
+    PtrVec *asm_functions;    /* `PtrVec<IrValue *>` - Raw assembly functions */
     StrMap *global_variables; /* `StrMap<IrValue *>` */
     StrMap *strings;          /* `StrMap<IrValue *>` */
     StrMap *types;            /* @TODO: StrMap<?> I feel this one needs

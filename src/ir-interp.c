@@ -25,6 +25,16 @@ int irIsInt(IrValueType ir_value_type) {
            ir_value_type == IR_TYPE_I64;
 }
 
+int irGetIntSize(IrValueType ir_value_type) {
+    switch (ir_value_type) {
+        case IR_TYPE_I8:  return 1;
+        case IR_TYPE_I16: return 2;
+        case IR_TYPE_I32: return 4;
+        case IR_TYPE_I64: return 8;
+        default: loggerPanic("%d is not an integer type\n", ir_value_type);
+    }
+}
+
 int irIsConst(IrValueKind ir_value_kind) {
     return ir_value_kind == IR_VALUE_CONST_INT || 
            ir_value_kind == IR_VALUE_CONST_FLOAT;
@@ -130,6 +140,30 @@ int irBlockIsRedundant(IrFunction *func, IrBlock *block) {
         return 1;
     }
 
+    return 0;
+}
+
+/* Does the previous block have one successor and jump to the next block and 
+ * does the next block have one predecessor that is the previous block. 
+ * If yes... we can join them together. */
+int irBlocksPointToEachOther(IrFunction *func, IrBlock *cur_block, IrBlock *next_block) {
+    IrInstr *ir_last_instr = irBlockLastInstr(cur_block);
+    assert(ir_last_instr);
+
+    if (ir_last_instr->opcode == IR_OP_JMP) {
+        /* The target block does not point to the block of interest */
+        if (ir_last_instr->target_block->id != next_block->id) return 0;
+        IntMap *cur_successors = irBlockGetSuccessors(func, cur_block);
+        IntMap *next_predecessors = irBlockGetPredecessors(func, next_block);
+
+        /* This check is overly safe */
+        if (next_predecessors->size == 1 &&
+            intMapHas(next_predecessors, cur_block->id) &&
+            cur_successors->size == 1 &&
+            intMapHas(cur_successors, next_block->id)) {
+            return 1;
+        }
+    }
     return 0;
 }
 
