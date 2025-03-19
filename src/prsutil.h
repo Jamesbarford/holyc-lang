@@ -34,7 +34,6 @@ int evalClassRef(Ast *ast, int offset);
 int assertLValue(Ast *ast);
 int parseIsFloatOrInt(Ast *ast);
 int parseIsClassOrUnion(int kind);
-int parseIsFunction(Ast *ast);
 int astIsArithmetic(long op, int is_float);
 
 void assertTokenIsTerminator(Cctrl *cc, Lexeme *tok, long terminator_flags);

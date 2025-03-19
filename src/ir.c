@@ -74,6 +74,7 @@ IrValue *irLoadClassRef(IrCtx *ctx,
                         int offset);
 aoStr *irBlockToString(IrFunction *func, IrBlock *ir_block);
 
+IrValue *irGlobalExpression(IrCtx *ctx, Ast *ast);
 IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast);
 void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast);
 
@@ -696,7 +697,9 @@ IrValue *irFunctionGetGlobal(IrFunction *ir_function, Ast *ast) {
 }
 
 IrValue *irFunctionGetLocalFnPtr(IrFunction *ir_function, Ast *ast) {
-    assert(ast->kind == AST_FUNPTR || ast->kind == AST_FUNPTR_CALL || ast->kind == AST_FUNC);
+    assert(ast->kind == AST_FUNPTR || ast->kind == AST_FUNPTR_CALL || 
+           ast->kind == AST_FUNC);
+
     IrValue *ir_fnptr = NULL;
     if (ast->tmp_fnptr_name) {
         ir_fnptr = strMapGetAoStr(ir_function->variables,
@@ -1299,7 +1302,6 @@ IrInstr *irTmpGoto(IrCtx *ctx, aoStr *label) {
     return ir_instr;
 }
 
-/* I think a label should possibly be the start of a new basic block  */
 IrInstr *irTmpGotoLabel(IrCtx *ctx, aoStr *label) {
     IrInstr *ir_instr = irInstrNew(IR_OP_LABEL);
     ir_instr->result = irValueNew(IR_TYPE_LABEL, IR_VALUE_UNRESOLVED);
@@ -1385,7 +1387,7 @@ IrValue *irLoadAddr(IrCtx *ctx, IrFunction *func, Ast *ast) {
 
         default:
             loggerPanic("Cannot turn Kind AST:%s %s into ir\n",
-                    astKindToString(ast->kind),
+                    astKindToString(operand->kind),
                     astToString(ast));
     }
 
@@ -1444,24 +1446,44 @@ IrValue *irAssignClassRef(IrCtx *ctx, IrFunction *func, Ast *cls, AstType *field
 IrValue *irAssign(IrCtx *ctx, IrFunction *func, Ast *ast) {
     IrValue *rhs = irExpression(ctx, func, ast->right);
 
-    if (ast->left->kind == AST_LVAR) {
-        IrValue *ir_local = irFunctionGetLocal(func, ast->left);
-        irStore(ctx->current_block, ir_local, rhs);
-        /* Assignments return the value */
-        return rhs;
-    } else if (ast->left->kind == AST_GVAR) {
-        IrValue *ir_global = irFunctionGetGlobal(func, ast->left);
-        irStore(ctx->current_block, ir_global, rhs);
-        return rhs; 
-    } else if (ast->left->kind == AST_DEREF) {
-        IrValue *ptr = irExpression(ctx, func, ast->left->left);
-        irStore(ctx->current_block, ptr, rhs);
-        return rhs;
-    } else if (ast->left->kind == AST_CLASS_REF) {
-        return irAssignClassRef(ctx, func, ast->left->cls, ast->left->type, rhs, 0);
-    } else {
-        loggerPanic("Unsupported LHS assignment %s\n",
-                astToString(ast->left));
+    switch (ast->left->kind) {
+        case AST_LVAR: {
+            IrValue *ir_local = irFunctionGetLocal(func, ast->left);
+            irStore(ctx->current_block, ir_local, rhs);
+            /* Assignments return the value */
+            return rhs;
+        }
+
+        case AST_GVAR: {
+            IrValue *ir_global = irFunctionGetGlobal(func, ast->left);
+            irStore(ctx->current_block, ir_global, rhs);
+            return rhs; 
+        }
+
+        case AST_DEREF: {
+            IrValue *ptr = irExpression(ctx, func, ast->left->left);
+            irStore(ctx->current_block, ptr, rhs);
+            return rhs;
+        }
+
+        case AST_CLASS_REF: {
+            return irAssignClassRef(ctx, func, ast->left->cls,
+                                    ast->left->type, rhs, 0);
+        }
+
+        case AST_FUNPTR: {
+            IrValue *ir_local = irFunctionGetLocalFnPtr(func, ast->left);
+            irStore(ctx->current_block, ir_local, rhs);
+            /* Assignments return the value */
+            return rhs;
+        }
+
+        default: {
+            loggerPanic("Unsupported LHS assignment %s %s\n",
+                    astKindToString(ast->left->kind),
+                    astToString(ast->left));
+
+        }
     }
 }
 
@@ -1621,18 +1643,10 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
             return irLoadAddr(ctx, func, ast);
         }
 
-        /* @Bug with parser this should be a load / store of a function pointer?
-         * actually maybe not as we are loading a global function */
-        case AST_FUNC: {
-            IrValue *fn = irValueNew(IR_TYPE_FUNCTION, IR_VALUE_GLOBAL);  // irFunctionGetLocalFnPtr(func, ast);
-            fn->name = ast->fname;
-
-            if (!fn) {
-                char *keys = strMapKeysToString(func->variables);
-                loggerPanic("func %s Variable %s not found keys = %s\n",
-                            func->name->data,
-                            ast->tmp_fnptr_name->data, keys);
-            }
+        case AST_ASM_FUNCDEF:
+        case AST_ASM_FUNC_BIND: {
+            IrValue *fn = irValueNew(IR_TYPE_FUNCTION, IR_VALUE_GLOBAL);
+            fn->name = ast->asmfname;
 
             IrValueType ir_value_type = irConvertType(ast->type);
             IrValue *ir_load_dest = irTmpVariable(ir_value_type);
@@ -1640,8 +1654,20 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
             /* @Tracking Update where the variable is? */
             strMapAddAoStr(func->variables,ast->fname,ir_load_dest);
             return ir_load_dest;
+        }
+    
+        /* We hit this when we load function arguments. NOT for anything else */
+        case AST_EXTERN_FUNC:
+        case AST_FUNC: {
+            IrValue *fn = irValueNew(IR_TYPE_FUNCTION, IR_VALUE_GLOBAL);  // irFunctionGetLocalFnPtr(func, ast);
+            fn->name = ast->fname;
 
-            break;
+            IrValueType ir_value_type = irConvertType(ast->type);
+            IrValue *ir_load_dest = irTmpVariable(ir_value_type);
+            irLoad(ir_block, ir_load_dest, fn);
+            /* @Tracking Update where the variable is? */
+            strMapAddAoStr(func->variables,ast->fname,ir_load_dest);
+            return ir_load_dest;
         }
 
         case AST_FUNPTR: {
@@ -2095,10 +2121,9 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
 
             if (ast->kind == AST_FUNPTR_CALL) {
                 printf("===========\n");
-                astPrint(ast);
+                //astPrint(ast);
                 ir_fn_call = irValueNew(IR_TYPE_FUNCTION, IR_VALUE_LOCAL);
                 IrValue *fn_ptr_var = irFunctionGetLocalFnPtr(func, ast);
-                printf("after\n");
                 ir_fn_call->name = fn_ptr_var->name;
             } else if (ast->kind == AST_FUNCALL) {
                 ir_fn_call = irValueNew(IR_TYPE_FUNCTION, IR_VALUE_GLOBAL);
@@ -2234,7 +2259,10 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
 
 
         default:
-            loggerPanic("Unhandled Ast kind: %s\n", astKindToString(ast->kind));
+            loggerPanic("Error with function '%s' Unhandled Ast kind: %s %s\n",
+                    func->name->data,
+                    astKindToString(ast->kind),
+                    astToString(ast));
     }
 
     return NULL;
@@ -2248,7 +2276,9 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
             listForEach(ast->stms) {
                 Ast *next = (Ast *)it->value;
                 irStatement(ctx, func, next);
-                if (ctx->current_block->sealed) break;
+                /* We cannot do this because of unresolved gotos that may need 
+                 * to jump to this block vvvvv */
+                //if (ctx->current_block->sealed) break;
             }
             break;
         }
@@ -2603,13 +2633,14 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
         }
 
         case AST_DECL: {
+            int ast_kind = ast->declvar->type->kind;
             IrInstr *ir_local = irAlloca(ctx->current_block, ast->declvar->type);
             IrValue *ir_local_var = irGetAllocaVar(ir_local);
             int ok = 0;
 
-            if (AST_TYPE_FUNC) {
+            if (ast_kind == AST_TYPE_FUNC) {
                 ok = strMapAddAoStr(func->variables,
-                                    ast->declvar->tmp_var_name, 
+                                    ast->declvar->tmp_fnptr_name, 
                                     ir_local_var);
             } else {
                 ok = strMapAddAoStr(func->variables,
@@ -2623,22 +2654,38 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
             }
             if (ast->declinit) {
                 IrValue *ir_init = NULL;
-                if (ast->declinit->kind == AST_ARRAY_INIT) {
-                    irCtxResetArray(ctx);
-                    PtrVec *ir_array = ptrVecNew();
-                    ctx->array_.init = ir_array;
-                    irArrayInit(ctx, func, ast->declinit);
+                switch (ast->declinit->kind) {
+                    case AST_ARRAY_INIT: {
+                        irCtxResetArray(ctx);
+                        PtrVec *ir_array = ptrVecNew();
+                        ctx->array_.init = ir_array;
+                        irArrayInit(ctx, func, ast->declinit);
 
-                    IrValue *head = (IrValue *)ir_array->entries[0];
-                    ir_init = irValueNew(IR_TYPE_ARRAY_INIT, head->kind);
-                    ir_init->array_.values = ir_array;
-                    ir_init->array_.nesting = ctx->array_.nesting;
-                    ir_init->array_.length_per_array = ctx->array_.length_per_array;
-                    ir_init->array_.label = irArrayName(func);
-                    strMapAddAoStr(ctx->ir_program->arrays, ir_init->array_.label, ir_init);
-                } else {
-                    ir_init = irExpression(ctx, func, ast->declinit);
+                        IrValue *head = (IrValue *)ir_array->entries[0];
+                        ir_init = irValueNew(IR_TYPE_ARRAY_INIT, head->kind);
+                        ir_init->array_.values = ir_array;
+                        ir_init->array_.nesting = ctx->array_.nesting;
+                        ir_init->array_.length_per_array = ctx->array_.length_per_array;
+                        ir_init->array_.label = irArrayName(func);
+                        strMapAddAoStr(ctx->ir_program->arrays, ir_init->array_.label, ir_init);
+                        break;
+                    }
+
+                    case AST_FUN_PROTO:
+                    case AST_FUNC:
+                    case AST_EXTERN_FUNC:
+                    case AST_ASM_FUNCDEF:
+                    case AST_ASM_FUNC_BIND: {
+                        ir_init = irGlobalExpression(ctx, ast->declinit);
+                        break;
+                    }
+
+                    default: {
+                        ir_init = irExpression(ctx, func, ast->declinit);
+                        break;
+                    }    
                 }
+
                 irStore(ctx->current_block,ir_local_var,ir_init);  
             }
             break;
@@ -2646,7 +2693,8 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
 
         /* We want to avoid having multiple return statements in a function 
          * it is more cannoincal to move the value you want to return to a
-         * specified stack variable and then jump to the end of the function. */
+         * specified stack variable and then jump to the end of the function. 
+         * Moving the stack variable into the return register. */
         case AST_RETURN: {
             IrValue *ir_return_val = irExpression(ctx, func, ast->retval);
             irStore(ctx->current_block,func->return_value,ir_return_val);
@@ -3124,7 +3172,7 @@ IrFunction *irLowerFunction(IrCtx *ctx, IrProgram *program, Ast *ast_function) {
         irResolveGotos(ctx, ir_function);
     }
 
-    irSimplifyBlocks(ir_function);
+    //irSimplifyBlocks(ir_function);
 
     return ir_function;
 }
@@ -3154,7 +3202,27 @@ IrValue *irGlobalExpression(IrCtx *ctx, Ast *ast) {
             value->str_real_len = ast->real_len;
             return value;
         }
-        
+
+        /**
+         * @Error AST_FUN_PROTO
+         * This should perhaps be an error as it implies that the function 
+         * prototype has not been bound to a function definition.
+         */
+        case AST_FUN_PROTO:
+        case AST_FUNC:
+        case AST_EXTERN_FUNC: {
+            IrValue *value = irValueNew(IR_TYPE_FUNCTION, IR_VALUE_GLOBAL);
+            value->name = ast->fname;
+            return value;
+        }
+
+        case AST_ASM_FUNCDEF:
+        case AST_ASM_FUNC_BIND: {
+            IrValue *value = irValueNew(IR_TYPE_FUNCTION, IR_VALUE_GLOBAL);
+            value->name = ast->asmfname;
+            return value;
+        }
+
         case AST_ARRAY_INIT: {
             // This case should be handled by the calling function (irFlattenAstArray)
             // since it needs to maintain array nesting context
@@ -3169,14 +3237,11 @@ IrValue *irGlobalExpression(IrCtx *ctx, Ast *ast) {
                 value->name = ast->operand->gname;
                 return value;
             }
-            // Fall through if not a valid address operation
+            loggerPanic("Cannot handle address for; %s\n", astToString(ast));
         }
-        
+
         default:
-            // Only constant expressions are allowed in global initializers
-            // For simplicity, we'll just report an error for anything else
-            fprintf(stderr, "Error: Non-constant expression in global initializer\n");
-            return NULL;
+            loggerPanic("Error: Non-constant expression in global initializer\n");
     }
 }
 

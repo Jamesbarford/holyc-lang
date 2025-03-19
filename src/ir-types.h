@@ -156,8 +156,8 @@ typedef struct IrValue {
     IrValueType type;
     IrValueKind kind;
     /* @Bug
-     * Used for any arbitrary string, this is not on the union as global needs
-     * a label/name and would conflict */
+     * Used for any arbitrary string, this is not on the union as globals and
+     * globally defined functions need a label/name and would conflict */
     aoStr *name;
 
     union {
@@ -301,11 +301,11 @@ typedef struct IrCtx {
     IrBlock *end_block;  /* This will either be the block after a
                                * `while/do_while/for` */
 
-    PtrVec *unresolved_gotos;  /* PtrVec<IrUnresolvedBlock *>
+    PtrVec *unresolved_gotos;  /* `PtrVec<IrUnresolvedBlock *>`
                                 * When we see a goto we need to save it till we 
                                 * have finished off the function. */
 
-    StrMap *unresolved_labels;  /* StrMap<IrUnresolvedBlock *>
+    StrMap *unresolved_labels;  /* `StrMap<IrUnresolvedBlock *>`
                                  * When we see a label we want to add it to the 
                                  * hashtable for later resolution. We will 
                                  * iterate over the gotos and index this 

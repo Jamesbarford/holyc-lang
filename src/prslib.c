@@ -656,7 +656,7 @@ static Ast *parseIdentifierOrFunction(Cctrl *cc,
             /* Function calls with no arguments are 'Function;' */
             if ((tokenPunctIs(tok,';') || tokenPunctIs(tok,',') || 
                 tokenPunctIs(tok,')'))  
-                    && parseIsFunction(ast)) {
+                    && astKindIsFunctionLike(ast->kind)) {
                 if (ast->flags & AST_FLAG_INLINE && !(cc->flags & CCTRL_TRANSPILING)) {
                     if (ast->kind == AST_ASM_FUNC_BIND || ast->kind == AST_ASM_FUNCDEF) {
                         Ast *call = astAsmFunctionCall(ast->type->rettype,
@@ -1247,8 +1247,7 @@ Ast *parseUnaryExpr(Cctrl *cc) {
             }
         }
 
-
-        if (unary_op == AST_ADDR && parseIsFunction(operand)) {
+        if (unary_op == AST_ADDR && astKindIsFunctionLike(operand->kind)) {
             return operand;
         }
 

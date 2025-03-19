@@ -926,6 +926,19 @@ int astIsIntType(AstType *type) {
     }
 }
 
+int astKindIsFunctionLike(int ast_kind) {
+    switch (ast_kind) {
+        case AST_FUNC:
+        case AST_FUN_PROTO:
+        case AST_ASM_FUNC_BIND:
+        case AST_ASM_FUNCDEF:
+        case AST_EXTERN_FUNC:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
 void astStringEndStmt(aoStr *str) {
     if (str->data[str->len-1] != '\n') {
         aoStrPutChar(str, '\n');

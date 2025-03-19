@@ -108,6 +108,8 @@ typedef struct Ast {
     long deref_symbol;
     unsigned long flags;
     AstType *type;
+    int is_static;
+
     union {
         struct {
         /* 8, 16, 32, 64 bit number */
@@ -141,7 +143,6 @@ typedef struct Ast {
 
         /* Global variable */
         struct {
-            int is_static;
             aoStr *gname;
             aoStr *glabel;
         };
@@ -382,6 +383,7 @@ aoStr *astMakeLabel(void);
 aoStr *astMakeTmpName(void);
 int astIsIntType(AstType *type);
 int astIsFloatType(AstType *type);
+int astKindIsFunctionLike(int ast_kind);
 int astIsVarArg(Ast *ast);
 int astIsRangeOperator(long op);
 Ast *astGlobalCmdArgs(void);
