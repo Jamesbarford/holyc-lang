@@ -244,9 +244,9 @@ typedef struct IrFunction {
     List *blocks;         /* Basic blocks, `List<IrBlock *>` */
     IrBlock *entry_block; /* Entry */
     IrBlock *exit_block;  /* Exit */
-    StrMap *variables;    /* The functions local variables StrMap<IrValue *> */
+    StrMap *variables;    /* The functions local variables `StrMap<IrValue *>` */
     IntMap *cfg;          /* The interconnectivity between nodes: 
-                           * IntMap<IrBlockMapping> [id] => {id, id...} */
+                           * `IntMap<IrBlockMapping> [id] => {id, id...}` */
     int has_var_args;
 } IrFunction;
 

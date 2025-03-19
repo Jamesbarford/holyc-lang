@@ -179,11 +179,17 @@ int irBlockIsRedundantJump(IrFunction *func, IrBlock *block) {
         IntMap *next_predecessors = irBlockGetPredecessors(func, next_block);
         IntMap *cur_successors = irBlockGetSuccessors(func, block);
 
+        unsigned long next_predecessors_size = next_predecessors ? 
+                                               next_predecessors->size : 0;
+        unsigned long cur_successors_size = cur_successors ?
+                                            cur_successors->size : 0;
+
         /* This check is overly safe */
-        if (next_predecessors->size == 1 &&
+        if (next_predecessors_size == 1 &&
             intMapHas(next_predecessors, block->id) &&
-            cur_successors->size == 1 &&
-            intMapHas(cur_successors, next_block->id)) {
+            cur_successors_size == 1 &&
+            intMapHas(cur_successors, next_block->id))
+        {
             return next_block->id != block->id;
         }
     }

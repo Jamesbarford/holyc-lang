@@ -21,6 +21,7 @@
 #include "lexer.h"
 #include "map.h"
 #include "memory.h"
+#include "transpiler.h"
 #include "uniq-list.h"
 #include "util.h"
 
@@ -637,6 +638,10 @@ static void irCtxSetLoopHeadBlock(IrCtx *ctx, IrBlock *ir_block) {
 
 /* We will reset this after each function has been created */
 static int ir_tmp_variable_count = 1;
+
+void irTmpVariableCountReset(void) {
+    ir_tmp_variable_count = 1;
+}
 
 IrValue *irTmpVariable(IrValueType ir_value_type) {
     IrValue *ir_value = irValueNew(ir_value_type, IR_VALUE_TEMP);
@@ -1454,6 +1459,15 @@ IrValue *irAssign(IrCtx *ctx, IrFunction *func, Ast *ast) {
             return rhs;
         }
 
+        /* @Bug store the declvar in the parser not the whole AST for a 
+         * default param */
+        case AST_DEFAULT_PARAM: {
+            IrValue *ir_local = irFunctionGetLocal(func, ast->left->declvar);
+            irStore(ctx->current_block, ir_local, rhs);
+            /* Assignments return the value */
+            return rhs;
+        }
+
         case AST_GVAR: {
             IrValue *ir_global = irFunctionGetGlobal(func, ast->left);
             irStore(ctx->current_block, ir_global, rhs);
@@ -1830,6 +1844,11 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
                 /* This would be the result of derefencing, for example, a 
                  * struct member, pointer ...*/
                 ir_value = irExpression(ctx, func, ast->operand);
+            } else if (ast->operand->kind == AST_DEFAULT_PARAM) {
+                /* @Bug
+                 * The parser should just save the declvar not the whole 
+                 * Ast. */
+                ir_value = irFunctionGetLocal(func, ast->operand->declvar);
             } else {
                 loggerPanic("Unsupported LHS assignment %s\n",
                         astKindToString(ast->operand->kind));
@@ -2190,8 +2209,15 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
 
             IrValueType ir_to_type = irConvertType(to_type);
             IrValue *result = irTmpVariable(ir_to_type);
+            /* @Bug
+             * We only use classes as 'intrinsics' that are integers at the 
+             * moment however this should be expanded to accept floats */
+            int types_are_ints = (astIsIntType(from_type) || 
+                                  from_type->is_intrinsic) &&
+                                 (astIsIntType(to_type) || 
+                                  to_type->is_intrinsic);
 
-            if (astIsIntType(from_type) && astIsIntType(to_type)) {
+            if (types_are_ints) {
                 if (from_type->size < to_type->size) {
                     if (to_type->issigned) {
                         irSExt(ctx->current_block, result, expr);  /* Sign extend */
@@ -2247,8 +2273,7 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
             else if (astIsIntType(from_type) && to_type->kind == AST_TYPE_POINTER) {
                 /* Integer to pointer  */
                 irIntToPtr(ctx->current_block, result, expr);
-            }
-            else {
+            } else {
                 loggerPanic("Unsupported cast: %s to %s", 
                         astTypeToString(from_type),
                         astTypeToString(to_type));
@@ -3062,6 +3087,7 @@ void irSimplifyBlocks(IrFunction *func) {
 
 IrFunction *irLowerFunction(IrCtx *ctx, IrProgram *program, Ast *ast_function) {
     irBlockCountReset();
+    irTmpVariableCountReset();
     IrFunction *ir_function = irFunctionNew(ast_function->fname);
     IrBlock *ir_entry_block = irBlockNew(irBlockId());
     IrBlock *ir_exit_block = irBlockNew(irBlockId());
@@ -3172,6 +3198,7 @@ IrFunction *irLowerFunction(IrCtx *ctx, IrProgram *program, Ast *ast_function) {
         irResolveGotos(ctx, ir_function);
     }
 
+    /* @Broken */
     //irSimplifyBlocks(ir_function);
 
     return ir_function;
@@ -3181,7 +3208,7 @@ void irFlattenGlobalAstArray(IrCtx *ctx, Ast *ast);
 
 IrValue *irGlobalExpression(IrCtx *ctx, Ast *ast) {
     if (!ast) return NULL;
-    
+
     // Handle the allowed types of global initializers
     switch (ast->kind) {
         case AST_LITERAL: {
