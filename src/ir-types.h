@@ -102,22 +102,22 @@ typedef enum IrCmpKind {
 } IrCmpKind;
 
 typedef enum IrValueType {
-    IR_TYPE_VOID,       /* Void type */
-   // IR_TYPE_I1,         /* Boolean (1 bit) */
-    IR_TYPE_I8,         /* 8-bit integer (char) */
-    IR_TYPE_I16,        /* 16-bit integer (short) */
-    IR_TYPE_I32,        /* 32-bit integer (int) */
-    IR_TYPE_I64,        /* 64-bit integer (long) */
+    IR_TYPE_VOID,        /* Void type */
+   // IR_TYPE_I1,        /* Boolean (1 bit) */
+    IR_TYPE_I8,          /* 8-bit integer (char) */
+    IR_TYPE_I16,         /* 16-bit integer (short) */
+    IR_TYPE_I32,         /* 32-bit integer (int) */
+    IR_TYPE_I64,         /* 64-bit integer (long) */
     // We do not have 32 bit floats...  yet IR_TYPE_F32,        /* 32-bit float */
-    IR_TYPE_F64,        /* 64-bit float (double) */
-    IR_TYPE_PTR,        /* Pointer type (with element type) */
-    IR_TYPE_ARRAY,      /* Array type (with element type and length) */
-    IR_TYPE_ARRAY_INIT, /* Array initaliser type (with element type and length) */
-    IR_TYPE_STRUCT,     /* Structure type (with field types) */
-    IR_TYPE_FUNCTION,   /* Function type (with return and param types) */
+    IR_TYPE_F64,         /* 64-bit float (double) */
+    IR_TYPE_PTR,         /* Pointer type (with element type) */
+    IR_TYPE_ARRAY,       /* Array type (with element type and length) */
+    IR_TYPE_ARRAY_INIT,  /* Array initaliser type (with element type and length) */
+    IR_TYPE_STRUCT,      /* Structure type (with field types) */
+    IR_TYPE_FUNCTION,    /* Function type (with return and param types) */
     IR_TYPE_ASM_FUNCTION,/* Raw assembly function, just a function name and 
                           * a string containing the assembly */
-    IR_TYPE_LABEL,      /* Label reference type */
+    IR_TYPE_LABEL,       /* Label reference type */
 } IrValueType;
 
 typedef enum IrValueKind {
@@ -186,7 +186,8 @@ typedef struct IrValue {
             aoStr *label;
             int nesting;
             int length_per_array;
-            PtrVec *values; /* `PtrVec<IrValue *>` recurisve array definition */
+            PtrVec *values; /* `PtrVec<IrValue *>` recurisve array definition,
+                             * also used for storing function arguments */
         } array_;
     };
     int version;
@@ -211,11 +212,6 @@ typedef struct IrInstr {
         IrCmpKind cmp_kind;
       /* either an unresolved `goto label;` or a a `label:` */
         aoStr *unresolved_label;
-
-        struct {
-          /* Function call arguments PtrVec<IrValue *> */
-            PtrVec *fn_args;
-        };
 
         struct {
             List *cases; /* `List<IrPair *>`

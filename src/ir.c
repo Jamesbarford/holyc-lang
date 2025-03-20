@@ -305,7 +305,7 @@ aoStr *irInstrToString(IrInstr *ir_instr) {
 
     switch (ir_instr->opcode) {
         case IR_OP_CALL: {
-            PtrVec *fn_args =  ir_instr->extra.fn_args;
+            PtrVec *fn_args = ir_instr->op1->array_.values;
             if (fn_args && fn_args->size > 0) {
                 for (int i = 0; i < fn_args->size; ++i) {
                     IrValue *ir_value = vecGet(IrValue *,fn_args,i);
@@ -323,7 +323,10 @@ aoStr *irInstrToString(IrInstr *ir_instr) {
                 }
                 aoStrCatLen(buf,str_lit("    "));
             }
-            aoStrCatFmt(buf, "%s %S", op, ir_instr->result->name);
+
+            aoStr *ir_ret_var = irValueToString(ir_instr->result);
+            aoStrCatFmt(buf, "%s %S, %S", op, ir_ret_var, ir_instr->op1->name);
+            aoStrRelease(ir_ret_var);
             break;
         }
 
@@ -542,6 +545,12 @@ void irArrayCountReset(void) {
     ir_array_count = 0;
 }
 
+/* We will reset this after each function has been created */
+static int ir_tmp_variable_count = 1;
+void irTmpVariableCountReset(void) {
+    ir_tmp_variable_count = 1;
+}
+
 void irBlockAddInstruction(IrBlock *block, IrInstr *ir_instr) {
     listAppend(block->instructions, ir_instr);
 }
@@ -601,6 +610,8 @@ void irCtxReset(IrCtx *ctx) {
     ctx->end_block = NULL;
     ctx->loop_head_block = NULL;
     irCtxResetArray(ctx);
+    irBlockCountReset();
+    irTmpVariableCountReset();
 
     if (ctx->unresolved_gotos) {
         ptrVecClear(ctx->unresolved_gotos, NULL);
@@ -634,13 +645,6 @@ static void irCtxSetEndBlock(IrCtx *ctx, IrBlock *ir_block) {
 
 static void irCtxSetLoopHeadBlock(IrCtx *ctx, IrBlock *ir_block) {
     ctx->loop_head_block = ir_block;
-}
-
-/* We will reset this after each function has been created */
-static int ir_tmp_variable_count = 1;
-
-void irTmpVariableCountReset(void) {
-    ir_tmp_variable_count = 1;
 }
 
 IrValue *irTmpVariable(IrValueType ir_value_type) {
@@ -2136,36 +2140,37 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
         case AST_ASM_FUNCALL:
         case AST_FUNPTR_CALL:
         case AST_FUNCALL: {
-            IrValue *ir_fn_call = NULL;
-
-            if (ast->kind == AST_FUNPTR_CALL) {
-                printf("===========\n");
-                //astPrint(ast);
-                ir_fn_call = irValueNew(IR_TYPE_FUNCTION, IR_VALUE_LOCAL);
-                IrValue *fn_ptr_var = irFunctionGetLocalFnPtr(func, ast);
-                ir_fn_call->name = fn_ptr_var->name;
-            } else if (ast->kind == AST_FUNCALL) {
-                ir_fn_call = irValueNew(IR_TYPE_FUNCTION, IR_VALUE_GLOBAL);
-                ir_fn_call->name = ast->fname;
-            } else if (ast->kind == AST_ASM_FUNCALL) {
-                ir_fn_call = irValueNew(IR_TYPE_FUNCTION, IR_VALUE_GLOBAL);
-                ir_fn_call->name = ast->fname;
-            }
+            IrValueType fn_ret_type = irConvertType(ast->type);
+            IrValue *ir_fn_ret = irTmpVariable(fn_ret_type);
+            IrValue *ir_call_args = irValueNew(IR_TYPE_ARRAY, IR_VALUE_PARAM);
 
             IrInstr *ir_call = irInstrNew(IR_OP_CALL);
-            ir_call->result = ir_fn_call;
+
+            if (ast->kind == AST_FUNPTR_CALL) {
+                IrValue *fn_ptr_var = irFunctionGetLocalFnPtr(func, ast);
+                ir_call_args->name = fn_ptr_var->name;
+            } else if (ast->kind == AST_FUNCALL) {
+                ir_call_args->name = ast->fname;
+            } else if (ast->kind == AST_ASM_FUNCALL) {
+                ir_call_args->name = ast->fname;
+            }
+
+            PtrVec *call_args = ptrVecNew();
+            ir_call->result = ir_fn_ret;
+            ir_call->op1 = ir_call_args;
+            ir_call_args->array_.values = call_args;
+
             if (ast->args) {
-                ir_call->extra.fn_args = ptrVecNew();
                 for (int i = 0; i < ast->args->size; ++i) {
                     Ast *ast_arg = vecGet(Ast *, ast->args, i);
                     IrValue *ir_arg = irExpression(ctx, func, ast_arg);
-                    ptrVecPush(ir_call->extra.fn_args, ir_arg);
+                    ptrVecPush(call_args, ir_arg);
                 } 
-            } else {
-                ir_call->extra.fn_args = NULL;
             }
+
             listAppend(ctx->current_block->instructions, ir_call);
-            return ir_fn_call;
+            /* This is the return value of the function */
+            return ir_fn_ret;
         }
 
         /* Start a basic block */
@@ -2677,6 +2682,7 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
                 loggerPanic("Failed to set function parameter variable with name %s already exists!\n",
                         ir_local_var->name->data);
             }
+
             if (ast->declinit) {
                 IrValue *ir_init = NULL;
                 switch (ast->declinit->kind) {
@@ -2891,7 +2897,6 @@ void irSimplifyBlocks(IrFunction *func) {
             if (irBlockIsRedundant(func, block)) {
                 loggerWarning("C0 - KILLED REDUNDANT %d!\n", block->id);
                 intSetAdd(blocks_to_delete, block->id);
-                printf("%s\n", irBlockToString(func,block)->data);
             } else if (listIsOne(block->instructions) && 
                        mapping->predecessors->size == 1 && 
                        mapping->successors->size == 1)
@@ -2909,6 +2914,12 @@ void irSimplifyBlocks(IrFunction *func) {
                                 block->id);
                     } else {
                         IrInstr *prev_last_instr = irBlockLastInstr(ir_prev_block);
+
+                        if (!prev_last_instr) {
+                            printf("<<%s\n", irBlockToString(func, block)->data);
+                            printf(">>%s\n", irBlockToString(func, ir_prev_block)->data);
+                            irPrintFunction(func);
+                        }
 
                         if (prev_last_instr->opcode == IR_OP_JMP) {
                             loggerWarning("C3 - KILLED %d!\n", block->id);
@@ -3086,8 +3097,6 @@ void irSimplifyBlocks(IrFunction *func) {
 }
 
 IrFunction *irLowerFunction(IrCtx *ctx, IrProgram *program, Ast *ast_function) {
-    irBlockCountReset();
-    irTmpVariableCountReset();
     IrFunction *ir_function = irFunctionNew(ast_function->fname);
     IrBlock *ir_entry_block = irBlockNew(irBlockId());
     IrBlock *ir_exit_block = irBlockNew(irBlockId());
@@ -3199,7 +3208,8 @@ IrFunction *irLowerFunction(IrCtx *ctx, IrProgram *program, Ast *ast_function) {
     }
 
     /* @Broken */
-    //irSimplifyBlocks(ir_function);
+    printf("irSimplifyBlocks(%s);\n", ir_function->name->data);
+    irSimplifyBlocks(ir_function);
 
     return ir_function;
 }
