@@ -714,7 +714,6 @@ IrValue *irFunctionGetLocalFnPtr(IrFunction *ir_function, Ast *ast) {
         ir_fnptr = strMapGetAoStr(ir_function->variables,
                 ast->tmp_fnptr_name);
     } else {
-        astTypePrint(ast->type);
         ir_fnptr = strMapGetAoStr(ir_function->variables,
                 ast->tmp_var_name);
     }
@@ -924,14 +923,17 @@ IrInstr *irGetElementPointer(IrBlock *ir_block,
     IrInstr *ir_getelementptr_instr = irInstrNew(IR_OP_GEP);
     ir_getelementptr_instr->op1 = ir_dest;
     ir_getelementptr_instr->op2 = ir_value;
+    /* @GEP
+     * For clarity; op3 is the index, if it is NULL, there is no index */
+    ir_getelementptr_instr->op3 = NULL;
     irBlockAddInstruction(ir_block, ir_getelementptr_instr);
     return ir_getelementptr_instr;
 }
 
-IrInstr *irGetAtIdx(IrBlock *ir_block,
-                    IrValue *ir_dest,
-                    IrValue *ir_value,
-                    long offset)
+IrInstr *irGetElementPointerAtIdx(IrBlock *ir_block,
+                                  IrValue *ir_dest,
+                                  IrValue *ir_value,
+                                  long offset)
 {
     IrInstr *ir_getelementptr_instr = irInstrNew(IR_OP_GEP);
     IrValue *ir_offset = irConstInt(IR_TYPE_I64, offset);
@@ -1404,12 +1406,13 @@ IrValue *irLoadAddr(IrCtx *ctx, IrFunction *func, Ast *ast) {
 }
 
 IrValue *irAssignClassRef(IrCtx *ctx, IrFunction *func, Ast *cls, AstType *field, IrValue *rhs, int offset) {
+    loggerWarning("here %s %s\n", astTypeToString(field), astKindToString(cls->kind));
     switch (cls->kind) {
         case AST_LVAR: {
             /* Load the offset into a variable and then assign */
             IrValue *ir_local = irFunctionGetLocal(func, cls);
             IrValue *ir_dest = irTmpVariable(IR_TYPE_PTR);
-            (void)irGetAtIdx(ctx->current_block,
+            (void)irGetElementPointerAtIdx(ctx->current_block,
                              ir_dest,
                              ir_local,
                              field->offset + offset);
@@ -1426,7 +1429,7 @@ IrValue *irAssignClassRef(IrCtx *ctx, IrFunction *func, Ast *cls, AstType *field
         case AST_CLASS_REF: {
             IrValue *ir_expr = irExpression(ctx, func, cls->operand);
             IrValue *ir_dest = irTmpVariable(ir_expr->type);
-            (void)irGetAtIdx(ctx->current_block,
+            (void)irGetElementPointerAtIdx(ctx->current_block,
                              ir_dest,
                              ir_expr,
                              field->offset + offset);
@@ -1437,7 +1440,7 @@ IrValue *irAssignClassRef(IrCtx *ctx, IrFunction *func, Ast *cls, AstType *field
         case AST_DEREF: {
             IrValue *ir_expr = irExpression(ctx, func, cls->operand);
             IrValue *ir_dest = irTmpVariable(IR_TYPE_PTR);
-            (void)irGetAtIdx(ctx->current_block,
+            (void)irGetElementPointerAtIdx(ctx->current_block,
                              ir_dest,
                              ir_expr,
                              field->offset + offset);
@@ -1523,7 +1526,7 @@ IrValue *irLoadClassRef(IrCtx *ctx,
              * Why did this code used to be:
              * `IrValue *ir_local = irFunctionGetLocal(func, cls->left);` */
             IrValue *ir_local = irFunctionGetLocal(func, cls);
-            (void)irGetAtIdx(ctx->current_block,
+            (void)irGetElementPointerAtIdx(ctx->current_block,
                              ir_dest,
                              ir_local,
                              field->offset + offset);
@@ -1542,7 +1545,7 @@ IrValue *irLoadClassRef(IrCtx *ctx,
         case AST_DEREF: {
             IrValue *ir_expr = irExpression(ctx, func, cls->operand);
             IrValue *ir_dest = irTmpVariable(irConvertType(field));
-            (void)irGetAtIdx(ctx->current_block,
+            (void)irGetElementPointerAtIdx(ctx->current_block,
                              ir_dest,
                              ir_expr,
                              field->offset + offset);
@@ -1578,6 +1581,7 @@ void irArrayInit(IrCtx *ctx, IrFunction *func, Ast *ast) {
 IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
     IrBlock *ir_block = ctx->current_block;
     if (!ast) return NULL;
+    astKindPrint(ast->kind);
 
     switch (ast->kind) {
         case AST_LITERAL: {
@@ -2143,12 +2147,18 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
             IrValueType fn_ret_type = irConvertType(ast->type);
             IrValue *ir_fn_ret = irTmpVariable(fn_ret_type);
             IrValue *ir_call_args = irValueNew(IR_TYPE_ARRAY, IR_VALUE_PARAM);
-
-            IrInstr *ir_call = irInstrNew(IR_OP_CALL);
+            IrInstr *ir_call_intr = irInstrNew(IR_OP_CALL);
 
             if (ast->kind == AST_FUNPTR_CALL) {
-                IrValue *fn_ptr_var = irFunctionGetLocalFnPtr(func, ast);
-                ir_call_args->name = fn_ptr_var->name;
+                /* This needs to be an offset load */
+                if (ast->ref && ast->ref->kind == AST_CLASS_REF) {
+                    /* This will load the function pointer from the class */
+                    IrValue *ir_expr = irExpression(ctx, func, ast->ref);
+                    ir_call_args->name = ir_expr->name;
+                } else {
+                    IrValue *fn_ptr_var = irFunctionGetLocalFnPtr(func, ast);
+                    ir_call_args->name = fn_ptr_var->name;
+                }
             } else if (ast->kind == AST_FUNCALL) {
                 ir_call_args->name = ast->fname;
             } else if (ast->kind == AST_ASM_FUNCALL) {
@@ -2156,8 +2166,8 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
             }
 
             PtrVec *call_args = ptrVecNew();
-            ir_call->result = ir_fn_ret;
-            ir_call->op1 = ir_call_args;
+            ir_call_intr->result = ir_fn_ret;
+            ir_call_intr->op1 = ir_call_args;
             ir_call_args->array_.values = call_args;
 
             if (ast->args) {
@@ -2168,7 +2178,7 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
                 } 
             }
 
-            listAppend(ctx->current_block->instructions, ir_call);
+            listAppend(ctx->current_block->instructions, ir_call_intr);
             /* This is the return value of the function */
             return ir_fn_ret;
         }

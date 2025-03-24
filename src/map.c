@@ -425,7 +425,7 @@ int intMapResize(IntMap *map) {
     map->indexes->entries = new_indexes;
 #endif
 
-    map->entries = new_entries;
+    map->indexes->size = new_size;
     map->size = new_size;
     map->threashold = (unsigned long)(new_capacity * HT_LOAD);
     return 1;
@@ -753,10 +753,11 @@ int strMapResize(StrMap *map) {
     free(new_indexes);
 #else
     free(map->indexes->entries);
-    map->indexes->capacity = indexes_size;
     map->indexes->entries = new_indexes;
+    map->indexes->capacity = indexes_size;
 #endif
 
+    map->indexes->size = new_size;
     map->size = new_size;
     map->threashold = (unsigned long)(new_capacity * HT_LOAD);
     return 1;
@@ -1086,6 +1087,7 @@ int intSetResize(IntSet *iset) {
     iset->indexes->entries = new_indexes;
 #endif
 
+    iset->indexes->size = new_size;
     iset->size = new_size;
     iset->threashold = (unsigned long)(new_capacity * HT_LOAD);
     return 1;

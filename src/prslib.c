@@ -1127,14 +1127,16 @@ Ast *parsePostFixExpr(Cctrl *cc) {
             } else if (ast->kind == AST_CLASS_REF) { 
                 int len = strlen(ast->field);
                 PtrVec *argv = parseArgv(cc,ast,')',ast->field,len);
-                aoStr *tmp_var_name = ast->operand->declvar->tmp_var_name;
+                /* Class function pointers assign `ref` which is the ast 
+                 * we are currently parsing, which will be the class. This 
+                 * could be repuposed for class methods if they were to be 
+                 * implemented. */
                 ast = astFunctionPtrCall(
                         ast->type->rettype,
                         ast->field,
                         len,
                         argv,
                         ast);
-                ast->tmp_fnptr_name = tmp_var_name;
                 continue;
             }
         }

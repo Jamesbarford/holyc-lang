@@ -184,7 +184,7 @@ int astIsArithmetic(long op, int is_float) {
 }
 
 int astCanEval(Ast *ast, int *_ok, int is_float) {
-    if (ast->left && ast->right) {
+    if (ast && ast->left && ast->right) {
         return astCanEval(ast->left, _ok,is_float) && 
                astCanEval(ast->right, _ok,is_float);
     } else if (astIsArithmetic(ast->kind, is_float)) {
