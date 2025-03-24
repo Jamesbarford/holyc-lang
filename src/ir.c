@@ -1406,7 +1406,6 @@ IrValue *irLoadAddr(IrCtx *ctx, IrFunction *func, Ast *ast) {
 }
 
 IrValue *irAssignClassRef(IrCtx *ctx, IrFunction *func, Ast *cls, AstType *field, IrValue *rhs, int offset) {
-    loggerWarning("here %s %s\n", astTypeToString(field), astKindToString(cls->kind));
     switch (cls->kind) {
         case AST_LVAR: {
             /* Load the offset into a variable and then assign */
@@ -1581,7 +1580,6 @@ void irArrayInit(IrCtx *ctx, IrFunction *func, Ast *ast) {
 IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
     IrBlock *ir_block = ctx->current_block;
     if (!ast) return NULL;
-    astKindPrint(ast->kind);
 
     switch (ast->kind) {
         case AST_LITERAL: {
@@ -2899,113 +2897,20 @@ void irSimplifyBlocks(IrFunction *func) {
         while (!uniqListEmpty(work_queue)) {
             /* We kind of have a list of lists */
             IrBlock *block = (IrBlock *)uniqListDequeue(work_queue);
-            IrBlockMapping *mapping = intMapGet(func->cfg, block->id);
 
             if (block == func->exit_block) continue;
             if (intSetHas(blocks_to_delete, block->id)) continue;
 
+            /* Currently only a few simple cases are handled for the block 
+             * simplification but it is enough to work with and have some simple 
+             * optimisations. */
+            
             if (irBlockIsRedundant(func, block)) {
-                loggerWarning("C0 - KILLED REDUNDANT %d!\n", block->id);
                 intSetAdd(blocks_to_delete, block->id);
-            } else if (listIsOne(block->instructions) && 
-                       mapping->predecessors->size == 1 && 
-                       mapping->successors->size == 1)
-            {
-                /* If we are looking at a block that has one previous block and 
-                 * is an unconditional jump, we can simplify it */
-                IrInstr *ir_instr = listValue(IrInstr *, block->instructions->next);
-
-                if (ir_instr->opcode == IR_OP_JMP) {
-                    IrBlock *ir_prev_block = intMapGetFirst(mapping->predecessors);
-                    IrBlock *ir_next_block = intMapGetFirst(mapping->successors);
-
-                    if (!ir_prev_block) {
-                        loggerWarning("Connection from %d to non-existant block\n", 
-                                block->id);
-                    } else {
-                        IrInstr *prev_last_instr = irBlockLastInstr(ir_prev_block);
-
-                        if (!prev_last_instr) {
-                            printf("<<%s\n", irBlockToString(func, block)->data);
-                            printf(">>%s\n", irBlockToString(func, ir_prev_block)->data);
-                            irPrintFunction(func);
-                        }
-
-                        if (prev_last_instr->opcode == IR_OP_JMP) {
-                            loggerWarning("C3 - KILLED %d!\n", block->id);
-                            irFunctionRemoveSuccessor(func, ir_prev_block, block);
-                            irFunctionRemovePredecessor(func, ir_next_block, block);
-                            irFunctionAddMapping(func, ir_prev_block, ir_next_block);
-                            prev_last_instr->target_block = ir_next_block; 
-                            uniqListAppend(work_queue, ir_prev_block);
-                            uniqListAppend(work_queue, ir_next_block);
-                            intSetAdd(blocks_to_delete, block->id);
-
-                            uniqListAppend(work_queue, ir_prev_block);
-                            uniqListAppend(work_queue, ir_next_block);
-
-                        } else if (prev_last_instr->opcode == IR_OP_BR) {
-                            if (prev_last_instr->target_block->id == block->id) {
-                                loggerWarning("C4 - KILLED %d!\n", block->id);
-
-                                prev_last_instr->target_block = ir_next_block;
-                                /* This should now mean that the block minimally 
-                                 * has not predecessors */
-                                irFunctionRemoveSuccessor(func, ir_prev_block, block);
-                                irFunctionRemovePredecessor(func, ir_next_block, block);
-                                irFunctionAddMapping(func, ir_prev_block, ir_next_block);
-                                intSetAdd(blocks_to_delete, block->id);
-
-                                uniqListAppend(work_queue, ir_prev_block);
-                                uniqListAppend(work_queue, ir_next_block);
-                                if (prev_last_instr->target_block->id == prev_last_instr->fallthrough_block->id) {
-                                    prev_last_instr->opcode = IR_OP_JMP;
-                                    loggerWarning("Pointless branch: %d %d\n",
-                                            prev_last_instr->fallthrough_block->id, 
-                                            prev_last_instr->target_block->id);
-
-                                    /* This is now a completely pointless branch */
-                                }
-                            } else if (irBranchFallsbackToSameBlock(prev_last_instr, ir_instr, block)) {
-                                /* Unlink redundant blocks */
-                                irFunctionRemoveSuccessor(func, ir_prev_block, block);
-                                irFunctionRemovePredecessor(func, ir_next_block, block);
-                                intSetAdd(blocks_to_delete, block->id);
-
-                                /* @Bug
-                                 * Should we be able to merge blocks even if they 
-                                 * don't have a single link I think? Or we could 
-                                 * do an unconditional jump to play it safe
-                                 * */
-                                if (irBlocksHaveSingleLink(func, ir_next_block, ir_prev_block))  {
-                                    /* We pop twice, once to remove the branch 
-                                     * and another time to remove what is now a 
-                                     * redundant comparison */
-                                    listPop(ir_prev_block->instructions);
-                                    listPop(ir_prev_block->instructions);
-                                    irBlockMerge(func, ir_prev_block, ir_next_block);
-                                } else {
-                                    /* @Logic, I'm not sure this is correct 
-                                     * */
-                                    uniqListAppend(work_queue, ir_prev_block);
-                                    uniqListAppend(work_queue, ir_next_block);
-                                }
-                            }
-                        } else {
-                            loggerWarning("Not sure how we got here?\n");
-                        }
-                    }
-                } else {
-                    loggerDebug("Not quite sure how to handle %s\n", irOpcodeToString(ir_instr));
-                }
             } else if (irBlockIsConstCompareAndBranch(block)) {
                 IrInstr *ir_cmp= listValue(IrInstr *, block->instructions->next);
                 IrInstr *ir_branch = listValue(IrInstr *, block->instructions->next->next);
                 IrBlock *jump_target = irInstrEvalConstBranch(ir_cmp, ir_branch);
-
-                loggerWarning("const branch: %d %s %s\n", block->id,
-                        intMapKeysToString(mapping->predecessors)->data,
-                        intMapKeysToString(mapping->successors)->data);
 
                 /* Clear the list, removing the cmp and the branch */
                 irInstrRelease(listPop(block->instructions));
@@ -3020,7 +2925,6 @@ void irSimplifyBlocks(IrFunction *func) {
                 if (!intSetHas(blocks_to_delete, jump_target->id)) {
                     irJump(func, block, jump_target);
                 }
-
             } else if (irBlockIsRedundantJump(func, block)) {
                 IrInstr *ir_jmp = irBlockLastInstr(block);
                 irFunctionRemoveSuccessor(func, block, ir_jmp->target_block);
@@ -3030,12 +2934,6 @@ void irSimplifyBlocks(IrFunction *func) {
                     irBlockMerge(func, block, ir_jmp->target_block);
                 }
                 intSetAdd(blocks_to_delete, ir_jmp->target_block->id);
-                loggerWarning("C? - Removed redundant Jump\n");
-
-            } else {
-                printf("block: %d %s %s\n", block->id,
-                        intMapKeysToString(mapping->predecessors)->data,
-                        intMapKeysToString(mapping->successors)->data);
             }
         }
 
@@ -3094,12 +2992,6 @@ void irSimplifyBlocks(IrFunction *func) {
     if (irBlockEntryCanMergeExit(func) || irBlocksPointToEachOther(func, func->entry_block, func->exit_block)) {
         irBlockMerge(func, func->entry_block, func->exit_block);
         irFunctionDelinkBlock(func, func->exit_block);
-    }
-
-
-    if (irBlockIsRedundantJump(func, func->entry_block)) {
-    
-        loggerWarning("YES\n");
     }
 
     uniqListRelease(work_queue);
