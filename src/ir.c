@@ -109,6 +109,25 @@ const char *irValueTypeToString(IrValueType ir_value_type) {
     }
 }
 
+const char *irValueKindToString(IrValueKind ir_value_kind) {
+    const char *kind_str = NULL;
+    switch (ir_value_kind) {
+        case IR_VALUE_CONST_INT: kind_str = "IR_VALUE_CONST_INT"; break;
+        case IR_VALUE_CONST_FLOAT: kind_str = "IR_VALUE_CONST_FLOAT"; break;
+        case IR_VALUE_CONST_STR: kind_str = "IR_VALUE_CONST_STR"; break;
+        case IR_VALUE_GLOBAL: kind_str = "IR_VALUE_GLOBAL"; break;
+        case IR_VALUE_PARAM: kind_str = "IR_VALUE_PARAM"; break;
+        case IR_VALUE_LOCAL: kind_str = "IR_VALUE_LOCAL"; break;
+        case IR_VALUE_TEMP: kind_str = "IR_VALUE_TEMP"; break;
+        case IR_VALUE_PHI: kind_str = "IR_VALUE_PHI"; break;
+        case IR_VALUE_LABEL: kind_str = "IR_VALUE_LABEL"; break;
+        case IR_VALUE_UNDEFINED: kind_str = "IR_VALUE_UNDEFINED"; break;
+        case IR_VALUE_UNRESOLVED: kind_str = "IR_VALUE_UNRESOLVED"; break;
+        default: loggerPanic("Unhandled IrValueKind: %d\n", ir_value_kind);
+    }
+    return kind_str;
+}
+
 /**
  * @Bug - Non breaking as in principle the array will still work.
  * Because we flatten something like: 
@@ -3282,7 +3301,7 @@ IrValue *irLowerGlobal(IrCtx *ctx, Ast *global_variable) {
     return value;
 }
 
-void irLowerAst(Cctrl *cc) {
+IrProgram *irLowerAst(Cctrl *cc) {
     IrProgram *ir_program = irProgramNew();
     IrCtx *ctx = irCtxNew();
     ctx->ir_program = ir_program;
@@ -3339,36 +3358,48 @@ void irLowerAst(Cctrl *cc) {
         }
     }
 
-    printf("target = %s-%s\n", ARCH_STR, OS_STR);
-    if (ctx->ir_program->global_variables->size) {
-        StrMapIterator *it = strMapIteratorNew(ctx->ir_program->global_variables);
+    irCtxRelease(ctx);
+    return ir_program;
+}
+
+aoStr *irProgramToString(IrProgram *ir_program) {
+    aoStr *buf = aoStrNew();
+    aoStrCatFmt(buf, "target = %s-%s\n", ARCH_STR, OS_STR);
+    if (ir_program->global_variables->size) {
+        StrMapIterator *it = strMapIteratorNew(ir_program->global_variables);
         StrMapNode *n = NULL;
         while ((n = strMapNext(it)) != NULL) {
             IrValue *ir_value = (IrValue *)n->value;
             aoStr *ir_value_str = irValueToString(ir_value);
-            printf("%s\n",ir_value_str->data);
+            aoStrCatFmt(buf, "%S\n", ir_value_str);
             aoStrRelease(ir_value_str);
         }
         strMapIteratorRelease(it);
-        printf("\n");
+        aoStrPutChar(buf,'\n');
     }
 
     if (ir_program->asm_functions->size > 0) {
         for (int i = 0; i < ir_program->asm_functions->size; ++i) {
             IrValue *asm_function = vecGet(IrValue *, ir_program->asm_functions, i);
             const char *type_str = irValueTypeToString(asm_function->type);
-            printf("%s fn %s\n",type_str, asm_function->name->data);
+            aoStrCatFmt(buf, "%s fn %S\n", type_str, asm_function->name);
         }
-        printf("\n");
+        aoStrPutChar(buf,'\n');
     }
 
     for (int i = 0; i < ir_program->functions->size; ++i) {
         IrFunction *ir_func = vecGet(IrFunction *, ir_program->functions, i);
         aoStr *ir_func_str = irFunctionToString(ir_func);
-        printf("%s\n",ir_func_str->data);
         aoStr *ir_func_cfg = irFunctionCFGToString(ir_func);
-        printf("%s\n",ir_func_cfg->data);
+        aoStrCatFmt(buf, "%S\n%S\n", ir_func_str, ir_func_cfg);
     }
 
-    irCtxRelease(ctx);
+    return buf;
+}
+
+void irDump(Cctrl *cc) {
+    IrProgram *ir_program = irLowerAst(cc);
+    aoStr *ir_str = irProgramToString(ir_program);
+    printf("%s\n",ir_str->data);
+    aoStrRelease(ir_str);
 }

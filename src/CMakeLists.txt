@@ -47,6 +47,7 @@ set(SOURCES
     cfg-print.c
     cfg.c
     cli.c
+    codegen-x64.c
     compile.c
     ir.c
     ir-interp.c
@@ -73,6 +74,7 @@ set(HEADERS
     cfg-print.h
     cfg.h
     cli.h
+    codegen-x64.h
     compile.h
     config.h
     ir.h

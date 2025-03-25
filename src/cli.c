@@ -20,6 +20,29 @@
 #define LINELEN_DEFAULT 80
 
 
+/* For creating error messages that can't take advantage of the nicer cctrl one */
+__noreturn void cliPanicGeneric(const char *const_msg, const char *fmt, va_list ap) {
+    char buffer[BUFSIZ];
+    size_t len = vsnprintf(buffer, sizeof(buffer), fmt, ap);
+    buffer[len] = '\0';
+    if (const_msg) {
+        if (is_terminal) {
+            fprintf(stderr, "\033[1;91m%s\033[0m", const_msg);
+        } else {
+            fprintf(stderr, "%s", const_msg);
+        }
+    }
+    fprintf(stderr, "%s", buffer);
+    va_end(ap);
+    exit(EXIT_FAILURE);
+}
+
+__noreturn void cliPanic(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap,fmt);
+    cliPanicGeneric("Error: ", fmt, ap);
+}
+
 char *cliParseAssign(char *arg) {
     while (*arg != '=') arg++;
     return arg;
@@ -73,6 +96,25 @@ int cliParseBoolean(CliValue *value, char *rawarg) {
     return retval;
 }
 
+enum CliEmitType cliParseEmitType(CliValue *value, char *rawarg) {
+    (void)value;
+    if (!strncmp(rawarg, str_lit("c"))) {
+        value->integer = CLI_EMIT_C;
+        return CLI_EMIT_C;
+    } else if (!strncmp(rawarg, str_lit("x86_64"))) {
+        value->integer = CLI_EMIT_X86_64;
+        return CLI_EMIT_X86_64;
+    } else if (!strncmp(rawarg, str_lit("ir"))) {
+        value->integer = CLI_EMIT_IR;
+        return CLI_EMIT_IR;
+    } else if (!strncmp(rawarg, str_lit("ast"))) {
+        value->integer = CLI_EMIT_AST;
+        return CLI_EMIT_AST;
+    } else {
+        cliPanic("Unknown `--emit` argument; '%s', should be one of; 'ast', 'c', 'ir', 'x86_64'");
+    }
+}
+
 static CliParser parsers[] = {
     {str_lit("-ast"),       0, CLI_PRINT_AST, "-ast", "Print the ast and exit", &cliParseNop},
     {str_lit("-cfg"),       0, CLI_CFG_CREATE, "-cfg", "Create graphviz control flow graph", &cliParseNop},
@@ -80,6 +122,8 @@ static CliParser parsers[] = {
     {str_lit("-cfg-svg"),   0, CLI_CFG_CREATE_SVG, "-cfg-png", "Create graphviz control flow graph as a SVG", &cliParseNop},
     {str_lit("-tokens"),    0, CLI_PRINT_TOKENS, "-tokens", "Print the tokens and exit", &cliParseNop},
     {str_lit("--dump-ir"),  0, CLI_DUMP_IR, "--dump-ir", "Print IR to stdout", &cliParseNop},
+    {str_lit("--emit"),     1, CLI_EMIT_TYPE, "--emit", "Prints one of the following to stdout; 'ast', 'c', 'ir', 'x86_64'",
+        (int (*)(CliValue *, char *))&cliParseEmitType},
     {str_lit("-S"),         0, CLI_ASSEMBLE_ONLY, "-S", "Emit assembly only", &cliParseNop},
     {str_lit("-obj"),       0, CLI_EMIT_OBJECT, "-obj", "Emit an objectfile", &cliParseNop},
     {str_lit("-lib"),       1, CLI_EMIT_DYLIB, "-lib <libname>", "Emit a dynamic and static library: `-lib <libname>`", &cliParseString},
@@ -122,29 +166,6 @@ const char *getBuildModeStr(void) {
 #else
     return "Release";
 #endif
-}
-
-/* For creating error messages that can't take advantage of the nicer cctrl one */
-__noreturn void cliPanicGeneric(const char *const_msg, const char *fmt, va_list ap) {
-    char buffer[BUFSIZ];
-    size_t len = vsnprintf(buffer, sizeof(buffer), fmt, ap);
-    buffer[len] = '\0';
-    if (const_msg) {
-        if (is_terminal) {
-            fprintf(stderr, "\033[1;91m%s\033[0m", const_msg);
-        } else {
-            fprintf(stderr, "%s", const_msg);
-        }
-    }
-    fprintf(stderr, "%s", buffer);
-    va_end(ap);
-    exit(EXIT_FAILURE);
-}
-
-__noreturn void cliPanic(const char *fmt, ...) {
-    va_list ap;
-    va_start(ap,fmt);
-    cliPanicGeneric("Error: ", fmt, ap);
 }
 
 __noreturn void cliVersionPrint(CliArgs *args) {
@@ -300,7 +321,7 @@ void getASMFileName(CliArgs *args, enum CliFileType file_type, char *filename, s
         case HC_HEADER:
             break;
         case HC_ASSEMBLY:
-        args->assemble = 1;
+            args->assemble = 1;
             break;
     }
 
@@ -382,6 +403,7 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
             case CLI_CFG_CREATE_SVG:     args->cfg_create_svg = 1; break;
             case CLI_ASM_DEBUG_COMMENTS: args->asm_debug_comments = 1; break;
             case CLI_DUMP_IR:            args->dump_ir = 1; break;
+            case CLI_EMIT_TYPE:          args->emit_type = (enum CliEmitType)value.integer; break;               
             case CLI_ASSEMBLE_ONLY:      args->assemble_only = 1; break;
             case CLI_EMIT_DYLIB: {
                 args->emit_dylib = 1;

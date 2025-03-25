@@ -53,7 +53,7 @@ void asmExpression(Cctrl *cc, aoStr *buf, Ast *ast);
 #define asmGetGlabel(gvar) \
     gvar->is_static ? gvar->glabel : gvar->gname
 
-uint64_t ieee754(double _f64) {
+static uint64_t ieee754(double _f64) {
     if (_f64 == 0.0) return 0;  // Handle zero value explicitly
 
     // Calculate exponent and adjust fraction

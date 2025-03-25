@@ -1,6 +1,7 @@
 #ifndef CLI_H
 #define CLI_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "list.h"
@@ -23,6 +24,7 @@ enum CliArgType {
     CLI_EMIT_OBJECT,
     CLI_RUN,
     CLI_DUMP_IR,
+    CLI_EMIT_TYPE,
     CLI_ASSEMBLE,
     CLI_TRANSPILE,
     CLI_TO_STDOUT,
@@ -54,6 +56,13 @@ typedef struct CliParser {
     int (*parse)(struct CliValue *value, char *rawarg);
 } CliParser;
 
+enum CliEmitType {
+    CLI_EMIT_X86_64 = 1,
+    CLI_EMIT_IR,
+    CLI_EMIT_AST,
+    CLI_EMIT_C,
+};
+
 typedef struct CliArgs {
     int print_ast;
     int print_tokens;
@@ -65,6 +74,7 @@ typedef struct CliArgs {
     int asm_debug_comments;
     int dump_ir;
     int assemble_only;
+    enum CliEmitType emit_type;
     int emit_dylib;
     int emit_object;
     int run;
