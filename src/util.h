@@ -7,6 +7,7 @@
 
 #define static_size(x) (sizeof((x)) / sizeof((x[0])))
 #define cast(type, value) (((type)(value)))
+#define ptrcast(integer) ((void *)(long)integer)
 #define str_lit(s) s,sizeof(s)-1
 
 #ifndef __inline

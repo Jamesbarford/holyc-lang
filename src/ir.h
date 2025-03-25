@@ -11,8 +11,10 @@ void irMemoryStats(void);
 IrProgram *irLowerAst(Cctrl *cc);
 aoStr *irProgramToString(IrProgram *ir_program);
 aoStr *irValueToString(IrValue *ir_value);
+aoStr *irInstrToString(IrInstr *ir_instr);
 const char *irValueKindToString(IrValueKind ir_value_kind);
 const char *irValueTypeToString(IrValueType ir_value_type);
+const char *irOpcodeToString(IrInstr *ir_instr);
 void irDump(Cctrl *cc);
 
 #endif

@@ -696,7 +696,8 @@ IrValue *irGlobalString(IrProgram *ir_program, Ast *ast) {
         ir_value = irValueNew(IR_TYPE_ARRAY, IR_VALUE_CONST_STR);
         ir_value->str = ast->sval;
         ir_value->str_real_len = ast->real_len;
-        strMapAdd(ir_program->strings, ast->slabel->data, ir_value);
+        ir_value->name = ast->slabel;
+        strMapAddAoStr(ir_program->strings, ast->slabel, ir_value);
     }
     return ir_value;
 }
