@@ -1164,7 +1164,7 @@ BasicBlock *cfgVecFindBlock(PtrVec *vec, int block_no, int *_idx) {
 void cfgAdjacencyListPrint(CFG *cfg) {
     IntMapIterator *it = intMapIteratorNew(cfg->no_to_block);
     IntMapNode *entry;
-    IntSetIterator *set_iter;
+    IntSetIter *set_iter;
     long block_no;
 
     while ((entry = intMapNext(it)) != NULL) {
@@ -1173,13 +1173,13 @@ void cfgAdjacencyListPrint(CFG *cfg) {
 
         cfgAdjacencyPrintBlock(parent,1);
 
-        set_iter = intSetIteratorNew(iset);
+        set_iter = intSetIterNew(iset);
         while ((block_no = intSetNext(set_iter)) != HT_DELETED) {
             BasicBlock *bb = (BasicBlock *)intMapGet(cfg->no_to_block,block_no);
             cfgAdjacencyPrintBlock(bb,0);
         }
         printf("====\n");
-        intSetIteratorRelease(set_iter);
+        intSetIterRelease(set_iter);
     }
     intMapIteratorRelease(it);
 }
@@ -1208,7 +1208,7 @@ aoStr *cdfAdjacencyListToJSON(CFG *cfg) {
         IntSet *iset = (IntSet *)intMapGet(cfg->graph,entry->key);
 
         aoStrCatPrintf(json, "    %d: [", parent->block_no);
-        IntSetIterator *set_iter = intSetIteratorNew(iset);
+        IntSetIter *set_iter = intSetIterNew(iset);
         long block_no;
         while ((block_no = intSetNext(set_iter)) != HT_DELETED) {
             BasicBlock *bb = (BasicBlock *)intMapGet(cfg->no_to_block,block_no);
@@ -1217,7 +1217,7 @@ aoStr *cdfAdjacencyListToJSON(CFG *cfg) {
                 aoStrCat(json,", ");
             }
         }
-        intSetIteratorRelease(set_iter);
+        intSetIterRelease(set_iter);
         aoStrCat(json,"]");
 
         if (it->idx + 1 != it->map->size) {
@@ -1825,13 +1825,13 @@ void cfgExplore(CFG *cfg, IntSet *seen, int block_no) {
     IntSet *iset = (IntSet *)intMapGet(cfg->graph,block_no);
     printf("bb%d\n",block_no);
 
-    IntSetIterator *it = intSetIteratorNew(iset);
+    IntSetIter *it = intSetIterNew(iset);
     long next_block_no;
     while ((next_block_no = intSetNext(it)) != HT_DELETED) {
         BasicBlock *bb = (BasicBlock *)intMapGet(cfg->no_to_block,(int)next_block_no);
         cfgExplore(cfg,seen,bb->block_no);
     }
-    intSetIteratorRelease(it);
+    intSetIterRelease(it);
 }
 
 void cfgIter(CFG *cfg) {

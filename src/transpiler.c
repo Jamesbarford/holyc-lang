@@ -51,24 +51,24 @@ aoStr *transpileAst(Ast *ast, TranspileCtx *ctx);
 aoStr *transpileFunctionProto(TranspileCtx *ctx, AstType *type, char *name);
 
 static char *transpile_used_c_headers[] = {
-    "arpa/inet.h",
-    "dirent.h",
-    "fcntl.h",
-    "math.h",
-    "netdb.h",
-    "pthread.h",
+    //"arpa/inet.h",
+    //"dirent.h",
+    //"fcntl.h",
+    //"math.h",
+    //"netdb.h",
+    //"pthread.h",
 #ifdef HCC_LINK_SQLITE3
     "sqlite3.h",
 #endif
     "stdio.h",
     "stdlib.h",
-    "string.h",
-    "strings.h",
-    "sys/socket.h",
-    "sys/stat.h",
-    "sys/wait.h",
-    "time.h",
-    "unistd.h",
+    //"string.h",
+    //"strings.h",
+    //"sys/socket.h",
+    //"sys/stat.h",
+    //"sys/wait.h",
+    //"time.h",
+    //"unistd.h",
 };
 
 static char *transpile_skip_defines[] = {

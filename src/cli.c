@@ -110,6 +110,9 @@ enum CliEmitType cliParseEmitType(CliValue *value, char *rawarg) {
     } else if (!strncmp(rawarg, str_lit("ast"))) {
         value->integer = CLI_EMIT_AST;
         return CLI_EMIT_AST;
+    } else if (!strncmp(rawarg, str_lit("aarch64"))) {
+        value->integer = CLI_EMIT_AARCH64;
+        return CLI_EMIT_AARCH64;
     } else {
         cliPanic("Unknown `--emit` argument; '%s', should be one of; 'ast', 'c', 'ir', 'x86_64'");
     }
@@ -122,7 +125,7 @@ static CliParser parsers[] = {
     {str_lit("-cfg-svg"),   0, CLI_CFG_CREATE_SVG, "-cfg-png", "Create graphviz control flow graph as a SVG", &cliParseNop},
     {str_lit("-tokens"),    0, CLI_PRINT_TOKENS, "-tokens", "Print the tokens and exit", &cliParseNop},
     {str_lit("--dump-ir"),  0, CLI_DUMP_IR, "--dump-ir", "Print IR to stdout", &cliParseNop},
-    {str_lit("--emit"),     1, CLI_EMIT_TYPE, "--emit", "Prints one of the following to stdout; 'ast', 'c', 'ir', 'x86_64'",
+    {str_lit("--emit"),     1, CLI_EMIT_TYPE, "--emit", "Prints one of the following to stdout; 'ast', 'c', 'ir', 'x86_64', 'aarch64'",
         (int (*)(CliValue *, char *))&cliParseEmitType},
     {str_lit("-S"),         0, CLI_ASSEMBLE_ONLY, "-S", "Emit assembly only", &cliParseNop},
     {str_lit("-obj"),       0, CLI_EMIT_OBJECT, "-obj", "Emit an objectfile", &cliParseNop},
@@ -131,6 +134,7 @@ static CliParser parsers[] = {
     {str_lit("-run"),       0, CLI_RUN, "-run", "Immediately run the file (not JIT)", &cliParseNop},
     {str_lit("-o"),         1, CLI_OUTPUT_FILENAME, "-o <binary_name>", "Output filename: `-o <name> ./<file>.HC`", &cliParseString},
     {str_lit("-o-"),        0, CLI_TO_STDOUT, "-o-", "Output assembly to stdout, only for use with -S", &cliParseNop},
+    {str_lit("-O"),         0, CLI_OPTIMISE, "-O", "Run the optimiser, produces faster code", &cliParseNop},
     {str_lit("-transpile"), 0, CLI_TRANSPILE, "-transpile", "Transpile the code to C, this is best effort", &cliParseNop},
     {str_lit("-D"),         0, CLI_DEFINES_LIST, "-D<VAR>", "Set a compiler #define (does not accept a value)", &cliParseDefine},
     {str_lit("--mem-stats"),  0, CLI_MEM_STATS, "--mem-stats", "Stats about memory usage when compiling" , &cliParseNop},
@@ -405,6 +409,7 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
             case CLI_DUMP_IR:            args->dump_ir = 1; break;
             case CLI_EMIT_TYPE:          args->emit_type = (enum CliEmitType)value.integer; break;               
             case CLI_ASSEMBLE_ONLY:      args->assemble_only = 1; break;
+            case CLI_OPTIMISE:           args->optimise = 1; break;
             case CLI_EMIT_DYLIB: {
                 args->emit_dylib = 1;
                 args->lib_name = mprintf("%s",value.str);

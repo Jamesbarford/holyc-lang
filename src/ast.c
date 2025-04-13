@@ -939,6 +939,17 @@ int astKindIsFunctionLike(int ast_kind) {
     }
 }
 
+int astKindIsFunctionCall(int ast_kind) {
+    switch (ast_kind) {
+        case AST_ASM_FUNCALL:
+        case AST_FUNPTR_CALL:
+        case AST_FUNCALL:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
 void astStringEndStmt(aoStr *str) {
     if (str->data[str->len-1] != '\n') {
         aoStrPutChar(str, '\n');
@@ -1200,6 +1211,7 @@ char *astFunctionToString(Ast *func) {
 }
 
 void _astToString(aoStr *str, Ast *ast, int depth) {
+    printf("%s\n", astKindToString(ast->kind));
     aoStrCatRepeat(str, "  ", depth);
     if (ast == NULL) {
         aoStrCatLen(str, "(null)", 6);
@@ -1543,60 +1555,28 @@ void _astToString(aoStr *str, Ast *ast, int depth) {
         }
         
         case AST_CLASS_REF: {
-            Ast *ast_tmp;
-            char *field_names[30];
-            int field_name_count = 0;
+            /* Dig until we find the <lvar> */
+            Ast *node = ast;
+            aoStr *class_path = aoStrNew();
             aoStrCatPrintf(str, "<class_ref>\n");
-            AstType *field_type = strMapGet(ast->cls->type->fields, ast->field);
-
-            /* We only really want to print at the data type we are looking 
-             * at, not the whole class */
-            if (field_type && ast->cls->kind == AST_DEREF) {
-                aoStrCatRepeat(str, "  ", depth+1);
-
-                if (!astIsClassPointer(field_type)) {
-                    aoStr *color_type = astTypeToColorAoStr(field_type);
-                    aoStrCatLen(str, color_type->data, color_type->len);
-                    if (color_type->data[color_type->len - 1] != '*') {
-                        aoStrPutChar(str, ' ');
-                    } 
-                } else {
-                    tmp = astTypeToColorString(field_type);
-                    aoStrCatPrintf(str, "<class> %s ",tmp);
+            int offset = 0;
+            while (node && node->kind != AST_LVAR) {
+                if (node->cls->deref_symbol == TK_ARROW) {
+                    aoStrCatFmt(class_path, "->%s", node->field);
+                } else if (node->field) {
+                    aoStrCatFmt(class_path, ".%s", node->field);
                 }
-
-                /* Find the name of the variable that contains this reference */
-                ast_tmp = ast;
-                while (ast_tmp->kind == AST_DEREF ||
-                        ast_tmp->kind == AST_CLASS_REF) {
-                    field_names[field_name_count++] = ast_tmp->field;
-                    if (ast_tmp->kind != AST_DEREF &&
-                            ast_tmp->kind != AST_CLASS_REF) {
-                        break;
-                    }
-                    ast_tmp = ast_tmp->cls->operand;
-                }
-
-                if (ast_tmp->kind == AST_LVAR) {
-                    aoStrCatPrintf(str, "%s->",ast_tmp->lname->data);
-                }
-                for (int i = 0; i < field_name_count; ++i) {
-                    if (i + 1 == field_name_count) {
-                        aoStrCatPrintf(str, "%s",field_names[i]);
-                    } else {
-                        aoStrCatPrintf(str, "%s->",field_names[i]);
-                    }
-                }
-            } else {
-                loggerWarning("printing whole class: %s!\n",
-                    astKindToString(ast->cls->kind));
-                aoStrCatRepeat(str, "  ", depth+1);
-                if (ast->cls->kind == AST_LVAR) {
-                    aoStrCatPrintf(str, "%s",ast->cls->lname->data);
-                }
-                aoStrCatPrintf(str, ".%s", ast->field, ast->type->offset);
+                offset += node->type->offset;
+                node = node->cls;
             }
-            astStringEndStmt(str);
+            aoStr *cls_type_str = astTypeToColorAoStr(node->type);
+            aoStr *type_str = astTypeToColorAoStr(ast->type);
+            aoStrCatRepeat(str, "  ", depth+1);
+            aoStrCatFmt(str, "%S %S%S (%S offset; %I)",
+                    type_str, node->lname, class_path, cls_type_str, offset);
+            aoStrRelease(class_path);
+            aoStrRelease(type_str);
+            aoStrRelease(cls_type_str);
             break;
         }
 

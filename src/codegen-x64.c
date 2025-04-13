@@ -1,18 +1,64 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <math.h>
+#include <stdarg.h>
 
 #include "aostr.h"
 #include "ast.h"
 #include "ir.h"
+#include "ir-interp.h"
 #include "list.h"
 #include "map.h"
 #include "util.h"
 #include "codegen-x64.h"
 
+/*==================== DATA STRUCTURE SPECIALISATION =========================*/
+
+static MapType irvalue_to_reg_map_type = {
+    .match = (mapKeyMatch *)&irValuesEq,
+    .hash = (mapKeyHash *)&irValueHash,
+    .get_key_len = (mapKeyLen *)&irValueKeyLen,
+    .key_to_string = (mapKeyToString *)&irValueKeyStringify,
+    .value_to_string = (mapValueToString *)&aoStrDupCString,
+    .value_release = NULL,
+    .value_type = "char *",
+    .key_type = "IrValue *",
+};
+
+int x64RegEq(char *s1, char *s2) {
+    return !strcmp(s1,s2);
+}
+
+unsigned long x64RegHash(char *s1) {
+    aoStr tmp = {.data = (void*)s1, .len = strlen(s1), .capacity = 0};
+    return aoStrHashFunction(&tmp);
+}
+
+static MapType reg_to_irvalue_map_type = {
+    .match = (mapKeyMatch *)&x64RegEq,
+    .hash = (mapKeyHash *)&x64RegHash,
+    .get_key_len = (mapKeyLen *)&strlen,
+    .key_to_string = (mapKeyToString *)&aoStrDupCString,
+    .value_to_string = (mapValueToString *)&irValueKeyStringify,
+    .value_release = NULL,
+    .value_type = "IrValue *",
+    .key_type = "char *",
+};
+
+/* `Map<IrValue *, char *>` */
+static Map *irValueToRegMapNew(void) {
+    return mapNew(32, &irvalue_to_reg_map_type);
+}
+
+/* `Map<char *, IrValue *>` */
+static Map *irRegToValueMapNew(void) {
+    return mapNew(32, &reg_to_irvalue_map_type);
+}
+
+/*==================== CODE GEN ==============================================*/
 /* System V ABI, for parameters passed as registers */
-const char *x64_int_param_regs[] = {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
-const char *x64_float_param_regs[] = {"%xmm0", "%xmm1", "%xmm2", "%xmm3", 
+char *x64_int_param_regs[] = {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
+char *x64_float_param_regs[] = {"%xmm0", "%xmm1", "%xmm2", "%xmm3", 
                                       "%xmm4", "%xmm5", "%xmm6", "%xmm7"};
 typedef struct X64Ctx X64Ctx;
 typedef struct X64RegState X64RegState;
@@ -20,8 +66,11 @@ typedef struct X64RegState X64RegState;
 struct X64RegState {
     int used[16];         // General purpose registers
     int used_xmm[16];     // XMM registers for floating point
-    const char *names[16]; // Register names
-    const char *xmm_names[16]; // XMM register names
+    char *names[16]; // Register names
+    char *xmm_names[16]; // XMM register names
+    Map *ir_to_reg; /* `Map<IrValue *, aoStr *>`, value to it's register 
+                        *  or NULL */
+    Map *reg_to_ir; /* `Map<char *, IrValue *>` register to a value */
 };
 
 struct X64Ctx {
@@ -37,7 +86,7 @@ static int alignTo(int value, int alignment) {
     return (value + alignment) & ~alignment;
 }
 
-aoStr *codeGenNormaliseFunctionName(aoStr *fname) {
+static aoStr *codeGenNormaliseFunctionName(aoStr *fname) {
     aoStr *normalised = aoStrNew();
     if (!strncmp(OS_STR, str_lit("apple"))) {
         aoStrPutChar(normalised, '_');
@@ -76,49 +125,158 @@ static void x64RegStateInit(X64RegState *state) {
         int len = snprintf(tmp,sizeof(tmp), "%%xmm%d",i);
         state->xmm_names[i] = strndup(tmp, len);
     }
+    state->ir_to_reg = irValueToRegMapNew();
+    state->reg_to_ir = irRegToValueMapNew();
 }
 
-int x64AllocRegister(X64RegState *state) {
-    /* @Speed - bitvector */
-    for (int i = 0; i < 16; ++i) {
-        if (!state->used[i]) {
-            state->used[i] = 1;
-            return i;
-        }
-    }
+static void x64RegStateClearMaps(X64RegState *state) {
+    mapClear(state->ir_to_reg);
+    mapClear(state->reg_to_ir);
+    memset(state->used, 0, sizeof(state->used));
+    memset(state->used_xmm, 0, sizeof(state->used_xmm));
+}
+
+static void x64RegStateClear(X64RegState *state) {
+    x64RegStateClearMaps(state);
+}
+
+int x64ValueInReg(X64RegState *state, IrValue *value) {
+    if (!value || !value->name) return 0;
+    if (!mapHas(state->ir_to_reg, value)) return 0;
+    char *reg = (char *)mapGet(state->ir_to_reg, value);
+    IrValue *stored = (IrValue *)mapGet(state->reg_to_ir, reg);
+    return stored == value;
+}
+
+char *x64GetRegForValue(X64RegState *state, IrValue *value) {
+    if (!value || !value->name) return NULL;
+    return (char *)mapGet(state->ir_to_reg, value);
+}
+
+int x64GetRegisterIdx(char *reg_name) {
+    if (!strncmp(reg_name, str_lit("%rax"))) return 0;
+    else if (!strncmp(reg_name, str_lit("%rbx"))) return 1;
+    else if (!strncmp(reg_name, str_lit("%rcx"))) return 2;
+    else if (!strncmp(reg_name, str_lit("%rdx"))) return 3;
+    else if (!strncmp(reg_name, str_lit("%rsi"))) return 4;
+    else if (!strncmp(reg_name, str_lit("%rdi"))) return 5;
+    else if (!strncmp(reg_name, str_lit("%r8"))) return 6;
+    else if (!strncmp(reg_name, str_lit("%r9"))) return 7;
+    else if (!strncmp(reg_name, str_lit("%r10"))) return 8;
+    else if (!strncmp(reg_name, str_lit("%r11"))) return 9;
+    else if (!strncmp(reg_name, str_lit("%r12"))) return 10;
+    else if (!strncmp(reg_name, str_lit("%r13"))) return 11;
+    else if (!strncmp(reg_name, str_lit("%r14"))) return 12;
+    else if (!strncmp(reg_name, str_lit("%r15"))) return 13;
+
+    loggerPanic("Invalid register: %s\n", reg_name);
     return -1;
 }
 
-int x64AllocFloatRegister(X64RegState *state) {
-    /* @Speed - bitvector */
-    for (int i = 0; i < 16; ++i) {
-        if (!state->used_xmm[i]) {
-            state->used_xmm[i] = 1;
-            return i;
-        }
-    }
-    return -1;
+void x64SetRegUsed(X64RegState *state, char *reg, IrValue *value) {
+    //if (value->type == IR_TYPE_F64) {
+    //    for (int i = 0; i < 16; ++i) {
+    //        if (!strcmp(state->xmm_names[i], reg)) {
+    //            state->used_xmm[i] = 1;
+    //            break;
+    //        }
+    //    }
+    //} else {
+    //    for (int i = 0; i < 16; ++i) {
+    //        if (!strcmp(state->names[i], reg)) {
+    //            state->used[i] = 1;
+    //            break;
+    //        }
+    //    }
+    //}
+    if (!value || !value->name) return;
+    mapAdd(state->ir_to_reg, value, reg);
+    mapAdd(state->reg_to_ir, reg, value);
 }
 
-void x64FreeRegister(X64RegState *state, int reg) {
+void x64FreeRegister(X64RegState *state, int reg, IrValue *value) {
+    (void)value;
     if (reg >= 0 && reg < 16) {
         state->used[reg] = 0;
     }
 }
 
-void x64FreeFloatRegister(X64RegState *state, int reg) {
+/* Remove a value from a register */
+void x64FreeValue(X64Ctx *ctx, IrValue *value) {
+    char *reg_name = x64GetRegForValue(&ctx->reg_state, value);
+    if (reg_name) {
+        int reg_idx = x64GetRegisterIdx(reg_name);
+        ctx->reg_state.used[reg_idx] = 0;
+        mapRemove(ctx->reg_state.ir_to_reg, value);
+        mapRemove(ctx->reg_state.reg_to_ir, reg_name);
+    }
+}
+
+void x64FreeRegisterByName(X64Ctx *ctx, char *reg_name) {
+    if (!reg_name) return;
+    IrValue *maybe_value = mapGet(ctx->reg_state.reg_to_ir, reg_name);
+    if (maybe_value) {
+        x64FreeValue(ctx, maybe_value);
+    } else {
+        int reg_idx = x64GetRegisterIdx(reg_name);
+        ctx->reg_state.used[reg_idx] = 0;
+        mapRemove(ctx->reg_state.reg_to_ir, reg_name);
+    }
+}
+
+
+void x64FreeFloatRegister(X64RegState *state, int reg, IrValue *value) {
+    (void)value;
     if (reg >= 0 && reg < 16) {
         state->used_xmm[reg] = 0;
     }
 }
 
-const char *x64GetRegisterName(X64RegState *state, int reg) {
+char *x64GetRegisterName(X64RegState *state, int reg) {
     return state->names[reg];
 }
 
-const char *x64GetFloatRegisterName(X64RegState *state, int reg) {
+char *x64GetFloatRegisterName(X64RegState *state, int reg) {
     return state->xmm_names[reg];
 }
+
+int x64AllocRegister(X64RegState *state, IrValue *value, char **_name) {
+    int reg = -1;
+
+    /* @Speed - bitvector */
+    for (int i = 0; i < 16; ++i) {
+        if (!state->used[i]) {
+            state->used[i] = 1;
+            mapAdd(state->ir_to_reg, value, state->names[i]);
+            mapAdd(state->reg_to_ir, state->names[i], value);
+            reg = i;
+            break;
+        }
+    }
+    if (reg != -1) {
+        *_name = x64GetRegisterName(state, reg);
+    }
+    return reg;
+}
+
+int x64AllocFloatRegister(X64RegState *state, IrValue *value, char **_name) {
+    int reg = -1;
+    /* @Speed - bitvector */
+    for (int i = 0; i < 16; ++i) {
+        if (!state->used_xmm[i]) {
+            state->used_xmm[i] = 1;
+            mapAdd(state->ir_to_reg, value, state->names[i]);
+            mapAdd(state->reg_to_ir, state->names[i], value);
+            reg = i;
+            break;
+        }
+    }
+    if (reg != -1) {
+        *_name = x64GetFloatRegisterName(state, reg);
+    }
+    return reg;
+}
+
 
 static X64Ctx *x64CtxNew(IrProgram *ir_program) {
     X64Ctx *ctx = (X64Ctx *)malloc(sizeof(X64Ctx));
@@ -131,6 +289,7 @@ static X64Ctx *x64CtxNew(IrProgram *ir_program) {
     return ctx;
 }
 
+/*
 static int getIntSize(IrValueType type) {
     switch (type) {
         case IR_TYPE_I8:  return 1;
@@ -139,6 +298,34 @@ static int getIntSize(IrValueType type) {
         case IR_TYPE_I64: return 8;
         default: loggerPanic("Invalid integer type: %s\n", irValueTypeToString(type));
     }
+}
+*/
+
+/* Get the size in bytes for *any* IR scalar/pointer type */
+static int getValueSize(IrValue* value) {
+     switch (value->type) {
+        case IR_TYPE_I8:  return 1;
+        case IR_TYPE_I16: return 2;
+        case IR_TYPE_I32: return 4;
+        case IR_TYPE_I64: return 8;
+        case IR_TYPE_F64: return 8;
+        case IR_TYPE_PTR: return 8;
+        default:
+            // loggerWarning("Cannot determine size for IR type: %d\n", value->type);
+            return 8;
+    }
+}
+
+static const char *x64GetMovInstr(IrValue *value) {
+    int size = getValueSize(value);
+    char *mov_op = "movq"; /* Default for 64-bit */
+    if (size == 4) mov_op = "movl"; /* Use movl for 32-bit (zeros upper bits of 64-bit reg) */
+    else if (size == 2) mov_op = "movzwq"; /* Zero-extend 16-bit to 64-bit */
+    else if (size == 1) mov_op = "movzbq"; /* Zero-extend 8-bit to 64-bit */
+
+    /* Use movq if mov_op is movl because movl target must be 32bit reg like %eax */
+    if (!strcmp(mov_op, "movl")) mov_op = "movq"; // Stick to 64-bit moves for simplicity here
+    return mov_op;
 }
 
 static uint64_t ieee754(double _f64) {
@@ -201,7 +388,7 @@ static void x64EmitInt(X64Ctx *ctx, IrValue *value) {
 
 static void x64EmitFloat(X64Ctx *ctx, IrValue *value) {
     long ieee = ieee754(value->f64);
-    aoStrCatFmt(ctx->buf,".quad %X\n", ieee);
+    aoStrCatFmt(ctx->buf,".quad %X # %f\n", ieee, value->f64);
 }
 
 static void x64EmitString(X64Ctx *ctx, aoStr *label, IrValue *value) {
@@ -224,10 +411,9 @@ static void x64ArrayGen(X64Ctx *ctx, aoStr *label, IrValue *value) {
 }
 
 static void x64GlobalGen(X64Ctx *ctx) {
-    StrMapIterator *iter = strMapIteratorNew(ctx->ir_program->global_variables);
-    StrMapNode *it = NULL;
-    while ((it = strMapNext(iter)) != NULL) {
-        IrValue *global = (IrValue *)it->value;
+    MapIter *iter = mapIterNew(ctx->ir_program->global_variables);
+    while (mapIterNext(iter)) {
+        IrValue *global = getValue(IrValue *, iter->node);
         IrValue *global_value = global->global.value;
     
         if (global_value) {
@@ -294,10 +480,13 @@ static void x64GlobalGen(X64Ctx *ctx) {
                 }
         }
     }
-    strMapIteratorRelease(iter);
+    mapIterRelease(iter);
 }
 
 static void x64StringGen(X64Ctx *ctx) {
+    if (ctx->buf->data[ctx->buf->len-1] == '\t') {
+        ctx->buf->len--;
+    }
     if (ctx->ir_program->strings->size) {
         StrMapIterator *iter = strMapIteratorNew(ctx->ir_program->strings);
         StrMapNode *it = NULL;
@@ -315,21 +504,33 @@ static void x64StringGen(X64Ctx *ctx) {
     }
 }
 
-static void x64EmitInstruction(X64Ctx *ctx, IrInstr *instr) {
-    return;
+static void x64FloatGen(X64Ctx *ctx) {
+    if (ctx->ir_program->floats->size) {
+        StrMapIterator *iter = strMapIteratorNew(ctx->ir_program->floats);
+        StrMapNode *it = NULL;
+        aoStr shell;
+        memset(&shell,0,sizeof(aoStr));
+
+        while ((it = strMapNext(iter)) != NULL) {
+            IrValue *value = (IrValue *)it->value;
+            if (value->kind == IR_VALUE_GLOBAL) continue;
+            aoStrCatFmt(ctx->buf, ".%S:\n\t", value->name);
+            x64EmitFloat(ctx, value);
+        }
+        strMapIteratorRelease(iter);
+    }
 }
 
-static void x64EmitBlock(X64Ctx *ctx, IrBlock *block) {
-    return;
-}
-
-void x64GenFloatLoad(X64Ctx *ctx, IrValue *value, const char *reg) {
+void x64GenFloatLoad(X64Ctx *ctx, IrValue *value, char *reg) {
     assert(value);
     switch (value->kind) {
         case IR_VALUE_CONST_FLOAT:
-            /* @Float - this label should be created when we create the stack 
-             * for the function */
-            loggerPanic("Unimplemented: IR_VALUE_CONST_FLOAT\n");
+            if (value->name) {
+                aoStrCatFmt(ctx->buf, "movsd .%S(%%rip), %s\n\t", value->name, reg);
+            } else {
+                loggerPanic("Failed to create move instruction for float\n");
+            }
+            break;
 
         case IR_VALUE_GLOBAL:
             aoStrCatFmt(ctx->buf, "movsd %S(%%rip), %s\n\t", value->name, reg);
@@ -339,7 +540,10 @@ void x64GenFloatLoad(X64Ctx *ctx, IrValue *value, const char *reg) {
         case IR_VALUE_LOCAL:
         case IR_VALUE_TEMP: {
             long offset = (long)strMapGetAoStr(ctx->var_offsets, value->name);
-            assert(offset != 0);
+            if (offset == 0) {
+                loggerPanic("Offset 0 for; %s\n", irValueToString(value)->data);
+
+            }
             aoStrCatFmt(ctx->buf, "movsd %I(%%rbp), %s\n\t", offset, reg);
             break;
         }
@@ -349,7 +553,7 @@ void x64GenFloatLoad(X64Ctx *ctx, IrValue *value, const char *reg) {
     }
 }
 
-void x64GenFloatStore(X64Ctx *ctx, IrValue *dest, const char *reg) {
+void x64GenFloatStore(X64Ctx *ctx, IrValue *dest, char *reg) {
     assert(dest);
     switch (dest->kind) {
         case IR_VALUE_GLOBAL:
@@ -361,12 +565,11 @@ void x64GenFloatStore(X64Ctx *ctx, IrValue *dest, const char *reg) {
         case IR_VALUE_PARAM: {
             long offset = (long)strMapGetAoStr(ctx->var_offsets, dest->name);
             if (!offset) {
-                loggerWarning("Allocating a store from the stack\n");
                 offset = ctx->stack_size;
                 ctx->stack_size += 8;
                 strMapAddAoStr(ctx->var_offsets, dest->name, ptrcast(offset));
             }
-            aoStrCatFmt(ctx->buf, "movsd %s, %I(%%rbp)\n\t", reg, offset);
+            aoStrCatFmt(ctx->buf, "movsd %s, %I(%%rbp) # %S\n\t", reg, offset, dest->name);
             break;
         }
 
@@ -375,8 +578,23 @@ void x64GenFloatStore(X64Ctx *ctx, IrValue *dest, const char *reg) {
     }
 }
 
-void x64GenLoad(X64Ctx *ctx, IrValue *value, const char *reg) {
+void x64GenLoad(X64Ctx *ctx, IrValue *value, char *reg) {
     assert(value);
+
+    char *current_reg = x64GetRegForValue(&ctx->reg_state, value);
+    if (current_reg && !strcmp(current_reg, reg)) {
+        /* Already in the correct register */
+        return;
+    }
+
+    if (current_reg) {
+        aoStrCatFmt(ctx->buf, "movq %s, %s # Move %S\n\t",
+                    current_reg, reg, value->name);
+        x64SetRegUsed(&ctx->reg_state, reg, value);
+        return;
+    }
+
+    /* If the value is already in a register lets not bother loading it */
     switch (value->kind) {
         case IR_VALUE_CONST_INT:
             aoStrCatFmt(ctx->buf, "movq $%I, %s\n\t", value->i64, reg);
@@ -384,6 +602,7 @@ void x64GenLoad(X64Ctx *ctx, IrValue *value, const char *reg) {
 
         case IR_VALUE_CONST_STR:
             aoStrCatFmt(ctx->buf, "leaq %S(%%rip), %s\n\t", value->name, reg);
+            x64SetRegUsed(&ctx->reg_state, reg, value);
             break;
 
         case IR_VALUE_GLOBAL:
@@ -394,8 +613,21 @@ void x64GenLoad(X64Ctx *ctx, IrValue *value, const char *reg) {
         case IR_VALUE_LOCAL:
         case IR_VALUE_PARAM: {
             long offset = (long)strMapGetAoStr(ctx->var_offsets, value->name);
-            assert(offset != 0);
-            aoStrCatFmt(ctx->buf, "movq %I(%%rbp), %s\n\t", offset, reg);
+            if (offset == 0) {
+                loggerPanic("Offset 0 for; %s\n", irValueToString(value)->data);
+
+            }
+
+            const char *mov_op = x64GetMovInstr(value);
+
+            // if (value->type == IR_TYPE_PTR) {
+            if (value->flags & IR_VALUE_ADDR) {
+                aoStrCatFmt(ctx->buf, "leaq %I(%%rbp), %s # Reg Load %S %s\n\t",
+                        offset, reg, value->name, irValueTypeToString(value->type));
+            } else {
+                aoStrCatFmt(ctx->buf, "%s %I(%%rbp), %s # Reg Load %S %s\n\t",
+                        mov_op, offset, reg, value->name, irValueTypeToString(value->type));
+            }
             break;
         }
 
@@ -404,7 +636,182 @@ void x64GenLoad(X64Ctx *ctx, IrValue *value, const char *reg) {
     }
 }
 
-void x64GenStore(X64Ctx *ctx, IrValue *dest, const char *reg) {
+typedef struct X64Reg {
+    int idx;
+    int needs_release;
+    char *name;
+} X64Reg;
+
+void x64AllocReg(X64Ctx *ctx, X64Reg *reg, IrValue *value) {
+    X64RegState *state = &ctx->reg_state;
+    char *current_reg = x64GetRegForValue(state, value);
+
+    if (current_reg) {
+        reg->idx = x64GetRegisterIdx(current_reg);
+        reg->needs_release = 0;
+        reg->name = current_reg;
+        return;
+    }
+
+    int reg_idx = -1;
+    char *reg_name = NULL;
+
+    /* @Speed - bitvector */
+    for (int i = 0; i < 16; ++i) {
+        if (!state->used[i]) {
+            state->used[i] = 1;
+            reg_name = state->names[i];
+            mapAdd(state->reg_to_ir, reg_name, value);
+            reg_idx = i;
+            break;
+        }
+    }
+
+    if (reg_idx != -1) {
+        reg->name = reg_name;
+        reg->idx = reg_idx;
+        reg->needs_release = 0;
+    }
+    return;
+}
+
+void x64RegisterMovLoad(X64Ctx *ctx, X64Reg *reg, const char *mov_instr, IrValue *value, int additional_offset) {
+    assert(value);
+
+    if (reg->name == NULL) {
+        /* If the value is already in a register lets not bother loading it */
+        char *current_reg = x64GetRegForValue(&ctx->reg_state, value);
+        if (current_reg) {
+            reg->idx = x64GetRegisterIdx(current_reg);
+            reg->needs_release = 0;
+            reg->name = current_reg;
+            return;
+        }
+
+        x64AllocReg(ctx, reg, value);
+    }
+    
+    switch (value->kind) {
+        case IR_VALUE_CONST_INT:
+            aoStrCatFmt(ctx->buf, "movq $%I, %s\n\t", value->i64, reg->name);
+            break;
+
+        case IR_VALUE_CONST_STR:
+            aoStrCatFmt(ctx->buf, "leaq %S(%%rip), %s\n\t", value->name, reg->name);
+            break;
+
+        case IR_VALUE_GLOBAL:
+            aoStrCatFmt(ctx->buf, "movq %S(%%rip), %s\n\t", value->name, reg->name);
+            break;
+
+        case IR_VALUE_TEMP:
+        case IR_VALUE_LOCAL:
+        case IR_VALUE_PARAM: {
+            long offset = (long)strMapGetAoStr(ctx->var_offsets, value->name);
+            if (offset == 0) {
+                loggerPanic("Offset 0 for; %s\n", irValueToString(value)->data);
+            }
+
+            aoStrCatFmt(ctx->buf, "%s %I(%%rbp), %s # Reg MOV Load %S %s\n\t",
+                    mov_instr,
+                    offset-additional_offset, reg->name, value->name, irValueTypeToString(value->type));
+            break;
+        }
+        default:
+            loggerPanic("Unsupported Indirect load: %s %s\n",
+                    irValueKindToString(value->kind),
+                    irValueToString(value)->data);
+
+    }
+}
+
+void x64RegisterLoadIndirect(X64Ctx *ctx, X64Reg *reg, IrInstr *instr, int additional_offset) {
+    debug("Bugger\n");
+    x64RegisterMovLoad(ctx,reg,"leaq",instr->op1, additional_offset);
+}
+
+void x64RegisterLoad(X64Ctx *ctx, X64Reg *reg, IrInstr *instr) {
+    IrValue *value = instr->op1;
+    assert(value);
+
+    if (reg->name == NULL) {
+        /* If the value is already in a register lets not bother loading it */
+        char *current_reg = x64GetRegForValue(&ctx->reg_state, instr->op1);
+        if (current_reg) {
+            reg->idx = x64GetRegisterIdx(current_reg);
+            reg->needs_release = 0;
+            reg->name = current_reg;
+            return;
+        }
+
+        x64AllocReg(ctx, reg, instr->op1);
+    }
+
+    switch (value->kind) {
+        case IR_VALUE_CONST_INT:
+            aoStrCatFmt(ctx->buf, "movq $%I, %s\n\t", value->i64, reg->name);
+            break;
+
+        case IR_VALUE_CONST_STR:
+            aoStrCatFmt(ctx->buf, "leaq %S(%%rip), %s\n\t", value->name, reg->name);
+            break;
+
+        case IR_VALUE_GLOBAL:
+            aoStrCatFmt(ctx->buf, "movq %S(%%rip), %s\n\t", value->name, reg->name);
+            break;
+
+        case IR_VALUE_TEMP:
+        case IR_VALUE_LOCAL:
+        case IR_VALUE_PARAM: {
+            long offset = (long)strMapGetAoStr(ctx->var_offsets, value->name);
+            if (offset == 0) {
+                loggerPanic("Offset 0 for; %s\n", irValueToString(value)->data);
+
+            }
+
+            const char *mov_op = x64GetMovInstr(value);
+
+            if (instr->op1->flags & IR_VALUE_ADDR) {
+                debug("`%s`\n", irInstrToString(instr)->data);
+                aoStrCatFmt(ctx->buf, "leaq %I(%%rbp), %s # Reg Load %S %s\n\t",
+                        offset, reg->name, value->name, irValueTypeToString(value->type));
+                aoStrCatFmt(ctx->buf, "%s (%s), %s\n\t", mov_op, reg->name, reg->name);
+            } else {
+                aoStrCatFmt(ctx->buf, "%s %I(%%rbp), %s # Reg Load %S %s\n\t",
+                        mov_op, offset, reg->name, value->name, irValueTypeToString(value->type));
+            }
+            break;
+        }
+
+        default:
+            loggerPanic("Unsupported load: %s %s\n",
+                    irValueKindToString(value->kind),
+                    irInstrToString(instr)->data);
+    }
+}
+
+int x64GetOrAllocateRegister(X64Ctx *ctx, IrValue *value, char **_reg_name) {
+    char *current_reg = x64GetRegForValue(&ctx->reg_state, value);
+
+    /* If the value is already in a register lets not bother loading it */
+    if (current_reg) {
+        *_reg_name = current_reg;
+        return x64GetRegisterIdx(current_reg);
+    }
+
+    int reg_idx = x64AllocRegister(&ctx->reg_state, value, _reg_name);
+    char *reg = *_reg_name;
+    return reg_idx;
+}
+
+
+void x64GenStoreMem(X64Ctx *ctx, IrValue *dest, char *reg) {
+    long offset = (long)strMapGetAoStr(ctx->var_offsets, dest->name);
+    assert(offset != 0);
+    aoStrCatFmt(ctx->buf, "movq (%s), %I(%%rbp) # mem \n\t", reg, offset);
+}
+
+void x64GenStore(X64Ctx *ctx, IrValue *dest, char *reg) {
     assert(dest);
     switch (dest->kind) {
         case IR_VALUE_GLOBAL:
@@ -415,41 +822,489 @@ void x64GenStore(X64Ctx *ctx, IrValue *dest, const char *reg) {
         case IR_VALUE_LOCAL:
         case IR_VALUE_PARAM: {
             long offset = (long)strMapGetAoStr(ctx->var_offsets, dest->name);
-            if (!offset) {
-                loggerWarning("Allocating a store from the stack\n");
-                offset = ctx->stack_size;
-                ctx->stack_size += 8;
-                strMapAddAoStr(ctx->var_offsets, dest->name, ptrcast(offset));
+            assert(offset != 0);
+           // if (!offset) {
+           //     loggerWarning("Allocating a store from the stack: |%s|\n", dest->name->data);
+           //     offset = -ctx->stack_size;
+           //     ctx->stack_size += 8;
+           //     strMapAddAoStr(ctx->var_offsets, dest->name, ptrcast(offset));
+           // }
+            if (dest->type == IR_TYPE_PTR) {
+                aoStrCatFmt(ctx->buf, "movq %s, %I(%%rbp) # STORE %S\n\t", reg, offset, dest->name);
+            } else {
+                aoStrCatFmt(ctx->buf, "movq %s, %I(%%rbp) # STORE %S\n\t", reg, offset, dest->name);
             }
-            aoStrCatFmt(ctx->buf, "movq %s, %I(%%rbp)\n\t", reg, offset);
             break;
         }
 
         default:
             loggerPanic("Unsupported store: %s\n", irValueKindToString(dest->kind));
     }
+    x64SetRegUsed(&ctx->reg_state, reg, dest);
 }
 
-void x64GenerateInstruction(X64Ctx *ctx, IrInstr *instr) {
+void x64GenStoreInstrWithOffset(X64Ctx *ctx, IrInstr *instr, char *reg, int additional_offset) {
+    IrValue *dest = instr->result;
+    assert(dest);
+    switch (dest->kind) {
+        case IR_VALUE_GLOBAL:
+            aoStrCatFmt(ctx->buf, "movq %s, %S(%%rip)\n\t", reg, dest->name);
+            break;
+
+        case IR_VALUE_TEMP:
+        case IR_VALUE_LOCAL:
+        case IR_VALUE_PARAM: {
+            long offset = (long)strMapGetAoStr(ctx->var_offsets, dest->name);
+            assert(offset != 0);
+            aoStrCatFmt(ctx->buf, "movq %s, %I(%%rbp) # STORE %S\n\t",
+                        reg,
+                        offset-additional_offset,
+                        dest->name);
+            break;
+        }
+
+        default:
+            loggerPanic("Unsupported store: %s\n", irValueKindToString(dest->kind));
+    }
+    x64SetRegUsed(&ctx->reg_state, reg, dest);
+}
+
+void x64GenStoreInstr(X64Ctx *ctx, IrInstr *instr, char *reg) {
+    IrValue *dest = instr->result;
+    assert(dest);
+                //x64GenStore(ctx, instr->result, reg.name);
+                //x64FreeValue(ctx, instr->result);
+    switch (dest->kind) {
+        case IR_VALUE_GLOBAL:
+            aoStrCatFmt(ctx->buf, "movq %s, %S(%%rip)\n\t", reg, dest->name);
+            break;
+
+        case IR_VALUE_TEMP:
+        case IR_VALUE_LOCAL:
+        case IR_VALUE_PARAM: {
+            long offset = (long)strMapGetAoStr(ctx->var_offsets, dest->name);
+            assert(offset != 0);
+           // if (!offset) {
+           //     loggerWarning("Allocating a store from the stack: |%s|\n", dest->name->data);
+           //     offset = -ctx->stack_size;
+           //     ctx->stack_size += 8;
+           //     strMapAddAoStr(ctx->var_offsets, dest->name, ptrcast(offset));
+           // }
+            aoStrCatFmt(ctx->buf, "movq %s, %I(%%rbp) # STORE %S\n\t", reg, offset, dest->name);
+            break;
+        }
+
+        default:
+            loggerPanic("Unsupported store: %s\n", irValueKindToString(dest->kind));
+    }
+    x64SetRegUsed(&ctx->reg_state, reg, dest);
+}
+
+void x64EmitBinaryOp(X64Ctx *ctx, char *op, char *dest_reg, IrValue *src_value) {
+    if (src_value->kind == IR_VALUE_CONST_INT) {
+        /* Immediate operand */
+        aoStrCatFmt(ctx->buf, "%s $%I, %s\n\t", op, src_value->i64, dest_reg);
+    } else {
+        char *src_reg = x64GetRegForValue(&ctx->reg_state, src_value);
+        if (src_reg) {
+            /* Register operand */
+            aoStrCatFmt(ctx->buf, "%s %s, %s\n\t", op, src_reg, dest_reg);
+        } else {
+            /* Memory operand (stack variable) */
+            long offset = (long)strMapGetAoStr(ctx->var_offsets, src_value->name);
+             if (offset == 0) { //&& strncmp(src_value->name, aoStrFromLit("argc")) && !aoStrEq(src_value->name, aoStrFromLit("argv"))) {
+                 loggerPanic("Offset 0 or not found for binary op source: %s\n", irValueToString(src_value)->data);
+             }
+            aoStrCatFmt(ctx->buf, "%s %I(%%rbp), %s # BinOp %S\n\t", op, offset, dest_reg, src_value->name);
+        }
+    }
+}
+
+/* Emit a float binary operation (addsd, subsd, mulsd, divsd, comisd) */
+void x64EmitFloatBinaryOp(X64Ctx *ctx, char *op, char *dest_reg, IrValue *src_value) {
+    if (src_value->kind == IR_VALUE_CONST_FLOAT) {
+         /* Load constant from memory via label */
+         if (!src_value->name) {
+             loggerPanic("Float constant has no label: %f\n", src_value->f64);
+         }
+         aoStrCatFmt(ctx->buf, "%s .%S(%%rip), %s\n\t", op, src_value->name, dest_reg);
+    } else {
+        char *src_reg = x64GetRegForValue(&ctx->reg_state, src_value);
+        if (src_reg) {
+             /* Register operand */
+             aoStrCatFmt(ctx->buf, "%s %s, %s\n\t", op, src_reg, dest_reg);
+        } else {
+            /* Memory operand (stack variable) */
+            long offset = (long)strMapGetAoStr(ctx->var_offsets, src_value->name);
+            if (offset == 0) { // && !aoStrEq(src_value->name, aoStrFromLit("argc")) && !aoStrEq(src_value->name, aoStrFromLit("argv"))) {
+                loggerPanic("Offset 0 or not found for float binary op source: %s\n", irValueToString(src_value)->data);
+            }
+            aoStrCatFmt(ctx->buf, "%s %I(%%rbp), %s # FBinOp %S\n\t", op, offset, dest_reg, src_value->name);
+        }
+    }
+}
+
+/* This temorarily uses `RAX` as a scratch register, it is not sophisticated. 
+ * means `RAX` is constantly trashed. We check first to see if the value 
+ * is already in a register, if it is we return that register and set
+ * `did_reassign` to false to know that we do not need to free RAX */
+char *x64GetRegisterForValue(X64Ctx *ctx, IrValue *value, int *_reg_idx) {
+    if (x64ValueInReg(&ctx->reg_state, value)) {
+        char *tmp = x64GetRegForValue(&ctx->reg_state, value);
+        *_reg_idx = x64GetRegisterIdx(tmp);
+        return tmp;
+    }
+
+    char *reg_name = "%rax";
+    x64GenLoad(ctx, value, reg_name);
+    *_reg_idx = x64GetRegisterIdx(reg_name);
+    x64SetRegUsed(&ctx->reg_state, reg_name, value);
+    return reg_name;
+}
+
+char *x64EnsureValueInReg(X64Ctx *ctx, IrValue *value, char *target_reg) {
+    char *current_reg = x64GetRegForValue(&ctx->reg_state, value);
+    if (current_reg) {
+        if (!strcmp(current_reg, target_reg)) {
+            aoStrCatFmt(ctx->buf, "movq %s, %s # ensure %S\n\t",
+                    current_reg, target_reg, value->name);
+        }
+    } else {
+        x64GenLoad(ctx, value, target_reg);
+    }
+    return target_reg;
+}
+
+void x64IntMaths(X64Ctx *ctx, char *operation, IrInstr *instr) {
+    int reg_idx = 0;
+    char *reg1_name = x64GetRegisterForValue(ctx, instr->op1, &reg_idx);
+    x64EmitBinaryOp(ctx, operation, reg1_name, instr->op2);
+
+    if (instr->result) {
+        if (instr->op1 && instr->op1->name) {
+            loggerDebug("in this mess\n");
+            //long offset = (long)strMapGetAoStr(ctx->var_offsets, instr->op1->name);
+      //      x64GenStore(ctx, instr->op1, reg1_name);
+            //x64GenStore(ctx, instr->result, reg1_name);
+            //x64SetRegUsed(&ctx->reg_state, reg1_name, instr->result);
+            x64GenStore(ctx, instr->result, reg1_name);
+            x64SetRegUsed(&ctx->reg_state, reg1_name, instr->result);
+        } else {
+            x64GenStore(ctx, instr->result, reg1_name);
+            x64SetRegUsed(&ctx->reg_state, reg1_name, instr->result);
+        }
+    }
+
+    x64FreeValue(ctx, instr->result);
+}
+
+int x64IsCompareAndBranch(IrInstr *instr, IrInstr *next_instr) {
+    return instr->opcode == IR_OP_ICMP && next_instr->opcode == IR_OP_BR;
+}
+
+void x64ICmp(X64Ctx *ctx, IrInstr *instr, IrInstr *next_instr) {
+    char *op = NULL;
+    int reg_idx = 0;
+
+    if (x64IsCompareAndBranch(instr, next_instr)) {
+        switch (instr->extra.cmp_kind) {
+            case IR_CMP_LT: op = "jge"; break;
+            case IR_CMP_LE: op = "jg"; break;
+            case IR_CMP_EQ: op = "jne"; break;
+            case IR_CMP_NE: op = "je"; break;
+            case IR_CMP_GT: op = "jle"; break;
+            case IR_CMP_GE: op = "jl"; break;
+            case IR_CMP_ULT: op = "jae"; break;
+            case IR_CMP_ULE: op = "ja"; break;
+            case IR_CMP_UGT: op = "jbe"; break;
+            case IR_CMP_UGE: op = "jb"; break;
+            default:
+                loggerPanic("Unhandled cmp: %s\n", irInstrToString(instr)->data);
+        }
+
+        char *reg1_name = x64GetRegisterForValue(ctx, instr->op1, &reg_idx);
+        x64EmitBinaryOp(ctx, "cmpq", reg1_name, instr->op2);
+
+        next_instr->opcode = IR_OP_NOP;
+        aoStrCatFmt(ctx->buf, "%s  BB%I\n\t", op, next_instr->fallthrough_block->id);
+    } else {
+        switch (instr->extra.cmp_kind) {
+            case IR_CMP_LT: op = "setl"; break;
+            case IR_CMP_LE: op = "setle"; break;
+            case IR_CMP_EQ: op = "sete"; break;
+            case IR_CMP_NE: op = "setne"; break;
+            case IR_CMP_GT: op = "setg"; break;
+            case IR_CMP_GE: op = "setge"; break;
+            case IR_CMP_ULT: op = "setb"; break;
+            case IR_CMP_ULE: op = "setba"; break;
+            case IR_CMP_UGT: op = "seta"; break;
+            case IR_CMP_UGE: op = "setae"; break;
+            default:
+                loggerPanic("Unhandled cmp: %s\n", irInstrToString(instr)->data);
+        }
+        char *reg1_name = x64GetRegisterForValue(ctx, instr->op1, &reg_idx);
+        x64EmitBinaryOp(ctx, "cmpq", reg1_name, instr->op2);
+
+        aoStrCatFmt(ctx->buf, "%s %%al\n\t"
+                               "movzbq %%al, %%rax\n\t"
+                               "cltq\n\t", op);
+        if (instr->result) {
+            x64GenStore(ctx, instr->result, reg1_name);
+            x64SetRegUsed(&ctx->reg_state, reg1_name, instr->result);
+        }
+    }
+
+    x64FreeRegister(&ctx->reg_state, reg_idx, instr->op1);
+}
+
+void x64IntDivide(X64Ctx *ctx, IrInstr *instr) {
+    char *op = NULL;
+    int is_modulo = 0;
+    int reg_idx = 0;
+
+    switch (instr->opcode) {
+        case IR_OP_IDIV: op = "idivq"; break;
+        case IR_OP_UDIV: op = "divq"; break;
+        case IR_OP_IREM: op = "idivq"; is_modulo = 1; break;
+        case IR_OP_UREM: op = "divq";  is_modulo = 1; break;
+        default:
+            loggerPanic("Should either be a divison or modulo got: %s\n",
+                    irOpcodeToString(instr));
+    }
+
+    char *reg1_name = x64GetRegisterForValue(ctx, instr->op1, &reg_idx);
+
+    aoStrCatFmt(ctx->buf, "cqto\n\t");
+    x64EmitBinaryOp(ctx, op, reg1_name, instr->op2);
+
+    if (is_modulo) {
+        aoStrCatFmt(ctx->buf, "movq %%rdx, %%rax\n\t");
+    }
+
+    if (instr->result) {
+        x64GenStore(ctx, instr->result, reg1_name);
+        x64SetRegUsed(&ctx->reg_state, reg1_name, instr->result);
+    }
+
+    x64FreeRegister(&ctx->reg_state, reg_idx, instr->op1);
+}
+
+void x64FloatMaths(X64Ctx *ctx, IrInstr *instr) {
+    char *operation = NULL;
+    switch (instr->opcode) {
+        case IR_OP_FADD: operation = "addsd"; break;
+        case IR_OP_FSUB: operation = "subsd"; break;
+        case IR_OP_FMUL: operation = "mulsd"; break;
+        case IR_OP_FDIV: operation = "divsd"; break;
+        default:
+            loggerPanic("Invalid float maths; %s\n", irInstrToString(instr)->data);
+    }
+
+    char *reg1_name = "%xmm0";
+    if (x64ValueInReg(&ctx->reg_state, instr->op1)) {
+        char *tmp = x64GetRegForValue(&ctx->reg_state, instr->op1);
+        if (strcmp(tmp, reg1_name) != 0) {
+            aoStrCatFmt(ctx->buf, "movq %s, %s\n\t", tmp, reg1_name);
+            x64SetRegUsed(&ctx->reg_state, reg1_name, instr->op1);
+        }
+    } else {
+        x64GenFloatLoad(ctx, instr->op1, reg1_name);
+        x64SetRegUsed(&ctx->reg_state, reg1_name, instr->op1);
+    }
+
+    if (instr->op2->kind == IR_VALUE_CONST_FLOAT) {
+        aoStrCatFmt(ctx->buf, "%s .%S(%%rip), %s\n\t", operation, instr->op2->name, reg1_name);
+    } else {
+        long offset = (long)strMapGetAoStr(ctx->var_offsets, instr->op2->name);
+        aoStrCatFmt(ctx->buf, "%s %I(%%rbp), %s\n\t", operation, offset, reg1_name);
+    }
+
+    if (instr->result) {
+        x64GenFloatStore(ctx, instr->result, reg1_name);
+        // x64SetRegUsed(&ctx->reg_state, reg1_name, instr->result);
+    }
+
+    x64FreeRegister(&ctx->reg_state, 0, instr->op1);
+}
+
+
+void x64GetElementPointerClass(X64Ctx *ctx, IrInstr *instr, IrInstr *next_instr) {
+    assert(instr->op2 != NULL);
+    X64Reg reg = {0};
+    X64Reg reg2 = {0};
+    int const_offset = instr->op2->kind == IR_VALUE_CONST_INT ? instr->op2->i64 : 0;
+    aoStrCatFmt(ctx->buf, "#GEP - offset; %I\n\t", const_offset);
+
+    /* If we are storing something on a stack allocated class we treat the 
+     * class as though it were a series of local variable allocated from the 
+     * stack */
+    if (irIsStore(next_instr) && irValuesEq(instr->result, next_instr->result)) {
+        if (instr->flags & IR_INSTR_STACK_CLASS) {
+            long offset = (long)strMapGetAoStr(ctx->var_offsets, instr->op1->name);
+            /* We could make this more efficient for const ints as it doesn't 
+             * need to move to a register before hand */
+            x64RegisterLoad(ctx, &reg, next_instr);
+            aoStrCatFmt(ctx->buf, "movq %s, %I(%%rbp)\n\t", reg.name, offset-const_offset);
+        } else if (instr->flags & IR_INSTR_HEAP_CLASS) {
+            const char *mov_instr = x64GetMovInstr(instr->result);
+            x64RegisterMovLoad(ctx, &reg, mov_instr, instr->op1, 0);
+            x64RegisterLoad(ctx, &reg2, next_instr);
+            if (const_offset) {
+                aoStrCatFmt(ctx->buf, "movq %s, %I(%s)\n\t", reg2.name, const_offset, reg.name);
+            } else {
+                aoStrCatFmt(ctx->buf, "movq %s, (%s)\n\t", reg2.name, reg.name);
+            }
+        } else {
+            loggerPanic("Class GEP: `%s` not handled\n", irInstrToString(instr)->data);
+        }
+        next_instr->opcode = IR_OP_NOP;
+    } else {
+        if (instr->flags & IR_INSTR_STACK_CLASS) {
+            const char *mov_instr = x64GetMovInstr(instr->result);
+            x64RegisterMovLoad(ctx, &reg, mov_instr, instr->op1, const_offset);
+            x64GenStore(ctx, instr->result, reg.name);
+        } else if (instr->flags & IR_INSTR_HEAP_CLASS) {
+            const char *mov_instr = x64GetMovInstr(instr->result);
+            x64RegisterMovLoad(ctx, &reg, mov_instr, instr->op1, 0);
+            if (const_offset) {
+                aoStrCatFmt(ctx->buf, "movq %I(%s), %s\n\t", const_offset, reg.name, reg.name);
+            } else {
+                aoStrCatFmt(ctx->buf, "movq (%s), %s\n\t", reg.name, reg.name);
+            }
+            x64GenStore(ctx, instr->result, reg.name);
+        } else {
+            loggerPanic("Class GEP: `%s` not handled\n", irInstrToString(instr)->data);
+        }
+    }
+
+    x64FreeRegisterByName(ctx, reg.name);
+    x64FreeRegisterByName(ctx, reg2.name);
+    aoStrCatFmt(ctx->buf, "#GEP - end;\n\t");
+}
+
+void x64GetElementPointer(X64Ctx *ctx, IrInstr *instr, IrInstr *next_instr) {
+    if (instr->flags & (IR_INSTR_STACK_CLASS|IR_INSTR_HEAP_CLASS)) {
+        x64GetElementPointerClass(ctx, instr, next_instr);
+        return;
+    }
+
+    X64Reg reg = {0};
+    X64Reg reg2 = {0};
+    int const_offset = instr->op2->kind == IR_VALUE_CONST_INT ? instr->op2->i64 : 0;
+    /* we need to LEA, then assign to that piece of memory if the next_instr is
+     * a store in one crack */
+    if (irIsStore(next_instr) && irValuesEq(instr->result, next_instr->result)) {
+        if (instr->op2 != NULL) {
+            x64RegisterLoadIndirect(ctx, &reg, instr, const_offset);
+            x64RegisterLoad(ctx, &reg2, next_instr);
+            aoStrCatFmt(ctx->buf, "movq %s, (%s)\n\t", reg2.name, reg.name);
+        } else {
+            x64RegisterLoad(ctx, &reg, instr);
+            x64RegisterLoad(ctx, &reg2, next_instr);
+            aoStrCatFmt(ctx->buf, "movq %s, (%s) # :(\n\t", reg2.name, reg.name);
+        }
+        next_instr->opcode = IR_OP_NOP;
+        x64FreeRegisterByName(ctx, reg.name);
+        x64FreeRegisterByName(ctx, reg2.name);
+    } else {
+        /* load the thing into a register/stack slot  */
+        if (instr->op2 != NULL) {
+            x64RegisterLoadIndirect(ctx, &reg, instr, const_offset);
+            aoStrCatFmt(ctx->buf, "movq (%s), %s\n\t", reg.name, reg.name);
+            x64GenStoreInstr(ctx, instr, reg.name);
+            x64FreeRegisterByName(ctx, reg.name);
+        } else {
+            x64RegisterLoad(ctx, &reg, instr);
+            x64FreeRegisterByName(ctx, reg.name);
+        }
+    }
+}
+
+void x64GenerateInstruction(X64Ctx *ctx, IrInstr *instr, IrInstr *next_instr) {
     switch (instr->opcode) {
         case IR_OP_ALLOCA:
             /* We have already allocated in on crack */
             break;
 
         case IR_OP_LOAD: {
-            if (instr->op2->type == IR_TYPE_F64) {
-                int reg = x64AllocFloatRegister(&ctx->reg_state);
-                const char *reg_name = x64GetFloatRegisterName(&ctx->reg_state, reg); 
-                x64GenFloatLoad(ctx, instr->op2, reg_name);
-                x64GenFloatStore(ctx, instr->op1, reg_name);
-                x64FreeFloatRegister(&ctx->reg_state, reg);
+            if (instr->op1->type == IR_TYPE_F64) {
+                char *reg_name = NULL;
+                int reg = x64AllocFloatRegister(&ctx->reg_state, instr->result, &reg_name);
+                x64GenFloatLoad(ctx, instr->op1, reg_name);
+                x64GenFloatStore(ctx, instr->result, reg_name);
+                x64FreeFloatRegister(&ctx->reg_state, reg, instr->result);
             } else {
-                int reg = x64AllocRegister(&ctx->reg_state);
-                const char *reg_name = x64GetRegisterName(&ctx->reg_state, reg); 
-                x64GenLoad(ctx, instr->op2, reg_name);
-                x64GenStore(ctx, instr->op1, reg_name);
-                x64FreeRegister(&ctx->reg_state, reg);
+                X64Reg reg = {0};
+                aoStrCatFmt(ctx->buf,"#loading start %s\n\t", irInstrToString(instr)->data);
+                x64RegisterLoad(ctx, &reg, instr);
+
+                // x64GenLoad(ctx, instr->op1, reg.name);
+
+                x64GenStoreInstr(ctx, instr, reg.name);
+                //x64GenStore(ctx, instr->op1, reg.name);
+                x64FreeRegisterByName(ctx, reg.name);
+                aoStrCatFmt(ctx->buf,"#loading end\n\t");
             }
+            break;
+        }
+
+        case IR_OP_GEP: {
+            x64GetElementPointer(ctx, instr, next_instr);
+            break;
+        }
+
+
+        case IR_OP_STORE: {
+            /* result is dest, op1 is the value */
+            if (instr->op1->type == IR_TYPE_F64) {
+                char *reg_name = NULL;
+                int reg = x64AllocFloatRegister(&ctx->reg_state, instr->result, &reg_name);
+                x64GenFloatLoad(ctx, instr->op1, reg_name);
+                x64GenFloatStore(ctx, instr->result, reg_name);
+                x64FreeFloatRegister(&ctx->reg_state, reg, instr->result);
+            } else {
+                char *reg_name = NULL;
+                X64Reg reg;
+                reg.name = NULL;
+
+                /**
+                 * WANT:
+                 * movq $300, %rbx
+                 * leaq -32(%rbp), %rax
+                 * movq %rbx, (%rax) # STORE %t7
+                 *
+                 * HAVE:
+                 * movq $300, %rbx
+                 * movq %rbx, -64(%rbp) # STORE %t7
+                 */
+
+                aoStrCatFmt(ctx->buf,"#storing start %s\n\t", irInstrToString(instr)->data);
+                const char *mov_instr = x64GetMovInstr(instr->op1);
+                if (instr->flags) {
+                    debug("flags = %lu\n", instr->flags);
+                }
+                x64RegisterMovLoad(ctx, &reg, mov_instr, instr->op1, 0);
+
+                if (instr->result->type == IR_TYPE_PTR) {
+                    // int reg_idx = x64AllocRegister(&ctx->reg_state, instr->result, &reg_name);
+                    //x64GenStoreInstr(ctx, instr, reg.name);
+                    x64FreeRegisterByName(ctx, reg.name);
+                    x64FreeRegisterByName(ctx, "%rcx");
+
+                    aoStrCatFmt(ctx->buf, "# %S\n\t", irInstrToString(instr));
+                    x64GenLoad(ctx, instr->result, "%rcx");
+
+                    aoStrCatFmt(ctx->buf, "movq %s, (%%rcx) #e\n\t", reg.name);
+                    //x64FreeRegister(&ctx->reg_state, reg_idx, instr->result);
+                } else {
+                    x64GenStoreInstr(ctx, instr, reg.name);
+                    x64FreeValue(ctx, instr->result);
+                }
+                
+
+                aoStrCatFmt(ctx->buf,"#storing end\n\t");
+            }
+
             break;
         }
 
@@ -459,25 +1314,35 @@ void x64GenerateInstruction(X64Ctx *ctx, IrInstr *instr) {
                 int int_reg_idx = 0;
                 int float_reg_idx = 0;
                 int stack_offset = 0;
+                int has_float = 0;
 
                 for (int i = fn_args->size-1; i >= 0; --i) {
-                    IrValue *arg = vecGet(IrValue *, fn_args, i);
+                    IrValue *value = vecGet(IrValue *, fn_args, i);
 
                     if (i >= 6) {
-                        if (arg->type == IR_TYPE_F64) {
-                            int arg_reg = x64AllocFloatRegister(&ctx->reg_state);
-                            const char *arg_name = x64GetFloatRegisterName(&ctx->reg_state, arg_reg); 
-                            x64GenFloatLoad(ctx, arg, arg_name);
+                        if (value->type == IR_TYPE_F64) {
+                            has_float = 1;
+                            char *arg_name = NULL;
+                            int arg_reg = x64AllocFloatRegister(&ctx->reg_state, value, &arg_name);
+
+                            x64GenFloatLoad(ctx, value, arg_name);
                             aoStrCatFmt(ctx->buf, "movsd %s, -%I(%%rsp)\n\t",
                                     arg_name, stack_offset);
-                            x64FreeFloatRegister(&ctx->reg_state, arg_reg);
+                            x64FreeFloatRegister(&ctx->reg_state, arg_reg, value);
                         } else {
-                            int arg_reg = x64AllocRegister(&ctx->reg_state);
-                            const char *arg_name = x64GetRegisterName(&ctx->reg_state, arg_reg); 
-                            x64GenLoad(ctx, arg, arg_name);
+                            char *reg_name = NULL;
+                            int reg = -1;
+                            if (x64ValueInReg(&ctx->reg_state, value)) {
+                                reg_name = x64GetRegForValue(&ctx->reg_state, value);
+                            } else {
+                                reg = x64AllocRegister(&ctx->reg_state, instr->result, &reg_name);
+                                x64GenLoad(ctx, value, reg_name);
+                            }
                             aoStrCatFmt(ctx->buf, "movq %s, -%I(%%rsp)\n\t",
-                                    arg_name, stack_offset);
-                            x64FreeRegister(&ctx->reg_state, arg_reg);
+                                    reg_name, stack_offset);
+                            if (reg != -1) {
+                                x64FreeRegister(&ctx->reg_state, reg, value);
+                            }
                         }
 
                     }
@@ -487,26 +1352,39 @@ void x64GenerateInstruction(X64Ctx *ctx, IrInstr *instr) {
                     aoStrCatFmt(ctx->buf, "subq $%I, %%rsp\n\t", stack_offset);
                 }
 
-
                 for (int i = 0; i < fn_args->size && i < 6; ++i) {
-                    IrValue *arg = vecGet(IrValue *, fn_args, i);
+                    IrValue *value = vecGet(IrValue *, fn_args, i);
 
-                    if (arg->type == IR_TYPE_F64) {
-                        int arg_reg = x64AllocFloatRegister(&ctx->reg_state);
-                        const char *arg_name = x64GetFloatRegisterName(&ctx->reg_state, arg_reg); 
-                        x64GenFloatLoad(ctx, arg, arg_name);
-                        aoStrCatFmt(ctx->buf, "movsd %s, %s\n\t", arg_name,
-                                    x64_float_param_regs[float_reg_idx++]);
-                        x64FreeFloatRegister(&ctx->reg_state, arg_reg);
+                    if (value->type == IR_TYPE_F64) {
+                        has_float = 1;
+                        char *arg_name = x64_float_param_regs[float_reg_idx++];
+                        if (x64ValueInReg(&ctx->reg_state, value)) {
+                            char *reg_name = x64GetRegForValue(&ctx->reg_state, value);
+                            if (strcmp(arg_name, arg_name) != 0) {
+                                aoStrCatFmt(ctx->buf, "movq %s, %s # yeeto\n\t", reg_name, arg_name);
+                            }
+                        } else {
+                            x64GenFloatLoad(ctx, value, arg_name);
+                        }
                     } else {
-                            int arg_reg = x64AllocRegister(&ctx->reg_state);
-                            const char *arg_name = x64GetRegisterName(&ctx->reg_state, arg_reg); 
-                            printf("here:%s \n", irValueToString(arg)->data);
-                            x64GenLoad(ctx, arg, arg_name);
-                            aoStrCatFmt(ctx->buf, "movq %s, %s\n\t",
-                                    arg_name, x64_int_param_regs[int_reg_idx++]);
-                            x64FreeRegister(&ctx->reg_state, arg_reg);
+                        char *arg_name = x64_int_param_regs[int_reg_idx++];
+                        if (x64ValueInReg(&ctx->reg_state, value)) {
+                            char *reg_name = x64GetRegForValue(&ctx->reg_state, value);
+                            if (strcmp(reg_name, arg_name) != 0) {
+                                aoStrCatFmt(ctx->buf, "movq %s, %s\n\t", reg_name, arg_name);
+                            }
+                        } else {
+                            X64Reg reg;
+                            reg.name = arg_name;
+                            //x64RegisterLoad(ctx, &reg, instr);
+
+                            x64GenLoad(ctx, value, arg_name);
+                        }
                     }
+                }
+
+                if (has_float) {
+                    aoStrCatFmt(ctx->buf, "mov  $1, %%al\n\t");
                 }
 
                 if (instr->op1->name->data[0] != '%') {
@@ -524,42 +1402,149 @@ void x64GenerateInstruction(X64Ctx *ctx, IrInstr *instr) {
 
                 if (instr->result) {
                     if (instr->result->type == IR_TYPE_F64) {
-                        x64GenFloatStore(ctx,instr->result,"%xmm0");
+                        x64GenFloatStore(ctx, instr->result, "%xmm0");
                     } else if (instr->result->type != IR_TYPE_VOID) {
-                        x64GenStore(ctx,instr->result,"%rax");
+                        x64GenStore(ctx,instr->result, "%rax");
                     }
                 }
+
+                if (has_float) {
+                    aoStrCatFmt(ctx->buf, "xorl %%eax, %%eax\n\t");
+                }
+                /* We could be more tacitical about this, however we simplify
+                 * things by assuming that all registers get trashed (which is 
+                 * not the case). We should push the registers being used before
+                 * the call and pop them afterwards. */
+                x64RegStateClearMaps(&ctx->reg_state);
             }
             break;
         }
 
-        case IR_OP_RET:
+        case IR_OP_RET: {
+            if (instr->result) {
+                if (instr->result->type == IR_TYPE_VOID) {
+                    return;
+                } else {
+                    if (instr->result->type == IR_TYPE_F64) {
+                        long offset = (long)strMapGetAoStr(ctx->var_offsets, instr->result->name);
+                        aoStrCatFmt(ctx->buf,
+                                    "movq %I(%%rbp), %%xmm0 # %S\n\t", offset,
+                                    instr->result->name);
+                    } else {
+                        if (x64ValueInReg(&ctx->reg_state, instr->result)) {
+                            char *reg = x64GetRegForValue(&ctx->reg_state, instr->result);
+                            if (strncmp(reg, str_lit("%rax")) != 0) {
+                                aoStrCatFmt(ctx->buf, "movq %s, %%rax\n\t", reg);
+                            }
+                        } else {
+                            long offset = (long)strMapGetAoStr(ctx->var_offsets, instr->result->name);
+                            aoStrCatFmt(ctx->buf, "movq %I(%%rbp), %%rax # %S\n\t", offset,
+                                    instr->result->name);
+                        }
+                    }
+                }
+            }
+
+            break;
+        }
+
+        case IR_OP_LOOP:
+        case IR_OP_JMP:
+            aoStrCatFmt(ctx->buf, "jmp BB%I\n\t", instr->target_block->id);
             break;
 
-        case IR_OP_STORE:
-        case IR_OP_GEP:
-        case IR_OP_IADD:
-        case IR_OP_ISUB:
-        case IR_OP_IMUL:
+        case IR_OP_IADD: { x64IntMaths(ctx, "addq", instr); break; }
+        case IR_OP_ISUB: { x64IntMaths(ctx, "subq", instr); break; }
+        case IR_OP_IMUL: { x64IntMaths(ctx, "imulq", instr); break; }
+
         case IR_OP_IDIV:
         case IR_OP_UDIV:
         case IR_OP_IREM:
-        case IR_OP_UREM:
-        case IR_OP_INEG:
+        case IR_OP_UREM: {
+            x64IntDivide(ctx,  instr);
+            break;
+        }
+
+        case IR_OP_INEG: {
+            IrValue *const_int = irConstInt(instr->op1->type, 0);
+            const_int->name = aoStrPrintf("__temp");
+            char *reg1_name = NULL;
+            char *reg2_name = NULL;
+            int reg2 = -1;
+            int reg1 = x64AllocRegister(&ctx->reg_state, const_int, &reg1_name);
+
+            aoStrCatFmt(ctx->buf, "xorq %s, %s\n\t", reg1_name, reg1_name);
+
+            if (x64ValueInReg(&ctx->reg_state, instr->op1)) {
+                reg2_name = x64GetRegForValue(&ctx->reg_state, instr->op1);
+            } else {
+                /* This doesn't need to be in a register, we could use 
+                 * the stack location */
+                reg2 = x64AllocRegister(&ctx->reg_state, instr->op1, &reg2_name);
+                x64GenLoad(ctx, instr->op1, reg2_name); 
+                x64SetRegUsed(&ctx->reg_state, reg2_name, instr->op1);
+            }
+
+            aoStrCatFmt(ctx->buf, "subq %s, %s\n\t", reg2_name, reg1_name);
+            if (reg2 != -1) {
+                x64FreeRegister(&ctx->reg_state, reg2, instr->op1);
+            }
+
+            if (instr->result) {
+                x64GenStore(ctx, instr->result, reg1_name);
+                x64SetRegUsed(&ctx->reg_state, reg1_name, instr->result);
+            }
+
+            x64FreeRegister(&ctx->reg_state, reg1, const_int);
+            break;
+        }
+
+        case IR_OP_AND: { x64IntMaths(ctx, "and", instr); break; }
+        case IR_OP_OR: { x64IntMaths(ctx, "or", instr); break; }
+        case IR_OP_XOR: { x64IntMaths(ctx, "xorq", instr); break; }
+
+        /* @Bug Shifting requires an 8 bit register */
+        case IR_OP_SHL: { x64IntMaths(ctx, "shl", instr); break; }
+        case IR_OP_SAR:
+        case IR_OP_SHR: { x64IntMaths(ctx, "shr", instr); break; }
+
+        case IR_OP_NOT: {
+            char *reg1_name = NULL;
+            int reg1 = -1;
+            if (x64ValueInReg(&ctx->reg_state, instr->op1)) {
+                reg1_name = x64GetRegForValue(&ctx->reg_state, instr->op1);
+            } else {
+                reg1 = x64AllocRegister(&ctx->reg_state, instr->op1, &reg1_name);
+                x64GenLoad(ctx, instr->op1, reg1_name);
+            }
+            aoStrCatFmt(ctx->buf, "not %s\n\t", reg1_name);
+            if (instr->result) {
+                x64GenStore(ctx, instr->result, reg1_name);
+                x64SetRegUsed(&ctx->reg_state, reg1_name, instr->result);
+            }
+
+            if (reg1 != -1) {
+                x64FreeRegister(&ctx->reg_state, reg1, instr->op1);
+            }
+            break;
+        }
+
         case IR_OP_FADD:
         case IR_OP_FSUB:
         case IR_OP_FMUL:
-        case IR_OP_FDIV:
+        case IR_OP_FDIV: {
+            x64FloatMaths(ctx, instr);
+            break;
+        }
+
+        case IR_OP_ICMP: {
+            x64ICmp(ctx, instr, next_instr);
+            break;
+        }
+
         case IR_OP_FNEG:
-        case IR_OP_AND:
-        case IR_OP_OR:
-        case IR_OP_XOR:
-        case IR_OP_SHL:
-        case IR_OP_SHR:
-        case IR_OP_SAR:
-        case IR_OP_NOT:
-        case IR_OP_ICMP:
         case IR_OP_FCMP:
+
         case IR_OP_TRUNC:
         case IR_OP_ZEXT:
         case IR_OP_SEXT:
@@ -573,15 +1558,13 @@ void x64GenerateInstruction(X64Ctx *ctx, IrInstr *instr) {
         case IR_OP_INTTOPTR:
         case IR_OP_BITCAST:
         case IR_OP_BR:
-        case IR_OP_JMP:
-        case IR_OP_LOOP:
         case IR_OP_SWITCH:
-        case IR_OP_PHI:
         case IR_OP_LABEL:
         case IR_OP_SELECT:
         case IR_OP_VA_ARG:
         case IR_OP_VA_START:
         case IR_OP_VA_END:
+        case IR_OP_PHI:
         default:
             loggerPanic("Unhandled op: %s for instruction:\n`%s`\n",
                     irOpcodeToString(instr),
@@ -590,47 +1573,54 @@ void x64GenerateInstruction(X64Ctx *ctx, IrInstr *instr) {
     }
 }
 
+
+static int x64ReserveStackSlot(X64Ctx *ctx, IrValue *local, int offset) {
+    if (strMapGetAoStr(ctx->var_offsets,local->name) != NULL) {
+        return offset;
+    }
+
+    int size = 8;
+    if (local->type == IR_TYPE_I8) size = 1;
+    else if (local->type == IR_TYPE_I16) size = 2;
+    else if (local->type == IR_TYPE_I32) size = 4;
+    else if (local->type == IR_TYPE_I64) size = 8;
+    else if (local->type == IR_TYPE_ARRAY) {
+        /* Assumes a 64 bit element */
+        size = 8 * local->array_.values->size;
+    }
+
+    size = alignTo(size, 8);
+    offset -= size;
+
+    assert(local->name);
+    strMapAddAoStr(ctx->var_offsets, local->name, ptrcast(offset));
+    return offset;
+}
+
 static void x64CalculateFunctionStack(X64Ctx *ctx, IrFunction *func) {
     strMapClear(ctx->var_offsets);
     ctx->stack_size = 0;
-    int offset = -8;
+    int offset = 0;
 
     for (int i = 0; i < func->params->size; ++i) {
         IrValue *param = vecGet(IrValue *, func->params, i);
-        int size = 8;
-        if (param->type == IR_TYPE_I8) size = 1;
-        else if (param->type == IR_TYPE_I16) size = 2;
-        else if (param->type == IR_TYPE_I32) size = 4;
-
-        size = alignTo(size, 8);
-        offset -= size;
-        strMapAddAoStr(ctx->var_offsets, param->name, ptrcast(offset));
+        offset = x64ReserveStackSlot(ctx, param, offset);
     }
 
     listForEach(func->blocks) {
         IrBlock *block = listValue(IrBlock *, it);
 
         /* We count up all of the ALLOCA instructions, calculate the stack 
-         * space and */
-        for (List *node = block->instructions->next; node != block->instructions; node = node->next) {
-            IrInstr *instr = listValue(IrInstr *, node);
+         * space */
+        listForEach(block->instructions) {
+            IrInstr *instr = listValue(IrInstr *, it);
 
             if (instr->opcode == IR_OP_ALLOCA) {
-                IrValue *local = instr->op1;
-                int size = 8;
-                if (local->type == IR_TYPE_I8) size = 1;
-                else if (local->type == IR_TYPE_I16) size = 2;
-                else if (local->type == IR_TYPE_I32) size = 4;
-                else if (local->type == IR_TYPE_I64) size = 8;
-                else if (local->type == IR_TYPE_ARRAY) {
-                    /* Assumes a 64 bit element */
-                    size = 8 * local->array_.values->size;
+                offset = x64ReserveStackSlot(ctx, instr->result, offset);
+            } else if (instr->result != NULL) {
+                if (instr->result->kind == IR_VALUE_TEMP) {
+                    offset = x64ReserveStackSlot(ctx, instr->result, offset);
                 }
-            
-                size = alignTo(size, 8);
-                offset -= size;
-
-                strMapAddAoStr(ctx->var_offsets, local->name, ptrcast(offset));
             }
         }
     }
@@ -641,6 +1631,7 @@ static void x64CalculateFunctionStack(X64Ctx *ctx, IrFunction *func) {
 
 static void x64EmitFunction(X64Ctx *ctx, IrFunction *func) {
     x64CalculateFunctionStack(ctx,func);
+    loggerWarning("Function: %s\n", func->name->data);
 
     aoStr *fname = codeGenNormaliseFunctionName(func->name);
 
@@ -654,59 +1645,68 @@ static void x64EmitFunction(X64Ctx *ctx, IrFunction *func) {
         aoStrCatFmt(ctx->buf, "subq $%i, %%rsp\n\t", ctx->stack_size);
     }
 
+    /* This is not optimal but it works, which for the moment is good enough */
     for (int i = 0; i < func->params->size && i < 6; ++i) {
         IrValue *param = vecGet(IrValue *, func->params, i);
-        long offset = (long)strMapGetAoStr(ctx->var_offsets, param->name);
+        char *reg = NULL;
 
         if (param->type == IR_TYPE_F64) {
-            aoStrCatFmt(ctx->buf, "movsd %%%s, %ld(%%rbp)\n\t",
-                        x64_float_param_regs[i], offset);
+            reg = x64_float_param_regs[i];
+            x64GenFloatStore(ctx, param, reg);
         } else {
             /* @Mov
              * Get the right `mov` to sign extend etc.. into a 64 bit 
              * stack slot */
-            aoStrCatFmt(ctx->buf, "movq %%%s, %ld(%%rbp)\n\t",
-                        x64_int_param_regs[i], offset);
+            reg = x64_int_param_regs[i];
+            x64GenStore(ctx, param, reg);
         }
+        x64SetRegUsed(&ctx->reg_state, reg, param);
     }
 
-    if (listEmpty(func->blocks)) {
-        listForEach(func->entry_block->instructions) {
+    listForEach(func->blocks) {
+        IrBlock *block = listValue(IrBlock *, it);
+
+        if (block != func->entry_block) {
+            if (ctx->buf->data[ctx->buf->len - 1] == '\t') {
+                ctx->buf->len--;
+            }
+            aoStrCatFmt(ctx->buf, "BB%I:\n\t", block->id);
+        }
+
+        listForEach(block->instructions) {
             IrInstr *instr = listValue(IrInstr *, it);
-            x64GenerateInstruction(ctx, instr);
-        }
-    } else {
-        for (List *node = func->blocks->next; node != func->blocks; node = node->next) {
-            IrBlock *block = listValue(IrBlock *, node);
-
-            if (block != func->entry_block) {
-                aoStrCatFmt(ctx->buf, ".L%i\n\t", block->id);
+            IrInstr *next_instr = NULL;
+            if (it->next != block->instructions) {
+                next_instr = listValue(IrInstr *, it->next);
             }
-
-            listForEach(block->instructions) {
-                IrInstr *instr = listValue(IrInstr *, it);
-                x64GenerateInstruction(ctx, instr);
-            }
+            /* While generating assembly we may have also nuked 
+             * some instructions */
+            if (instr->opcode == IR_OP_NOP) continue;
+            x64GenerateInstruction(ctx, instr, next_instr);
         }
+
+        //x64RegStateClearMaps(&ctx->reg_state);
     }
 
-    aoStrCatFmt(ctx->buf, "leave\n\tret\n"); 
+    aoStrCatFmt(ctx->buf, "leave\n\tret\n\n"); 
+
 }
 
 static void x64FunctionsGen(X64Ctx *ctx) {
     PtrVec *funcs = ctx->ir_program->functions;
     for (int i = 0; i < funcs->size; ++i) {
         IrFunction *func = vecGet(IrFunction *, funcs, i);
+        x64RegStateClear(&ctx->reg_state);
         x64EmitFunction(ctx, func);
     }
 }
-
 
 aoStr *x64CodeGen(IrProgram *ir_program) {
     X64Ctx *ctx = x64CtxNew(ir_program);
 
     x64GlobalGen(ctx);
     x64StringGen(ctx);
+    x64FloatGen(ctx);
     x64FunctionsGen(ctx);
 
 

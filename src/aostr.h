@@ -29,6 +29,7 @@ void aoStrToUpperCase(aoStr *buf);
 void aoStrPutChar(aoStr *buf, char ch);
 void aoStrRepeatChar(aoStr *buf, char ch, int times);
 int aoStrEq(aoStr *b1, aoStr *b2);
+aoStr *aoStrDupCString(char *s);
 aoStr *aoStrDupRaw(char *s, size_t len);
 aoStr *aoStrDup(aoStr *buf);
 
@@ -51,5 +52,8 @@ char *mprintFmt(const char *fmt, ...);
 char *mprintVa(const char *fmt, va_list ap, ssize_t *_len);
 aoStr *aoStrError(void);
 aoStr *aoStrIntToHumanReadableBytes(long bytes);
+unsigned long aoStrHashFunction(aoStr *str);
+size_t aoStrGetLen(aoStr *buf);
+aoStr *aoStrIdentity(aoStr *buf);
 
 #endif

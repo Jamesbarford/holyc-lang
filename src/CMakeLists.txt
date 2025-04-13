@@ -48,9 +48,12 @@ set(SOURCES
     cfg.c
     cli.c
     codegen-x64.c
+    codegen-aarch64.c
     compile.c
     ir.c
     ir-interp.c
+    ir-optimiser.c
+    ir-types.c
     lexer.c
     list.c
     main.c
@@ -75,10 +78,13 @@ set(HEADERS
     cfg.h
     cli.h
     codegen-x64.h
+    codegen-aarch64.h
     compile.h
     config.h
     ir.h
     ir-interp.h
+    ir-optimiser.h
+    ir-types.h
     lexer.h
     list.h
     map.h

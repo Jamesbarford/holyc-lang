@@ -35,6 +35,7 @@ enum CliArgType {
     CLI_MEM_STATS,
     CLI_HELP,
     CLI_TERRY,
+    CLI_OPTIMISE,
 };
 
 typedef struct CliValue {
@@ -58,6 +59,7 @@ typedef struct CliParser {
 
 enum CliEmitType {
     CLI_EMIT_X86_64 = 1,
+    CLI_EMIT_AARCH64,
     CLI_EMIT_IR,
     CLI_EMIT_AST,
     CLI_EMIT_C,
@@ -81,6 +83,7 @@ typedef struct CliArgs {
     int assemble;
     int transpile;
     int to_stdout;
+    int optimise;
     char *infile;
     char *infile_no_ext;
     char *asm_outfile;

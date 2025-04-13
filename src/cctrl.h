@@ -16,6 +16,7 @@
 #define CCTRL_SAVE_ANONYMOUS  (1<<1)
 #define CCTRL_PASTE_DEFINES   (1<<2)
 #define CCTRL_PRESERVE_SIZEOF (1<<3)
+#define CCTRL_OPTIMISE        (1<<4)
 
 /* For messages */
 #define CCTRL_ICE   0
@@ -133,6 +134,7 @@ typedef struct Cctrl {
     int is_static;
     TokenRingBuffer *token_buffer;
     Lexer *lexer_;
+
 } Cctrl;
 
 /* Instantiate a new compiler control struct */

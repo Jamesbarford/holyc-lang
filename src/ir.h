@@ -1,7 +1,6 @@
 #ifndef IR_H__
 #define IR_H__
 
-#include "aostr.h"
 #include "cctrl.h"
 #include "ir-types.h"
 
@@ -9,12 +8,11 @@ void irArenaInit(unsigned int capacity);
 void irMemoryRelease(void);
 void irMemoryStats(void);
 IrProgram *irLowerAst(Cctrl *cc);
-aoStr *irProgramToString(IrProgram *ir_program);
-aoStr *irValueToString(IrValue *ir_value);
-aoStr *irInstrToString(IrInstr *ir_instr);
-const char *irValueKindToString(IrValueKind ir_value_kind);
-const char *irValueTypeToString(IrValueType ir_value_type);
-const char *irOpcodeToString(IrInstr *ir_instr);
+
+int irCouldReadMemory(IrInstr *instr);
 void irDump(Cctrl *cc);
+
+IrValue *irConstInt(IrValueType ir_value_type, long i64);
+IrValue *irConstFloat(IrValueType ir_value_type, double f64);
 
 #endif

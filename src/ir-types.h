@@ -13,6 +13,7 @@
 #define IR_CTX_FLAG_IN_SWITCH (1<<1)
 
 typedef enum IrOpcode {
+    IR_OP_NOP,         /* No op */
     /* Memory operations */
     IR_OP_ALLOCA,      /* Allocate stack memory */
     IR_OP_LOAD,        /* Load from memory */
@@ -135,30 +136,60 @@ typedef enum IrValueKind {
                             * constructing the IR*/
 } IrValueKind;
 
+enum IrFunctionType {
+    IR_FUNC,
+    IR_FUNC_CONST,
+    IR_FUNC_PURE,
+};
+typedef enum IrFunctionType IrFunctionType;
+
 typedef struct IrInstr IrInstr;
 typedef struct IrValue IrValue;
 typedef struct IrBlock IrBlock;
+typedef struct IrPair IrPair;
 typedef struct IrFunction IrFunction;
 typedef struct IrProgram IrProgram;
+typedef struct IrBlockMapping IrBlockMapping;
 typedef union IrUnresolvedBlock IrUnresolvedBlock;
+typedef struct IrLivenessInfo IrLivenessInfo;
+typedef struct IrLivenessAnalysis IrLivenessAnalysis;
+
+struct IrLivenessInfo {
+    Set *live_in;  /* `Set<IrValue *>` */
+    Set *live_out; /* `Set<IrValue *>` */
+    Set *def;      /* `Set<IrValue *>` */
+    Set *use;      /* `Set<IrValue *>` */
+};
+
+struct IrLivenessAnalysis {
+    IntMap *block_info; /* `IntMap<IrLivenessInfo *>`*/
+};
 
 /* We keep the successors and predecessors on the function in a graph as it 
  * is easier to keep track of the mappings between the blocks. */
-typedef struct IrBlock {
+struct IrBlock {
     int id;             /* Identifier for the block */
     char sealed;        /* Block is done */
     char removed;       /* Soft delete a block? */ 
-    List *instructions; /* List<IrInstr *> ir instructions belonging to the block */
+    List *instructions; /* `List<IrInstr *>` ir instructions belonging to the block */
     StrMap *ssa_values;
-} IrBlock;
+    /* IrLivenessInfo *liveness; @Liveness - putting it on the block _feels_ 
+     *                           like it makes sense however it's only really 
+     *                           useful when used in conjunction with all 
+     *                           the other blocks information */
+};
 
-typedef struct IrValue {
+#define IR_VALUE_ADDR  (1<<0)
+#define IR_FN_VAL_USED (1<<1)
+
+struct IrValue {
     IrValueType type;
     IrValueKind kind;
     /* @Bug
      * Used for any arbitrary string, this is not on the union as globals and
      * globally defined functions need a label/name and would conflict */
     aoStr *name;
+    unsigned long flags;
 
     union {
         long i64;   /* For integer constants */
@@ -191,16 +222,22 @@ typedef struct IrValue {
         } array_;
     };
     int version;
-} IrValue;
+};
 
 /* The value and which block it came from, easier to keep track of than
  * 2 vectors */
-typedef struct IrPair {
+struct IrPair {
     IrValue *ir_value;
     IrBlock *ir_block;
-} IrPair;
+};
 
-typedef struct IrInstr {
+/* These are to help discriminate get element pointers pointer type */
+#define IR_INSTR_STACK_CLASS (1<<0)
+#define IR_INSTR_HEAP_CLASS  (1<<1)
+#define IR_INSTR_LVAR_ADDR   (1<<2)
+#define IR_INSTR_GVAR_ADDR   (1<<3)
+
+struct IrInstr {
     IrOpcode opcode;            /* Operation type */
     IrValue *result;            /* Destination if any */
     IrValue *op1;               /* First operand if any */
@@ -208,6 +245,7 @@ typedef struct IrInstr {
     IrValue *op3;               /* 3rd operand if any */
     IrBlock *target_block;      /* For control flow instructions */
     IrBlock *fallthrough_block; /* For conditional flow */
+    unsigned long flags;
     union {
         IrCmpKind cmp_kind;
       /* either an unresolved `goto label;` or a a `label:` */
@@ -220,18 +258,20 @@ typedef struct IrInstr {
         };
 
         struct {
-            PtrVec *pairs; /* PtrVec<IrPair *> */
+            PtrVec *pairs; /* `PtrVec<IrPair *>` */
         } phi;
     } extra;
-} InInstr;
+};
 
-typedef struct IrBlockMapping {
-    int id;
-    IntMap *successors;
-    IntMap *predecessors;
-} IrBlockMapping;
+struct IrBlockMapping {
+    int id; /* This block */
+    Map *successors;   /* `Map<long, IrBlock *>` */
+    Map *predecessors; /* `Map<long, IrBlock *>` */
+};
 
-typedef struct IrFunction {
+struct IrFunction {
+    IrFunctionType type; /* The type of the function we are looking at, affects
+                          * how we produce assembly */
     IrValue *return_value; /* Not sure if this is needed but for printing as a 
                            * string it looks pretty! */
     aoStr *name;          /* Function name */
@@ -241,24 +281,31 @@ typedef struct IrFunction {
     IrBlock *entry_block; /* Entry */
     IrBlock *exit_block;  /* Exit */
     StrMap *variables;    /* The functions local variables `StrMap<IrValue *>` */
-    IntMap *cfg;          /* The interconnectivity between nodes: 
-                           * `IntMap<IrBlockMapping> [id] => {id, id...}` */
+    Map *cfg;             /* The interconnectivity between nodes: 
+                           * `Map<long, IrBlockMapping> [id] => {id, id...}` */
     int has_var_args;
-} IrFunction;
+    Map *allocas;         /* `Map<aoStr *, IrInstr *>` a map of alloca 
+                           * instructions, makes it easier to determine if 
+                           * they are used. */
+    Map *stores; /* `Map<aoStr *, IrInstr *>` a map of store instructions */
+    Map *loads;  /* `Map<aoStr *, IrInstr *>` a map of load instructions */
+};
 
-typedef struct IrProgram {
+struct IrProgram {
     PtrVec *functions;        /* `PtrVec<IrFunction *>` */
     /* Im not sure we need these as they exist on the Cctrl struct, certainly
      * the strings and types do... These are presumably Ast structs which 
      * is kinds nasty having both an Ast and Ir later in the codegen phase.
      */
     PtrVec *asm_functions;    /* `PtrVec<IrValue *>` - Raw assembly functions */
-    StrMap *global_variables; /* `StrMap<IrValue *>` */
+    Map *global_variables;    /* `Map<aoStr *, IrValue *>` */
     StrMap *strings;          /* `StrMap<IrValue *>` */
-    StrMap *types;            /* @TODO: StrMap<?> I feel this one needs
-                               * a bit more thought */
-    StrMap *arrays;           /* @TODO decide on representation `StrMap<IrValue *>` */
-} IrProgram;
+    StrMap *arrays;           /* @Improve, we flatten the array and store it 
+                               * which feels perhaps wrong? `StrMap<IrValue *>` */
+    StrMap *floats;           /* `StrMap<IrValue>` We store all floats, which
+                               * will become a bit like global variables. This is
+                               * because you cannot treat floats as immediates */
+};
 
 /* This seems a little daft having this but goto's wreck havoc with control 
  * flow. We need to find when we have seen a label and when we have seen a 
@@ -285,6 +332,7 @@ typedef struct IrArrayCtx {
 } IrArrayCtx;
 
 typedef struct IrCtx {
+    int optimise;             /* Should the optimiser be run? */
     IrProgram *ir_program;    /* The program being created */
     unsigned long flags;      /* Flags for parsing */
     IrFunction *func;         /* The current function being lowered to IR */
@@ -312,5 +360,40 @@ typedef struct IrCtx {
      * of it's shape */
     IrArrayCtx array_;
 } IrCtx;
+
+
+/* The memory arena for the IR */
+void irArenaInit(unsigned int capacity);
+void irMemoryRelease(void);
+void irMemoryStats(void);
+void *irArenaAlloc(unsigned int size);
+
+
+aoStr *irFunctionToString(IrFunction *ir_func);
+aoStr *irFunctionCFGToString(IrFunction *func);
+aoStr *irProgramToString(IrProgram *ir_program);
+aoStr *irValueToString(IrValue *ir_value);
+aoStr *irInstrToString(IrInstr *ir_instr);
+const char *irValueKindToString(IrValueKind ir_value_kind);
+const char *irValueTypeToString(IrValueType ir_value_type);
+const char *irOpcodeToString(IrInstr *ir_instr);
+unsigned long irValueHash(IrValue *value);
+long irValueKeyLen(IrValue *value);
+aoStr *irValueKeyStringify(IrValue *value);
+
+Set *irValueSetNew(void);
+Map *irStrValueMapNew(void);
+Map *irStrInstrMapNew(void);
+Map *irIntValueMapNew(void);
+Map *irIntBlockMapNew(void);
+Map *irIntBlockMappingMapNew(void);
+
+IrBlockMapping *irFunctionGetBlockMapping(IrFunction *func, IrBlock *ir_block);
+Map *irFunctionGetSuccessors(IrFunction *func, IrBlock *ir_block);
+Map *irFunctionGetPredecessors(IrFunction *func, IrBlock *ir_block);
+
+IrBlockMapping *irBlockMappingNew(int id);
+IrProgram *irProgramNew(void);
+IrValue *irValueNew(IrValueType ir_type, IrValueKind ir_kind);
 
 #endif

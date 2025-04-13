@@ -1,5 +1,4 @@
 #include <limits.h>
-#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1142,14 +1141,14 @@ void intSetRelease(IntSet *iset) {
     }
 }
 
-IntSetIterator *intSetIteratorNew(IntSet *iset) {
-    IntSetIterator *it = (IntSetIterator *)malloc(sizeof(IntSetIterator));
+IntSetIter *intSetIterNew(IntSet *iset) {
+    IntSetIter *it = (IntSetIter *)malloc(sizeof(IntSetIter));
     it->idx = 0;
     it->iset = iset;
     return it;
 }
 
-long intSetNext(IntSetIterator *it) {
+long intSetNext(IntSetIter *it) {
     while ((int)it->idx < it->iset->indexes->size) {
         long idx = intVecGet(it->iset->indexes,it->idx);
         long key = it->iset->entries[idx];
@@ -1162,7 +1161,7 @@ long intSetNext(IntSetIterator *it) {
     return HT_DELETED;
 }
 
-void intSetIteratorRelease(IntSetIterator *it) {
+void intSetIterRelease(IntSetIter *it) {
     if (it) free(it);
 }
 
@@ -1177,7 +1176,7 @@ aoStr *intSetToString(IntSet *iset) {
 
     unsigned long i = 0;
     long key;
-    IntSetIterator *it = intSetIteratorNew(iset);
+    IntSetIter *it = intSetIterNew(iset);
     aoStrPutChar(buf,'{');
     while ((key = intSetNext(it)) != HT_DELETED) {
         aoStrCatFmt(buf,"%I",key);
@@ -1187,6 +1186,847 @@ aoStr *intSetToString(IntSet *iset) {
         i++;
     }
     aoStrPutChar(buf,'}');
-    intSetIteratorRelease(it);
+    intSetIterRelease(it);
     return buf;
 }
+
+/*================ Generic Set Implementation ===============================*/
+
+static aoStr *setTypeToString(Set *set);
+
+static aoStr *setStats(Set *set) {
+    aoStr *buf = aoStrNew();
+    aoStr *type = setTypeToString(set);
+    aoStrCatFmt(buf, "%S Stats {\n", type);
+    aoStrCatFmt(buf, "  capacity = %U\n"
+                     "  size = %U\n"
+                     "  filled = %f%%\n"
+                     "  threashold = %U\n"
+                     "}",
+                     set->capacity,
+                     set->size,
+                     (double)((double)((double)set->size/set->capacity)*100.0),
+                     set->threashold);
+    aoStrRelease(type);
+    return buf;
+}
+
+void setPrintStats(Set *set) {
+    aoStr *stats = setStats(set);
+    printf("%s\n",stats->data);
+    aoStrRelease(stats);
+}
+
+Set *setNew(unsigned long capacity, SetType *type) {
+    Set *set = (Set *)malloc(sizeof(Set));
+    set->size = 0;
+#ifdef DEBUG
+    (void)capacity;
+    set->capacity = VEC_DEBUG_SIZE;
+#else
+    set->capacity = capacity;
+#endif
+
+    set->mask = set->capacity - 1;
+    set->threashold = (unsigned long)(HT_LOAD * set->capacity);
+
+#ifdef DEBUG
+    for (int i = 0; i < VEC_DEBUG_SIZE; ++i) {
+        SetNode *node = &set->entries[i];
+        node->free = 1;
+        node->key = NULL;
+    }
+#else
+    set->entries = (void **)calloc(set->capacity, sizeof(void *));
+#endif
+    set->indexes = intVecNew();
+    set->type = type;
+    return set;
+}
+
+static unsigned long setGetNextIdx(Set *set, void *key, int *_is_free) { 
+    unsigned long hash = set->type->hash(key);
+    unsigned long idx = hash & set->mask;
+    SetNode *cur = &set->entries[idx];
+
+    while (!cur->free) { 
+        if (cur && set->type->match(cur->key, key)) {
+            *_is_free = 0;
+            return idx;
+        }
+        idx = (idx + 1) & set->mask;
+        cur = &set->entries[idx];
+    }
+    *_is_free = 1;
+    return idx;
+}
+
+static unsigned long setGetIdx(Set *set, void *key, int *_ok) {
+    unsigned long hash = set->type->hash(key);
+    unsigned long idx = hash & set->mask;
+    SetNode *cur = &set->entries[idx];
+
+    while (!cur->free) { 
+        if (set->type->match(cur->key, key)) {
+            *_ok = 1;
+            return idx;
+        }
+        idx = (idx + 1) & set->mask;
+        cur = &set->entries[idx];
+    }
+    *_ok = 0;
+    return 0;
+}
+
+static int setResize(Set *set) {
+    unsigned long new_capacity = set->capacity << 1;
+    unsigned long new_mask = new_capacity - 1;
+    SetNode *old_entries = set->entries;
+    long *old_index_entries = set->indexes->entries;
+    int indexes_size = set->indexes->size;
+
+    SetNode *new_entries = (SetNode *)malloc(new_capacity * sizeof(SetNode *));
+    /* OOM */
+    if (new_entries == NULL) {
+        return 0;
+    }
+
+
+    long *new_indexes = (long *)calloc(indexes_size, sizeof(long));
+    /* OOM */
+    if (new_indexes == NULL) {
+        free(new_entries);
+        return 0;
+    }
+
+    memset(new_entries, 1, new_capacity * sizeof(SetNode  *));
+
+    set->mask = new_mask;
+#ifndef DEBUG
+    set->entries = new_entries;
+#endif
+    set->capacity = new_capacity;
+
+    long new_size = 0;
+    int is_free;
+    for (int i = 0; i < indexes_size; ++i) {
+        long idx = old_index_entries[i];
+        SetNode *old = &old_entries[idx];
+        if (!old->free) {
+            unsigned long new_idx = setGetNextIdx(set, old, &is_free);
+            SetNode *new_node = &new_entries[idx];
+            new_node->free = 0;
+            new_node->key = old->key;
+            new_indexes[new_size] = new_idx;
+            /* keep track of the new size of this Set */
+            new_size++;
+        }
+    } 
+
+    free(old_entries);
+    set->indexes->size = new_size;
+
+#ifdef DEBUG
+    memcpy(set->indexes->entries, new_indexes, new_size * sizeof(long));
+    free(new_indexes);
+#else
+    free(set->indexes->entries);
+    set->indexes->capacity = indexes_size;
+    set->indexes->entries = new_indexes;
+#endif
+
+    set->indexes->size = new_size;
+    set->size = new_size;
+    set->threashold = (unsigned long)(new_capacity * HT_LOAD);
+    return 1;
+}
+
+int setAdd(Set *set, void *key) {
+    if (set->size >= set->threashold) {
+#ifdef DEBUG
+        aoStr *stats = setStats(set);
+        printf("%s\n",stats->data);
+        aoStrRelease(stats);
+        loggerPanic("Set with size: %lu and Capacity %lu not big enough for debug mode\n",
+                set->size,
+                set->capacity);
+#endif
+        if (!setResize(set)) {
+            /* This means we have run out of memory */
+            return 0;
+        }
+    }
+
+    int is_free = 0;
+    unsigned long idx = setGetNextIdx(set, key, &is_free);
+    
+    /* Add only if not in the set */
+    if (is_free) {
+        SetNode *node = &set->entries[idx];
+        node->free = 0;
+        node->key = key;
+        intVecPush(set->indexes, idx);
+        set->size++;
+        return 1;
+    }
+    
+    return 0;
+}
+
+void *setRemove(Set *set, void *key) {
+    int ok = 0;
+    unsigned long idx = setGetIdx(set, key, &ok);
+    if (ok) {
+        /* We do nothing with the indexes, this does mean if there are multiple 
+         * deletes the indexes vector would grow indefinitely */
+        SetNode *node = &set->entries[idx];
+        void *key = node->key;
+        node->free = 1;
+        node->key = NULL;
+        set->size--;
+        return key;
+    }
+    return NULL;
+}
+
+int setHas(Set *set, void *key) {
+    int ok = 0;
+    setGetIdx(set, key, &ok);
+    return ok == 1;
+}
+
+void *setGetAt(Set *set, long index) {
+    if (index < 0 || index >= set->indexes->size)
+        return NULL;
+        
+    long idx = intVecGet(set->indexes, index);
+    SetNode *node = &set->entries[idx];
+    return node->key;
+}
+
+void setClear(Set *set) {
+    memset(set->entries, 1, sizeof(void *) * set->capacity);
+    intVecClear(set->indexes);
+    set->size = 0;
+}
+
+void setRelease(Set *set) {
+    if (set) {
+        if (set->type->value_release) {
+            SetIter *it = setIterNew(set);
+            SetFor(it, value) {
+                set->type->value_release(value);
+            }
+            setIterRelease(it);
+        }
+#ifndef DEBUG
+        free(set->entries);
+#endif
+        intVecRelease(set->indexes);
+        free(set);
+    }
+}
+
+SetIter *setIterNew(Set *set) {
+    SetIter *it = (SetIter *)malloc(sizeof(SetIter));
+    it->idx = 0;
+    it->vecidx = 0;
+    it->set = set;
+    return it;
+}
+
+void *setNext(SetIter *it) {
+    while ((int)it->vecidx < it->set->indexes->size) {
+        long idx = intVecGet(it->set->indexes, it->vecidx);
+        SetNode *node = &it->set->entries[idx];
+        it->vecidx++;
+        if (!node->free) {
+            it->idx++;
+            it->value = node->key;
+            return it->value;
+        }
+    }
+    return NULL;
+}
+
+int setIterNext(SetIter *it) {
+    while ((int)it->vecidx < it->set->indexes->size) {
+        long idx = intVecGet(it->set->indexes, it->vecidx);
+        SetNode *node = &it->set->entries[idx];
+        it->vecidx++;
+        if (!node->free) {
+            it->idx++;
+            it->value = node->key;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void setIterRelease(SetIter *it) {
+    if (it) free(it);
+}
+
+static aoStr *setTypeToString(Set *set) {
+    if (is_terminal) {
+        return aoStrPrintf(ESC_GREEN"Set"ESC_RESET"<"ESC_CYAN"%s"
+                           ESC_RESET">",
+                           set->type->type);
+    } else {
+        return aoStrPrintf("Set<%s>", set->type->type);
+    }
+}
+
+aoStr *setToString(Set *set) {
+    aoStr *buf = aoStrNew();
+    aoStr *type = setTypeToString(set);
+
+    aoStrCatFmt(buf, "%S", type);
+    if (set->size == 0) {
+        aoStrCatLen(buf, str_lit("{}"));
+        aoStrRelease(type);
+        return buf;
+    }
+
+    if (!set->type->stringify) {
+        aoStrCatLen(buf, str_lit("{...}"));
+        aoStrRelease(type);
+        return buf;
+    }
+
+    aoStrCatFmt(buf, " {", type);
+    aoStrRelease(type);
+
+    SetIter *it = setIterNew(set);
+    while (setIterNext(it)) {
+        aoStr *str_val = set->type->stringify(it->value);
+        aoStrCatAoStr(buf, str_val);
+        aoStrRelease(str_val);
+
+        if (((int)it->vecidx + 1) != set->indexes->size) {
+            aoStrCatLen(buf, str_lit(", "));
+        }
+    }
+    aoStrCatLen(buf, str_lit("}"));
+    setIterRelease(it);
+    return buf;
+}
+
+void setPrint(Set *set) {
+    aoStr *str = setToString(set);
+    printf("%s\n",str->data);
+    aoStrRelease(str);
+}
+
+/* With `void *` and an ambigious match this will segfault */
+int setEq(Set *s1, Set *s2) {
+    if (s1->size != s2->size) return 0;
+    int retval = 1;
+    SetIter *it = setIterNew(s1);
+
+    SetFor(it, value) {
+        if (!setHas(s2, value)) {
+            retval = 0;
+            goto out;
+        }
+    }
+
+out:
+    setIterRelease(it);
+    return retval;
+}
+
+/* Add all of `s2` to `s1` */
+Set *setUnion(Set *s1, Set *s2) {
+    Set *set = setNew(s1->capacity, s1->type);
+    SetIter *it = setIterNew(s1);
+
+    SetFor(it, value) {
+        setAdd(set, value);
+    }
+    setIterRelease(it);
+
+    it = setIterNew(s2);
+    SetFor(it, value) {
+        setAdd(set, value);
+    }
+    setIterRelease(it);
+
+    return set;
+}
+
+/* Add from s1 that are not in s2 */
+Set *setDifference(Set *s1, Set *s2) {
+    Set *set = setNew(s1->capacity, s1->type);
+    SetIter *it = setIterNew(s1);
+    SetFor(it, value) {
+        if (!setHas(s2, value)) {
+            setAdd(set, value);
+        }
+    }
+    return set;
+}
+
+Set *setCopy(Set *set) {
+    Set *copy = setNew(set->capacity, set->type);
+    /* Union will add of `set` to `copy` */
+    setUnion(copy, set);
+    return copy;
+}
+
+aoStr *setAoStrPassThrough(aoStr *value) {
+    return value;
+}
+
+SetType aostr_set_type = {
+    .match = (setValueMatch *)aoStrEq,
+    .hash = (setValueHash *)aoStrHashFunction,
+    .stringify = (setValueToString *)setAoStrPassThrough,
+    .value_release = NULL,
+    .type = "aoStr *",
+};
+
+SetType int_set_type = {
+    .match = (mapKeyMatch *)intMapKeyMatch,
+    .hash = (mapKeyHash *)intMapKeyHash,
+    .stringify = (mapKeyToString *)intMapKeyToString,
+    .value_release = NULL,
+    .type = "long",
+};
+
+/*================ Generic Map Implementation ===============================*/
+/* @TODO - use this everywhere */
+
+static aoStr *mapTypeToString(Map *map) {
+    /* I'm staring at maps a lot and it is nicer to colour them */
+    if (is_terminal) {
+        return aoStrPrintf(ESC_GREEN"Map"ESC_RESET"<"ESC_CYAN"%s"
+                           ESC_RESET", "ESC_CYAN"%s"ESC_RESET">",
+                           map->type->key_type,
+                           map->type->value_type);
+    } else {
+        return aoStrPrintf("Map<%s, %s>", map->type->key_type,
+                           map->type->value_type);
+    }
+}
+
+Map *mapNew(unsigned long capacity, MapType *type) {
+    Map *map = (Map *)malloc(sizeof(Map));
+#ifdef DEBUG
+    (void)capacity;
+    map->capacity = VEC_DEBUG_SIZE;
+#else
+    capacity = roundUpToNextPowerOf2(capacity);
+    map->capacity = capacity;
+    map->entries = (MapNode *)malloc(sizeof(MapNode) * map->capacity);
+#endif
+
+    map->mask = map->capacity - 1;
+    map->size = 0;
+    map->threashold = (unsigned long)(HT_LOAD * map->capacity);
+    memset(map->entries, 1, sizeof(MapNode) * map->capacity);
+    map->indexes = intVecNew();
+    map->parent = NULL;
+    map->type = type;
+    return map;
+}
+
+static unsigned long mapGetNextIdx(Map *map, void *key, int *_is_free) {
+    unsigned long hash = map->type->hash ? map->type->hash(key) : (unsigned long)key;
+    unsigned long idx = hash & map->mask;
+    MapNode *cur = &map->entries[idx];
+    *_is_free = 1;
+
+    /* A free node is one that is either free or previously deleted */
+    while (1) {
+        if (cur->flags & (MAP_FLAG_FREE | MAP_FLAG_DELETED)) {
+            break;
+        }
+        /* This means we have found a node with the same key we are trying to
+         * add*/
+        else if (cur->flags & MAP_FLAG_TAKEN && map->type->match(cur->key, key)) {
+            *_is_free = 0;
+            break;
+        }
+        idx = (idx + 1) & map->mask;
+        cur = &map->entries[idx];
+    }
+
+    return idx;
+}
+
+static unsigned long mapGetIdx(Map *map, void *key, int *_ok) {
+    unsigned long hash = map->type->hash(key);
+    unsigned long idx = hash & map->mask;
+    MapNode *cur = &map->entries[idx];
+
+    /* We are only interested in TAKEN nodes */
+    while (cur->flags & MAP_FLAG_TAKEN) {
+        /* We know something is in this position as it is flagged as TAKEN */
+        if (map->type->match(cur->key, key)) {
+            *_ok = 1;
+            return idx;
+        }
+        idx = (idx + 1) & map->mask;
+        cur = &map->entries[idx];
+    }
+    *_ok = 0;
+    return 0;
+}
+
+static int mapResize(Map *map) {
+    int is_free;
+    unsigned long new_capacity = map->capacity << 1;
+    unsigned long new_mask = new_capacity - 1;
+    long *old_index_entries = map->indexes->entries;
+    MapNode *old_entries = map->entries;
+    int indexes_size = map->indexes->size;
+
+    long *new_indexes = (long *)calloc(indexes_size, sizeof(long));
+    /* OOM */
+    if (new_indexes == NULL) {
+        return 0;
+    }
+
+    MapNode *new_entries = (MapNode *)calloc(new_capacity, sizeof(MapNode));
+    /* OOM */
+    if (new_entries == NULL) {
+        free(new_indexes);
+        return 0;
+    }
+
+    map->mask = new_mask;
+#ifndef DEBUG
+    map->entries = new_entries;
+#endif
+    map->capacity = new_capacity;
+    long new_size = 0;
+
+    /* Keeps insertion order, and does not have to go over the capacity of 
+     * the hashtable which should in theory be faster, but there are more 
+     * array lookups however they should have good spatial locality */
+    for (long i = 0; i < indexes_size; ++i) {
+        long idx = old_index_entries[i];
+        MapNode *old = &old_entries[idx];
+        if (old->flags & MAP_FLAG_TAKEN) {
+            long new_idx = mapGetNextIdx(map,old->key,&is_free);
+            MapNode *new_node = &new_entries[new_idx];
+            new_node->key = old->key;
+            new_node->value = old->value;
+            new_node->key_len = old->key_len;
+            new_node->flags = MAP_FLAG_TAKEN;
+            new_indexes[new_size] = new_idx;
+            /* keep track of the new size of this hashtable */
+            new_size++;
+        }
+    }
+
+    free(old_entries);
+    map->indexes->size = new_size;
+
+#ifdef DEBUG
+    memcpy(map->indexes->entries, new_indexes, new_size * sizeof(long));
+    free(new_indexes);
+#else
+    free(map->indexes->entries);
+    map->indexes->entries = new_indexes;
+    map->indexes->capacity = indexes_size;
+#endif
+
+    map->indexes->size = new_size;
+    map->size = new_size;
+    map->threashold = (unsigned long)(new_capacity * HT_LOAD);
+    return 1;
+}
+
+int mapAdd(Map *map, void *key, void *value) {
+    if (map->size >= map->threashold) {
+        if (!mapResize(map)) {
+            /* This means we have run out of memory */
+            return 0;
+        }
+    }
+
+    int is_free;
+    unsigned long idx = mapGetNextIdx(map, key, &is_free);
+    MapNode *n = &map->entries[idx];
+
+    /* Only if it is not free do we add to the vector... Though this does mean
+     * the ordering that we are trying to keep is now messed up... */
+    if (is_free) {
+        intVecPush(map->indexes, idx);
+        map->size++;
+    }
+
+    n->key = key;
+    n->value = value;
+    n->key_len = map->type->get_key_len(key);
+    n->flags = MAP_FLAG_TAKEN;
+    return 1;
+}
+
+int mapAddOrErr(Map *map, void *key, void *value) {
+    if (map->size >= map->threashold) {
+#ifdef DEBUG
+        mapPrintStats(map);
+        loggerPanic("Map capacity of %lu is not big enough!\n", map->capacity);
+#endif
+        if (!mapResize(map)) {
+            /* This means we have run out of memory */
+            return 0;
+        }
+    }
+
+    int is_free = 0;
+    unsigned long idx = mapGetNextIdx(map, key, &is_free);
+
+    /* We only add if it is free otherwise this operation is an error - 
+     * in practice this ensures we can't overwrite values. */
+    if (is_free) {
+        MapNode *n = &map->entries[idx];
+        intVecPush(map->indexes, idx);
+        n->key = key;
+        n->value = value;
+        n->key_len = map->type->get_key_len(key);
+        n->flags = MAP_FLAG_TAKEN;
+        map->size++;
+        return 1;
+    }
+    return 0;
+}
+
+void mapRemove(Map *map, void *key) {
+    int ok = 0;
+    unsigned long idx = mapGetIdx(map, key, &ok);
+    printf("remove:%s\n",map->type->key_to_string(key)->data);
+    if (ok == 0) return;
+    MapNode *n = &map->entries[idx];
+    if (map->type->value_release) map->type->value_release(n->value);
+    if (map->type->key_release) map->type->key_release(n->key);
+    n->flags = MAP_FLAG_DELETED;
+    n->value = NULL;
+    n->key = NULL;
+    n->key_len = 0;
+    /* @Bug
+     * Why does reducing the map size cause the hashtable to do weird
+     * things?*/
+    map->size--;
+}
+
+int mapHas(Map *map, void *key) {
+    int ok = 0;
+    unsigned long idx = mapGetIdx(map, key, &ok);
+    if (ok == 0) return 0;
+    map->cached_key = key;
+    map->cached_idx = idx;
+    return 1;
+}
+
+void *mapGetAt(Map *map, unsigned long index) {
+    for (unsigned long i = index; i < (unsigned long)map->indexes->size; ++i) {
+        long vec_idx = map->indexes->entries[i];
+        MapNode *n = &map->entries[vec_idx];
+        if (n->flags & MAP_FLAG_TAKEN) {
+            return n->value;
+        }
+    }
+    return NULL;
+}
+
+void *mapGet(Map *map, void *key) {
+    /* Retrive from cache if we can */
+    if (map->cached_key == key) {
+        MapNode *n = &map->entries[map->cached_idx];
+        if (n->flags & MAP_FLAG_TAKEN) {
+            return n->value;
+        }
+        return NULL;
+    }
+
+    for (; map != NULL; map = map->parent) {
+        int ok = 0;
+        unsigned long idx = mapGetIdx(map, key, &ok);
+        if (ok) {
+            /* May as well... at least it means the value is not stale */
+            MapNode *n = &map->entries[idx];
+            map->cached_key = key;
+            map->cached_idx = idx;
+            return n->value;
+        }
+    }
+    return NULL;
+}
+
+void mapClear(Map *map) {
+    MapIter *it = mapIterNew(map);
+    while (mapIterNext(it)) {
+        MapNode *n = it->node;
+        n->flags = MAP_FLAG_FREE;
+        if (map->type->value_release) map->type->value_release(n->value);
+        if (map->type->key_release) map->type->key_release(n->key);
+        n->key = NULL;
+        n->value = NULL;
+        n->key_len = 0;
+    }
+    map->size = 0;
+    intVecClear(map->indexes);
+    mapIterRelease(it);
+}
+
+void mapRelease(Map *map) {
+    mapClear(map);
+#ifndef DEBUG
+    free(map->entries);
+#endif
+    intVecRelease(map->indexes);
+    free(map);
+}
+
+void mapIterInit(Map *map, MapIter *iter) {
+    iter->map = map;
+    iter->node = NULL;
+    iter->idx = 0;
+    iter->vecidx = 0;
+}
+
+MapIter *mapIterNew(Map *map) {
+    MapIter *iter = (MapIter *)malloc(sizeof(MapIter));
+    mapIterInit(map, iter);
+    return iter;
+}
+
+int mapIterNext(MapIter *it) {
+    while ((int)it->vecidx < it->map->indexes->size) {
+        unsigned long idx = intVecGet(it->map->indexes, it->vecidx);
+        MapNode *n = &it->map->entries[idx];
+        it->vecidx++;
+        if (n->flags & MAP_FLAG_TAKEN) {
+            it->idx++;
+            it->node = n;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+
+void mapIterRelease(MapIter *it) {
+    if (it) free(it);
+}
+
+static aoStr *mapStats(Map *map) {
+    aoStr *buf = aoStrNew();
+    aoStr *type = mapTypeToString(map);
+    aoStrCatFmt(buf, "%S Stats {\n", type);
+    aoStrCatFmt(buf, "  capacity = %U\n"
+                     "  size = %U\n"
+                     "  filled = %f\n"
+                     "  threashold = %U\n"
+                     "}",
+                     map->capacity,
+                     map->size,
+                     (double)(((double)map->size/map->capacity)/100),
+                     map->threashold);
+    aoStrRelease(type);
+    return buf;
+}
+
+void mapPrintStats(Map *map) {
+    aoStr *stats = mapStats(map);
+    printf("%s\n",stats->data);
+    aoStrRelease(stats);
+}
+
+/* Convert the map to a string */
+aoStr *mapToString(Map *map, char *delimiter) {
+    aoStr *buf = aoStrNew();
+    aoStr *type = mapTypeToString(map);
+    if (map->size == 0) {
+        aoStrCatLen(buf, str_lit(" {}"));
+        aoStrRelease(type);
+        return buf;
+    }
+
+    aoStrCatFmt(buf, "%S {\n", type);
+    aoStrRelease(type);
+    MapIter *it = mapIterNew(map);
+    while (mapIterNext(it)) {
+        MapNode *n = it->node;
+        aoStr *value_string = map->type->value_to_string(n->value);
+        aoStr *key_string = map->type->key_to_string(n->key);
+        if (it->idx == map->size) {
+            aoStrCatFmt(buf,"  [%S] => %S",key_string, value_string);
+        } else {
+            aoStrCatFmt(buf,"  [%S] => %S%s", key_string, value_string, delimiter);
+        }
+        aoStrRelease(value_string);
+        aoStrRelease(key_string);
+    }
+    aoStrCatLen(buf, str_lit("\n}"));
+    mapIterRelease(it);
+    aoStrRelease(type);
+    return buf;
+}
+
+aoStr *mapKeysToString(Map *map) {
+    aoStr *buf = aoStrNew();
+    if (map->size == 0) {
+        aoStrCatLen(buf, str_lit(" {}"));
+        return buf;
+    }
+
+    aoStrCatFmt(buf, "{");
+    MapIter *it = mapIterNew(map);
+    while (mapIterNext(it)) {
+        MapNode *n = it->node;
+        aoStr *key_string = map->type->key_to_string(n->key);
+        if (it->idx == map->size) {
+            aoStrCatFmt(buf,"%S",key_string);
+        } else {
+            aoStrCatFmt(buf,"%S, ", key_string);
+        }
+        aoStrRelease(key_string);
+    }
+    aoStrCatLen(buf, str_lit("}"));
+    mapIterRelease(it);
+    return buf;
+}
+
+void mapPrint(Map *map) {
+    aoStr *map_str = mapToString(map, ",\n");
+    printf("%s\n\n",map_str->data);
+    aoStrRelease(map_str);
+}
+
+/*================= Int Map speciality ========================================*/
+int intMapKeyMatch(void *a, void *b) {
+    return (long)a == (long)b;
+}
+
+long intMapKeyLen(void *key) {
+    (void)key;
+    return 0;
+}
+
+/* This does not hash the integer... AND-ing it with the mask seems reasonable 
+ * enough. _mostly_ in this application the integers are incrementing 
+ * which means they're not going to clash, though will bunch together meaning
+ * wasted space */
+unsigned long intMapKeyHash(void *key) {
+    return (unsigned long)(long)key;
+}
+
+aoStr *intMapKeyToString(void *key) {
+    return aoStrPrintf("%ld", (long)key);
+}
+
+MapType int_map_type = {
+    .match = (mapKeyMatch *)intMapKeyMatch,
+    .hash = (mapKeyHash *)intMapKeyHash,
+    .get_key_len = (mapKeyLen *)intMapKeyLen,
+    .key_to_string = (mapKeyToString *)intMapKeyToString,
+    .value_to_string = NULL,
+    .value_release = NULL,
+    .value_type = NULL,
+    .key_type = "long",
+};

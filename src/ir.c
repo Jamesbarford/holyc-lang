@@ -12,46 +12,17 @@
 
 #include "aostr.h"
 #include "ast.h"
-#include "arena.h"
 #include "cctrl.h"
 #include "ir.h"
 #include "ir-interp.h"
 #include "ir-types.h"
+#include "ir-optimiser.h"
 #include "list.h"
 #include "lexer.h"
 #include "map.h"
 #include "memory.h"
-#include "transpiler.h"
 #include "uniq-list.h"
 #include "util.h"
-
-static Arena ir_memory_arena;
-static int ir_memory_arena_init = 0;
-
-/* The memory arena for the IR */
-
-void irArenaInit(unsigned int capacity) {
-    if (!ir_memory_arena_init) {
-        arenaInit(&ir_memory_arena, capacity);
-        ir_memory_arena_init = 1;
-    }
-}
-
-void irMemoryRelease(void) {
-    if (ir_memory_arena_init) {
-        ir_memory_arena_init = 0;
-        arenaClear(&ir_memory_arena);
-    }
-}
-
-void irMemoryStats(void) {
-    printf("IR Arena:\n");
-    arenaPrintStats(&ir_memory_arena);
-}
-
-static void *irArenaAlloc(unsigned int size) {
-    return arenaAlloc(&ir_memory_arena,size);
-}
 
 /*==================== IR PROTOTYPES ======================================== */
 IrUnresolvedBlock *irUnresolvedGotoNew(List *list_node, IrBlock *ir_source_block);
@@ -81,445 +52,11 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast);
 
 IrValue *irFunctionGetLocalFnPtr(IrFunction *ir_function, Ast *ast);
 IrBlockMapping *irFunctionGetBlockMapping(IrFunction *func, IrBlock *ir_block);
-IntMap *irFunctionGetSuccessors(IrFunction *func, IrBlock *ir_block);
-IntMap *irFunctionGetPredecessors(IrFunction *func, IrBlock *ir_block);
+Map *irFunctionGetSuccessors(IrFunction *func, IrBlock *ir_block);
+Map *irFunctionGetPredecessors(IrFunction *func, IrBlock *ir_block);
 
-/*==================== IR STRING REPRESENTATIONS ============================ */
-const char *irValueTypeToString(IrValueType ir_value_type) {
-    const char *type_str = NULL;
-    switch (ir_value_type) {
-        case IR_TYPE_VOID:     type_str = "void"; break;
-        case IR_TYPE_I8:       type_str = "i8"; break;
-        case IR_TYPE_I16:      type_str = "i16"; break;
-        case IR_TYPE_I32:      type_str = "i32"; break;
-        case IR_TYPE_I64:      type_str = "i64"; break;
-        case IR_TYPE_F64:      type_str = "f64"; break;
-        case IR_TYPE_PTR:      type_str = "ptr"; break;
-        case IR_TYPE_ARRAY:    type_str = "array"; break;
-        case IR_TYPE_STRUCT:   type_str = "struct"; break;
-        case IR_TYPE_FUNCTION: type_str = "function"; break;
-        case IR_TYPE_ASM_FUNCTION: type_str = "asm"; break;
-        case IR_TYPE_LABEL:    return "";
-        default: loggerPanic("Unhandled IrValueType: %d\n", ir_value_type);
-    }
-    if (is_terminal) {
-        return mprintf(ESC_WHITE"%s"ESC_RESET,type_str);
-    } else {
-        return mprintf("%s",type_str);
-    }
-}
-
-const char *irValueKindToString(IrValueKind ir_value_kind) {
-    const char *kind_str = NULL;
-    switch (ir_value_kind) {
-        case IR_VALUE_CONST_INT: kind_str = "IR_VALUE_CONST_INT"; break;
-        case IR_VALUE_CONST_FLOAT: kind_str = "IR_VALUE_CONST_FLOAT"; break;
-        case IR_VALUE_CONST_STR: kind_str = "IR_VALUE_CONST_STR"; break;
-        case IR_VALUE_GLOBAL: kind_str = "IR_VALUE_GLOBAL"; break;
-        case IR_VALUE_PARAM: kind_str = "IR_VALUE_PARAM"; break;
-        case IR_VALUE_LOCAL: kind_str = "IR_VALUE_LOCAL"; break;
-        case IR_VALUE_TEMP: kind_str = "IR_VALUE_TEMP"; break;
-        case IR_VALUE_PHI: kind_str = "IR_VALUE_PHI"; break;
-        case IR_VALUE_LABEL: kind_str = "IR_VALUE_LABEL"; break;
-        case IR_VALUE_UNDEFINED: kind_str = "IR_VALUE_UNDEFINED"; break;
-        case IR_VALUE_UNRESOLVED: kind_str = "IR_VALUE_UNRESOLVED"; break;
-        default: loggerPanic("Unhandled IrValueKind: %d\n", ir_value_kind);
-    }
-    return kind_str;
-}
-
-/**
- * @Bug - Non breaking as in principle the array will still work.
- * Because we flatten something like: 
- * 
- * `I64 array[][2][2] = {{{1,1}, {2,2}}, {{3, 3}, {4, 4}}};`
- *
- * To; `i64 [1, 1, 2, 2, 3, 3, 4, 4]`
- *
- * We can't represent;
- * `[i64 x 2 [i64 x 2 [i64 x 2]]]`
- *
- * We just have; `[i64 x 8]`
- */
-void irArrayInitToString(aoStr *buf, IrValue *ir_value) {
-    aoStrCatFmt(buf,"[%i x ", ir_value->array_.values->size);
-    if (ir_value->array_.nesting == 1) {
-        IrValue *head = (IrValue *)ir_value->array_.values->entries[0];
-        aoStrCatFmt(buf,"%s]", irValueTypeToString(head->type));
-    } else {
-        PtrVec *ir_array = ir_value->array_.values;
-        IrValue *actual_value = NULL;
-        int bracket_count = 0;
-        for (int i = 0; i < ir_array->size; ++i) {
-            IrValue *tmp = (IrValue *)ir_value->array_.values->entries[i];
-            if (tmp->type == IR_TYPE_ARRAY_INIT) {
-                ir_array = tmp->array_.values;
-            } else {
-                actual_value = tmp;
-                bracket_count = i;
-                break;
-            }
-        }
-        bracket_count++;
-
-        aoStrCatFmt(buf,"%s",irValueTypeToString(actual_value->type));
-        aoStrCatRepeat(buf,"]",bracket_count);
-    }
-}
-
-aoStr *irValueToString(IrValue *ir_value) {
-    aoStr *buf = aoStrNew();
-
-    if (ir_value->type == IR_TYPE_ARRAY_INIT) {
-        irArrayInitToString(buf,ir_value);
-    } else {
-        switch (ir_value->kind) {
-            case IR_VALUE_CONST_INT:   aoStrCatFmt(buf, "%I", ir_value->i64); break;
-            case IR_VALUE_CONST_FLOAT: aoStrCatFmt(buf, "%f", ir_value->f64); break;
-            case IR_VALUE_CONST_STR:   aoStrCatFmt(buf, "\"%S\"", ir_value->str); break;
-            case IR_VALUE_GLOBAL: {
-                if (is_terminal) {
-                    aoStrCatFmt(buf, ESC_WHITE"global "ESC_RESET"%S", ir_value->name);
-                } else {
-                    aoStrCatFmt(buf, "global %S", ir_value->name);
-                }
-
-                if (ir_value->global.value) {
-                    aoStr *init_buf = irValueToString(ir_value->global.value);
-                    aoStrCatFmt(buf, " %S ", init_buf);
-                    aoStrRelease(init_buf);
-                }
-                break;
-            }
-            case IR_VALUE_PARAM:       aoStrCatFmt(buf, "%S", ir_value->name); break;
-            case IR_VALUE_LOCAL:       aoStrCatFmt(buf, "%S", ir_value->name); break;
-            case IR_VALUE_TEMP:        aoStrCatFmt(buf, "%S", ir_value->name); break;
-            case IR_VALUE_PHI:         aoStrCatFmt(buf, "phi"); break;
-            case IR_VALUE_LABEL:       aoStrCatFmt(buf, "%S", ir_value->name); break;
-            case IR_VALUE_UNDEFINED:   aoStrCatFmt(buf, "undefined"); break;
-            case IR_VALUE_UNRESOLVED:  aoStrCatFmt(buf, "unresolved"); break;
-            default: loggerPanic("Unhandled IrValueKind: %d\n", ir_value->kind);
-        }
-
-        const char *ir_value_type_str = irValueTypeToString(ir_value->type);
-        aoStrPutChar(buf,' ');
-        aoStrCatFmt(buf,"%s",ir_value_type_str);
-    }
-    return buf;
-}
-
-const char *irCmpKindToString(IrCmpKind ir_cmp_kind) {
-    const char *ir_cmp_str = NULL;
-    switch (ir_cmp_kind) {
-        case IR_CMP_EQ:  ir_cmp_str = "cmp_eq"; break;
-        case IR_CMP_NE:  ir_cmp_str = "cmp_ne"; break;
-        case IR_CMP_LT:  ir_cmp_str = "cmp_lt"; break;
-        case IR_CMP_LE:  ir_cmp_str = "cmp_le"; break;
-        case IR_CMP_GT:  ir_cmp_str = "cmp_gt"; break;
-        case IR_CMP_GE:  ir_cmp_str = "cmp_ge"; break;
-        case IR_CMP_ULT: ir_cmp_str = "cmp_ult"; break;
-        case IR_CMP_ULE: ir_cmp_str = "cmp_ule"; break;
-        case IR_CMP_UGT: ir_cmp_str = "cmp_ugt"; break;
-        case IR_CMP_UGE: ir_cmp_str = "cmp_uge"; break;
-        case IR_CMP_OEQ: ir_cmp_str = "cmp_oeq"; break;
-        case IR_CMP_ONE: ir_cmp_str = "cmp_one"; break;
-        case IR_CMP_OLT: ir_cmp_str = "cmp_olt"; break;
-        case IR_CMP_OLE: ir_cmp_str = "cmp_ole"; break;
-        case IR_CMP_OGT: ir_cmp_str = "cmp_ogt"; break;
-        case IR_CMP_OGE: ir_cmp_str = "cmp_oge"; break;
-        case IR_CMP_UNO: ir_cmp_str = "cmp_uno"; break;
-        case IR_CMP_ORD: ir_cmp_str = "cmp_ord"; break;
-        default: loggerPanic("Unhandled comparison kind: %d\n", ir_cmp_kind);
-    }
-    if (is_terminal) {
-        return mprintf(ESC_BLUE"%-8s"ESC_RESET,ir_cmp_str);
-    } else {
-        return mprintf("%-8s",ir_cmp_str);
-    }
-}
-
-const char *irOpcodeToString(IrInstr *ir_instr) {
-    IrOpcode opcode = ir_instr->opcode;
-    const char *ir_op_str;
-    switch (opcode) {
-        case IR_OP_ALLOCA:   ir_op_str = "alloca"; break;
-        case IR_OP_LOAD:     ir_op_str = "load"; break;
-        case IR_OP_STORE:    ir_op_str = "store"; break;
-        case IR_OP_GEP:      ir_op_str = "gep"; break;
-
-        case IR_OP_IADD:      ir_op_str = "iadd"; break;
-        case IR_OP_ISUB:      ir_op_str = "isub"; break;
-        case IR_OP_IMUL:      ir_op_str = "imul"; break;
-        case IR_OP_IDIV:      ir_op_str = "idiv"; break;
-        case IR_OP_UDIV:      ir_op_str = "udiv"; break;
-        case IR_OP_IREM:      ir_op_str = "irem"; break;
-        case IR_OP_UREM:      ir_op_str = "urem"; break;
-        case IR_OP_INEG:      ir_op_str = "ineg"; break;
-
-        case IR_OP_FADD:      ir_op_str = "fadd"; break;
-        case IR_OP_FSUB:      ir_op_str = "fsub"; break;
-        case IR_OP_FMUL:      ir_op_str = "fmul"; break;
-        case IR_OP_FDIV:      ir_op_str = "fdiv"; break;
-        case IR_OP_FNEG:      ir_op_str = "fneg"; break;
-
-        case IR_OP_AND:      ir_op_str = "and"; break;
-        case IR_OP_OR:       ir_op_str = "or"; break;
-        case IR_OP_XOR:      ir_op_str = "xor"; break;
-        case IR_OP_SHL:      ir_op_str = "shl"; break;
-        case IR_OP_SHR:      ir_op_str = "shr"; break;
-        case IR_OP_SAR:      ir_op_str = "sar"; break;
-        case IR_OP_NOT:      ir_op_str = "not"; break;
-        case IR_OP_ICMP:
-        case IR_OP_FCMP:
-            return irCmpKindToString(ir_instr->extra.cmp_kind);
-        case IR_OP_TRUNC:    ir_op_str = "trunc"; /* Int to smaller int i.e i32 -> i16 */ break;
-        case IR_OP_ZEXT:     ir_op_str = "zext"; /* zero extend */ break;
-        case IR_OP_SEXT:     ir_op_str = "sext"; /* sign extend */ break;
-        case IR_OP_FPTRUNC:  ir_op_str = "fptrunc"; /* float truncate f32 -> f64 */ break;
-        case IR_OP_FPEXT:    ir_op_str = "fpext";   /* f32 -> f64 */ break;
-        case IR_OP_FPTOUI:   ir_op_str = "fptoui"; break;
-        case IR_OP_FPTOSI:   ir_op_str = "fptosi"; break;
-        case IR_OP_UITOFP:   ir_op_str = "uitofp"; break;
-        case IR_OP_SITOFP:   ir_op_str = "sitofp"; break;
-        case IR_OP_PTRTOINT: ir_op_str = "ptrtoint"; break;
-        case IR_OP_INTTOPTR: ir_op_str = "inttoptr"; break;
-        case IR_OP_BITCAST:  ir_op_str = "bitcast"; break;
-        case IR_OP_RET:      ir_op_str = "ret"; break;
-        case IR_OP_BR:       ir_op_str = "br"; break;
-        case IR_OP_JMP:      ir_op_str = "jmp"; break;
-        case IR_OP_LOOP:     ir_op_str = "loop"; break;
-        case IR_OP_SWITCH:   ir_op_str = "switch"; break;
-        case IR_OP_CALL:     ir_op_str = "call"; break;
-        case IR_OP_PHI:      ir_op_str = "phi"; break;
-        case IR_OP_LABEL:    ir_op_str = "label"; break;
-        case IR_OP_SELECT:   ir_op_str = "select"; break;
-        case IR_OP_VA_ARG:   ir_op_str = "va_arg"; break;
-        case IR_OP_VA_START: ir_op_str = "va_start"; break;
-        case IR_OP_VA_END:   ir_op_str = "va_end"; break;
-        default: loggerPanic("Unhandled opcode: %d\n", opcode);
-    }
-    if (is_terminal) {
-        return mprintf(ESC_BLUE"%-8s"ESC_RESET,ir_op_str);
-    } else {
-        return mprintf("%-8s",ir_op_str);
-    }
-}
-
-void irPairToString(aoStr *buf, IrPair *ir_phi_pair) {
-    aoStr *ir_value_str = irValueToString(ir_phi_pair->ir_value);
-    /* <Value, block> */
-    aoStrCatFmt(buf, "[ %S, bb%i ]", ir_value_str, ir_phi_pair->ir_block->id);
-}
-
-/* Convert an instruction to a string. */
-aoStr *irInstrToString(IrInstr *ir_instr) {
-    IrValue *ir_values[4] = {
-        ir_instr->result,
-        ir_instr->op1,
-        ir_instr->op2,
-        ir_instr->op3,
-    };
-    aoStr *buf = aoStrNew();
-    const char *op = irOpcodeToString(ir_instr);
-
-    switch (ir_instr->opcode) {
-        case IR_OP_CALL: {
-            PtrVec *fn_args = ir_instr->op1->array_.values;
-            if (fn_args && fn_args->size > 0) {
-                for (int i = 0; i < fn_args->size; ++i) {
-                    IrValue *ir_value = vecGet(IrValue *,fn_args,i);
-                    aoStr *ir_value_str = irValueToString(ir_value);
-                    if (i != 0) {
-                        aoStrCatLen(buf,str_lit("    "));
-                    }
-                    if (is_terminal) {
-                        aoStrCatFmt(buf, ESC_BLUE"%-8s "ESC_RESET"%S\n",
-                                    "arg", ir_value_str);
-                    } else {
-                        aoStrCatFmt(buf, "%-8s %S\n", "arg", ir_value_str);
-                    }
-                    aoStrRelease(ir_value_str);
-                }
-                aoStrCatLen(buf,str_lit("    "));
-            }
-
-            aoStr *ir_ret_var = irValueToString(ir_instr->result);
-            aoStrCatFmt(buf, "%s %S, %S", op, ir_ret_var, ir_instr->op1->name);
-            aoStrRelease(ir_ret_var);
-            break;
-        }
-
-        case IR_OP_BR: {
-            aoStr *ir_value_str = irValueToString(ir_instr->op1);
-            aoStrCatFmt(buf, "%s %S, bb%i, bb%i",
-                        op,
-                        ir_value_str,
-                        ir_instr->target_block->id,
-                        ir_instr->fallthrough_block->id);
-            aoStrRelease(ir_value_str);
-            break;
-        }
-
-        case IR_OP_LOOP:
-        case IR_OP_JMP: {
-            /* This is for unresolved gotos */
-            if (ir_instr->target_block == NULL) {
-                aoStrCatFmt(buf, "%s ???", op);
-            } else {
-                aoStrCatFmt(buf, "%s bb%I", op, ir_instr->target_block->id);
-            }
-            break;
-        }
-
-        case IR_OP_PHI: {
-            aoStr *phi_pairs_str = aoStrNew();
-            for (int i = 0; i < ir_instr->extra.phi.pairs->size; ++i) {
-                IrPair *ir_phi_pair = vecGet(IrPair *,
-                                                ir_instr->extra.phi.pairs, i);
-                irPairToString(phi_pairs_str, ir_phi_pair);
-                if (i + 1 != ir_instr->extra.phi.pairs->size) {
-                    aoStrPutChar(phi_pairs_str, ' ');;
-                }
-            }
-            aoStrCatFmt(buf,"%s %S",op, phi_pairs_str);
-            aoStrRelease(phi_pairs_str);
-            break;
-        }
-
-        case IR_OP_SWITCH: {
-            aoStr *pairs_str = aoStrNew();
-            aoStr *ir_value_str = irValueToString(ir_instr->op1);
-            aoStrCatFmt(buf, "%s %S, label bb%i [\n",
-                        op,
-                        ir_value_str,
-                        ir_instr->target_block->id);
-
-            listForEach(ir_instr->extra.cases) {
-                IrPair *ir_pair = listValue(IrPair *, it);
-                aoStr *ir_value_str = irValueToString(ir_pair->ir_value);
-                aoStrCatFmt(buf, "      %S, bb%i\n", ir_value_str, ir_pair->ir_block->id);
-            }
-            aoStrCatLen(buf, str_lit("    ]"));
-
-            aoStrRelease(ir_value_str);
-            aoStrRelease(pairs_str);
-            break;
-        }
-
-        default: {
-            aoStrCatFmt(buf, "%s", op);
-            for (int i = 0; i < (int)static_size(ir_values); i++) {
-                IrValue *ir_value = ir_values[i];
-                if (!ir_value) continue;
-                aoStr *ir_value_str = irValueToString(ir_value);
-                aoStrCatFmt(buf, " %S,", ir_value_str);
-                aoStrRelease(ir_value_str);
-            }
-            if (buf->data[buf->len-1] == ',') {
-                buf->len--; /* remove trailing ',' */
-                buf->data[buf->len] = '\0';
-            }
-            break;
-        }
-    }
-    
-    return buf;
-}
-
-/* Convert a basic block to a string
- * <block_name>:
- *   <instructions...>
- * */
-aoStr *irBlockToString(IrFunction *func, IrBlock *ir_block) {
-    aoStr *buf = aoStrNew();
-
-    IntMap *successors = irFunctionGetSuccessors(func, ir_block);
-    IntMap *predecessors = irFunctionGetPredecessors(func, ir_block);
-
-    if (is_terminal) {
-        aoStrCatFmt(buf, ESC_BOLD"  bb%i"ESC_CLEAR_BOLD" -> ", ir_block->id);
-    } else {
-        aoStrCatFmt(buf, "  bb%i -> ", ir_block->id);
-    }
-
-    if (predecessors) {
-        aoStr *predecessors_str = intMapKeysToString(predecessors);
-        aoStrCatFmt(buf, "predecessors: %S  ", predecessors_str);
-        aoStrRelease(predecessors_str);
-    } else {
-        aoStrCatFmt(buf, "predecessors: {}  ");
-    }
-
-    if (successors) {
-        aoStr *successors_str = intMapKeysToString(successors);
-        aoStrCatFmt(buf, "successors: %S", successors_str);
-        aoStrRelease(successors_str);
-    } else {
-        aoStrCatFmt(buf, "successors: {}");
-    }
-
-    aoStrPutChar(buf, '\n');
-    if (!listEmpty(ir_block->instructions)) {
-        listForEach(ir_block->instructions) {
-            IrInstr *ir_instr = (IrInstr *)it->value;
-            aoStr *ir_instr_str = irInstrToString(ir_instr);
-            aoStrCatFmt(buf, "    %S\n", ir_instr_str);
-            aoStrRelease(ir_instr_str);
-        }
-    }
-
-    return buf;
-}
-
-aoStr *irParamsToString(PtrVec *ir_value_vector) {
-    aoStr *buf = aoStrNew();
-    if (ir_value_vector->size != 0) {
-        for (int i = 0; i < ir_value_vector->size; ++i) {
-            IrValue *ir_value = vecGet(IrValue *, ir_value_vector, i);
-            aoStr *ir_value_str = irValueToString(ir_value);
-            aoStrCatFmt(buf,"%S",ir_value_str);
-            if (i + 1 != ir_value_vector->size) {
-                aoStrCatLen(buf,str_lit(", "));
-            }
-            aoStrRelease(ir_value_str);
-        }
-    }
-    return buf;
-}
-
-aoStr *irFunctionToString(IrFunction *ir_func) {
-    aoStr *buf = aoStrNew();
-    /* This is not as high fidelity as LLVM's ir */
-    const char *ir_return_type_str = irValueTypeToString(ir_func->return_value->type);
-    aoStrCatFmt(buf, "%s %S(", ir_return_type_str, ir_func->name);
-    aoStr *params_str = irParamsToString(ir_func->params);
-    aoStrCatFmt(buf, "%S) {\n", params_str);
-    aoStrRelease(params_str);
-
-    aoStr *ir_entry_block_str = irBlockToString(ir_func, ir_func->entry_block);
-
-    aoStrCatFmt(buf, "%S\n",ir_entry_block_str);
-    aoStrRelease(ir_entry_block_str);
-
-    listForEach(ir_func->blocks) {
-        IrBlock *ir_block = (IrBlock *)it->value;
-        aoStr *ir_block_str = irBlockToString(ir_func, ir_block);
-        aoStrCatFmt(buf, "%S\n", ir_block_str);
-        aoStrRelease(ir_block_str);
-    }
-
-    buf->len--;
-
-    aoStrCatLen(buf, str_lit("}\n"));
-    return buf;
-}
-
-void irPrintFunction(IrFunction *ir_function) {
-    aoStr *ir_function_str = irFunctionToString(ir_function);
-    printf("%s\n",ir_function_str->data);
-    aoStrRelease(ir_function_str);
-}
-
+const char *irValueTypeToString(IrValueType ir_value_type);
+aoStr *irValueToString(IrValue *ir_value);
 
 /*==================== IR CONSTRUCTORS ====================================== */
 IrBlock *irBlockNew(int id) {
@@ -527,6 +64,7 @@ IrBlock *irBlockNew(int id) {
     ir_block->id = id;
     ir_block->instructions = listNew();
     ir_block->sealed = 0;
+    ir_block->removed = 0;
     ir_block->ssa_values = strMapNew(8);
     return ir_block;
 }
@@ -591,34 +129,6 @@ IrUnresolvedBlock *irUnresolvedLabelNew(List *list_node,
     return ir_unresolved;
 }
 
-IrBlockMapping *irBlockMappingNew(int id) {
-    IrBlockMapping *mapping = (IrBlockMapping *)irArenaAlloc(sizeof(IrBlockMapping));
-    mapping->id = id;
-    mapping->successors = intMapNew(8);
-    mapping->predecessors = intMapNew(8);
-    return mapping;
-}
-
-IrProgram *irProgramNew(void) {
-    IrProgram *program = (IrProgram *)irArenaAlloc(sizeof(IrProgram));
-    program->functions = ptrVecNew();
-    program->asm_functions = ptrVecNew();
-    program->global_variables = strMapNew(16);
-    program->strings = strMapNew(16);
-    program->types = strMapNew(16);
-    program->arrays = strMapNew(16);
-    return program;
-}
-
-IrValue *irValueNew(IrValueType ir_type, IrValueKind ir_kind) {
-    IrValue *ir_value = (IrValue *)irArenaAlloc(sizeof(IrValue));
-    memset(ir_value,0,sizeof(IrValue));
-    ir_value->type = ir_type;
-    ir_value->kind = ir_kind;
-    ir_value->version = 1;
-    return ir_value;
-}
-
 void irCtxResetArray(IrCtx *ctx) {
     memset(&ctx->array_,0,sizeof(IrArrayCtx));
 }
@@ -628,6 +138,7 @@ void irCtxReset(IrCtx *ctx) {
     ctx->current_block = NULL;
     ctx->end_block = NULL;
     ctx->loop_head_block = NULL;
+
     irCtxResetArray(ctx);
     irBlockCountReset();
     irTmpVariableCountReset();
@@ -674,7 +185,7 @@ IrValue *irTmpVariable(IrValueType ir_value_type) {
 
 IrValue *irGetAllocaVar(IrInstr *ir_alloca) {
     assert(ir_alloca->opcode == IR_OP_ALLOCA);
-    return ir_alloca->op1;
+    return ir_alloca->result;
 }
 
 IrValue *irConstInt(IrValueType ir_value_type, long i64) {
@@ -687,6 +198,17 @@ IrValue *irConstFloat(IrValueType ir_value_type, double f64) {
     IrValue *ir_value = irValueNew(ir_value_type, IR_VALUE_CONST_FLOAT);
     ir_value->f64 = f64;
     return ir_value;
+}
+
+static int ir_const_float_count = 0;
+void irAddConstFloat(IrProgram *ir_program, IrValue *const_float) {
+    /* @Bug
+     * This means we can value multiple labels which have the same value of 
+     * const float - means wasted space and is a bit annoying but not 
+     * fundamentally broken */
+    aoStr *float_label = aoStrPrintf("F%d", ir_const_float_count++);
+    const_float->name = float_label;
+    strMapAddAoStr(ir_program->floats, float_label, const_float);
 }
 
 IrValue *irGlobalString(IrProgram *ir_program, Ast *ast) {
@@ -716,8 +238,7 @@ IrValue *irFunctionGetLocal(IrFunction *ir_function, Ast *ast) {
 IrValue *irFunctionGetGlobal(IrFunction *ir_function, Ast *ast) {
     assert(ast->kind == AST_GVAR);
     IrProgram *ir_program = ir_function->program;
-    IrValue *ir_global_var = strMapGetAoStr(ir_program->global_variables,
-                                            ast->gname);
+    IrValue *ir_global_var = mapGet(ir_program->global_variables, ast->gname);
     if (!ir_global_var) {
         loggerPanic("Global variable with name `%s` not found\n",
                     ast->gname->data);
@@ -745,59 +266,37 @@ IrValue *irFunctionGetLocalFnPtr(IrFunction *ir_function, Ast *ast) {
     return ir_fnptr;
 }
 
-/* This is very easy to inline */
-IrBlockMapping *irFunctionGetBlockMapping(IrFunction *func, IrBlock *ir_block) {
-    IrBlockMapping *ir_block_mapping = (IrBlockMapping *)intMapGet(func->cfg,
-                                                                   ir_block->id);
-    return ir_block_mapping;
-}
-
-IntMap *irFunctionGetSuccessors(IrFunction *func, IrBlock *ir_block) {
-    IrBlockMapping *ir_block_mapping = irFunctionGetBlockMapping(func, ir_block);
-    if (ir_block_mapping) {
-        return ir_block_mapping->successors;
-    }
-    return NULL;
-}
-
-IntMap *irFunctionGetPredecessors(IrFunction *func, IrBlock *ir_block) {
-    IrBlockMapping *ir_block_mapping = irFunctionGetBlockMapping(func, ir_block);
-    if (ir_block_mapping) {
-        return ir_block_mapping->predecessors;
-    }
-    return NULL;
-}
 /* Pass in the whole block to abstract away that we area using an interal 
  * datastructure to keep track of things. I'm trying a few different ones out */
 void irFunctionAddSuccessor(IrFunction *func, IrBlock *src, IrBlock *dest) {
-    IrBlockMapping *ir_block_mapping = (IrBlockMapping *)intMapGet(func->cfg, src->id);
+    IrBlockMapping *ir_block_mapping = (IrBlockMapping *)mapGet(func->cfg, src->id);
     if (!ir_block_mapping) {
         ir_block_mapping = irBlockMappingNew(src->id);
-        intMapAdd(func->cfg, src->id, ir_block_mapping);
+        mapAdd(func->cfg, src->id, ir_block_mapping);
     }
-    intMapAdd(ir_block_mapping->successors, dest->id, dest);
+    mapAdd(ir_block_mapping->successors, dest->id, dest);
 }
 
 void irFunctionAddPredecessor(IrFunction *func, IrBlock *src, IrBlock *prev) {
-    IrBlockMapping *ir_block_mapping = (IrBlockMapping *)intMapGet(func->cfg, src->id);
+    IrBlockMapping *ir_block_mapping = (IrBlockMapping *)mapGet(func->cfg, src->id);
     if (!ir_block_mapping) {
         ir_block_mapping = irBlockMappingNew(src->id);
-        intMapAdd(func->cfg, src->id, ir_block_mapping);
+        mapAdd(func->cfg, src->id, ir_block_mapping);
     }
-    intMapAdd(ir_block_mapping->predecessors, prev->id, prev);
+    mapAdd(ir_block_mapping->predecessors, prev->id, prev);
 }
 
 void irFunctionRemoveSuccessor(IrFunction *func, IrBlock *src, IrBlock *dest) {
-    IrBlockMapping *ir_block_mapping = (IrBlockMapping *)intMapGet(func->cfg, src->id);
+    IrBlockMapping *ir_block_mapping = (IrBlockMapping *)mapGet(func->cfg, src->id);
     if (ir_block_mapping) {
-        intMapDelete(ir_block_mapping->successors, dest->id);
+        mapRemove(ir_block_mapping->successors, dest->id);
     }
 }
 
 void irFunctionRemovePredecessor(IrFunction *func, IrBlock *src, IrBlock *prev) {
-    IrBlockMapping *ir_block_mapping = (IrBlockMapping *)intMapGet(func->cfg, src->id);
+    IrBlockMapping *ir_block_mapping = (IrBlockMapping *)mapGet(func->cfg, src->id);
     if (ir_block_mapping) {
-        intMapDelete(ir_block_mapping->predecessors, prev->id);
+        mapRemove(ir_block_mapping->predecessors, prev->id);
     }
 }
 
@@ -827,41 +326,10 @@ IrBlock *irFunctionFindBlock(IrFunction *func, int id) {
     return NULL;
 }
 
-/* This makes no sense to use in the wild as it is specifically formatted to be
- * used with the `intMapToString(...)` function. That isn't to say this cannot
- * be used... Just that it will look a bit our of place */
-aoStr *irBlockMappingToStringCallback(void *_ir_block_mapping) {
-    IrBlockMapping *ir_block_mapping = (IrBlockMapping *)_ir_block_mapping;
-    aoStr *buf = aoStrNew();
-    aoStr *successor_str = intMapKeysToString(ir_block_mapping->successors);
-    aoStr *predecessor_str = intMapKeysToString(ir_block_mapping->predecessors);
-    aoStrCatFmt(buf, "{\n"
-                "    P: %S\n"
-                "    S: %S\n  }",
-                predecessor_str,
-                successor_str);
-    aoStrRelease(successor_str);
-    aoStrRelease(predecessor_str);
-    return buf;
-}
-
-aoStr *irFunctionCFGToString(IrFunction *func) {
-    aoStr *buf = aoStrNew();
-    /* `char *` has been allocated for an aoStr arena. DO NOT FREE */
-    aoStr *map_str = intMapToString(func->cfg, ",\n  ", irBlockMappingToStringCallback);
-    aoStrCatFmt(buf, "CFG {\n  %S\n}",map_str);
-    return buf;
-}
-
 IrInstr *irInstrNew(IrOpcode opcode) {
     IrInstr *ir_instr = (IrInstr *)irArenaAlloc(sizeof(IrInstr));
+    memset(ir_instr, 0, sizeof(IrInstr));
     ir_instr->opcode = opcode;
-    ir_instr->result = NULL;
-    ir_instr->op1 = NULL;
-    ir_instr->op2 = NULL;
-    ir_instr->op3 = NULL;
-    ir_instr->target_block = NULL;
-    ir_instr->fallthrough_block = NULL;
     return ir_instr;
 }
 
@@ -899,39 +367,40 @@ void irAddPhiIncoming(IrInstr *ir_phi_instr,
 
 /* Where `ir_value` is always a constant int so we know how much stack space
  * we require. We _may_ want type info for of the thing we are storing? */
-IrInstr *irAlloca(IrBlock *ir_block, AstType *ast_type) {
+IrInstr *irAlloca(IrFunction *func, IrBlock *ir_block, AstType *ast_type) {
     IrInstr *ir_alloca_instr = irInstrNew(IR_OP_ALLOCA);
     IrValueType ir_value_type = irConvertType(ast_type);
     IrValue *ir_alloca_size = irConstInt(ir_value_type, ast_type->size);
     IrValue *ir_temporary_variable = irTmpVariable(ir_value_type);
-    ir_alloca_instr->op1 = ir_temporary_variable;
-    ir_alloca_instr->op2 = ir_alloca_size;
+    ir_alloca_instr->result = ir_temporary_variable;
+    ir_alloca_instr->op1 = ir_alloca_size;
     irBlockAddInstruction(ir_block, ir_alloca_instr);
+    mapAdd(func->allocas, ir_alloca_instr->result->name, ir_alloca_instr); 
     return ir_alloca_instr;
 }
 
-/* op1 is where we are storing something and op2 is the thing we are storing 
+/* result is where we are storing something and op1 is the thing we are storing 
  * I think op1 could/shoule have an offset as it is either going to be the 
  * stack or it is going to be a struct/pointer offset? */
 IrInstr *irStore(IrBlock *ir_block, IrValue *ir_dest, IrValue *ir_value) {
     IrInstr *ir_store_instr = irInstrNew(IR_OP_STORE);
-    ir_store_instr->op1 = ir_dest;
-    ir_store_instr->op2 = ir_value;
+    ir_store_instr->result = ir_dest;
+    ir_store_instr->op1 = ir_value;
     irBlockAddInstruction(ir_block, ir_store_instr);
     return ir_store_instr;
 }
 
 IrInstr *irLoad(IrBlock *ir_block, IrValue *ir_dest, IrValue *ir_value) {
     IrInstr *ir_load_instr = irInstrNew(IR_OP_LOAD);
-    ir_load_instr->op1 = ir_dest;
-    ir_load_instr->op2 = ir_value;
+    ir_load_instr->result = ir_dest;
+    ir_load_instr->op1 = ir_value;
     irBlockAddInstruction(ir_block, ir_load_instr);
     return ir_load_instr;
 }
 
 IrInstr *irRet(IrBlock *ir_block, IrValue *ir_value) {
     IrInstr *ir_return_instr = irInstrNew(IR_OP_RET);
-    ir_return_instr->op1 = ir_value;
+    ir_return_instr->result = ir_value;
     irBlockAddInstruction(ir_block, ir_return_instr);
     return ir_return_instr;
 }
@@ -941,11 +410,11 @@ IrInstr *irGetElementPointer(IrBlock *ir_block,
                              IrValue *ir_value)
 {
     IrInstr *ir_getelementptr_instr = irInstrNew(IR_OP_GEP);
-    ir_getelementptr_instr->op1 = ir_dest;
-    ir_getelementptr_instr->op2 = ir_value;
+    ir_getelementptr_instr->result = ir_dest;
+    ir_getelementptr_instr->op1 = ir_value;
     /* @GEP
-     * For clarity; op3 is the index, if it is NULL, there is no index */
-    ir_getelementptr_instr->op3 = NULL;
+     * For clarity; op2 is the index, if it is NULL, there is no index */
+    ir_getelementptr_instr->op2 = NULL;
     irBlockAddInstruction(ir_block, ir_getelementptr_instr);
     return ir_getelementptr_instr;
 }
@@ -957,9 +426,9 @@ IrInstr *irGetElementPointerAtIdx(IrBlock *ir_block,
 {
     IrInstr *ir_getelementptr_instr = irInstrNew(IR_OP_GEP);
     IrValue *ir_offset = irConstInt(IR_TYPE_I64, offset);
-    ir_getelementptr_instr->op1 = ir_dest;
-    ir_getelementptr_instr->op2 = ir_value;
-    ir_getelementptr_instr->op3 = ir_offset;
+    ir_getelementptr_instr->result = ir_dest;
+    ir_getelementptr_instr->op1 = ir_value;
+    ir_getelementptr_instr->op2 = ir_offset;
     irBlockAddInstruction(ir_block, ir_getelementptr_instr);
     return ir_getelementptr_instr;
 }
@@ -972,8 +441,11 @@ IrFunction *irFunctionNew(aoStr *name) {
     ir_function->entry_block = NULL;
     ir_function->exit_block = NULL;
     ir_function->variables = strMapNew(16);
-    ir_function->cfg = intMapNew(16);
+    ir_function->cfg = irIntBlockMappingMapNew();
     ir_function->has_var_args = 0;
+    ir_function->allocas = irStrInstrMapNew();
+    ir_function->loads = irStrInstrMapNew();
+    ir_function->stores = irStrInstrMapNew();
     return ir_function;
 }
 
@@ -1234,7 +706,7 @@ void irBuildIntCompareAndBranch(IrFunction *func,
     ir_cmp_instr->extra.cmp_kind = cmp_kind;
 
     IrInstr *ir_branch = irInstrNew(IR_OP_BR);
-    ir_branch->op1 = ir_cmp_instr->result;
+    ir_branch->result = ir_cmp_instr->result;
     ir_branch->target_block = true_block;
     ir_branch->fallthrough_block = false_block;
 
@@ -1263,7 +735,7 @@ IrInstr *irBranch(IrFunction *func,
     }
 
     IrInstr *instr = irInstrNew(IR_OP_BR);
-    instr->op1 = cond;
+    instr->result = cond;
     instr->target_block = true_block;
     instr->fallthrough_block = false_block;
 
@@ -1356,6 +828,45 @@ IrInstr *irTmpGotoLabel(IrCtx *ctx, aoStr *label) {
     return ir_instr;
 }
 
+IrValue *irFnCall(IrCtx *ctx, IrFunction *func, Ast *ast) {
+    IrValue *ir_call_args = irValueNew(IR_TYPE_ARRAY, IR_VALUE_UNRESOLVED);
+    IrValue *ir_ret_val = irTmpVariable(irConvertType(ast->type));
+    IrInstr *ir_call_instr = irInstrNew(IR_OP_CALL);
+
+    if (ast->kind == AST_FUNPTR_CALL) {
+        /* This needs to be an offset load */
+        if (ast->ref && ast->ref->kind == AST_CLASS_REF) {
+            /* This will load the function pointer from the class */
+            IrValue *ir_expr = irExpression(ctx, func, ast->ref);
+            ir_call_args->name = ir_expr->name;
+        } else {
+            IrValue *fn_ptr_var = irFunctionGetLocalFnPtr(func, ast);
+            ir_call_args->name = fn_ptr_var->name;
+        }
+    } else if (ast->kind == AST_FUNCALL) {
+        ir_call_args->name = ast->fname;
+    } else if (ast->kind == AST_ASM_FUNCALL) {
+        ir_call_args->name = ast->fname;
+    }
+
+    PtrVec *call_args = ptrVecNew();
+    ir_call_instr->result = ir_ret_val;
+    ir_call_instr->op1 = ir_call_args;
+    ir_call_args->array_.values = call_args;
+
+    if (ast->args) {
+        for (int i = 0; i < ast->args->size; ++i) {
+            Ast *ast_arg = vecGet(Ast *, ast->args, i);
+            IrValue *ir_arg = irExpression(ctx, func, ast_arg);
+            ptrVecPush(call_args, ir_arg);
+        } 
+    }
+
+    listAppend(ctx->current_block->instructions, ir_call_instr);
+    /* This is the return value of the function */
+    return ir_ret_val;
+}
+
 /* Get Element Pointer */
 IrValue *irLoadAddr(IrCtx *ctx, IrFunction *func, Ast *ast) {
     Ast *operand = ast->operand;
@@ -1369,23 +880,30 @@ IrValue *irLoadAddr(IrCtx *ctx, IrFunction *func, Ast *ast) {
                 switch (operand->type->ptr->kind) {
                     case AST_TYPE_CLASS:
                         return irLoadClassRef(ctx, func, operand, operand->type, 0);
-                    case AST_TYPE_ARRAY:
-                    case AST_TYPE_CHAR:
-                        irGetElementPointer(ctx->current_block, ir_dest, ir_value);
+                    default: {
+                        IrInstr *instr = irGetElementPointer(ctx->current_block,
+                                                             ir_dest,
+                                                             ir_value);
+                        instr->flags |= IR_INSTR_LVAR_ADDR;
                         break;
-                    default:
-                        irGetElementPointer(ctx->current_block, ir_dest, ir_value);
-                        break;
+                    }
                 }
             } else {
-                irGetElementPointer(ctx->current_block, ir_dest, ir_value);
+                // irLoad(ctx->current_block, ir_dest, ir_value);
+                IrInstr *instr = irGetElementPointer(ctx->current_block,
+                                                     ir_dest,
+                                                     ir_value);
+                instr->flags |= IR_INSTR_LVAR_ADDR;
             }
             break;
         }
 
         case AST_GVAR: {
             IrValue *ir_value = irFunctionGetGlobal(func, operand);
-            irGetElementPointer(ctx->current_block, ir_dest, ir_value);
+            IrInstr *instr = irGetElementPointer(ctx->current_block,
+                                                 ir_dest,
+                                                 ir_value);
+            instr->flags |= IR_INSTR_GVAR_ADDR;
             break;
         }
 
@@ -1428,13 +946,16 @@ IrValue *irLoadAddr(IrCtx *ctx, IrFunction *func, Ast *ast) {
 IrValue *irAssignClassRef(IrCtx *ctx, IrFunction *func, Ast *cls, AstType *field, IrValue *rhs, int offset) {
     switch (cls->kind) {
         case AST_LVAR: {
+            int total_offset = cls->type->offset + field->offset + offset;
             /* Load the offset into a variable and then assign */
             IrValue *ir_local = irFunctionGetLocal(func, cls);
-            IrValue *ir_dest = irTmpVariable(IR_TYPE_PTR);
-            (void)irGetElementPointerAtIdx(ctx->current_block,
-                             ir_dest,
-                             ir_local,
-                             field->offset + offset);
+            /* @GEP fixing */
+            IrValue *ir_dest = irTmpVariable(irConvertType(field));
+            IrInstr *instr = irGetElementPointerAtIdx(ctx->current_block,
+                                                      ir_dest,
+                                                      ir_local,
+                                                      total_offset);
+            instr->flags |= IR_INSTR_STACK_CLASS;
             irStore(ctx->current_block,ir_dest,rhs);
             return ir_dest;
         }
@@ -1446,23 +967,41 @@ IrValue *irAssignClassRef(IrCtx *ctx, IrFunction *func, Ast *cls, AstType *field
             break;
 
         case AST_CLASS_REF: {
-            IrValue *ir_expr = irExpression(ctx, func, cls->operand);
+            Ast *node = cls;
+            int field_offset = 0;
+            while (node && node->kind != AST_LVAR) {
+                field_offset += node->type->offset;
+                node = node->cls;
+            }
+
+            IrValue *ir_expr = irFunctionGetLocal(func, node);
             IrValue *ir_dest = irTmpVariable(ir_expr->type);
-            (void)irGetElementPointerAtIdx(ctx->current_block,
+            IrInstr *instr = irGetElementPointerAtIdx(ctx->current_block,
                              ir_dest,
                              ir_expr,
-                             field->offset + offset);
+                             field_offset);
+            instr->flags |= IR_INSTR_STACK_CLASS;
             irStore(ctx->current_block,ir_dest,rhs);
             return ir_dest;
         }
 
         case AST_DEREF: {
-            IrValue *ir_expr = irExpression(ctx, func, cls->operand);
-            IrValue *ir_dest = irTmpVariable(IR_TYPE_PTR);
-            (void)irGetElementPointerAtIdx(ctx->current_block,
-                             ir_dest,
-                             ir_expr,
-                             field->offset + offset);
+            Ast *node = cls;
+            int field_offset = field->offset;
+            while (node && node->kind != AST_LVAR) {
+                field_offset += node->type->offset;
+                node = node->cls;
+            }
+
+            //IrValue *ir_expr = irExpression(ctx, func, cls->operand);
+            IrValue *ir_expr = irFunctionGetLocal(func, node);
+            IrValue *ir_dest = irTmpVariable(ir_expr->type);
+            debug("ASSIGN CLASS DEREF: %s %d\n",irValueTypeToString(ir_dest->type), field_offset);
+            IrInstr *instr = irGetElementPointerAtIdx(ctx->current_block,
+                                                      ir_dest,
+                                                      ir_expr,
+                                                      field_offset);
+            instr->flags |= IR_INSTR_HEAP_CLASS;
             irStore(ctx->current_block,ir_dest,rhs);
             return ir_dest;
         }
@@ -1475,10 +1014,9 @@ IrValue *irAssignClassRef(IrCtx *ctx, IrFunction *func, Ast *cls, AstType *field
 }
 
 IrValue *irAssign(IrCtx *ctx, IrFunction *func, Ast *ast) {
-    IrValue *rhs = irExpression(ctx, func, ast->right);
-
     switch (ast->left->kind) {
         case AST_LVAR: {
+            IrValue *rhs = irExpression(ctx, func, ast->right);
             IrValue *ir_local = irFunctionGetLocal(func, ast->left);
             irStore(ctx->current_block, ir_local, rhs);
             /* Assignments return the value */
@@ -1488,6 +1026,7 @@ IrValue *irAssign(IrCtx *ctx, IrFunction *func, Ast *ast) {
         /* @Bug store the declvar in the parser not the whole AST for a 
          * default param */
         case AST_DEFAULT_PARAM: {
+            IrValue *rhs = irExpression(ctx, func, ast->right);
             IrValue *ir_local = irFunctionGetLocal(func, ast->left->declvar);
             irStore(ctx->current_block, ir_local, rhs);
             /* Assignments return the value */
@@ -1495,23 +1034,29 @@ IrValue *irAssign(IrCtx *ctx, IrFunction *func, Ast *ast) {
         }
 
         case AST_GVAR: {
+            IrValue *rhs = irExpression(ctx, func, ast->right);
             IrValue *ir_global = irFunctionGetGlobal(func, ast->left);
             irStore(ctx->current_block, ir_global, rhs);
             return rhs; 
         }
 
         case AST_DEREF: {
-            IrValue *ptr = irExpression(ctx, func, ast->left->left);
-            irStore(ctx->current_block, ptr, rhs);
+            debug("assigning to a deref\n");
+            IrValue *rhs = irExpression(ctx, func, ast->right);
+            IrValue *ir_local = irFunctionGetLocal(func, ast->left->left);
+            // IrValue *ptr = irExpression(ctx, func, ast->left->left);
+            irStore(ctx->current_block, ir_local, rhs);
             return rhs;
         }
 
         case AST_CLASS_REF: {
+            IrValue *rhs = irExpression(ctx, func, ast->right);
             return irAssignClassRef(ctx, func, ast->left->cls,
                                     ast->left->type, rhs, 0);
         }
 
         case AST_FUNPTR: {
+            IrValue *rhs = irExpression(ctx, func, ast->right);
             IrValue *ir_local = irFunctionGetLocalFnPtr(func, ast->left);
             irStore(ctx->current_block, ir_local, rhs);
             /* Assignments return the value */
@@ -1541,33 +1086,53 @@ IrValue *irLoadClassRef(IrCtx *ctx,
             */
             IrValueType ir_dest_type = irConvertType(field);
             IrValue *ir_dest = irTmpVariable(ir_dest_type);
-            /* @Unknown
-             * Why did this code used to be:
-             * `IrValue *ir_local = irFunctionGetLocal(func, cls->left);` */
+            //IrValue *ir_dest = irTmpVariable(IR_TYPE_PTR);
             IrValue *ir_local = irFunctionGetLocal(func, cls);
-            (void)irGetElementPointerAtIdx(ctx->current_block,
-                             ir_dest,
-                             ir_local,
-                             field->offset + offset);
+            /* @GEP fixing*/
+            IrInstr *instr = irGetElementPointerAtIdx(ctx->current_block,
+                                           ir_dest,
+                                           ir_local,
+                                           cls->type->offset + field->offset + offset);
+            instr->flags |= IR_INSTR_STACK_CLASS;
             return ir_dest;
         }
 
         /* Call function again, this would be a nested struct or a union */
-        case AST_CLASS_REF:
-            return irLoadClassRef(ctx,
-                                 func,
-                                 cls->operand,
-                                 field,
-                                 offset + field->offset);
+        case AST_CLASS_REF: {
+            Ast *node = cls;
+            int field_offset = 0;
+            while (node && node->kind != AST_LVAR) {
+                field_offset += node->type->offset;
+                node = node->cls;
+            }
+            IrValue *ir_expr = irFunctionGetLocal(func, node);
+            IrValue *ir_dest = irTmpVariable(ir_expr->type);
+            IrInstr *instr = irGetElementPointerAtIdx(ctx->current_block,
+                             ir_dest,
+                             ir_expr,
+                             field_offset);
+            instr->flags |= IR_INSTR_STACK_CLASS;
+            return ir_dest;
+        }
 
         /* Load the `->` dereference */
         case AST_DEREF: {
-            IrValue *ir_expr = irExpression(ctx, func, cls->operand);
+            Ast *node = cls;
+            int field_offset = field->offset;
+            while (node && node->kind != AST_LVAR) {
+                field_offset += node->type->offset;
+                node = node->cls;
+            }
+
+            IrValue *ir_expr = irFunctionGetLocal(func, node);
+            //IrValue *ir_expr = irExpression(ctx, func, cls->operand);
             IrValue *ir_dest = irTmpVariable(irConvertType(field));
-            (void)irGetElementPointerAtIdx(ctx->current_block,
-                             ir_dest,
-                             ir_expr,
-                             field->offset + offset);
+            debug("Load CLASS DEREF: %s %d\n",irValueTypeToString(ir_dest->type), field_offset);
+            IrInstr *instr = irGetElementPointerAtIdx(ctx->current_block,
+                                                      ir_dest,
+                                                      ir_expr,
+                                                      field_offset);
+            instr->flags |= IR_INSTR_HEAP_CLASS;
             return ir_dest;
         }
 
@@ -1607,8 +1172,11 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
                 case AST_TYPE_INT:
                 case AST_TYPE_CHAR:
                     return irConstInt(irConvertType(ast->type), ast->i64);
-                case AST_TYPE_FLOAT:
-                    return irConstFloat(IR_TYPE_F64, ast->f64);
+                case AST_TYPE_FLOAT: {
+                    IrValue *value = irConstFloat(IR_TYPE_F64, ast->f64);
+                    irAddConstFloat(ctx->ir_program, value);
+                    return value;
+                }
                 default:
                     loggerPanic("Unknown literal: %s\n",
                              astKindToString(ast->type->kind));
@@ -1641,7 +1209,13 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
 
             IrValueType ir_value_type = irConvertType(ast->type);
             IrValue *ir_load_dest = irTmpVariable(ir_value_type);
-            irLoad(ir_block, ir_load_dest, local_var);
+
+            if (irIsStruct(local_var->type)) {
+                // irGetElementPointer(ir_block, ir_load_dest, local_var);
+            } else {
+                irLoad(ir_block, ir_load_dest, local_var);
+            }
+
             return ir_load_dest;
         }
 
@@ -1659,6 +1233,7 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
 
         /* @TODO: Check classes and arrays */
         case AST_DEREF: {
+            loggerDebug("DEREF\n");
             IrValue *ir_ptr = irExpression(ctx, func, ast->operand);
 
             if (ir_ptr->type != IR_TYPE_PTR) {
@@ -1673,14 +1248,15 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
             irLoad(ir_block, ir_tmp_var, ir_ptr);
             return ir_tmp_var;
         }
-        
+
         case AST_CLASS_REF: {
             IrValue *ir_value = irLoadClassRef(ctx, func, ast->cls, ast->type, 0); 
             return ir_value;
         }
 
         case AST_ADDR: {
-            return irLoadAddr(ctx, func, ast);
+            IrValue *dest = irLoadAddr(ctx, func, ast);
+            return dest;
         }
 
         case AST_ASM_FUNCDEF:
@@ -1860,21 +1436,21 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
         case TK_PRE_PLUS_PLUS:
         case TK_MINUS_MINUS:
         case TK_PRE_MINUS_MINUS: {
-            IrValue *ir_value =  NULL;
+            IrValue *ir_var =  NULL;
             if (ast->operand->kind == AST_LVAR) {
-                ir_value = irFunctionGetLocal(func, ast->operand);
+                ir_var = irFunctionGetLocal(func, ast->operand);
             } else if (ast->operand->kind == AST_GVAR) {
-                ir_value = irFunctionGetGlobal(func, ast->operand);
+                ir_var = irFunctionGetGlobal(func, ast->operand);
             } else if (ast->operand->kind == AST_DEREF ||
                        ast->operand->kind == AST_CLASS_REF) {
                 /* This would be the result of derefencing, for example, a 
                  * struct member, pointer ...*/
-                ir_value = irExpression(ctx, func, ast->operand);
+                ir_var = irExpression(ctx, func, ast->operand);
             } else if (ast->operand->kind == AST_DEFAULT_PARAM) {
                 /* @Bug
                  * The parser should just save the declvar not the whole 
                  * Ast. */
-                ir_value = irFunctionGetLocal(func, ast->operand->declvar);
+                ir_var = irFunctionGetLocal(func, ast->operand->declvar);
             } else {
                 loggerPanic("Unsupported LHS assignment %s\n",
                         astKindToString(ast->operand->kind));
@@ -1904,8 +1480,8 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
             }
 
             IrValue *ir_result = irTmpVariable(ir_value_type);
-            operator(ctx->current_block, ir_result,ir_value,ir_size);
-            irStore(ctx->current_block, ir_value, ir_result);
+            operator(ctx->current_block, ir_result,ir_var,ir_size);
+            irStore(ctx->current_block, ir_var, ir_result);
             return ir_result;
         }
 
@@ -2162,43 +1738,7 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
         case AST_ASM_FUNCALL:
         case AST_FUNPTR_CALL:
         case AST_FUNCALL: {
-            IrValueType fn_ret_type = irConvertType(ast->type);
-            IrValue *ir_fn_ret = irTmpVariable(fn_ret_type);
-            IrValue *ir_call_args = irValueNew(IR_TYPE_ARRAY, IR_VALUE_PARAM);
-            IrInstr *ir_call_intr = irInstrNew(IR_OP_CALL);
-
-            if (ast->kind == AST_FUNPTR_CALL) {
-                /* This needs to be an offset load */
-                if (ast->ref && ast->ref->kind == AST_CLASS_REF) {
-                    /* This will load the function pointer from the class */
-                    IrValue *ir_expr = irExpression(ctx, func, ast->ref);
-                    ir_call_args->name = ir_expr->name;
-                } else {
-                    IrValue *fn_ptr_var = irFunctionGetLocalFnPtr(func, ast);
-                    ir_call_args->name = fn_ptr_var->name;
-                }
-            } else if (ast->kind == AST_FUNCALL) {
-                ir_call_args->name = ast->fname;
-            } else if (ast->kind == AST_ASM_FUNCALL) {
-                ir_call_args->name = ast->fname;
-            }
-
-            PtrVec *call_args = ptrVecNew();
-            ir_call_intr->result = ir_fn_ret;
-            ir_call_intr->op1 = ir_call_args;
-            ir_call_args->array_.values = call_args;
-
-            if (ast->args) {
-                for (int i = 0; i < ast->args->size; ++i) {
-                    Ast *ast_arg = vecGet(Ast *, ast->args, i);
-                    IrValue *ir_arg = irExpression(ctx, func, ast_arg);
-                    ptrVecPush(call_args, ir_arg);
-                } 
-            }
-
-            listAppend(ctx->current_block->instructions, ir_call_intr);
-            /* This is the return value of the function */
-            return ir_fn_ret;
+            return irFnCall(ctx, func, ast);
         }
 
         /* Start a basic block */
@@ -2315,6 +1855,13 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
             return result;
         }
 
+        case AST_COMPOUND_STMT: {
+            listForEach(ast->stms) {
+                Ast *next = (Ast *)it->value;
+                irStatement(ctx, func, next);
+            }
+            break;
+        }
 
         default:
             loggerPanic("Error with function '%s' Unhandled Ast kind: %s %s\n",
@@ -2335,7 +1882,7 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
                 Ast *next = (Ast *)it->value;
                 irStatement(ctx, func, next);
                 /* We cannot do this because of unresolved gotos that may need 
-                 * to jump to this block vvvvv */
+     * to jump to this block vvvvv */
                 //if (ctx->current_block->sealed) break;
             }
             break;
@@ -2605,7 +2152,7 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
 
             IrInstr *ir_switch_head = irInstrNew(IR_OP_SWITCH);
             /* Setup the switch condition instruction */
-            ir_switch_head->op1 = switch_var;
+            ir_switch_head->result = switch_var;
             ir_switch_head->target_block = end_block;
             ir_switch_head->extra.cases = listNew();
             irBlockAddInstruction(ctx->current_block, ir_switch_head);
@@ -2692,7 +2239,7 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
 
         case AST_DECL: {
             int ast_kind = ast->declvar->type->kind;
-            IrInstr *ir_local = irAlloca(ctx->current_block, ast->declvar->type);
+            IrInstr *ir_local = irAlloca(func, ctx->current_block, ast->declvar->type);
             IrValue *ir_local_var = irGetAllocaVar(ir_local);
             int ok = 0;
 
@@ -2727,6 +2274,7 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
                         ir_init->array_.length_per_array = ctx->array_.length_per_array;
                         ir_init->array_.label = irArrayName(func);
                         strMapAddAoStr(ctx->ir_program->arrays, ir_init->array_.label, ir_init);
+                        irStore(ctx->current_block,ir_local_var,ir_init);  
                         break;
                     }
 
@@ -2736,16 +2284,32 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
                     case AST_ASM_FUNCDEF:
                     case AST_ASM_FUNC_BIND: {
                         ir_init = irGlobalExpression(ctx, ast->declinit);
+                        irStore(ctx->current_block,ir_local_var,ir_init);  
                         break;
                     }
 
+                    case AST_ASM_FUNCALL:
+                    case AST_FUNPTR_CALL:
+                    case AST_FUNCALL: {
+                        ir_init = irExpression(ctx, func, ast->declinit);
+                        ir_local_var->flags |= IR_FN_VAL_USED;
+                        irStore(ctx->current_block,ir_local_var,ir_init);  
+                        break;
+                    }
+
+                    case AST_ADDR:
+                        ir_init = irExpression(ctx, func, ast->declinit);
+                        ir_local_var->flags |= IR_VALUE_ADDR;
+                        irStore(ctx->current_block,ir_local_var,ir_init);  
+                        break;
+
                     default: {
                         ir_init = irExpression(ctx, func, ast->declinit);
+                        irStore(ctx->current_block,ir_local_var,ir_init);  
                         break;
                     }    
                 }
 
-                irStore(ctx->current_block,ir_local_var,ir_init);  
             }
             break;
         }
@@ -2795,37 +2359,29 @@ void irResolveGotos(IrCtx *ctx, IrFunction *func) {
     }
 }
 
-/*==================== IR LOWERING ========================================== */
-/* Function parameters can only be a one of a few different types, thus this is
- * fairly reasonable to have separate */
-IrValue *irConvertAstFuncParam(Ast *ast_param) {
-    IrValueType ir_type = irConvertType(ast_param->type);
-    IrValue *ir_value = irValueNew(ir_type, IR_VALUE_PARAM);
-    if (ast_param->kind == AST_LVAR) {
-        ir_value->name = ast_param->tmp_var_name;
-    } else if (ast_param->kind == AST_FUNPTR) {
-        ir_value->name = ast_param->tmp_fnptr_name;
-    } else if (ast_param->kind == AST_DEFAULT_PARAM) {
-        ir_value->name = ast_param->declvar->tmp_var_name;
-    } else {
-        loggerPanic("Unhandled Ast: %s\n", astToString(ast_param));
-    }
-    return ir_value;
-}
+
+
+
+/*==================== BLOCK OPTIMISATIONS ===================================*/
 
 /* Remove `delete_block` from all predecessor and successor maps */
 void irFunctionDelinkBlock(IrFunction *func, IrBlock *delete_block) {
     List *needle = NULL;
+    if (!mapHas(func->cfg, delete_block->id)) {
+        return;
+    }
+    printf("DELETE: %d\n", delete_block->id);
     listForEach(func->blocks) {
         IrBlock *block = listValue(IrBlock *, it);
         if (block->id == delete_block->id) {
             needle = it;
+        } else {
+            irFunctionRemoveSuccessor(func, block, delete_block);
+            irFunctionRemovePredecessor(func, block, delete_block);
         }
-        irFunctionRemoveSuccessor(func, block, delete_block);
-        irFunctionRemovePredecessor(func, block, delete_block);
     }
 
-    intMapDelete(func->cfg, delete_block->id);
+    mapRemove(func->cfg, delete_block->id);
     if (needle) {
         listUnlink(func->blocks, needle);
     }
@@ -2833,7 +2389,7 @@ void irFunctionDelinkBlock(IrFunction *func, IrBlock *delete_block) {
 
 /* If the fallthrough id is the destination id and the destination target is 
  * the same as the target, then we can remove the branch */
-int irBranchFallsbackToSameBlock(IrInstr *src, InInstr *destination, IrBlock *block) {
+int irBranchFallsbackToSameBlock(IrInstr *src, IrInstr *destination, IrBlock *block) {
     if (src->opcode == IR_OP_BR) {
         return src->fallthrough_block->id == block->id &&
                src->target_block->id == destination->target_block->id;
@@ -2845,23 +2401,45 @@ int irBranchFallsbackToSameBlock(IrInstr *src, InInstr *destination, IrBlock *bl
 void irBlockMerge(IrFunction *func, IrBlock *block, IrBlock *target) {
     /* We now also need to unlink `target` which is kind of tricky as we use a 
      * linked list... */
+    IrBlockMapping *target_mapping = irFunctionGetBlockMapping(func, target);
+    Map *target_successors = target_mapping ? target_mapping->successors : NULL;
+
+    /* From the target blocks successor blocks we need to add `block` as a 
+     * predecessor as we are splicing out `target` and need to maintain links */
+    if (target_successors) {
+        MapIter it;
+        mapIterInit(target_successors, &it);
+        while (mapIterNext(&it)) {
+            IrBlock *successor_block = getValue(IrBlock *, it.node);
+            /* Our new block needs to be linked to this successor */
+            irFunctionAddSuccessor(func, block, successor_block);
+            /* Successor needs this block as a predecessor */
+            irFunctionAddPredecessor(func, successor_block, block);
+            /* Successor removes the `target` which is the block being removed */
+            irFunctionRemovePredecessor(func, successor_block, target);
+        }
+    }
+
+    /* Splice out target */
     irFunctionRemoveSuccessor(func, block, target);
-    irFunctionRemovePredecessor(func, block, target);
-    listMergeAppend(block->instructions, target->instructions);
-    /* A `NULL` list of instructions means it can be deleted */
-    target->instructions = NULL;
+    irFunctionRemovePredecessor(func, target, block);
+    if (target->instructions != NULL) {
+        listMergeAppend(block->instructions, target->instructions);
+        /* A `NULL` list of instructions means it can be deleted */
+        target->instructions = NULL;
+    }
 }
 
 int irBlocksHaveSingleLink(IrFunction *func, IrBlock *next, IrBlock *prev) {
-    IrBlockMapping *prev_mapping = intMapGet(func->cfg, prev->id);
-    IrBlockMapping *next_mapping = intMapGet(func->cfg, next->id);
+    IrBlockMapping *prev_mapping = mapGet(func->cfg, prev->id);
+    IrBlockMapping *next_mapping = mapGet(func->cfg, next->id);
     /* This should not happen */
     if (!prev_mapping || !next_mapping) {
         return 0;
     }
 
     if (prev_mapping->successors->size == 1 && next_mapping->predecessors->size == 1) {
-        IrBlock *previous_next = intMapGetFirst(prev_mapping->successors);
+        IrBlock *previous_next = mapGetAt(prev_mapping->successors,0);
 
         if (previous_next->id == next->id && next->id == previous_next->id) {
             return 1;
@@ -2892,14 +2470,23 @@ int irBlockEntryCanMergeExit(IrFunction *func) {
 
 void irSimplifyBlocks(IrFunction *func) {
     UniqList *work_queue = uniqListNew(&irBlockListIdAccessor);
-    IntSet *blocks_to_delete = intSetNew(16);
+    Set *blocks_to_delete = setNew(16, &int_set_type);
 
-    /* 2 passses seems to eliminate a lot of issues however is not based on 
-     * anything other than trial and error, this is primarily done to run 
-     * `irFunctionDelinkBlock(...)` which scans all blocks removing items from 
-     * the set of successors and predecessors */
-    int i = 2;
-    while (i--) {
+
+    /* Any blocks that don't have a successor lets assume they jump to 
+     * the return */
+    listForEach(func->blocks) {
+        IrBlock *block = getValue(IrBlock *, it);
+        if (irBlockIsStartOrEnd(func, block)) continue;
+        Map *cur_successors = irBlockGetSuccessors(func, block);
+        if (cur_successors && cur_successors->size == 0) {
+            irJump(func, block, func->exit_block);
+        }
+    }
+
+    int changed = 1;
+    while (changed) {
+        changed = 0;
         /** 
          * @THINK
          * We append the list nodes themeselves as opposed to the `IrBlock *` as this
@@ -2919,16 +2506,17 @@ void irSimplifyBlocks(IrFunction *func) {
             IrBlock *block = (IrBlock *)uniqListDequeue(work_queue);
 
             if (block == func->exit_block) continue;
-            if (intSetHas(blocks_to_delete, block->id)) continue;
+            if (setHas(blocks_to_delete, block->id)) continue;
 
             /* Currently only a few simple cases are handled for the block 
              * simplification but it is enough to work with and have some simple 
              * optimisations. */
             
             if (irBlockIsRedundant(func, block)) {
-                intSetAdd(blocks_to_delete, block->id);
+                setAdd(blocks_to_delete, block->id);
+                changed = 1;
             } else if (irBlockIsConstCompareAndBranch(block)) {
-                IrInstr *ir_cmp= listValue(IrInstr *, block->instructions->next);
+                IrInstr *ir_cmp = listValue(IrInstr *, block->instructions->next);
                 IrInstr *ir_branch = listValue(IrInstr *, block->instructions->next->next);
                 IrBlock *jump_target = irInstrEvalConstBranch(ir_cmp, ir_branch);
 
@@ -2942,21 +2530,42 @@ void irSimplifyBlocks(IrFunction *func) {
 
                 irFunctionRemoveSuccessor(func, block, ir_branch->fallthrough_block);
                 irFunctionRemovePredecessor(func, ir_branch->fallthrough_block, block);
-                if (!intSetHas(blocks_to_delete, jump_target->id)) {
+                if (!setHas(blocks_to_delete, jump_target->id)) {
                     irJump(func, block, jump_target);
                 }
+                changed = 1;
             } else if (irBlockIsRedundantJump(func, block)) {
+                /*
+                 * block 1 :: P {...}, S {2};
+                 *  ..
+                 *  ..
+                 *  jmp
+                 *
+                 * DELETE - block 2 :: P {1}, S {...} <- this successor needs 
+                 *                                       the current block as a
+                 *                                       predecessor
+                 */
                 IrInstr *ir_jmp = irBlockLastInstr(block);
-                irFunctionRemoveSuccessor(func, block, ir_jmp->target_block);
-                irFunctionRemovePredecessor(func, ir_jmp->target_block, block);
                 listPop(block->instructions);
-                if (!intSetHas(blocks_to_delete, ir_jmp->target_block->id)) {
+                if (!setHas(blocks_to_delete, ir_jmp->target_block->id)) {
                     irBlockMerge(func, block, ir_jmp->target_block);
                 }
-                intSetAdd(blocks_to_delete, ir_jmp->target_block->id);
+                setAdd(blocks_to_delete, ir_jmp->target_block->id);
+                changed = 1;
+            } else if (irBlockIsOnlyJump(func, block)) {
+                IrInstr *instr = irBlockLastInstr(block);
+                IrBlock *successor = instr->target_block;
+                block->instructions = NULL;
+                if (!setHas(blocks_to_delete, block->id)) {
+                    /* `block` is the target that is getting removed */
+                    irBlockMerge(func, successor, block);
+                }
+                setAdd(blocks_to_delete, block->id);
             }
         }
 
+        /* This cleans up the branch from the blocks we've mutated, this 
+         * could be done in the merge function */
         listForEach(func->blocks) {
             IrBlock *block = it->value;
 
@@ -2965,23 +2574,26 @@ void irSimplifyBlocks(IrFunction *func) {
                 switch (last_instr->opcode) {
                     case IR_OP_JMP:
                     case IR_OP_LOOP:
-                        if (intSetHas(blocks_to_delete, last_instr->target_block->id)) {
+                        if (setHas(blocks_to_delete, last_instr->target_block->id)) {
                             loggerWarning("case 1 bb%d\n", block->id);
                             last_instr->target_block = func->exit_block;
                             irFunctionAddMapping(func, block, func->exit_block);
+                            changed = 1;
                         }
                         break;
                     case IR_OP_BR: {
-                        if (intSetHas(blocks_to_delete, last_instr->target_block->id)) {
+                        if (setHas(blocks_to_delete, last_instr->target_block->id)) {
                             loggerWarning("case 2 bb%d\n", block->id);
                             last_instr->target_block = func->exit_block;
                             irFunctionAddMapping(func, block, func->exit_block);
+                            changed = 1;
                         }
 
-                        if (intSetHas(blocks_to_delete, last_instr->fallthrough_block->id)) {
+                        if (setHas(blocks_to_delete, last_instr->fallthrough_block->id)) {
                             loggerWarning("case 3 bb%d\n", block->id);
                             last_instr->fallthrough_block = func->exit_block;
                             irFunctionAddMapping(func, block, func->exit_block);
+                            changed = 1;
                         }
                         break;
                     }
@@ -2990,16 +2602,18 @@ void irSimplifyBlocks(IrFunction *func) {
                 }
             }
 
-            if (intSetHas(blocks_to_delete, block->id)) {
+            if (setHas(blocks_to_delete, block->id)) {
                 /* This means that nothing links to it. However... Things can 
                  * reference this node so we need to traverse all blocks removing 
                  * it. Doing this is extremely slow */
                 irFunctionDelinkBlock(func, block);
+                changed = 1;
             }
 
-            if (!irBlockHasPredecessors(func, block) && block != func->exit_block) {
-                loggerWarning("No predecessors for block %d\n", block->id);
+            if (!irBlockHasPredecessors(func, block) && block != func->exit_block &&
+                                                        block != func->entry_block) {
                 irFunctionDelinkBlock(func, block);
+                changed = 1;
             }
 
             //if (mapping && mapping->successors->size == 0 && block != func->exit_block) {
@@ -3009,52 +2623,63 @@ void irSimplifyBlocks(IrFunction *func) {
         }
     } /* While end */
 
-    if (irBlockEntryCanMergeExit(func) || irBlocksPointToEachOther(func, func->entry_block, func->exit_block)) {
+    if (irBlockEntryCanMergeExit(func) || 
+            irBlocksPointToEachOther(func, func->entry_block, func->exit_block)) {
+        IrInstr *last = irBlockLastInstr(func->entry_block);
+        if (last && last->opcode == IR_OP_JMP) {
+            listPop(func->entry_block->instructions);
+        }
         irBlockMerge(func, func->entry_block, func->exit_block);
         irFunctionDelinkBlock(func, func->exit_block);
     }
 
     uniqListRelease(work_queue);
-    intSetRelease(blocks_to_delete);
+    setRelease(blocks_to_delete);
+}
+
+
+/*==================== IR LOWERING ========================================== */
+
+
+/* Function parameters can only be a one of a few different types, thus this is
+ * fairly reasonable to have separate */
+IrValue *irConvertAstFuncParam(Ast *ast_param) {
+    IrValueType ir_type = irConvertType(ast_param->type);
+    IrValue *ir_value = irValueNew(ir_type, IR_VALUE_PARAM);
+    if (ast_param->kind == AST_LVAR) {
+        ir_value->name = ast_param->tmp_var_name;
+    } else if (ast_param->kind == AST_FUNPTR) {
+        ir_value->name = ast_param->tmp_fnptr_name;
+    } else if (ast_param->kind == AST_DEFAULT_PARAM) {
+        ir_value->name = ast_param->declvar->tmp_var_name;
+    } else {
+        loggerPanic("Unhandled Ast: %s\n", astToString(ast_param));
+    }
+    return ir_value;
 }
 
 IrFunction *irLowerFunction(IrCtx *ctx, IrProgram *program, Ast *ast_function) {
-    IrFunction *ir_function = irFunctionNew(ast_function->fname);
+    IrFunction *func = irFunctionNew(ast_function->fname);
     IrBlock *ir_entry_block = irBlockNew(irBlockId());
     IrBlock *ir_exit_block = irBlockNew(irBlockId());
 
-    ir_function->program = program;
+    func->program = program;
+
+    irFunctionAddBlock(func, ir_entry_block);
 
     if (ast_function->type->has_var_args) {
-        ir_function->has_var_args = 1;
+        func->has_var_args = 1;
     }
-
-    IrInstr *ir_return_space = irAlloca(ir_entry_block,
-                                        ast_function->type->rettype);
-    IrValue *ir_return_var = irGetAllocaVar(ir_return_space);
-    IrBlockMapping *ir_exit_block_mapping = irBlockMappingNew(ir_exit_block->id);
-    intMapAdd(ir_function->cfg, ir_exit_block_mapping->id, ir_exit_block_mapping);
-
-    /* I'm not sure if this is needed */
-    ir_function->return_value = ir_return_var;
 
     Ast *ast_var_args = NULL;
     for (int i = 0; i < ast_function->params->size; ++i) {
         Ast *ast_param = vecGet(Ast *,ast_function->params,i);
 
         if (ast_param->kind == AST_VAR_ARGS) {
-            assert(ir_function->has_var_args);
+            assert(func->has_var_args);
             ast_var_args = ast_param;
             break;
         }
-
-        /* Add to the current basic block as a store 
-         * this is 2 instructions;
-         * 1) Allocate space on the stack for the function parameter
-         * 2) Store the function parameter at this location.
-         * */
-        IrValue *ir_param = irConvertAstFuncParam(ast_param);
-        ptrVecPush(ir_function->params, ir_param);
 
         aoStr *key = NULL;
         if (ast_param->kind == AST_LVAR) {
@@ -3068,72 +2693,83 @@ IrFunction *irLowerFunction(IrCtx *ctx, IrProgram *program, Ast *ast_function) {
                     astKindToString(ast_param->kind));
         }
 
-        IrInstr *ir_alloca = irAlloca(ir_entry_block, ast_param->type);
-        IrValue *ir_tmp_var = irGetAllocaVar(ir_alloca);
-        int ok = strMapAddAoStrOrErr(ir_function->variables,
+        IrValue *ir_tmp_var = irTmpVariable(irConvertType(ast_param->type));
+        ir_tmp_var->kind = IR_VALUE_PARAM;
+        int ok = strMapAddAoStrOrErr(func->variables,
                                      key,
                                      ir_tmp_var);
+        ptrVecPush(func->params, ir_tmp_var);
+
         if (!ok) {
             loggerPanic("Failed to set function parameter variable with name %s already exists!\n",
                     ir_tmp_var->name->data);
         }
-        /* Now create the instruction to store */
-        irStore(ir_entry_block, ir_tmp_var, ir_param);
     }
 
-    if (ir_function->has_var_args) {
+    if (func->has_var_args) {
         assert(ast_var_args != NULL);
         if (ast_var_args) {
             // Create argc local variable
-            IrInstr *argc_alloca = irAlloca(ir_entry_block, ast_var_args->argc->type);
+            IrInstr *argc_alloca = irAlloca(func, ir_entry_block, ast_var_args->argc->type);
             IrValue *argc_var = irGetAllocaVar(argc_alloca);
             argc_var->name = ast_var_args->argc->tmp_var_name;
-            strMapAddAoStr(ir_function->variables, argc_var->name, argc_var);
+            strMapAddAoStr(func->variables, argc_var->name, argc_var);
             
             // Create a special parameter for argc
             IrValue *argc_param = irValueNew(irConvertType(ast_var_args->argc->type), IR_VALUE_PARAM);
             argc_param->name = aoStrPrintf("argc");
-            ptrVecPush(ir_function->params, argc_param);
+            ptrVecPush(func->params, argc_param);
             
             // Store the parameter value to the local
             irStore(ir_entry_block, argc_var, argc_param);
             
             // Create argv local variable
-            IrInstr *argv_alloca = irAlloca(ir_entry_block, ast_var_args->argv->type);
+            IrInstr *argv_alloca = irAlloca(func, ir_entry_block, ast_var_args->argv->type);
             IrValue *argv_var = irGetAllocaVar(argv_alloca);
             argv_var->name = ast_var_args->argv->tmp_var_name;
-            strMapAddAoStr(ir_function->variables, argv_var->name, argv_var);
+            strMapAddAoStr(func->variables, argv_var->name, argv_var);
             
             // Create a special parameter for argv
             IrValue *argv_param = irValueNew(irConvertType(ast_var_args->argv->type), IR_VALUE_PARAM);
             argv_param->name = aoStrPrintf("argv");
-            ptrVecPush(ir_function->params, argv_param);
+            ptrVecPush(func->params, argv_param);
             
             // Store the parameter value to the local
             irStore(ir_entry_block, argv_var, argv_param);
         }
     }
 
-    ir_function->entry_block = ir_entry_block;
-    ir_function->exit_block = ir_exit_block;
+    IrInstr *ir_return_space = irAlloca(func, ir_entry_block, ast_function->type->rettype);
+    IrValue *ir_return_var = irGetAllocaVar(ir_return_space);
+    IrBlockMapping *ir_exit_block_mapping = irBlockMappingNew(ir_exit_block->id);
+    mapAdd(func->cfg, ir_exit_block_mapping->id, ir_exit_block_mapping);
+
+    /* I'm not sure if this is needed */
+    func->return_value = ir_return_var;
+
+
+    func->entry_block = ir_entry_block;
+    func->exit_block = ir_exit_block;
     
     irCtxSetCurrentBlock(ctx, ir_entry_block);
 
     /* The function now has everything lowered to IR */
-    irStatement(ctx, ir_function, ast_function->body);
+    irStatement(ctx, func, ast_function->body);
 
-    irFunctionAddBlock(ir_function, ir_exit_block);
-    irRet(ir_function->exit_block, ir_function->return_value);
+    irFunctionAddBlock(func, ir_exit_block);
+    irRet(func->exit_block, func->return_value);
 
     if (ctx->unresolved_gotos->size) {
-        irResolveGotos(ctx, ir_function);
+        irResolveGotos(ctx, func);
     }
 
-    /* @Broken */
-    printf("irSimplifyBlocks(%s);\n", ir_function->name->data);
-    irSimplifyBlocks(ir_function);
 
-    return ir_function;
+    if (ctx->optimise) {
+        irSimplifyBlocks(func);
+        irOptimiseFunction(func);
+    }
+
+    return func;
 }
 
 void irFlattenGlobalAstArray(IrCtx *ctx, Ast *ast);
@@ -3217,19 +2853,19 @@ void irFlattenGlobalAstArray(IrCtx *ctx, Ast *ast) {
 
     int dimension_size = ast->arrayinit->size;
     
-    // If this is the first nesting level, initialize the tracking info
+    /* If this is the first nesting level, initialize the tracking info */
     if (ctx->array_.nesting == 0) {
         ctx->array_.length_per_array = dimension_size;
     }
     
-    // Increment nesting for recursive calls
+    /* Increment nesting for recursive calls */
     ctx->array_.nesting++;
     
-    // Process each element in the array
+    /* Process each element in the array */
     for (int i = 0; i < dimension_size; ++i) {
         Ast *array_element = (Ast *)ast->arrayinit->entries[i];
         
-        // Recursively process nested arrays
+        /* Recursively process nested arrays */
         if (array_element->kind == AST_ARRAY_INIT) {
             irFlattenGlobalAstArray(ctx, array_element);
         } else {
@@ -3242,7 +2878,7 @@ void irFlattenGlobalAstArray(IrCtx *ctx, Ast *ast) {
         }
     }
     
-    // Decrement nesting as we return from recursion
+    /* Decrement nesting as we return from recursion */
     ctx->array_.nesting--;
 }
 
@@ -3306,6 +2942,7 @@ IrProgram *irLowerAst(Cctrl *cc) {
     IrProgram *ir_program = irProgramNew();
     IrCtx *ctx = irCtxNew();
     ctx->ir_program = ir_program;
+    ctx->optimise = cc->flags & CCTRL_OPTIMISE;
 
     /* Handle asm blocks */
     if (!listEmpty(cc->asm_blocks)) {
@@ -3350,7 +2987,7 @@ IrProgram *irLowerAst(Cctrl *cc) {
 
         } else if (ast->kind == AST_DECL) { 
             IrValue *global_value = irLowerGlobal(ctx, ast);
-            strMapAddAoStr(ctx->ir_program->global_variables, global_value->name, global_value);
+            mapAdd(ctx->ir_program->global_variables, global_value->name, global_value);
         } else if (ast->kind == AST_ASM_FUNC_BIND) {
 
         } else {
@@ -3367,15 +3004,14 @@ aoStr *irProgramToString(IrProgram *ir_program) {
     aoStr *buf = aoStrNew();
     aoStrCatFmt(buf, "target = %s-%s\n", ARCH_STR, OS_STR);
     if (ir_program->global_variables->size) {
-        StrMapIterator *it = strMapIteratorNew(ir_program->global_variables);
-        StrMapNode *n = NULL;
-        while ((n = strMapNext(it)) != NULL) {
-            IrValue *ir_value = (IrValue *)n->value;
+        MapIter *it = mapIterNew(ir_program->global_variables);
+        while (mapIterNext(it)) {
+            IrValue *ir_value = getValue(IrValue *, it->node);
             aoStr *ir_value_str = irValueToString(ir_value);
             aoStrCatFmt(buf, "%S\n", ir_value_str);
             aoStrRelease(ir_value_str);
         }
-        strMapIteratorRelease(it);
+        mapIterRelease(it);
         aoStrPutChar(buf,'\n');
     }
 

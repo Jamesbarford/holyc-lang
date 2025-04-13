@@ -114,6 +114,11 @@ aoStr *aoStrDupRaw(char *s, size_t len) {
     return dupe;
 }
 
+aoStr *aoStrDupCString(char *s) {
+    long len = strlen(s);
+    return aoStrDupRaw(s, len);
+}
+
 aoStr *aoStrDup(aoStr *buf) {
     aoStr *dupe = aoStrAlloc(buf->len);
     memcpy(dupe->data, buf->data, buf->len);
@@ -487,7 +492,7 @@ char *mprintFmtVa(const char *fmt, va_list ap, size_t *_len, size_t *_allocated)
 
                     case 'X': {
                         size_t uint_ = va_arg(ap, size_t);
-                        aoStrCatPrintf(buf,"0x%X",uint_);
+                        aoStrCatPrintf(buf,"0x%lX",uint_);
                         break;
                     }
 
@@ -624,4 +629,20 @@ aoStr *aoStrIntToHumanReadableBytes(long bytes) {
         aoStrCatPrintf(str, "%.2fG", d);
     }
     return str;
+}
+
+unsigned long aoStrHashFunction(aoStr *str) {
+    unsigned long hash = 0;
+    for (size_t i = 0; i < str->len; ++i) {
+        hash = ((hash << 5) - hash) + str->data[i];
+    }
+    return hash;
+}
+
+size_t aoStrGetLen(aoStr *buf) {
+    return buf->len;
+}
+
+aoStr *aoStrIdentity(aoStr *buf) {
+    return buf;
 }

@@ -384,6 +384,7 @@ aoStr *astMakeTmpName(void);
 int astIsIntType(AstType *type);
 int astIsFloatType(AstType *type);
 int astKindIsFunctionLike(int ast_kind);
+int astKindIsFunctionCall(int ast_kind);
 int astIsVarArg(Ast *ast);
 int astIsRangeOperator(long op);
 Ast *astGlobalCmdArgs(void);

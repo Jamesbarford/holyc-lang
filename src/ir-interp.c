@@ -5,7 +5,7 @@
 #include "ir-types.h"
 #include "util.h"
 
-/*==================== IR HELPERS =========================================== */
+/*==================== IR TYPE TESTING ====================================== */
 /* Is what we are looking at a comparison? */
 int irOpIsCmp(IrOpcode opcode) {
     if (opcode == IR_OP_ICMP || opcode == IR_OP_FCMP) {
@@ -23,6 +23,26 @@ int irIsInt(IrValueType ir_value_type) {
            ir_value_type == IR_TYPE_I16 ||
            ir_value_type == IR_TYPE_I32 ||
            ir_value_type == IR_TYPE_I64;
+}
+
+int irIsPtr(IrValueType ir_value_type) {
+    return ir_value_type == IR_TYPE_PTR;
+}
+
+int irIsStore(IrOpcode opcode) {
+    return opcode = IR_OP_STORE;
+}
+
+int irIsLoad(IrOpcode opcode) {
+    return opcode = IR_OP_LOAD;
+}
+
+int irIsStruct(IrValueType ir_value_type) {
+    return ir_value_type == IR_TYPE_STRUCT;
+}
+
+int irTypeIsScalar(IrValueType ir_value_type) {
+    return irIsFloat(ir_value_type) || irIsInt(ir_value_type);
 }
 
 int irGetIntSize(IrValueType ir_value_type) {
@@ -48,6 +68,15 @@ int irAreCompatibleCmpTypes(IrValueType t1, IrValueType t2) {
     if ((t1 == IR_TYPE_PTR && irIsInt(t2)) || (t2 == IR_TYPE_PTR && irIsInt(t1)))
         return 1;
 
+    return 0;
+}
+
+int irValuesEq(IrValue *v1, IrValue *v2) {
+    if (!v2) return 0;
+    if (v1 == v2) return 1;
+    if (v1->kind == v2->kind && v1->type == v2->type && aoStrEq(v1->name, v2->name)) {
+        return 1;
+    }
     return 0;
 }
 
@@ -84,6 +113,19 @@ IrValueType irConvertType(AstType *type) {
     }
 }
 
+int irValueIsVariable(IrValue *value) {
+    return value->kind == IR_VALUE_LOCAL ||
+           value->kind == IR_VALUE_PARAM ||
+           value->kind == IR_VALUE_TEMP ||
+           value->kind == IR_VALUE_GLOBAL;
+}
+
+IrFunctionType irFuncGetType(IrFunction *func) {
+    return IR_FUNC;
+}
+
+/*=========================================================================== */
+
 
 /*==================== IR COMPILE TIME EVALUATION =========================== */
 
@@ -101,33 +143,41 @@ int irLastInstructionIsJumpLike(IrBlock *block) {
            ir_instr->opcode == IR_OP_BR;
 }
 
-IntMap *irBlockGetSuccessors(IrFunction *func, IrBlock *block) {
-    IrBlockMapping *mapping = intMapGet(func->cfg, block->id);
+Map *irBlockGetSuccessors(IrFunction *func, IrBlock *block) {
+    IrBlockMapping *mapping = mapGet(func->cfg, block->id);
     if (!mapping) return NULL;
     return mapping->successors;
 }
 
-IntMap *irBlockGetPredecessors(IrFunction *func, IrBlock *block) {
-    IrBlockMapping *mapping = intMapGet(func->cfg, block->id);
+Map *irBlockGetPredecessors(IrFunction *func, IrBlock *block) {
+    IrBlockMapping *mapping = mapGet(func->cfg, block->id);
     if (!mapping) return NULL;
     return mapping->predecessors;
 }
 
 int irBlockHasSuccessors(IrFunction *func, IrBlock *block) {
-    IntMap *successors = irBlockGetSuccessors(func, block);
+    Map *successors = irBlockGetSuccessors(func, block);
     return successors ? successors->size > 0 : 0;
 }
 
 int irBlockHasPredecessors(IrFunction *func, IrBlock *block) {
-    IntMap *predecessors = irBlockGetPredecessors(func, block);
+    Map *predecessors = irBlockGetPredecessors(func, block);
     return predecessors ? predecessors->size > 0 : 0;
 }
 
-int irBlockIsRedundant(IrFunction *func, IrBlock *block) {
-    IrBlockMapping *mapping = intMapGet(func->cfg, block->id);
+int irBlockIsStartOrEnd(IrFunction *func, IrBlock *block) {
+    return block == func->entry_block || block == func->exit_block; 
+}
 
+int irBlockIsRedundant(IrFunction *func, IrBlock *block) {
+    IrBlockMapping *mapping = mapGet(func->cfg, block->id);
+
+    /* Start and exit will be merged seprately */
+    if (irBlockIsStartOrEnd(func, block)) {
+        return 0;
+    }
     /* No instructions in a node means it can be killed */
-    if (listEmpty(block->instructions)) {
+    else if (listEmpty(block->instructions)) {
         return 1;
     } 
     /* No mapping means the block is essentially not used */
@@ -136,7 +186,7 @@ int irBlockIsRedundant(IrFunction *func, IrBlock *block) {
     }
     /* There is nothing that points to this node and it is not the start 
      * block for the function */
-    else if (mapping->predecessors->size == 0 && block->id != 0) {
+    else if (mapping->predecessors->size == 0) {
         return 1;
     }
 
@@ -153,15 +203,31 @@ int irBlocksPointToEachOther(IrFunction *func, IrBlock *cur_block, IrBlock *next
     if (ir_last_instr->opcode == IR_OP_JMP) {
         /* The target block does not point to the block of interest */
         if (ir_last_instr->target_block->id != next_block->id) return 0;
-        IntMap *cur_successors = irBlockGetSuccessors(func, cur_block);
-        IntMap *next_predecessors = irBlockGetPredecessors(func, next_block);
+        Map *cur_successors = irBlockGetSuccessors(func, cur_block);
+        Map *next_predecessors = irBlockGetPredecessors(func, next_block);
 
         /* This check is overly safe */
         if (next_predecessors->size == 1 &&
-            intMapHas(next_predecessors, cur_block->id) &&
+            mapHas(next_predecessors, cur_block->id) &&
             cur_successors->size == 1 &&
-            intMapHas(cur_successors, next_block->id)) {
+            mapHas(cur_successors, next_block->id)) {
             return 1;
+        }
+    }
+    return 0;
+}
+
+/* Is the block a solitary jump instruction? */
+int irBlockIsOnlyJump(IrFunction *func, IrBlock *block) {
+    IrInstr *ir_last_instr = irBlockLastInstr(block);
+    assert(ir_last_instr);
+    if (ir_last_instr->opcode == IR_OP_JMP && listIsOne(block->instructions)) {
+        Map *successors = irBlockGetSuccessors(func, block);
+        Map *predecessors = irBlockGetSuccessors(func, block);
+        if (successors && predecessors) {
+            return successors->size == 1 && predecessors->size == 1;
+        } else {
+            return 0;
         }
     }
     return 0;
@@ -176,8 +242,8 @@ int irBlockIsRedundantJump(IrFunction *func, IrBlock *block) {
     assert(ir_last_instr);
     if (ir_last_instr->opcode == IR_OP_JMP) {
         IrBlock *next_block = ir_last_instr->target_block;
-        IntMap *next_predecessors = irBlockGetPredecessors(func, next_block);
-        IntMap *cur_successors = irBlockGetSuccessors(func, block);
+        Map *cur_successors = irBlockGetSuccessors(func, block);
+        Map *next_predecessors = irBlockGetPredecessors(func, next_block);
 
         unsigned long next_predecessors_size = next_predecessors ? 
                                                next_predecessors->size : 0;
@@ -186,9 +252,9 @@ int irBlockIsRedundantJump(IrFunction *func, IrBlock *block) {
 
         /* This check is overly safe */
         if (next_predecessors_size == 1 &&
-            intMapHas(next_predecessors, block->id) &&
+            mapHas(next_predecessors, block->id) &&
             cur_successors_size == 1 &&
-            intMapHas(cur_successors, next_block->id))
+            mapHas(cur_successors, next_block->id))
         {
             return next_block->id != block->id;
         }

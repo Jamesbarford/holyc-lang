@@ -104,6 +104,10 @@ IntMapIterator *intMapIteratorNew(IntMap *map);
 void intMapIteratorRelease(IntMapIterator *it);
 IntMapNode *intMapNext(IntMapIterator *it);
 
+#define IntMapFor(it, value) \
+    for (void *value = intMapNext(it); value != NULL; value = intMapNext(it))
+
+
 typedef struct StrMapNode {
     char *key;
     long key_len;
@@ -181,10 +185,11 @@ typedef struct IntSet {
     IntVec *indexes;
 } IntSet;
 
-typedef struct IntSetIterator {
+typedef struct IntSetIter {
     IntSet *iset;
     unsigned long idx;
-} IntSetIterator;
+} IntSetIter;
+
 
 IntSet *intSetNew(unsigned long capacity);
 int intSetAdd(IntSet *iset, long key);
@@ -193,9 +198,188 @@ int intSetHas(IntSet *iset, long key);
 long intSetGetAt(IntSet *iset, long index);
 void intSetClear(IntSet *iset);
 void intSetRelease(IntSet *iset);
-IntSetIterator *intSetIteratorNew(IntSet *iset);
-long intSetNext(IntSetIterator *it);
-void intSetIteratorRelease(IntSetIterator *it);
+IntSetIter *intSetIterNew(IntSet *iset);
+long intSetNext(IntSetIter *it);
+void intSetIterRelease(IntSetIter *it);
 aoStr *intSetToString(IntSet *iset);
+
+/* @DataStructures
+ * We need a massive refactor, and ONLY use the generic implmentations, it's 
+ * extremely annoying having mulitple hashtables */
+
+/*================== Generic MAP ==============================================*/
+typedef struct MapNode MapNode;
+typedef struct Map Map;
+typedef struct MapIter MapIter;
+typedef struct MapType MapType;
+
+#define MAP_FLAG_FREE    (1<<0)
+#define MAP_FLAG_TAKEN   (1<<1)
+#define MAP_FLAG_DELETED (1<<2)
+
+typedef int (mapKeyMatch)(void *v1, void *v2);
+typedef unsigned long (mapKeyHash)(void *value);
+typedef long (mapKeyLen)(void *value);
+typedef aoStr *(mapKeyToString)(void *value);
+typedef aoStr *(mapValueToString)(void *value);
+typedef void (mapValueRelease)(void *value);
+typedef void (mapKeyRelease)(void *value);
+
+extern MapType int_map_type;
+
+struct MapType {
+    mapKeyMatch *match;
+    mapKeyHash *hash;
+    mapKeyLen *get_key_len;
+    mapKeyToString *key_to_string;
+    mapValueToString *value_to_string;
+    mapValueRelease *value_release;
+    mapKeyRelease *key_release;
+    const char *value_type;
+    const char *key_type;
+};
+
+struct MapNode {
+    unsigned int flags;
+    void *key;
+    void *value;
+    long key_len;
+};
+
+struct Map {
+    unsigned long size;
+    unsigned long capacity;
+    unsigned long mask;
+    unsigned long threashold;
+#ifdef DEBUG
+    MapNode entries[VEC_DEBUG_SIZE];
+#else
+    MapNode *entries;
+#endif
+    IntVec *indexes;
+    MapType *type;
+    Map *parent;
+    /* A _very_ common idiom is to see if the `mapHas(...)` some value 
+     * immediately followed by a `mapGet(...)` so we cache the key on
+     * `mapHas(...)` */
+    void *cached_key;
+    unsigned long cached_idx;
+};
+
+#define mapSetValueToString(map, func) ((map)->type->value_to_string = (func))
+#define mapSetValueRelease(map, func) ((map)->type->value_release = (func))
+#define mapSetValueType(map, type) ((map)->type->value_type = (type))
+#define mapSetKeyType(map, type) ((map)->type->key_type = (type))
+
+struct MapIter {
+    Map *map;
+    MapNode *node;
+    unsigned long idx;
+    unsigned long vecidx;
+};
+
+Map *mapNew(unsigned long capacity, MapType *type);
+int mapAdd(Map *map, void *key, void *value);
+int mapAddOrErr(Map *map, void *key, void *value);
+void mapRemove(Map *map, void *key);
+int mapHas(Map *map, void *key);
+void *mapGet(Map *map, void *key);
+void *mapGetAt(Map *map, unsigned long index);
+void mapClear(Map *map);
+void mapRelease(Map *map);
+MapIter *mapIterNew(Map *map);
+void mapIterInit(Map *map, MapIter *iter);
+int mapIterNext(MapIter *it);
+void mapIterRelease(MapIter *it);
+aoStr *mapToString(Map *map, char *delimiter);
+aoStr *mapKeysToString(Map *map);
+void mapPrint(Map *map);
+void mapPrintStats(Map *map);
+
+int intMapKeyMatch(void *a, void *b);
+long intMapKeyLen(void *key);
+unsigned long intMapKeyHash(void *key);
+aoStr *intMapKeyToString(void *key);
+
+/*================== Generic SET ==============================================*/
+typedef struct Set Set;
+typedef struct SetIter SetIter;
+typedef struct SetType SetType;
+typedef struct SetNode SetNode;
+
+typedef int (setValueMatch)(void *v1, void *v2);
+typedef unsigned long (setValueHash)(void *value);
+typedef aoStr *(setValueToString)(void *value);
+typedef aoStr *(setValueRelease)(void *value);
+
+struct SetType {
+    setValueMatch *match;
+    setValueToString *stringify;
+    setValueHash *hash;
+    setValueRelease *value_release;
+    char *type;
+};
+
+struct SetNode {
+    int free;
+    void *key;
+};
+
+extern SetType aostr_set_type;
+extern SetType int_set_type;
+
+struct Set {
+    unsigned long size;
+    unsigned long capacity;
+    unsigned long mask;
+    unsigned long threashold;
+#ifdef DEBUG
+    SetNode entries[VEC_DEBUG_SIZE];
+#else
+    SetNode *entries;
+#endif
+    IntVec *indexes;
+    SetType *type;
+};
+
+#define SetFor(it, value) \
+    for (void *value = setNext(it); value != NULL; value = setNext(it))
+
+#define setAssignValueMatch(set, func) ((set)->type->match = (func))
+#define setAssignValueToString(set, func) ((set)->type->stringify = (func))
+#define setAssignValueHash(set, func) ((set)->type->hash = (func))
+
+struct SetIter {
+    /* Set being iterated over */
+    Set *set;
+    /* The user facing index which the size relative to the size of the Set */
+    unsigned long idx;
+    /* The internal index into the vector of indexes */
+    unsigned long vecidx;
+    /* Current value being pointed to */
+    void *value;
+};
+
+Set *setNew(unsigned long capacity, SetType *type);
+int setAdd(Set *set, void *key);
+void *setRemove(Set *set, void *key);
+int setHas(Set *set, void *key);
+void *setGetAt(Set *set, long index);
+void setClear(Set *set);
+void setRelease(Set *set);
+SetIter *setIterNew(Set *set);
+void *setNext(SetIter *it);
+int setIterNext(SetIter *it);
+void setIterRelease(SetIter *it);
+aoStr *setToString(Set *set);
+int setEq(Set *s1, Set *s2);
+/* Add all of `s2` to `s1` */
+Set *setUnion(Set *s1, Set *s2);
+/* Add from s1 that are not in s2 */
+Set *setDifference(Set *s1, Set *s2);
+/* this is not a deep copy in that the values are not duplicated */
+Set *setCopy(Set *set);
+void setPrint(Set *set);
+void setPrintStats(Set *set);
 
 #endif

@@ -14,6 +14,8 @@
     #define __inline __attribute__((always_inline))
 #endif
 
+#define getValue(type, it) (((type)(it)->value))
+
 #define ESC_GREEN  "\033[0;32m"
 #define ESC_BLACK  "\033[0;30m"
 #define ESC_RED    "\033[0;31m"
@@ -50,11 +52,28 @@ extern int is_terminal;
         fprintf(stderr, __VA_ARGS__);                  \
     } while (0)
 
+#define debug(...)
+
 #else
-#define loggerDebug(...)                                             \
-    do {                                                             \
-        fprintf(stdout, "%s:%d:%s\t", __FILE__, __LINE__, __func__); \
-        fprintf(stdout, __VA_ARGS__);                                \
+
+#define debug(...)                                                         \
+    do {                                                                   \
+        fprintf(stderr, ESC_PURPLE"Debug - "ESC_RESET);                    \
+        fprintf(stderr, __VA_ARGS__);                                      \
+    } while (0)
+
+#define loggerDebug(...)                                                   \
+    do {                                                                   \
+        size_t __file_len__ = strlen(__FILE__);                            \
+        char *__endptr__ = __FILE__;                                       \
+        __file_len__--;                                                    \
+        while (__file_len__ && __endptr__[__file_len__] != '/') {          \
+          __file_len__--;                                                  \
+        }                                                                  \
+        __file_len__++;                                                    \
+        fprintf(stderr, "\x1b[1m%s:%d:%s\x1b[0m - ",                       \
+            __endptr__+__file_len__, __LINE__, __func__);                  \
+        fprintf(stderr, __VA_ARGS__);                                      \
     } while (0)
 
 #define loggerPanic(...)                                                   \
