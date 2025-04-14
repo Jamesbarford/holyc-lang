@@ -756,12 +756,12 @@ IrInstr *irJumpInternal(IrFunction *func,
     if (!block || !target) {
         loggerPanic("NULL param\n");
     }
-
-    if (block->sealed) {
-        loggerWarning("Tried to add a jump to a sealed block: %d\n",
-                block->id);
-        return NULL;
-    }
+    /* For a do-while we need this */
+    //if (block->sealed) {
+    //    loggerWarning("Tried to add a jump to a sealed block: %d\n",
+    //            block->id);
+    //    return NULL;
+    //}
 
     IrInstr *instr = irInstrNew(opcode);
     instr->target_block = target;
@@ -968,7 +968,8 @@ IrValue *irAssignClassRef(IrCtx *ctx, IrFunction *func, Ast *cls, AstType *field
 
         case AST_CLASS_REF: {
             Ast *node = cls;
-            int field_offset = 0;
+            //int field_offset = 0;
+            int field_offset = field->offset;
             while (node && node->kind != AST_LVAR) {
                 field_offset += node->type->offset;
                 node = node->cls;
@@ -993,7 +994,6 @@ IrValue *irAssignClassRef(IrCtx *ctx, IrFunction *func, Ast *cls, AstType *field
                 node = node->cls;
             }
 
-            //IrValue *ir_expr = irExpression(ctx, func, cls->operand);
             IrValue *ir_expr = irFunctionGetLocal(func, node);
             IrValue *ir_dest = irTmpVariable(ir_expr->type);
             debug("ASSIGN CLASS DEREF: %s %d\n",irValueTypeToString(ir_dest->type), field_offset);
@@ -1100,7 +1100,7 @@ IrValue *irLoadClassRef(IrCtx *ctx,
         /* Call function again, this would be a nested struct or a union */
         case AST_CLASS_REF: {
             Ast *node = cls;
-            int field_offset = 0;
+            int field_offset = field->offset;
             while (node && node->kind != AST_LVAR) {
                 field_offset += node->type->offset;
                 node = node->cls;
@@ -1120,8 +1120,8 @@ IrValue *irLoadClassRef(IrCtx *ctx,
             Ast *node = cls;
             int field_offset = field->offset;
             while (node && node->kind != AST_LVAR) {
-                field_offset += node->type->offset;
-                node = node->cls;
+               field_offset += node->type->offset;
+               node = node->cls;
             }
 
             IrValue *ir_expr = irFunctionGetLocal(func, node);
@@ -2370,7 +2370,6 @@ void irFunctionDelinkBlock(IrFunction *func, IrBlock *delete_block) {
     if (!mapHas(func->cfg, delete_block->id)) {
         return;
     }
-    printf("DELETE: %d\n", delete_block->id);
     listForEach(func->blocks) {
         IrBlock *block = listValue(IrBlock *, it);
         if (block->id == delete_block->id) {
@@ -2401,8 +2400,14 @@ int irBranchFallsbackToSameBlock(IrInstr *src, IrInstr *destination, IrBlock *bl
 void irBlockMerge(IrFunction *func, IrBlock *block, IrBlock *target) {
     /* We now also need to unlink `target` which is kind of tricky as we use a 
      * linked list... */
+    IrInstr *maybe_jump = irBlockLastInstr(target);
     IrBlockMapping *target_mapping = irFunctionGetBlockMapping(func, target);
-    Map *target_successors = target_mapping ? target_mapping->successors : NULL;
+    Map *target_successors = target_mapping ?
+                             target_mapping->successors :
+                             NULL;
+    Map *target_predecessors = target_mapping ?
+                              target_mapping->predecessors :
+                              NULL;
 
     /* From the target blocks successor blocks we need to add `block` as a 
      * predecessor as we are splicing out `target` and need to maintain links */
@@ -2418,6 +2423,46 @@ void irBlockMerge(IrFunction *func, IrBlock *block, IrBlock *target) {
             /* Successor removes the `target` which is the block being removed */
             irFunctionRemovePredecessor(func, successor_block, target);
         }
+    }
+
+    /* There should only be one, or a handful of predecessors however their 
+     * last instruction will need updating if it was a branch, a jump 
+     * @TODO - That probably means the successors, if a PHI node also need 
+     * their list filtering */
+    if (maybe_jump && maybe_jump->opcode == IR_OP_JMP && target_predecessors) {
+        MapIter it;
+        mapIterInit(target_predecessors, &it);
+        while (mapIterNext(&it)) {
+            IrBlock *predecessor_block = getValue(IrBlock *, it.node);
+            IrInstr *instr = irBlockLastInstr(predecessor_block);
+            if (instr) {
+                switch (instr->opcode) {
+                    case IR_OP_JMP:
+                    case IR_OP_LOOP:
+                        if (instr->target_block->id == target->id) {
+                            instr->target_block = maybe_jump->target_block;
+                         //   irFunctionAddMapping(func, block, func->exit_block);
+                        }
+                        break;
+                    case IR_OP_BR: {
+                        if (instr->target_block->id == target->id) {
+                            instr->target_block = maybe_jump->target_block;
+                            // irFunctionAddMapping(func, block, func->exit_block);
+                        }
+
+                        if (instr->fallthrough_block->id == target->id) {
+                            instr->fallthrough_block = maybe_jump->target_block;
+                            // irFunctionAddMapping(func, block, func->exit_block);
+                        }
+                        break;
+                    }
+                    default:
+                        break;
+                }
+            }
+        }
+        /* We do not want to merge in the jump instruction as it is now useless */
+        target->instructions = NULL;
     }
 
     /* Splice out target */
@@ -2555,7 +2600,6 @@ void irSimplifyBlocks(IrFunction *func) {
             } else if (irBlockIsOnlyJump(func, block)) {
                 IrInstr *instr = irBlockLastInstr(block);
                 IrBlock *successor = instr->target_block;
-                block->instructions = NULL;
                 if (!setHas(blocks_to_delete, block->id)) {
                     /* `block` is the target that is getting removed */
                     irBlockMerge(func, successor, block);
@@ -2564,43 +2608,46 @@ void irSimplifyBlocks(IrFunction *func) {
             }
         }
 
-        /* This cleans up the branch from the blocks we've mutated, this 
+        /* 
+         * @BUG - This assumes all roads lead to the exit block which is
+         * incorrect.
+         * This cleans up the branch from the blocks we've mutated, this 
          * could be done in the merge function */
         listForEach(func->blocks) {
             IrBlock *block = it->value;
 
-            if (irLastInstructionIsJumpLike(block)) {
-                IrInstr *last_instr = irBlockLastInstr(block);
-                switch (last_instr->opcode) {
-                    case IR_OP_JMP:
-                    case IR_OP_LOOP:
-                        if (setHas(blocks_to_delete, last_instr->target_block->id)) {
-                            loggerWarning("case 1 bb%d\n", block->id);
-                            last_instr->target_block = func->exit_block;
-                            irFunctionAddMapping(func, block, func->exit_block);
-                            changed = 1;
-                        }
-                        break;
-                    case IR_OP_BR: {
-                        if (setHas(blocks_to_delete, last_instr->target_block->id)) {
-                            loggerWarning("case 2 bb%d\n", block->id);
-                            last_instr->target_block = func->exit_block;
-                            irFunctionAddMapping(func, block, func->exit_block);
-                            changed = 1;
-                        }
+            //if (irLastInstructionIsJumpLike(block)) {
+            //    IrInstr *last_instr = irBlockLastInstr(block);
+            //    switch (last_instr->opcode) {
+            //        case IR_OP_JMP:
+            //        case IR_OP_LOOP:
+            //            if (setHas(blocks_to_delete, last_instr->target_block->id)) {
+            //                loggerWarning("case 1 bb%d\n", block->id);
+            //                last_instr->target_block = func->exit_block;
+            //                irFunctionAddMapping(func, block, func->exit_block);
+            //                changed = 1;
+            //            }
+            //            break;
+            //        case IR_OP_BR: {
+            //            if (setHas(blocks_to_delete, last_instr->target_block->id)) {
+            //                loggerWarning("case 2 bb%d\n", block->id);
+            //                last_instr->target_block = func->exit_block;
+            //                irFunctionAddMapping(func, block, func->exit_block);
+            //                changed = 1;
+            //            }
 
-                        if (setHas(blocks_to_delete, last_instr->fallthrough_block->id)) {
-                            loggerWarning("case 3 bb%d\n", block->id);
-                            last_instr->fallthrough_block = func->exit_block;
-                            irFunctionAddMapping(func, block, func->exit_block);
-                            changed = 1;
-                        }
-                        break;
-                    }
-                    default:
-                        break;
-                }
-            }
+            //            if (setHas(blocks_to_delete, last_instr->fallthrough_block->id)) {
+            //                loggerWarning("case 3 bb%d\n", block->id);
+            //                last_instr->fallthrough_block = func->exit_block;
+            //                irFunctionAddMapping(func, block, func->exit_block);
+            //                changed = 1;
+            //            }
+            //            break;
+            //        }
+            //        default:
+            //            break;
+            //    }
+            //}
 
             if (setHas(blocks_to_delete, block->id)) {
                 /* This means that nothing links to it. However... Things can 
@@ -2767,6 +2814,7 @@ IrFunction *irLowerFunction(IrCtx *ctx, IrProgram *program, Ast *ast_function) {
     if (ctx->optimise) {
         irSimplifyBlocks(func);
         irOptimiseFunction(func);
+        //irSimplifyBlocks(func);
     }
 
     return func;

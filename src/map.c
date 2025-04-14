@@ -1798,7 +1798,6 @@ int mapAddOrErr(Map *map, void *key, void *value) {
 void mapRemove(Map *map, void *key) {
     int ok = 0;
     unsigned long idx = mapGetIdx(map, key, &ok);
-    printf("remove:%s\n",map->type->key_to_string(key)->data);
     if (ok == 0) return;
     MapNode *n = &map->entries[idx];
     if (map->type->value_release) map->type->value_release(n->value);
