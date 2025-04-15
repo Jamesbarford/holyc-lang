@@ -641,7 +641,7 @@ IrProgram *irProgramNew(void) {
     program->asm_functions = ptrVecNew();
     program->global_variables = irStrValueMapNew();
     program->strings = strMapNew(16);
-    program->arrays = strMapNew(16);
+    program->arrays = irStrValueMapNew();
     program->floats = strMapNew(16);
     return program;
 }

@@ -168,7 +168,7 @@ struct IrLivenessAnalysis {
 /* We keep the successors and predecessors on the function in a graph as it 
  * is easier to keep track of the mappings between the blocks. */
 struct IrBlock {
-    int id;             /* Identifier for the block */
+    long id;             /* Identifier for the block */
     char sealed;        /* Block is done */
     char removed;       /* Soft delete a block? */ 
     List *instructions; /* `List<IrInstr *>` ir instructions belonging to the block */
@@ -300,8 +300,8 @@ struct IrProgram {
     PtrVec *asm_functions;    /* `PtrVec<IrValue *>` - Raw assembly functions */
     Map *global_variables;    /* `Map<aoStr *, IrValue *>` */
     StrMap *strings;          /* `StrMap<IrValue *>` */
-    StrMap *arrays;           /* @Improve, we flatten the array and store it 
-                               * which feels perhaps wrong? `StrMap<IrValue *>` */
+    Map *arrays;              /* @Improve, we flatten the array and store it 
+                               * which feels perhaps wrong? `Map<aoStr *, IrValue *>` */
     StrMap *floats;           /* `StrMap<IrValue>` We store all floats, which
                                * will become a bit like global variables. This is
                                * because you cannot treat floats as immediates */

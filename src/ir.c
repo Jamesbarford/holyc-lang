@@ -821,7 +821,7 @@ IrInstr *irTmpGotoLabel(IrCtx *ctx, aoStr *label) {
                                  label,
                                  ir_unresolved_label);
     if (!ok) {
-        loggerPanic("Label %s has already been seen in IR block %d\n", 
+        loggerPanic("Label %s has already been seen in IR block %ld\n", 
                 label->data, ctx->current_block->id);
     }
 
@@ -1043,9 +1043,9 @@ IrValue *irAssign(IrCtx *ctx, IrFunction *func, Ast *ast) {
         case AST_DEREF: {
             debug("assigning to a deref\n");
             IrValue *rhs = irExpression(ctx, func, ast->right);
-            IrValue *ir_local = irFunctionGetLocal(func, ast->left->left);
-            // IrValue *ptr = irExpression(ctx, func, ast->left->left);
-            irStore(ctx->current_block, ir_local, rhs);
+            //IrValue *lhs = irFunctionGetLocal(func, ast->left->left);
+            IrValue *lhs = irExpression(ctx, func, ast->left->left);
+            irStore(ctx->current_block, lhs, rhs);
             return rhs;
         }
 
@@ -2273,7 +2273,8 @@ void irStatement(IrCtx *ctx, IrFunction *func, Ast *ast) {
                         ir_init->array_.nesting = ctx->array_.nesting;
                         ir_init->array_.length_per_array = ctx->array_.length_per_array;
                         ir_init->array_.label = irArrayName(func);
-                        strMapAddAoStr(ctx->ir_program->arrays, ir_init->array_.label, ir_init);
+                        /* @Array */
+                        mapAdd(ctx->ir_program->arrays, ir_local_var->name, ir_init);
                         irStore(ctx->current_block,ir_local_var,ir_init);  
                         break;
                     }
@@ -2969,7 +2970,7 @@ IrValue *irLowerGlobal(IrCtx *ctx, Ast *global_variable) {
             ir_init->array_.values = ctx->array_.init;
 
             // Add to program's array table
-            strMapAddAoStr(ctx->ir_program->arrays, value->name, ir_init);
+            mapAdd(ctx->ir_program->arrays, value->name, ir_init);
         } else {
             loggerWarning("Trying to create global IR for : %s\n",
                     astToString(global_init));

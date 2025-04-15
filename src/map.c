@@ -1323,13 +1323,13 @@ static int setResize(Set *set) {
         }
     } 
 
-    free(old_entries);
     set->indexes->size = new_size;
 
 #ifdef DEBUG
     memcpy(set->indexes->entries, new_indexes, new_size * sizeof(long));
     free(new_indexes);
 #else
+    free(old_entries);
     free(set->indexes->entries);
     set->indexes->capacity = indexes_size;
     set->indexes->entries = new_indexes;
@@ -1721,13 +1721,13 @@ static int mapResize(Map *map) {
         }
     }
 
-    free(old_entries);
     map->indexes->size = new_size;
 
 #ifdef DEBUG
     memcpy(map->indexes->entries, new_indexes, new_size * sizeof(long));
     free(new_indexes);
 #else
+    free(old_entries);
     free(map->indexes->entries);
     map->indexes->entries = new_indexes;
     map->indexes->capacity = indexes_size;
