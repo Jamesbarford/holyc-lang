@@ -7,7 +7,7 @@
 UniqList *uniqListNew(uniqListGetKey *get_key) {
     UniqList *uniq_list = (UniqList *)malloc(sizeof(UniqList));
     uniq_list->work_queue = listNew();
-    uniq_list->queued = intSetNew(16);
+    uniq_list->queued = setNew(16, &int_set_type);
     uniq_list->get_key = get_key;
     uniq_list->free_value = NULL;
     return uniq_list;
@@ -19,9 +19,9 @@ int uniqListEmpty(UniqList *uniq_list) {
 
 void uniqListAppend(UniqList *uniq_list, void *value) {
     long id = uniq_list->get_key(value);
-    if (!intSetHas(uniq_list->queued, id)) {
+    if (!setHas(uniq_list->queued, (void *)id)) {
         listAppend(uniq_list->work_queue, value);
-        intSetAdd(uniq_list->queued, id);
+        setAdd(uniq_list->queued, (void *)id);
     }
 }
 
@@ -30,7 +30,7 @@ void *uniqListDequeue(UniqList *uniq_list) {
     if (!uniqListEmpty(uniq_list)) {
         void *value = listDeque(uniq_list->work_queue);
         long id = uniq_list->get_key(value);
-        intSetRemove(uniq_list->queued, id);
+        setRemove(uniq_list->queued, (void *)id);
         return value;
     }
     return NULL;
@@ -38,6 +38,6 @@ void *uniqListDequeue(UniqList *uniq_list) {
 
 void uniqListRelease(UniqList *uniq_list) {
     listRelease(uniq_list->work_queue, uniq_list->free_value);
-    intSetRelease(uniq_list->queued);
+    setRelease(uniq_list->queued);
     free(uniq_list);
 }

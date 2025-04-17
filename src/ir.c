@@ -1043,8 +1043,8 @@ IrValue *irAssign(IrCtx *ctx, IrFunction *func, Ast *ast) {
         case AST_DEREF: {
             debug("assigning to a deref\n");
             IrValue *rhs = irExpression(ctx, func, ast->right);
-            //IrValue *lhs = irFunctionGetLocal(func, ast->left->left);
-            IrValue *lhs = irExpression(ctx, func, ast->left->left);
+            IrValue *lhs = irFunctionGetLocal(func, ast->left->left);
+            //IrValue *lhs = irExpression(ctx, func, ast->left->left);
             irStore(ctx->current_block, lhs, rhs);
             return rhs;
         }
@@ -1067,7 +1067,6 @@ IrValue *irAssign(IrCtx *ctx, IrFunction *func, Ast *ast) {
             loggerPanic("Unsupported LHS assignment %s %s\n",
                     astKindToString(ast->left->kind),
                     astToString(ast->left));
-
         }
     }
 }
@@ -2360,9 +2359,6 @@ void irResolveGotos(IrCtx *ctx, IrFunction *func) {
     }
 }
 
-
-
-
 /*==================== BLOCK OPTIMISATIONS ===================================*/
 
 /* Remove `delete_block` from all predecessor and successor maps */
@@ -2442,18 +2438,15 @@ void irBlockMerge(IrFunction *func, IrBlock *block, IrBlock *target) {
                     case IR_OP_LOOP:
                         if (instr->target_block->id == target->id) {
                             instr->target_block = maybe_jump->target_block;
-                         //   irFunctionAddMapping(func, block, func->exit_block);
                         }
                         break;
                     case IR_OP_BR: {
                         if (instr->target_block->id == target->id) {
                             instr->target_block = maybe_jump->target_block;
-                            // irFunctionAddMapping(func, block, func->exit_block);
                         }
 
                         if (instr->fallthrough_block->id == target->id) {
                             instr->fallthrough_block = maybe_jump->target_block;
-                            // irFunctionAddMapping(func, block, func->exit_block);
                         }
                         break;
                     }
@@ -2562,6 +2555,7 @@ void irSimplifyBlocks(IrFunction *func) {
                 setAdd(blocks_to_delete, block->id);
                 changed = 1;
             } else if (irBlockIsConstCompareAndBranch(block)) {
+                debug("constant\n");
                 IrInstr *ir_cmp = listValue(IrInstr *, block->instructions->next);
                 IrInstr *ir_branch = listValue(IrInstr *, block->instructions->next->next);
                 IrBlock *jump_target = irInstrEvalConstBranch(ir_cmp, ir_branch);
@@ -2616,40 +2610,6 @@ void irSimplifyBlocks(IrFunction *func) {
          * could be done in the merge function */
         listForEach(func->blocks) {
             IrBlock *block = it->value;
-
-            //if (irLastInstructionIsJumpLike(block)) {
-            //    IrInstr *last_instr = irBlockLastInstr(block);
-            //    switch (last_instr->opcode) {
-            //        case IR_OP_JMP:
-            //        case IR_OP_LOOP:
-            //            if (setHas(blocks_to_delete, last_instr->target_block->id)) {
-            //                loggerWarning("case 1 bb%d\n", block->id);
-            //                last_instr->target_block = func->exit_block;
-            //                irFunctionAddMapping(func, block, func->exit_block);
-            //                changed = 1;
-            //            }
-            //            break;
-            //        case IR_OP_BR: {
-            //            if (setHas(blocks_to_delete, last_instr->target_block->id)) {
-            //                loggerWarning("case 2 bb%d\n", block->id);
-            //                last_instr->target_block = func->exit_block;
-            //                irFunctionAddMapping(func, block, func->exit_block);
-            //                changed = 1;
-            //            }
-
-            //            if (setHas(blocks_to_delete, last_instr->fallthrough_block->id)) {
-            //                loggerWarning("case 3 bb%d\n", block->id);
-            //                last_instr->fallthrough_block = func->exit_block;
-            //                irFunctionAddMapping(func, block, func->exit_block);
-            //                changed = 1;
-            //            }
-            //            break;
-            //        }
-            //        default:
-            //            break;
-            //    }
-            //}
-
             if (setHas(blocks_to_delete, block->id)) {
                 /* This means that nothing links to it. However... Things can 
                  * reference this node so we need to traverse all blocks removing 
@@ -2663,11 +2623,6 @@ void irSimplifyBlocks(IrFunction *func) {
                 irFunctionDelinkBlock(func, block);
                 changed = 1;
             }
-
-            //if (mapping && mapping->successors->size == 0 && block != func->exit_block) {
-            //    printf("Creating jump from %d to %d\n", block->id, func->exit_block->id);
-            //    irJump(func, block, func->exit_block);
-            //}
         }
     } /* While end */
 
@@ -2810,7 +2765,6 @@ IrFunction *irLowerFunction(IrCtx *ctx, IrProgram *program, Ast *ast_function) {
     if (ctx->unresolved_gotos->size) {
         irResolveGotos(ctx, func);
     }
-
 
     if (ctx->optimise) {
         irSimplifyBlocks(func);

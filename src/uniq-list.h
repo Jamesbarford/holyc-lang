@@ -12,7 +12,7 @@ typedef void uniqListFreeValue(void *value);
  * processing queue */
 typedef struct UniqList {
     List *work_queue;
-    IntSet *queued;
+    Set *queued; /* `Set<long>` */
     /* And accessor on `void *` that must return a long so we can keep track
      * of what is queued in the set */
     uniqListGetKey *get_key;

@@ -1579,19 +1579,19 @@ aoStr *setAoStrPassThrough(aoStr *value) {
 }
 
 SetType aostr_set_type = {
-    .match = (setValueMatch *)aoStrEq,
-    .hash = (setValueHash *)aoStrHashFunction,
-    .stringify = (setValueToString *)setAoStrPassThrough,
+    .match         = (setValueMatch *)aoStrEq,
+    .hash          = (setValueHash *)aoStrHashFunction,
+    .stringify     = (setValueToString *)setAoStrPassThrough,
     .value_release = NULL,
-    .type = "aoStr *",
+    .type          = "aoStr *",
 };
 
 SetType int_set_type = {
-    .match = (mapKeyMatch *)intMapKeyMatch,
-    .hash = (mapKeyHash *)intMapKeyHash,
-    .stringify = (mapKeyToString *)intMapKeyToString,
+    .match         = (mapKeyMatch *)intMapKeyMatch,
+    .hash          = (mapKeyHash *)intMapKeyHash,
+    .stringify     = (mapKeyToString *)intMapKeyToString,
     .value_release = NULL,
-    .type = "long",
+    .type          = "long",
 };
 
 /*================ Generic Map Implementation ===============================*/
