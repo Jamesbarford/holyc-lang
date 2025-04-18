@@ -1,11 +1,11 @@
 #ifndef IR_OPTIMISER_H__
 #define IR_OPTIMISER_H__
 
-aoStr *irLivenessAnalysisToString(IrLivenessAnalysis *analysis);
+AoStr *irLivenessAnalysisToString(IrLivenessAnalysis *analysis);
 IrLivenessAnalysis *irLivenessAnalysis(IrFunction *func);
 int irInstrHasSideEffects(IrInstr *instr);
 int irFnCallReturnUsed(IrBlock *block, IrLivenessInfo *info, IrInstr *instr);
-aoStr *irMemLocation(IrValue *value);
+AoStr *irMemLocation(IrValue *value);
 void irReplaceAllUses(IrFunction *func, IrValue *old_value, IrValue *new_value);
 void irBlockRemoveNops(IrBlock *block);
 int irCanPromoteAlloca(IrFunction *func, IrInstr *instr);

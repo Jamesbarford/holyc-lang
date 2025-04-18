@@ -156,7 +156,7 @@ static size_t longestCommand(void) {
     return max_len;
 }
 
-aoStr *gitGetHash(void) {
+AoStr *gitGetHash(void) {
 #ifdef HCC_GIT_HASH
     return aoStrDupRaw(str_lit(HCC_GIT_HASH));
 #else
@@ -173,8 +173,8 @@ const char *getBuildModeStr(void) {
 }
 
 __noreturn void cliVersionPrint(CliArgs *args) {
-    aoStr *git_hash = gitGetHash();
-    aoStr *buffer = aoStrNew();
+    AoStr *git_hash = gitGetHash();
+    AoStr *buffer = aoStrNew();
     if (is_terminal) {
         aoStrCatFmt(buffer, "\033[1;1mhcc\033[0m %s\n", cctrlGetVersion());
     } else {
@@ -224,7 +224,7 @@ __noreturn void cliNoInputFiles(void) {
 __noreturn void cliPrintUsage(void) {
     int commands_len = (int)(sizeof(parsers)/sizeof(parsers[0]));
     size_t longest = longestCommand() + 4;
-    aoStr *buffer = aoStrNew();
+    AoStr *buffer = aoStrNew();
 
     if (is_terminal) {
         aoStrCatFmt(buffer,"\033[1;1mhcc - HolyC Compiler %s\033[0m\n", cctrlGetVersion());

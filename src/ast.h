@@ -88,7 +88,7 @@ typedef struct AstType {
     int len;
 
     /* Class */
-    aoStr *clsname;
+    AoStr *clsname;
     StrMap *fields;
     int offset;
     int is_intrinsic;
@@ -119,32 +119,32 @@ typedef struct Ast {
         /* Float & Double */
         struct {
             double f64;
-            aoStr *f64_label;
+            AoStr *f64_label;
         };
 
         /* asm block */
         struct {
-            aoStr *asm_stmt;
+            AoStr *asm_stmt;
             List *funcs;
         };
 
         /* String */
         struct {
-            aoStr *sval;
-            aoStr *slabel;
+            AoStr *sval;
+            AoStr *slabel;
             long real_len;
         };
 
         /* Local variable */
         struct {
-            aoStr *tmp_var_name;
-            aoStr *lname;
+            AoStr *tmp_var_name;
+            AoStr *lname;
         };
 
         /* Global variable */
         struct {
-            aoStr *gname;
-            aoStr *glabel;
+            AoStr *gname;
+            AoStr *glabel;
         };
 
         /* Local reference */
@@ -173,9 +173,9 @@ typedef struct Ast {
         /* Function call, declaration, pointer or assembly */
         struct {
             /* asm function binding */
-            aoStr *asmfname;
-            aoStr *fname;
-            aoStr *tmp_fnptr_name;
+            AoStr *asmfname;
+            AoStr *fname;
+            AoStr *tmp_fnptr_name;
             PtrVec *args;
             PtrVec *params;
 
@@ -215,17 +215,17 @@ typedef struct Ast {
             Ast *forcond;
             Ast *forstep;
             Ast *forbody;
-            aoStr *for_begin;
-            aoStr *for_middle;
-            aoStr *for_end;
+            AoStr *for_begin;
+            AoStr *for_middle;
+            AoStr *for_end;
         };
 
         /* while statement */
         struct {
             Ast *whilecond;
             Ast *whilebody;
-            aoStr *while_begin;
-            aoStr *while_end;
+            AoStr *while_begin;
+            AoStr *while_end;
         };
 
         struct {
@@ -257,7 +257,7 @@ typedef struct Ast {
         struct {
             long case_begin;
             long case_end;
-            aoStr *case_label;
+            AoStr *case_label;
             /* Scopes ast nodes to the case label... Think this makes sense;
              * in my head it does. As then all the top level case nodes 
              * have the begining and end ranges... making creating a jump table
@@ -273,7 +273,7 @@ typedef struct Ast {
             Ast *case_default;
             Ast **jump_table_order;
             PtrVec *cases;
-            aoStr *case_end_label;
+            AoStr *case_end_label;
         };
     };
 } Ast;
@@ -323,20 +323,20 @@ Ast *astArrayInit(PtrVec *init);
 Ast *astCompountStatement(List *stmts);
 
 /* Control */
-Ast *astFor(Ast *init, Ast *cond, Ast *step, Ast *body, aoStr *for_begin,
-        aoStr *for_middle, aoStr *for_end);
+Ast *astFor(Ast *init, Ast *cond, Ast *step, Ast *body, AoStr *for_begin,
+        AoStr *for_middle, AoStr *for_end);
 Ast *astIf(Ast *cond, Ast *then, Ast *els);
-Ast *astWhile(Ast *whilecond, Ast *whilebody, aoStr *while_begin,
-        aoStr *while_end);
-Ast *astDoWhile(Ast *whilecond, Ast *whilebody, aoStr *while_begin, 
-        aoStr *while_end);
-Ast *astContinue(aoStr *continue_label);
-Ast *astBreak(aoStr *break_label);
-Ast *astCase(aoStr *case_label, long case_begin, long case_end, List *case_asts);
+Ast *astWhile(Ast *whilecond, Ast *whilebody, AoStr *while_begin,
+        AoStr *while_end);
+Ast *astDoWhile(Ast *whilecond, Ast *whilebody, AoStr *while_begin, 
+        AoStr *while_end);
+Ast *astContinue(AoStr *continue_label);
+Ast *astBreak(AoStr *break_label);
+Ast *astCase(AoStr *case_label, long case_begin, long case_end, List *case_asts);
 /* Do it with lists, then do it with a vector */
 Ast *astSwitch(Ast *cond, PtrVec *cases, Ast *case_default,
-        aoStr *case_end_label, int switch_bounds_checked);
-Ast *astDefault(aoStr *case_label,List *case_asts);
+        AoStr *case_end_label, int switch_bounds_checked);
+Ast *astDefault(AoStr *case_label,List *case_asts);
 
 /* Functions */
 Ast *astFunctionCall(AstType *type, char *fname, int len, PtrVec *argv);
@@ -351,19 +351,19 @@ Ast *astFunctionPtrCall(AstType *type, char *fname, int len,
 Ast *astFunctionDefaultParam(Ast *var, Ast *init);
 Ast *astVarArgs(void);
 
-Ast *astAsmBlock(aoStr *asm_stmt, List *funcs);
-Ast *astAsmFunctionBind(AstType *rettype, aoStr *asm_fname, 
-        aoStr *fname, PtrVec *params);
-Ast *astAsmFunctionCall(AstType *rettype, aoStr *asm_fname, PtrVec *argv);
-Ast *astAsmFunctionDef(aoStr *asm_fname, aoStr *asm_stmt);
+Ast *astAsmBlock(AoStr *asm_stmt, List *funcs);
+Ast *astAsmFunctionBind(AstType *rettype, AoStr *asm_fname, 
+        AoStr *fname, PtrVec *params);
+Ast *astAsmFunctionCall(AstType *rettype, AoStr *asm_fname, PtrVec *argv);
+Ast *astAsmFunctionDef(AoStr *asm_fname, AoStr *asm_stmt);
 
 /* Only used when transpiling */
 Ast *astSizeOf(AstType *type);
 Ast *astComment(char *comment, int len);
 
 /* Gotos */
-Ast *astGoto(aoStr *label);
-Ast *astLabel(aoStr *label);
+Ast *astGoto(AoStr *label);
+Ast *astLabel(AoStr *label);
 Ast *astJump(char *jumpname, int len);
 
 /* Pointers */
@@ -373,14 +373,14 @@ AstType *astMakeClassField(AstType *type, int offset);
 AstType *astMakeFunctionType(AstType *rettype, PtrVec *param_types);
 AstType *astConvertArray(AstType *ast_type);
 Ast *astClassRef(AstType *type, Ast *cls, char *field_name);
-AstType *astClassType(StrMap *fields, aoStr *clsname, int size, int is_intrinsic);
+AstType *astClassType(StrMap *fields, AoStr *clsname, int size, int is_intrinsic);
 Ast *astCast(Ast *var, AstType *to);
 
 AstType *astGetResultType(long op, AstType *a, AstType *b);
 AstType *astTypeCheck(AstType *expected, Ast *ast, long op);
 
-aoStr *astMakeLabel(void);
-aoStr *astMakeTmpName(void);
+AoStr *astMakeLabel(void);
+AoStr *astMakeTmpName(void);
 int astIsIntType(AstType *type);
 int astIsFloatType(AstType *type);
 int astKindIsFunctionLike(int ast_kind);
@@ -389,26 +389,26 @@ int astIsVarArg(Ast *ast);
 int astIsRangeOperator(long op);
 Ast *astGlobalCmdArgs(void);
 
-aoStr *astNormaliseFunctionName(char *fname);
+AoStr *astNormaliseFunctionName(char *fname);
 int astIsAssignment(long op);
 int astIsBinCmp(long op);
 Ast *astMakeForeverSentinal(void);
 Ast *astMakeLoopSentinal(void);
 char *astAnnonymousLabel(void);
 
-int astIsLabelMatch(Ast *ast, aoStr *goto_label);
+int astIsLabelMatch(Ast *ast, AoStr *goto_label);
 
 /* For debugging */
-aoStr *astTypeToAoStr(AstType *type);
+AoStr *astTypeToAoStr(AstType *type);
 char *astTypeToString(AstType *type);
 char *astTypeToColorString(AstType *type);
-aoStr *astTypeToColorAoStr(AstType *type);
+AoStr *astTypeToColorAoStr(AstType *type);
 char *astKindToString(int kind);
 char *astFunctionToString(Ast *func);
 char *astFunctionNameToString(AstType *rettype, char *fname, int len);
 char *astToString(Ast *ast);
 char *astLValueToString(Ast *ast, unsigned long lexme_flags);
-aoStr *astLValueToAoStr(Ast *ast, unsigned long lexeme_flags);
+AoStr *astLValueToAoStr(Ast *ast, unsigned long lexeme_flags);
 void astPrint(Ast *ast);
 void astTypePrint(AstType *type);
 void astKindPrint(int kind);

@@ -156,7 +156,7 @@ void cfgPrintAstArray(BasicBlock *bb) {
 
 char *bbFlagsToString(unsigned int flags) {
     if (!flags) return mprintf("(NO_FLAGS)");
-    aoStr *str = aoStrNew();
+    AoStr *str = aoStrNew();
     int has_flag = 0;
 
 #define _concat_flag(str_flag) \
@@ -219,7 +219,7 @@ char *bbFlagsToString(unsigned int flags) {
 #define BB_FMT_TYPE_CHARS 18
 #define BB_FMT_FLAG_CHARS 40
 char *bbToString(BasicBlock *bb) {
-    aoStr *str = aoStrNew();
+    AoStr *str = aoStrNew();
     char *str_flags = bbFlagsToString(bb->flags);
     char *str_type =  bbTypeToString(bb->type);
     char *str_prev =  bbPreviousBlockNumbersToString(bb);
@@ -244,7 +244,7 @@ char *bbPreviousBlockNumbersToString(BasicBlock *bb) {
 }
 
 char *bbToJSON(BasicBlock *bb) {
-    aoStr *str = aoStrNew();
+    AoStr *str = aoStrNew();
     char *str_flags = bbFlagsToString(bb->flags);
     char *str_type =  bbTypeToString(bb->type);
     char *str_prev =  bbPreviousBlockNumbersToString(bb);
@@ -279,7 +279,7 @@ void bbPrintNoAst(BasicBlock *bb) {
 void bbPrint(BasicBlock *bb) {
     assert(bb != NULL);
     char *bb_str = bbToString(bb);
-    aoStr *str = aoStrDupRaw((char*)bb_str, strlen(bb_str)); 
+    AoStr *str = aoStrDupRaw((char*)bb_str, strlen(bb_str)); 
     aoStrPutChar(str,'\n');
     for (int i = 0; i < bb->ast_array->size; ++i) {
         char *ast_str = astLValueToString(bb->ast_array->entries[i],0);
@@ -310,7 +310,7 @@ static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder,
     return bb;
 }
 
-static CFG *cfgNew(aoStr *fname, BasicBlock *head_block) {
+static CFG *cfgNew(AoStr *fname, BasicBlock *head_block) {
     CFG *cfg = (CFG *)malloc(sizeof(CFG));
     cfg->head = head_block;
     cfg->ref_fname = fname;
@@ -698,7 +698,7 @@ static void cfgHandleDoWhileLoop(CFGBuilder *builder, Ast *ast) {
 
 static void cfgHandleGoto(CFGBuilder *builder, Ast *ast) {
     BasicBlock *dest;
-    aoStr *label = astHackedGetLabel(ast);
+    AoStr *label = astHackedGetLabel(ast);
 
     bbSetType(builder->bb,BB_GOTO);
 
@@ -746,7 +746,7 @@ static void cfgHandleLabel(CFGBuilder *builder, Ast *ast) {
             BB_CONTROL_BLOCK,BB_FLAG_LABEL);
     /* We want the label in the newly allocated block */
     ptrVecPush(bb_label->ast_array,ast);
-    aoStr *label = astHackedGetLabel(ast);
+    AoStr *label = astHackedGetLabel(ast);
     strMapAdd(builder->resolved_labels,label->data,bb_label);
     cfgBuilderSetBlock(builder,bb_label);
 }
@@ -1022,7 +1022,7 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
 }
 
 /* Remove nodes from the ast array that are before the label */
-//static void cfgRemoveNodesBeforeLabel(BasicBlock *bb_dest, aoStr *goto_label) {
+//static void cfgRemoveNodesBeforeLabel(BasicBlock *bb_dest, AoStr *goto_label) {
 //    int collect = 0;
 //    int new_size = 0;
 //    Ast *ast = bb_dest->ast_array->entries[0];
@@ -1051,7 +1051,7 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
 /* a lot of the code in this function is absolutely ridiculous, as 
  * what you can do with goto is absolutely ridiculous */
 static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
-        BasicBlock *bb_dest, aoStr *goto_label)
+        BasicBlock *bb_dest, AoStr *goto_label)
 {
     /* Can happen... if the block we want to goto is itself */
     if (bb_goto == bb_dest) {
@@ -1197,8 +1197,8 @@ void cfgAdjacencyListPrintShallow(CFG *cfg) {
     intMapIteratorRelease(it);
 }
 
-aoStr *cdfAdjacencyListToJSON(CFG *cfg) {
-    aoStr *json = aoStrNew();
+AoStr *cdfAdjacencyListToJSON(CFG *cfg) {
+    AoStr *json = aoStrNew();
     IntMapIterator *it = intMapIteratorNew(cfg->no_to_block);
     IntMapNode *entry;
 
@@ -1672,8 +1672,8 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
             }
         }
 
-        aoStr *goto_label = astHackedGetLabel(ast);
-        aoStr *dest_label = astHackedGetLabel(ast);
+        AoStr *goto_label = astHackedGetLabel(ast);
+        AoStr *dest_label = astHackedGetLabel(ast);
 
         assert(ast->kind == AST_GOTO);
 

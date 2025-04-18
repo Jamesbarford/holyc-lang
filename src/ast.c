@@ -57,14 +57,14 @@ AstType *ast_void_type = &(AstType){.kind = AST_TYPE_VOID, .size = 0, .ptr = NUL
 AstType *ast_auto_type = &(AstType){.kind = AST_TYPE_VOID, .size = 0, .ptr = NULL,.issigned=0};
 
 Ast *ast_loop_sentinal = &(Ast){.kind = AST_GOTO, .type=NULL,
-    .slabel = &(aoStr){.data="loop_sentinal", .len=13, .capacity = 0}};
+    .slabel = &(AoStr){.data="loop_sentinal", .len=13, .capacity = 0}};
 Ast *placeholder_arg = &(Ast){ .kind = AST_PLACEHOLDER};
 
 Ast *ast_forever_sentinal = &(Ast){ .kind = AST_LITERAL,
   .type = &(AstType){.kind = AST_TYPE_INT, .size = 8, .ptr = NULL,.issigned=1},
   .i64 = 1 };
 
-void _astToString(aoStr *str, Ast *ast, int depth);
+void _astToString(AoStr *str, Ast *ast, int depth);
 char *_astToStringRec(Ast *ast, int depth);
 
 static int ast_tmp_variable_counter = 0;
@@ -162,16 +162,16 @@ Ast *astF64Type(double val) {
     return ast;
 }
 
-aoStr *astMakeLabel(void) {
+AoStr *astMakeLabel(void) {
     static int label_sequence = 0;
-    aoStr *s = aoStrNew();
+    AoStr *s = aoStrNew();
     aoStrCatPrintf(s, ".L%d", label_sequence++);
     return s;
 }
 
 static int tmp_name_sequence = 0;
-aoStr *astMakeTmpName(void) {
-    aoStr *s = aoStrNew();
+AoStr *astMakeTmpName(void) {
+    AoStr *s = aoStrNew();
     aoStrCatPrintf(s, ".T%d", tmp_name_sequence++);
     return s;
 }
@@ -340,7 +340,7 @@ static void astJumpTableSort(Ast **cases, int high, int low) {
 /* For cases that are stacked remove their individual labels, merging them 
  * with their neighbours */
 static void astCasesCompress(Ast **cases, int size) {
-    aoStr *label = NULL;
+    AoStr *label = NULL;
     for (int i = 0; i < size; ++i) {
         Ast *_case = cases[i];
         label = _case->case_label;
@@ -355,7 +355,7 @@ static void astCasesCompress(Ast **cases, int size) {
 }
 
 Ast *astSwitch(Ast *cond, PtrVec *cases, Ast *case_default,
-        aoStr *case_end_label, int switch_bounds_checked)
+        AoStr *case_end_label, int switch_bounds_checked)
 {
     Ast *ast = astNew();
     Ast **jump_table_order = (Ast **)malloc(sizeof(Ast *) * cases->size);
@@ -377,7 +377,7 @@ Ast *astSwitch(Ast *cond, PtrVec *cases, Ast *case_default,
     return ast;
 }
 
-Ast *astCase(aoStr *case_label,
+Ast *astCase(AoStr *case_label,
              long case_begin,
              long case_end,
              List *case_asts)
@@ -392,7 +392,7 @@ Ast *astCase(aoStr *case_label,
     return ast;
 }
 
-Ast *astDefault(aoStr *case_label, List *case_asts) {
+Ast *astDefault(AoStr *case_label, List *case_asts) {
     Ast *ast = astNew();
     ast->kind = AST_DEFAULT;
     ast->case_label = case_label;
@@ -404,9 +404,9 @@ Ast *astFor(Ast *init,
             Ast *cond,
             Ast *step,
             Ast *body,
-            aoStr *for_begin,
-            aoStr *for_middle,
-            aoStr *for_end)
+            AoStr *for_begin,
+            AoStr *for_middle,
+            AoStr *for_end)
 {
     Ast *ast = astNew();
     ast->type = NULL;
@@ -423,8 +423,8 @@ Ast *astFor(Ast *init,
 
 Ast *astDoWhile(Ast *whilecond,
                 Ast *whilebody,
-                aoStr *while_begin, 
-                aoStr *while_end)
+                AoStr *while_begin, 
+                AoStr *while_end)
 {
     Ast *ast = astNew();
     ast->type = NULL;
@@ -438,8 +438,8 @@ Ast *astDoWhile(Ast *whilecond,
 
 Ast *astWhile(Ast *whilecond,
               Ast *whilebody,
-              aoStr *while_begin, 
-              aoStr *while_end)
+              AoStr *while_begin, 
+              AoStr *while_end)
 {
     Ast *ast = astNew();
     ast->type = NULL;
@@ -452,7 +452,7 @@ Ast *astWhile(Ast *whilecond,
 }
 
 /* Duplicates the label */
-Ast *astContinue(aoStr *continue_label) {
+Ast *astContinue(AoStr *continue_label) {
     Ast *ast = astNew();
     ast->type = NULL;
     ast->kind = AST_CONTINUE;
@@ -462,7 +462,7 @@ Ast *astContinue(aoStr *continue_label) {
 
 /* XXX: reference count string? 
  * Duplicates the label */
-Ast *astBreak(aoStr *break_label) {
+Ast *astBreak(AoStr *break_label) {
     Ast *ast = astNew();
     ast->type = NULL;
     ast->kind = AST_BREAK;
@@ -511,7 +511,7 @@ Ast *astSizeOf(AstType *type) {
     return ast;
 }
 
-Ast *astGoto(aoStr *label) {
+Ast *astGoto(AoStr *label) {
     Ast *ast = astNew();
     ast->type = NULL;
     ast->kind = AST_GOTO;
@@ -519,7 +519,7 @@ Ast *astGoto(aoStr *label) {
     return ast;
 }
 
-Ast *astLabel(aoStr *label) {
+Ast *astLabel(AoStr *label) {
     Ast *ast = astNew();
     ast->type = NULL;
     ast->kind = AST_LABEL;
@@ -554,7 +554,7 @@ Ast *astClassRef(AstType *type, Ast *cls, char *field_name) {
     return ref;
 }
 
-AstType *astClassType(StrMap *fields, aoStr *clsname, int size, int is_intrinsic) {
+AstType *astClassType(StrMap *fields, AoStr *clsname, int size, int is_intrinsic) {
     AstType *ref = astTypeNew();
     ref->kind = AST_TYPE_CLASS;
     ref->fields = fields;
@@ -572,7 +572,7 @@ Ast *astCompountStatement(List *stmts) {
     return ast;
 }
 
-Ast *astAsmBlock(aoStr *asm_stmt, List *funcs) {
+Ast *astAsmBlock(AoStr *asm_stmt, List *funcs) {
     Ast *ast = astNew();
     ast->kind = AST_ASM_STMT;
     ast->type = NULL;
@@ -581,7 +581,7 @@ Ast *astAsmBlock(aoStr *asm_stmt, List *funcs) {
     return ast;
 }
 
-Ast *astAsmFunctionDef(aoStr *asm_fname, aoStr *asm_stmt) {
+Ast *astAsmFunctionDef(AoStr *asm_fname, AoStr *asm_stmt) {
     Ast *ast = astNew();
     ast->kind = AST_ASM_FUNCDEF;
     ast->asmfname = asm_fname;
@@ -590,8 +590,8 @@ Ast *astAsmFunctionDef(aoStr *asm_fname, aoStr *asm_stmt) {
     return ast;
 }
 
-Ast *astAsmFunctionBind(AstType *rettype, aoStr *asm_fname,
-                        aoStr *fname, PtrVec *params)
+Ast *astAsmFunctionBind(AstType *rettype, AoStr *asm_fname,
+                        AoStr *fname, PtrVec *params)
 {
     Ast *ast = astNew();
     ast->kind = AST_ASM_FUNC_BIND;
@@ -602,7 +602,7 @@ Ast *astAsmFunctionBind(AstType *rettype, aoStr *asm_fname,
     return ast;
 }
 
-Ast *astAsmFunctionCall(AstType *rettype, aoStr *asm_fname, PtrVec *argv) {
+Ast *astAsmFunctionCall(AstType *rettype, AoStr *asm_fname, PtrVec *argv) {
     Ast *ast = astNew();
     ast->type = rettype;
     ast->kind = AST_ASM_FUNCALL;
@@ -658,8 +658,8 @@ Ast *astComment(char *comment, int len) {
     return ast;
 }
 
-aoStr *astNormaliseFunctionName(char *fname) {
-    aoStr *newfn = aoStrNew();
+AoStr *astNormaliseFunctionName(char *fname) {
+    AoStr *newfn = aoStrNew();
 #if IS_BSD
     if (fname[0] != '_') {
         aoStrPutChar(newfn, '_');
@@ -950,19 +950,19 @@ int astKindIsFunctionCall(int ast_kind) {
     }
 }
 
-void astStringEndStmt(aoStr *str) {
+void astStringEndStmt(AoStr *str) {
     if (str->data[str->len-1] != '\n') {
         aoStrPutChar(str, '\n');
     }
 }
 
-void astUnaryOpToString(aoStr *str, char *op, Ast *ast,int depth) {
+void astUnaryOpToString(AoStr *str, char *op, Ast *ast,int depth) {
     aoStrCatPrintf(str, "<unary_expr> %s\n", op);
     _astToString(str, ast->operand, depth+1);
     astStringEndStmt(str);
 }
 
-void astBinaryOpToString(aoStr *str, char *op, Ast *ast, int depth) {
+void astBinaryOpToString(AoStr *str, char *op, Ast *ast, int depth) {
     aoStrCatPrintf(str, "<binary_expr> %s\n", op);
     _astToString(str, ast->left, depth+1);
     astStringEndStmt(str);
@@ -982,13 +982,13 @@ int astIsUnionPointer(AstType *type) {
            type->ptr->kind == AST_TYPE_UNION;
 }
 
-int astIsLabelMatch(Ast *ast, aoStr *goto_label) {
+int astIsLabelMatch(Ast *ast, AoStr *goto_label) {
     return ast->kind == AST_LABEL &&
            aoStrEq(goto_label, astHackedGetLabel(ast));
 }
 
-static aoStr *astTypeToAoStrInternal(AstType *type) {
-    aoStr *str = aoStrNew();
+static AoStr *astTypeToAoStrInternal(AstType *type) {
+    AoStr *str = aoStrNew();
 
     switch (type->kind) {
     case AST_TYPE_VOID:
@@ -1032,7 +1032,7 @@ static aoStr *astTypeToAoStrInternal(AstType *type) {
         return str;
 
     case AST_TYPE_POINTER: {
-        aoStr *ptr_type = astTypeToAoStrInternal(type->ptr);
+        AoStr *ptr_type = astTypeToAoStrInternal(type->ptr);
         aoStrCatPrintf(str, "%s*", ptr_type->data);
         return str;
     }
@@ -1059,7 +1059,7 @@ static aoStr *astTypeToAoStrInternal(AstType *type) {
     }
 
     case AST_TYPE_FUNC: {
-        aoStr *return_type = astTypeToAoStrInternal(type->rettype);
+        AoStr *return_type = astTypeToAoStrInternal(type->rettype);
         aoStrCatPrintf(str, "<fn> %s", return_type->data);
         return str;
     }
@@ -1073,8 +1073,8 @@ static aoStr *astTypeToAoStrInternal(AstType *type) {
     }
 }
 
-aoStr *astTypeToAoStr(AstType *type) {
-    aoStr *str_type = astTypeToAoStrInternal(type);
+AoStr *astTypeToAoStr(AstType *type) {
+    AoStr *str_type = astTypeToAoStrInternal(type);
     if (str_type->data[str_type->len - 1] == '*') {
         /* move the stars to the end of the string
          * 
@@ -1097,17 +1097,17 @@ aoStr *astTypeToAoStr(AstType *type) {
 }
 
 char *astTypeToString(AstType *type) {
-    aoStr *str_type = astTypeToAoStr(type);
+    AoStr *str_type = astTypeToAoStr(type);
     return aoStrMove(str_type);
 }
 
-aoStr *astTypeToColorAoStr(AstType *type) {
-    aoStr *str = astTypeToAoStr(type);
+AoStr *astTypeToColorAoStr(AstType *type) {
+    AoStr *str = astTypeToAoStr(type);
     if (!isatty(STDOUT_FILENO)) {
         return str;
     }
 
-    aoStr *buf = aoStrNew();
+    AoStr *buf = aoStrNew();
     int star_count = 0;
     if (str->data[str->len-1] == '*') {
         ssize_t idx = str->len - 1;
@@ -1131,13 +1131,13 @@ aoStr *astTypeToColorAoStr(AstType *type) {
 }
 
 char *astTypeToColorString(AstType *type) {
-    aoStr *color_type = astTypeToColorAoStr(type);
+    AoStr *color_type = astTypeToColorAoStr(type);
     return aoStrMove(color_type);
 }
 
 char *astFunctionNameToString(AstType *rettype, char *fname, int len) {
-    aoStr *str = aoStrNew();
-    aoStr *tmp = astTypeToColorAoStr(rettype);
+    AoStr *str = aoStrNew();
+    AoStr *tmp = astTypeToColorAoStr(rettype);
 
     /* Add type definition */
     aoStrCatLen(str,tmp->data,tmp->len);
@@ -1152,7 +1152,7 @@ char *astFunctionNameToString(AstType *rettype, char *fname, int len) {
 }
 
 static char *astParamsToString(PtrVec *params) {
-    aoStr *str = aoStrNew();
+    AoStr *str = aoStrNew();
     char *tmp;
     if (params->size == 0) {
         tmp = astTypeToColorString(ast_void_type);
@@ -1175,10 +1175,10 @@ static char *astParamsToString(PtrVec *params) {
 }
 
 static char *astFunctionToStringInternal(Ast *func, AstType *type) {
-    aoStr *str = aoStrNew();
+    AoStr *str = aoStrNew();
     char *strparams = NULL;
 
-    aoStr *tmp = astTypeToColorAoStr(type);
+    AoStr *tmp = astTypeToColorAoStr(type);
     if (tmp->data[tmp->len - 1] == '*') {
         aoStrCatPrintf(str,"%s%s",tmp->data,func->fname->data);
     } else {
@@ -1210,8 +1210,7 @@ char *astFunctionToString(Ast *func) {
     return astFunctionToStringInternal(func,func->type->rettype);
 }
 
-void _astToString(aoStr *str, Ast *ast, int depth) {
-    printf("%s\n", astKindToString(ast->kind));
+void _astToString(AoStr *str, Ast *ast, int depth) {
     aoStrCatRepeat(str, "  ", depth);
     if (ast == NULL) {
         aoStrCatLen(str, "(null)", 6);
@@ -1277,7 +1276,7 @@ void _astToString(aoStr *str, Ast *ast, int depth) {
         }
     }
     case AST_LVAR: {
-        aoStr *type_str = astTypeToColorAoStr(ast->type);
+        AoStr *type_str = astTypeToColorAoStr(ast->type);
 
         aoStrCatLen(str, str_lit("<lvar> "));
         
@@ -1291,7 +1290,7 @@ void _astToString(aoStr *str, Ast *ast, int depth) {
     }    
     
     case AST_DECL: {
-        aoStr *type_color = astTypeToColorAoStr(ast->declvar->type);
+        AoStr *type_color = astTypeToColorAoStr(ast->declvar->type);
 
         /* type declaration sorted */
         aoStrCatLen(str, str_lit("<decl> "));
@@ -1555,25 +1554,38 @@ void _astToString(aoStr *str, Ast *ast, int depth) {
         }
         
         case AST_CLASS_REF: {
+            int field_idx = 0;
+            char *fields[32];
+            char *ref_notation[32];
             /* Dig until we find the <lvar> */
             Ast *node = ast;
-            aoStr *class_path = aoStrNew();
+            AoStr *class_path = aoStrNew();
             aoStrCatPrintf(str, "<class_ref>\n");
             int offset = 0;
+            /* reverse it so the order is correct */
             while (node && node->kind != AST_LVAR) {
                 if (node->cls->deref_symbol == TK_ARROW) {
-                    aoStrCatFmt(class_path, "->%s", node->field);
+                    ref_notation[field_idx] = "->";
+                    fields[field_idx++] = strdup(node->field);
                 } else if (node->field) {
-                    aoStrCatFmt(class_path, ".%s", node->field);
+                    ref_notation[field_idx] = ".";
+                    fields[field_idx++] = strdup(node->field);
                 }
                 offset += node->type->offset;
                 node = node->cls;
             }
-            aoStr *cls_type_str = astTypeToColorAoStr(node->type);
-            aoStr *type_str = astTypeToColorAoStr(ast->type);
+            while (--field_idx != -1) {
+                aoStrCatFmt(class_path, "%s%s", ref_notation[field_idx], fields[field_idx]);
+            }
+            AoStr *cls_type_str = astTypeToColorAoStr(node->type);
+            AoStr *type_str = astTypeToColorAoStr(ast->type);
             aoStrCatRepeat(str, "  ", depth+1);
             aoStrCatFmt(str, "%S %S%S (%S offset; %I)",
-                    type_str, node->lname, class_path, cls_type_str, offset);
+                        type_str,
+                        node->lname,
+                        class_path,
+                        cls_type_str, 
+                        offset);
             aoStrRelease(class_path);
             aoStrRelease(type_str);
             aoStrRelease(cls_type_str);
@@ -1810,7 +1822,7 @@ int astIsRangeOperator(long op) {
 }
 
 char *_astToStringRec(Ast *ast, int depth) {
-    aoStr *str = aoStrNew();
+    AoStr *str = aoStrNew();
     _astToString(str,ast, depth);
     return aoStrMove(str);
 }
@@ -1821,21 +1833,21 @@ char *astToString(Ast *ast) {
 }
 
 /* This can only be used for lvalues */
-static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags);
+static void _astLValueToString(AoStr *str, Ast *ast, unsigned long lexeme_flags);
 
-void astUnaryArgToString(aoStr *str, char *op, Ast *ast, unsigned long lexeme_flags) {
+void astUnaryArgToString(AoStr *str, char *op, Ast *ast, unsigned long lexeme_flags) {
     aoStrCatPrintf(str, "%s", op);
     _astLValueToString(str, ast->operand,lexeme_flags);
 }
 
-void astBinaryArgToString(aoStr *str, char *op, Ast *ast, unsigned long lexeme_flags) {
+void astBinaryArgToString(AoStr *str, char *op, Ast *ast, unsigned long lexeme_flags) {
     _astLValueToString(str, ast->left,lexeme_flags);
     aoStrCatPrintf(str, " %s ", op);
     _astLValueToString(str, ast->right,lexeme_flags);
 }
 
 /* This can only be used for lvalues */
-static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags) {
+static void _astLValueToString(AoStr *str, Ast *ast, unsigned long lexeme_flags) {
     char *str_op = NULL;
     if (ast == NULL) {
         aoStrCatLen(str, "(null)", 6);
@@ -1865,7 +1877,7 @@ static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
             break;
 
         case AST_STRING: {
-            aoStr *encoded = NULL;
+            AoStr *encoded = NULL;
             char *quote = "\"";
             if (lexeme_flags & LEXEME_GRAPH_VIZ_ENCODE_PUNCT) {
                 quote = "&#34;";
@@ -1902,7 +1914,7 @@ static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
         case AST_FUNCALL:
         case AST_FUNPTR_CALL:
         case AST_ASM_FUNCALL: {
-            aoStr *internal = aoStrAlloc(256);
+            AoStr *internal = aoStrAlloc(256);
             for (ssize_t i = 0; i < ast->args->size; ++i) {
                 Ast *val = cast(Ast *, ast->args->entries[i]);
                 _astLValueToString(internal,val,lexeme_flags);
@@ -1949,13 +1961,13 @@ static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
         }
 
         case AST_GOTO: {
-            aoStr *label = astHackedGetLabel(ast);
+            AoStr *label = astHackedGetLabel(ast);
             aoStrCatPrintf(str,"goto %s",label->data);
             break;
         }
 
         case AST_LABEL: {
-            aoStr *label = astHackedGetLabel(ast);
+            AoStr *label = astHackedGetLabel(ast);
             aoStrCatPrintf(str,"%s:",label->data);
             break;
         }
@@ -2061,14 +2073,14 @@ static void _astLValueToString(aoStr *str, Ast *ast, unsigned long lexeme_flags)
     }
 }
 
-aoStr *astLValueToAoStr(Ast *ast, unsigned long lexeme_flags) {
-    aoStr *str = aoStrNew();
+AoStr *astLValueToAoStr(Ast *ast, unsigned long lexeme_flags) {
+    AoStr *str = aoStrNew();
     _astLValueToString(str,ast,lexeme_flags);
     return str;
 }
 
 char *astLValueToString(Ast *ast, unsigned long lexeme_flags) {
-    aoStr *str = astLValueToAoStr(ast,lexeme_flags);
+    AoStr *str = astLValueToAoStr(ast,lexeme_flags);
     return aoStrMove(str);
 }
 

@@ -97,8 +97,8 @@ void intMapSetFreeValue(IntMap *map, void (*_free_value)(void *value));
 void intMapClear(IntMap *map);
 void intMapRelease(IntMap *map);
 int intMapResize(IntMap *map);
-aoStr *intMapToString(IntMap *map, char *delimiter, aoStr *(*stringify_value)(void *));
-aoStr *intMapKeysToString(IntMap *map);
+AoStr *intMapToString(IntMap *map, char *delimiter, AoStr *(*stringify_value)(void *));
+AoStr *intMapKeysToString(IntMap *map);
 
 IntMapIterator *intMapIteratorNew(IntMap *map);
 void intMapIteratorRelease(IntMapIterator *it);
@@ -142,17 +142,17 @@ unsigned long roundUpToNextPowerOf2(unsigned long v);
 StrMap *strMapNew(unsigned long capacity);
 StrMap *strMapNewWithParent(unsigned long capacity, StrMap *parent);
 void *strMapGetLen(StrMap *map, char *key, long key_len);
-void *strMapGetAoStr(StrMap *map, aoStr *key);
+void *strMapGetAoStr(StrMap *map, AoStr *key);
 void *strMapGet(StrMap *map, char *key);
 
 int strMapAdd(StrMap *map, char *key, void *value);
 int strMapAddLen(StrMap *map, char *key, long key_len, void *value);
-int strMapAddAoStr(StrMap *map, aoStr *key, void *value);
+int strMapAddAoStr(StrMap *map, AoStr *key, void *value);
 
 /* Return an error rather than updating a value in the map with the same key */
 int strMapAddOrErr(StrMap *map, char *key, void *value);
 int strMapAddLenOrErr(StrMap *map, char *key, long key_len, void *value);
-int strMapAddAoStrOrErr(StrMap *map, aoStr *key, void *value);
+int strMapAddAoStrOrErr(StrMap *map, AoStr *key, void *value);
 
 int strMapHas(StrMap *map, char *key);
 int strMapRemove(StrMap *map, char *key);
@@ -201,7 +201,7 @@ void intSetRelease(IntSet *iset);
 IntSetIter *intSetIterNew(IntSet *iset);
 long intSetNext(IntSetIter *it);
 void intSetIterRelease(IntSetIter *it);
-aoStr *intSetToString(IntSet *iset);
+AoStr *intSetToString(IntSet *iset);
 
 /* @DataStructures
  * We need a massive refactor, and ONLY use the generic implmentations, it's 
@@ -220,8 +220,8 @@ typedef struct MapType MapType;
 typedef int (mapKeyMatch)(void *v1, void *v2);
 typedef unsigned long (mapKeyHash)(void *value);
 typedef long (mapKeyLen)(void *value);
-typedef aoStr *(mapKeyToString)(void *value);
-typedef aoStr *(mapValueToString)(void *value);
+typedef AoStr *(mapKeyToString)(void *value);
+typedef AoStr *(mapValueToString)(void *value);
 typedef void (mapValueRelease)(void *value);
 typedef void (mapKeyRelease)(void *value);
 
@@ -291,15 +291,15 @@ MapIter *mapIterNew(Map *map);
 void mapIterInit(Map *map, MapIter *iter);
 int mapIterNext(MapIter *it);
 void mapIterRelease(MapIter *it);
-aoStr *mapToString(Map *map, char *delimiter);
-aoStr *mapKeysToString(Map *map);
+AoStr *mapToString(Map *map, char *delimiter);
+AoStr *mapKeysToString(Map *map);
 void mapPrint(Map *map);
 void mapPrintStats(Map *map);
 
 int intMapKeyMatch(void *a, void *b);
 long intMapKeyLen(void *key);
 unsigned long intMapKeyHash(void *key);
-aoStr *intMapKeyToString(void *key);
+AoStr *intMapKeyToString(void *key);
 
 /*================== Generic SET ==============================================*/
 typedef struct Set Set;
@@ -309,8 +309,8 @@ typedef struct SetNode SetNode;
 
 typedef int (setValueMatch)(void *v1, void *v2);
 typedef unsigned long (setValueHash)(void *value);
-typedef aoStr *(setValueToString)(void *value);
-typedef aoStr *(setValueRelease)(void *value);
+typedef AoStr *(setValueToString)(void *value);
+typedef AoStr *(setValueRelease)(void *value);
 
 struct SetType {
     setValueMatch *match;
@@ -371,7 +371,7 @@ SetIter *setIterNew(Set *set);
 void *setNext(SetIter *it);
 int setIterNext(SetIter *it);
 void setIterRelease(SetIter *it);
-aoStr *setToString(Set *set);
+AoStr *setToString(Set *set);
 int setEq(Set *s1, Set *s2);
 /* Add all of `s2` to `s1` */
 Set *setUnion(Set *s1, Set *s2);

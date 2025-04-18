@@ -79,7 +79,7 @@ typedef struct BasicBlock {
 /* Head of a CFG is a function */
 typedef struct CFG {
     /* CFG Does not own the function name, the AST does */
-    aoStr *ref_fname;
+    AoStr *ref_fname;
     /* This head block and start of the CFG */
     BasicBlock *head;
     /* How many basic blocks are in the graph */

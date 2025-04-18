@@ -4,7 +4,7 @@
 #include "cli.h"
 #include "cctrl.h"
 
-aoStr *transpileToC(Cctrl *cc, CliArgs *args);
+AoStr *transpileToC(Cctrl *cc, CliArgs *args);
 void astPrintCType(AstType *type);
 void astPrintHolyCType(AstType *type);
 

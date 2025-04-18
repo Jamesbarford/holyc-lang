@@ -130,9 +130,9 @@ void arenaPrintStats(Arena *arena) {
 
     unsigned int average_unused_amount = total_diff == 0 || total_non_full_blocks == 0 ? 0 : total_diff / total_non_full_blocks;
 
-    aoStr *total_mem = aoStrIntToHumanReadableBytes((long) total_capacity);
-    aoStr *total_allocated = aoStrIntToHumanReadableBytes((long)total_used);
-    aoStr *per_block_capacity = aoStrIntToHumanReadableBytes((long)arena->block_capacity);
+    AoStr *total_mem = aoStrIntToHumanReadableBytes((long) total_capacity);
+    AoStr *total_allocated = aoStrIntToHumanReadableBytes((long)total_used);
+    AoStr *per_block_capacity = aoStrIntToHumanReadableBytes((long)arena->block_capacity);
 
     printf("Total Memory: %s (%u)\n"
            "Total Allocated: %s (%u)\n"

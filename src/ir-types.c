@@ -94,7 +94,7 @@ const char *irValueKindToString(IrValueKind ir_value_kind) {
  *
  * We just have; `[i64 x 8]`
  */
-void irArrayInitToString(aoStr *buf, IrValue *ir_value) {
+void irArrayInitToString(AoStr *buf, IrValue *ir_value) {
     aoStrCatFmt(buf,"[%i x ", ir_value->array_.values->size);
     if (ir_value->array_.nesting == 1) {
         IrValue *head = (IrValue *)ir_value->array_.values->entries[0];
@@ -120,8 +120,8 @@ void irArrayInitToString(aoStr *buf, IrValue *ir_value) {
     }
 }
 
-aoStr *irValueToString(IrValue *ir_value) {
-    aoStr *buf = aoStrNew();
+AoStr *irValueToString(IrValue *ir_value) {
+    AoStr *buf = aoStrNew();
 
     if (ir_value->type == IR_TYPE_ARRAY_INIT) {
         irArrayInitToString(buf,ir_value);
@@ -138,7 +138,7 @@ aoStr *irValueToString(IrValue *ir_value) {
                 }
 
                 if (ir_value->global.value) {
-                    aoStr *init_buf = irValueToString(ir_value->global.value);
+                    AoStr *init_buf = irValueToString(ir_value->global.value);
                     aoStrCatFmt(buf, " %S ", init_buf);
                     aoStrRelease(init_buf);
                 }
@@ -258,21 +258,21 @@ const char *irOpcodeToString(IrInstr *ir_instr) {
     }
 }
 
-void irPairToString(aoStr *buf, IrPair *ir_phi_pair) {
-    aoStr *ir_value_str = irValueToString(ir_phi_pair->ir_value);
+void irPairToString(AoStr *buf, IrPair *ir_phi_pair) {
+    AoStr *ir_value_str = irValueToString(ir_phi_pair->ir_value);
     /* <Value, block> */
     aoStrCatFmt(buf, "[ %S, bb%i ]", ir_value_str, ir_phi_pair->ir_block->id);
 }
 
 /* Convert an instruction to a string. */
-aoStr *irInstrToString(IrInstr *ir_instr) {
+AoStr *irInstrToString(IrInstr *ir_instr) {
     IrValue *ir_values[4] = {
         ir_instr->result,
         ir_instr->op1,
         ir_instr->op2,
         ir_instr->op3,
     };
-    aoStr *buf = aoStrNew();
+    AoStr *buf = aoStrNew();
     const char *op = irOpcodeToString(ir_instr);
 
     switch (ir_instr->opcode) {
@@ -281,7 +281,7 @@ aoStr *irInstrToString(IrInstr *ir_instr) {
             if (fn_args && fn_args->size > 0) {
                 for (int i = 0; i < fn_args->size; ++i) {
                     IrValue *ir_value = vecGet(IrValue *,fn_args,i);
-                    aoStr *ir_value_str = irValueToString(ir_value);
+                    AoStr *ir_value_str = irValueToString(ir_value);
                     if (i != 0) {
                         aoStrCatLen(buf,str_lit("    "));
                     }
@@ -297,7 +297,7 @@ aoStr *irInstrToString(IrInstr *ir_instr) {
             }
 
             if (ir_instr->result) {
-                aoStr *ir_ret_var = irValueToString(ir_instr->result);
+                AoStr *ir_ret_var = irValueToString(ir_instr->result);
                 aoStrCatFmt(buf, "%s %S, %S", op, ir_ret_var, ir_instr->op1->name);
                 aoStrRelease(ir_ret_var);
             } else {
@@ -307,7 +307,7 @@ aoStr *irInstrToString(IrInstr *ir_instr) {
         }
 
         case IR_OP_BR: {
-            aoStr *ir_value_str = irValueToString(ir_instr->result);
+            AoStr *ir_value_str = irValueToString(ir_instr->result);
             aoStrCatFmt(buf, "%s %S, bb%i, bb%i",
                         op,
                         ir_value_str,
@@ -329,7 +329,7 @@ aoStr *irInstrToString(IrInstr *ir_instr) {
         }
 
         case IR_OP_PHI: {
-            aoStr *phi_pairs_str = aoStrNew();
+            AoStr *phi_pairs_str = aoStrNew();
             for (int i = 0; i < ir_instr->extra.phi.pairs->size; ++i) {
                 IrPair *ir_phi_pair = vecGet(IrPair *,
                                                 ir_instr->extra.phi.pairs, i);
@@ -344,8 +344,8 @@ aoStr *irInstrToString(IrInstr *ir_instr) {
         }
 
         case IR_OP_SWITCH: {
-            aoStr *pairs_str = aoStrNew();
-            aoStr *ir_value_str = irValueToString(ir_instr->result);
+            AoStr *pairs_str = aoStrNew();
+            AoStr *ir_value_str = irValueToString(ir_instr->result);
             aoStrCatFmt(buf, "%s %S, label bb%i [\n",
                         op,
                         ir_value_str,
@@ -353,7 +353,7 @@ aoStr *irInstrToString(IrInstr *ir_instr) {
 
             listForEach(ir_instr->extra.cases) {
                 IrPair *ir_pair = listValue(IrPair *, it);
-                aoStr *ir_value_str = irValueToString(ir_pair->ir_value);
+                AoStr *ir_value_str = irValueToString(ir_pair->ir_value);
                 aoStrCatFmt(buf, "      %S, bb%i\n", ir_value_str, ir_pair->ir_block->id);
             }
             aoStrCatLen(buf, str_lit("    ]"));
@@ -368,7 +368,7 @@ aoStr *irInstrToString(IrInstr *ir_instr) {
             for (int i = 0; i < (int)static_size(ir_values); i++) {
                 IrValue *ir_value = ir_values[i];
                 if (!ir_value) continue;
-                aoStr *ir_value_str = irValueToString(ir_value);
+                AoStr *ir_value_str = irValueToString(ir_value);
                 aoStrCatFmt(buf, " %S,", ir_value_str);
                 aoStrRelease(ir_value_str);
             }
@@ -387,8 +387,8 @@ aoStr *irInstrToString(IrInstr *ir_instr) {
  * <block_name>:
  *   <instructions...>
  * */
-aoStr *irBlockToString(IrFunction *func, IrBlock *ir_block) {
-    aoStr *buf = aoStrNew();
+AoStr *irBlockToString(IrFunction *func, IrBlock *ir_block) {
+    AoStr *buf = aoStrNew();
 
     Map *successors = irFunctionGetSuccessors(func, ir_block);
     Map *predecessors = irFunctionGetPredecessors(func, ir_block);
@@ -400,7 +400,7 @@ aoStr *irBlockToString(IrFunction *func, IrBlock *ir_block) {
     }
 
     if (predecessors) {
-        aoStr *predecessors_str = mapKeysToString(predecessors);
+        AoStr *predecessors_str = mapKeysToString(predecessors);
         aoStrCatFmt(buf, "predecessors: %S  ", predecessors_str);
         aoStrRelease(predecessors_str);
     } else {
@@ -408,7 +408,7 @@ aoStr *irBlockToString(IrFunction *func, IrBlock *ir_block) {
     }
 
     if (successors) {
-        aoStr *successors_str = mapKeysToString(successors);
+        AoStr *successors_str = mapKeysToString(successors);
         aoStrCatFmt(buf, "successors: %S", successors_str);
         aoStrRelease(successors_str);
     } else {
@@ -419,7 +419,7 @@ aoStr *irBlockToString(IrFunction *func, IrBlock *ir_block) {
     if (!listEmpty(ir_block->instructions)) {
         listForEach(ir_block->instructions) {
             IrInstr *ir_instr = (IrInstr *)it->value;
-            aoStr *ir_instr_str = irInstrToString(ir_instr);
+            AoStr *ir_instr_str = irInstrToString(ir_instr);
             aoStrCatFmt(buf, "    %S\n", ir_instr_str);
             aoStrRelease(ir_instr_str);
         }
@@ -428,12 +428,12 @@ aoStr *irBlockToString(IrFunction *func, IrBlock *ir_block) {
     return buf;
 }
 
-aoStr *irParamsToString(PtrVec *ir_value_vector) {
-    aoStr *buf = aoStrNew();
+AoStr *irParamsToString(PtrVec *ir_value_vector) {
+    AoStr *buf = aoStrNew();
     if (ir_value_vector->size != 0) {
         for (int i = 0; i < ir_value_vector->size; ++i) {
             IrValue *ir_value = vecGet(IrValue *, ir_value_vector, i);
-            aoStr *ir_value_str = irValueToString(ir_value);
+            AoStr *ir_value_str = irValueToString(ir_value);
             aoStrCatFmt(buf,"%S",ir_value_str);
             if (i + 1 != ir_value_vector->size) {
                 aoStrCatLen(buf,str_lit(", "));
@@ -444,18 +444,18 @@ aoStr *irParamsToString(PtrVec *ir_value_vector) {
     return buf;
 }
 
-aoStr *irFunctionToString(IrFunction *ir_func) {
-    aoStr *buf = aoStrNew();
+AoStr *irFunctionToString(IrFunction *ir_func) {
+    AoStr *buf = aoStrNew();
     /* This is not as high fidelity as LLVM's ir */
     const char *ir_return_type_str = irValueTypeToString(ir_func->return_value->type);
     aoStrCatFmt(buf, "%s %S(", ir_return_type_str, ir_func->name);
-    aoStr *params_str = irParamsToString(ir_func->params);
+    AoStr *params_str = irParamsToString(ir_func->params);
     aoStrCatFmt(buf, "%S) {\n", params_str);
     aoStrRelease(params_str);
 
     listForEach(ir_func->blocks) {
         IrBlock *ir_block = (IrBlock *)it->value;
-        aoStr *ir_block_str = irBlockToString(ir_func, ir_block);
+        AoStr *ir_block_str = irBlockToString(ir_func, ir_block);
         aoStrCatFmt(buf, "%S\n", ir_block_str);
         aoStrRelease(ir_block_str);
     }
@@ -467,18 +467,18 @@ aoStr *irFunctionToString(IrFunction *ir_func) {
 }
 
 void irPrintFunction(IrFunction *ir_function) {
-    aoStr *ir_function_str = irFunctionToString(ir_function);
+    AoStr *ir_function_str = irFunctionToString(ir_function);
     printf("%s\n",ir_function_str->data);
     aoStrRelease(ir_function_str);
 }
 
-static aoStr *irBlockToStringSimplified(IrBlock *ir_block) {
-    aoStr *buf = aoStrNew();
+static AoStr *irBlockToStringSimplified(IrBlock *ir_block) {
+    AoStr *buf = aoStrNew();
     aoStrPutChar(buf, '\n');
     if (!listEmpty(ir_block->instructions)) {
         listForEach(ir_block->instructions) {
             IrInstr *ir_instr = (IrInstr *)it->value;
-            aoStr *ir_instr_str = irInstrToString(ir_instr);
+            AoStr *ir_instr_str = irInstrToString(ir_instr);
             aoStrCatFmt(buf, "    %S\n", ir_instr_str);
             aoStrRelease(ir_instr_str);
         }
@@ -490,11 +490,11 @@ static aoStr *irBlockToStringSimplified(IrBlock *ir_block) {
 /* This makes no sense to use in the wild as it is specifically formatted to be
  * used with the `mapToString(...)` function. That isn't to say this cannot
  * be used... Just that it will look a bit our of place */
-aoStr *irBlockMappingToStringCallback(void *_ir_block_mapping) {
+AoStr *irBlockMappingToStringCallback(void *_ir_block_mapping) {
     IrBlockMapping *ir_block_mapping = (IrBlockMapping *)_ir_block_mapping;
-    aoStr *buf = aoStrNew();
-    aoStr *successor_str = mapKeysToString(ir_block_mapping->successors);
-    aoStr *predecessor_str = mapKeysToString(ir_block_mapping->predecessors);
+    AoStr *buf = aoStrNew();
+    AoStr *successor_str = mapKeysToString(ir_block_mapping->successors);
+    AoStr *predecessor_str = mapKeysToString(ir_block_mapping->predecessors);
     aoStrCatFmt(buf, "{\n"
                 "    P: %S\n"
                 "    S: %S\n  }",
@@ -505,9 +505,9 @@ aoStr *irBlockMappingToStringCallback(void *_ir_block_mapping) {
     return buf;
 }
 
-aoStr *irFunctionCFGToString(IrFunction *func) {
-    aoStr *buf = aoStrNew();
-    aoStr *map_str = mapToString(func->cfg, ",\n");
+AoStr *irFunctionCFGToString(IrFunction *func) {
+    AoStr *buf = aoStrNew();
+    AoStr *map_str = mapToString(func->cfg, ",\n");
     aoStrCatFmt(buf, "CFG {\n%S\n}",map_str);
     return buf;
 }
@@ -524,7 +524,7 @@ long irValueKeyLen(IrValue *value) {
     return (long)value->name->len;
 }
 
-aoStr *irValueKeyStringify(IrValue *value) {
+AoStr *irValueKeyStringify(IrValue *value) {
     return value->name;
 }
 
@@ -542,7 +542,7 @@ Set *irValueSetNew(void) {
     return setNew(16, &ir_value_set);
 }
 
-/* create a `Map<aoStr *, IrValue *>` */
+/* create a `Map<AoStr *, IrValue *>` */
 static MapType str_irvalue_map_type = {
     .match = (mapKeyMatch *)aoStrEq,
     .hash = (mapKeyHash *)aoStrHashFunction,
@@ -551,7 +551,7 @@ static MapType str_irvalue_map_type = {
     .value_to_string = (mapValueToString *)&irValueToString,
     .value_release = NULL,
     .value_type = "IrValue *",
-    .key_type = "aoStr *",
+    .key_type = "AoStr *",
 };
 
 /* create a `Map<long, IrValue *>` */
@@ -578,7 +578,7 @@ static MapType int_irblock_map_type = {
     .key_type = "long",
 };
 
-/* create a `Map<aoStr *, IrInstr *>` */
+/* create a `Map<AoStr *, IrInstr *>` */
 static MapType str_irinstr_map_type = {
     .match = (mapKeyMatch *)aoStrEq,
     .hash = (mapKeyHash *)aoStrHashFunction,
@@ -602,7 +602,7 @@ static MapType int_blockmapping_map_type = {
     .key_type = "long",
 };
 
-/* create a `Map<aoStr *, IrValue *>` */
+/* create a `Map<AoStr *, IrValue *>` */
 Map *irStrValueMapNew(void) {
     return mapNew(32, &str_irvalue_map_type);
 }

@@ -13,16 +13,16 @@
 #include "memory.h"
 #include "util.h"
 
-static aoStr *_aoStrAlloc(void) {
-    return (aoStr *)globalArenaAllocate(sizeof(aoStr));
+static AoStr *_aoStrAlloc(void) {
+    return (AoStr *)globalArenaAllocate(sizeof(AoStr));
 }
 
 static char *aoStrBufferAlloc(size_t capacity) {
     return (char *)globalArenaAllocate((unsigned int)capacity);
 }
 
-aoStr *aoStrAlloc(size_t capacity) {
-    aoStr *buf = _aoStrAlloc();
+AoStr *aoStrAlloc(size_t capacity) {
+    AoStr *buf = _aoStrAlloc();
     capacity += 10;
     buf->capacity = capacity;
     buf->len = 0;
@@ -30,11 +30,11 @@ aoStr *aoStrAlloc(size_t capacity) {
     return buf;
 }
 
-aoStr *aoStrNew(void) {
+AoStr *aoStrNew(void) {
     return aoStrAlloc(1 << 5);
 }
 
-void aoStrRelease(aoStr *buf) {
+void aoStrRelease(AoStr *buf) {
     (void)buf;
     return;
 }
@@ -42,13 +42,13 @@ void aoStrRelease(aoStr *buf) {
 /* Get the underlying string, we do not free the `aoStr`... it will get 
  * collected later. This means we don't need to manually keep track of this 
  * buffer */
-char *aoStrMove(aoStr *buf) {
+char *aoStrMove(AoStr *buf) {
     char *buffer = buf->data;
     return buffer;
 }
 
 /* Grow the capacity of the string buffer by `additional` space */
-int aoStrExtendBuffer(aoStr *buf, size_t additional) {
+int aoStrExtendBuffer(AoStr *buf, size_t additional) {
     size_t new_capacity = (buf->capacity*2) + additional;
     assert(new_capacity > buf->capacity);
     if (new_capacity <= buf->capacity) {
@@ -67,46 +67,46 @@ int aoStrExtendBuffer(aoStr *buf, size_t additional) {
 
 /* Only extend the buffer if the additional space required would overspill the
  * current allocated capacity of the buffer */
-static int aoStrExtendBufferIfNeeded(aoStr *buf, size_t additional) {
+static int aoStrExtendBufferIfNeeded(AoStr *buf, size_t additional) {
     if ((buf->len + additional + 1) >= buf->capacity) {
         return aoStrExtendBuffer(buf, additional+1);
     }
     return 0;
 }
 
-void aoStrToLowerCase(aoStr *buf) {
+void aoStrToLowerCase(AoStr *buf) {
     for (size_t i = 0; i < buf->len; ++i) {
         buf->data[i] = tolower(buf->data[i]);
     }
 }
 
-void aoStrToUpperCase(aoStr *buf) {
+void aoStrToUpperCase(AoStr *buf) {
     for (size_t i = 0; i < buf->len; ++i) {
         buf->data[i] = toupper(buf->data[i]);
     }
 }
 
-void aoStrPutChar(aoStr *buf, char ch) {
+void aoStrPutChar(AoStr *buf, char ch) {
     aoStrExtendBufferIfNeeded(buf, 10);
     buf->data[buf->len++] = ch;
     buf->data[buf->len] = '\0';
 }
 
-void aoStrRepeatChar(aoStr *buf, char ch, int times) {
+void aoStrRepeatChar(AoStr *buf, char ch, int times) {
     for (int i = 0; i < times; ++i) {
         aoStrPutChar(buf,ch);
     }
 }
 
-int aoStrEq(aoStr *b1, aoStr *b2) {
+int aoStrEq(AoStr *b1, AoStr *b2) {
     size_t l1 = b1->len;
     size_t l2 = b2->len;
     return l1==l2&&!memcmp(b1->data, b2->data, l1);
 }
 
-aoStr *aoStrDupRaw(char *s, size_t len) {
+AoStr *aoStrDupRaw(char *s, size_t len) {
     size_t capacity = len+10;
-    aoStr *dupe = aoStrAlloc(capacity);
+    AoStr *dupe = aoStrAlloc(capacity);
     memcpy(dupe->data, s, len);
     dupe->len = len;
     dupe->data[len] = '\0';
@@ -114,13 +114,13 @@ aoStr *aoStrDupRaw(char *s, size_t len) {
     return dupe;
 }
 
-aoStr *aoStrDupCString(char *s) {
+AoStr *aoStrDupCString(char *s) {
     long len = strlen(s);
     return aoStrDupRaw(s, len);
 }
 
-aoStr *aoStrDup(aoStr *buf) {
-    aoStr *dupe = aoStrAlloc(buf->len);
+AoStr *aoStrDup(AoStr *buf) {
+    AoStr *dupe = aoStrAlloc(buf->len);
     memcpy(dupe->data, buf->data, buf->len);
     dupe->len = buf->len;
     dupe->data[dupe->len] = '\0';
@@ -128,23 +128,23 @@ aoStr *aoStrDup(aoStr *buf) {
     return dupe;
 }
 
-void aoStrCatLen(aoStr *buf, const void *d, size_t len) {
+void aoStrCatLen(AoStr *buf, const void *d, size_t len) {
     aoStrExtendBufferIfNeeded(buf, len);
     memcpy(buf->data + buf->len, d, len);
     buf->len += len;
     buf->data[buf->len] = '\0';
 }
 
-void aoStrCatAoStr(aoStr *buf, aoStr *s2) {
+void aoStrCatAoStr(AoStr *buf, AoStr *s2) {
     aoStrCatLen(buf, s2->data, s2->len);
 }
 
-void aoStrCat(aoStr *buf, const void *d) {
+void aoStrCat(AoStr *buf, const void *d) {
     size_t len = strlen(d);
     aoStrCatLen(buf, d, len);
 }
 
-void aoStrCatRepeat(aoStr *buf, char *str, int times) {
+void aoStrCatRepeat(AoStr *buf, char *str, int times) {
     int len = strlen(str);
     for (int i = 0; i < times; ++i) {
         aoStrCatLen(buf,str,len);
@@ -223,8 +223,8 @@ char *aoStrEncodeChar(long op) {
     }
 }
 
-aoStr *aoStrEncode(aoStr *buf) {
-    aoStr *outstr = aoStrAlloc(buf->capacity);
+AoStr *aoStrEncode(AoStr *buf) {
+    AoStr *outstr = aoStrAlloc(buf->capacity);
     char *ptr = buf->data;
     char *encoded;
 
@@ -252,8 +252,8 @@ aoStr *aoStrEncode(aoStr *buf) {
     return outstr;
 }
 
-aoStr *aoStrEscapeString(aoStr *buf) {
-    aoStr *outstr = aoStrAlloc(buf->capacity);
+AoStr *aoStrEscapeString(AoStr *buf) {
+    AoStr *outstr = aoStrAlloc(buf->capacity);
     char *ptr = buf->data;
 
     if (buf == NULL) {
@@ -289,7 +289,7 @@ aoStr *aoStrEscapeString(aoStr *buf) {
     return outstr;
 }
 
-void aoStrArrayRelease(aoStr **arr, int count) {
+void aoStrArrayRelease(AoStr **arr, int count) {
     if (arr) {
         for (int i = 0; i < count; ++i) {
             aoStrRelease(arr[i]);
@@ -301,8 +301,8 @@ void aoStrArrayRelease(aoStr **arr, int count) {
 /**
  * Split into strings on delimiter
  */
-aoStr **aoStrSplit(char *to_split, char delimiter, int *_count) {
-    aoStr **outArr;
+AoStr **aoStrSplit(char *to_split, char delimiter, int *_count) {
+    AoStr **outArr;
     long start, end;
     char *ptr = to_split;
 
@@ -314,13 +314,13 @@ aoStr **aoStrSplit(char *to_split, char delimiter, int *_count) {
     start = end = 0;
     int arrsize = 0;
 
-    if ((outArr = (aoStr **)malloc(sizeof(aoStr *) * memslot)) == NULL)
+    if ((outArr = (AoStr **)malloc(sizeof(AoStr *) * memslot)) == NULL)
         return NULL;
 
     while (*ptr != '\0') {
         if (arrsize + 1 >= memslot) {
             memslot *= 5;
-            aoStr **tmp = (aoStr **)realloc(outArr, sizeof(aoStr) * memslot);
+            AoStr **tmp = (AoStr **)realloc(outArr, sizeof(AoStr) * memslot);
             if (tmp == NULL) {
                 goto error;
             }
@@ -394,11 +394,11 @@ char *mprintVa(const char *fmt, va_list ap, ssize_t *_len) {
     return mprintVaImpl(fmt,ap,(size_t *)_len,NULL);
 }
 
-static aoStr *aoStrPrintfVa(const char *fmt, va_list ap) {
+static AoStr *aoStrPrintfVa(const char *fmt, va_list ap) {
     size_t len = 0;
     size_t capacity = 0;
     char *new_buf = mprintVaImpl(fmt,ap,&len,&capacity);
-    aoStr *buffer = _aoStrAlloc();
+    AoStr *buffer = _aoStrAlloc();
     buffer->data = new_buf;
     buffer->len = len;
     buffer->capacity = capacity;
@@ -411,24 +411,24 @@ char *mprintf(const char *fmt, ...) {
     va_start(ap,fmt);
     /* This is so we can use the pool allocator, and not have to deal with 
      * freeing aribitary strings */
-    aoStr *buffer = aoStrPrintfVa(fmt, ap);
+    AoStr *buffer = aoStrPrintfVa(fmt, ap);
     va_end(ap);
     return aoStrMove(buffer);
 }
 
-void aoStrCatPrintf(aoStr *b, const char *fmt, ...) {
+void aoStrCatPrintf(AoStr *b, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
 
-    aoStr *new_str = aoStrPrintfVa(fmt, ap);
+    AoStr *new_str = aoStrPrintfVa(fmt, ap);
     aoStrCatAoStr(b,new_str);
     aoStrRelease(new_str);
     va_end(ap);
 }
 
 char *mprintFmtVa(const char *fmt, va_list ap, size_t *_len, size_t *_allocated) {
-    aoStr _buf = { .data = aoStrBufferAlloc(256), .len = 0, .capacity = 256 };
-    aoStr *buf = &_buf;
+    AoStr _buf = { .data = aoStrBufferAlloc(256), .len = 0, .capacity = 256 };
+    AoStr *buf = &_buf;
     const char *ptr = fmt;
     size_t padding = 0;
     size_t prev_len = 0;
@@ -479,8 +479,8 @@ char *mprintFmtVa(const char *fmt, va_list ap, size_t *_len, size_t *_allocated)
                     }
 
                     case 'I': {
-                        ssize_t int_ = va_arg(ap, ssize_t);
-                        aoStrCatPrintf(buf,"%lld",int_);
+                        long int_ = va_arg(ap, long);
+                        aoStrCatPrintf(buf,"%ld",int_);
                         break;
                     }
 
@@ -515,14 +515,19 @@ char *mprintFmtVa(const char *fmt, va_list ap, size_t *_len, size_t *_allocated)
                     }
 
                     case 'S': {
-                        aoStr *str = va_arg(ap, aoStr *);
+                        AoStr *str = va_arg(ap, AoStr *);
                         aoStrCatAoStr(buf,str);
                         break;
                     }
 
                     case '.': {
+                        /* If the number is not an `int` all goes wrong as  
+                         * as the `va_arg` I think bumps the stack by the size 
+                         * of bytes of the argument. Thus if you pass a long 
+                         * it would increment and "eat into" the `char *` causing
+                         * a segfault. */
                         if (*(ptr+1) == '*' && *(ptr+2) == 's') {
-                            ssize_t len = va_arg(ap,ssize_t);
+                            int len = va_arg(ap,int);
                             char *str = va_arg(ap,char*);
                             aoStrCatLen(buf,str,len);
                             ptr += 2;
@@ -534,7 +539,7 @@ char *mprintFmtVa(const char *fmt, va_list ap, size_t *_len, size_t *_allocated)
 
                     case 'A': {
                         Ast *ast = va_arg(ap, Ast*);
-                        aoStr *ast_str = astLValueToAoStr(ast,0);
+                        AoStr *ast_str = astLValueToAoStr(ast,0);
                         aoStrCatAoStr(buf,ast_str);
                         break;
                     }
@@ -580,7 +585,7 @@ done:
 }
 
 /* For the happy path of strings this is very fast */
-void aoStrCatFmt(aoStr *buf, const char *fmt, ...) {
+void aoStrCatFmt(AoStr *buf, const char *fmt, ...) {
     va_list ap;
     va_start(ap,fmt);
     size_t buffer_len = 0;
@@ -598,22 +603,22 @@ char *mprintFmt(const char *fmt, ...) {
     return buffer;
 }
 
-aoStr *aoStrPrintf(const char *fmt, ...) {
+AoStr *aoStrPrintf(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    aoStr *buffer = aoStrPrintfVa(fmt,ap);
+    AoStr *buffer = aoStrPrintfVa(fmt,ap);
     va_end(ap);
     return buffer;
 }
 
-aoStr *aoStrError(void) {
+AoStr *aoStrError(void) {
     char *err = strerror(errno);
-    aoStr *str = aoStrDupRaw(err,strlen(err));
+    AoStr *str = aoStrDupRaw(err,strlen(err));
     return str;
 }
 
-aoStr *aoStrIntToHumanReadableBytes(long bytes) {
-    aoStr *str = aoStrAlloc(32);
+AoStr *aoStrIntToHumanReadableBytes(long bytes) {
+    AoStr *str = aoStrAlloc(32);
     double d;
 
     if (bytes < 1024) {
@@ -631,7 +636,7 @@ aoStr *aoStrIntToHumanReadableBytes(long bytes) {
     return str;
 }
 
-unsigned long aoStrHashFunction(aoStr *str) {
+unsigned long aoStrHashFunction(AoStr *str) {
     unsigned long hash = 0;
     for (size_t i = 0; i < str->len; ++i) {
         hash = ((hash << 5) - hash) + str->data[i];
@@ -639,10 +644,10 @@ unsigned long aoStrHashFunction(aoStr *str) {
     return hash;
 }
 
-size_t aoStrGetLen(aoStr *buf) {
+size_t aoStrGetLen(AoStr *buf) {
     return buf->len;
 }
 
-aoStr *aoStrIdentity(aoStr *buf) {
+AoStr *aoStrIdentity(AoStr *buf) {
     return buf;
 }

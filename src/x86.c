@@ -48,7 +48,7 @@ static int has_initialisers = 0;
 #define REG_RIP "rip"
 #define REG_RDI "rdi"
 
-void asmExpression(Cctrl *cc, aoStr *buf, Ast *ast);
+void asmExpression(Cctrl *cc, AoStr *buf, Ast *ast);
 
 #define asmGetGlabel(gvar) \
     gvar->is_static ? gvar->glabel : gvar->gname
@@ -86,7 +86,7 @@ static uint64_t ieee754(double _f64) {
 /* This is a hacky, but seemingly functional way of me being able
  * to run this on Macos and Linux */
 char *asmNormaliseFunctionName(char *fname) {
-    aoStr *newfn = astNormaliseFunctionName(fname);
+    AoStr *newfn = astNormaliseFunctionName(fname);
     if (!strncasecmp(fname, "Main", 4)) {
         if (has_initialisers) {
             aoStrCatPrintf(newfn,"Fn");
@@ -97,7 +97,7 @@ char *asmNormaliseFunctionName(char *fname) {
     return aoStrMove(newfn);
 }
 
-void asmRemovePreviousTab(aoStr *buf) {
+void asmRemovePreviousTab(AoStr *buf) {
     if (buf->data[buf->len-1] == '\t') {
         buf->len--;
     }
@@ -203,13 +203,13 @@ char *asmGetIntReg(AstType *type, char ch) {
     }
 }
 
-void asmToInt(aoStr *buf, AstType *type) {
+void asmToInt(AoStr *buf, AstType *type) {
     if (type->kind == AST_TYPE_FLOAT) {
         aoStrCatPrintf(buf, "cvttsd2si  %%xmm0, %%rax\n\t");
     }
 }
 
-void asmToFloat(aoStr *buf, AstType *type) {
+void asmToFloat(AoStr *buf, AstType *type) {
     if (type->kind != AST_TYPE_FLOAT) {
         if (type->has_var_args) {
             aoStrCatPrintf(buf, "movq    %%rax, %%xmm0\n\t");
@@ -219,13 +219,13 @@ void asmToFloat(aoStr *buf, AstType *type) {
     }
 }
 
-void asmPushXMM(aoStr *str, int reg) {
+void asmPushXMM(AoStr *str, int reg) {
     aoStrCatPrintf(str, "sub   $8, %%rsp\n\t"
                         "movsd %%xmm%d, (%%rsp)\n\t", reg);
     stack_pointer += 8;
 }
 
-void asmPopXMM(aoStr *str, int reg) {
+void asmPopXMM(AoStr *str, int reg) {
     aoStrCatPrintf(str, "movsd  (%%rsp), %%xmm%d\n\t"
                         "add    $8, %%rsp\n\t", reg);
     stack_pointer -= 8;
@@ -234,12 +234,12 @@ void asmPopXMM(aoStr *str, int reg) {
     }
 }
 
-void asmPush(aoStr *buf, char *reg) {
+void asmPush(AoStr *buf, char *reg) {
     aoStrCatPrintf(buf,"push   %%%s\n\t", reg);
     stack_pointer += 8;
 }
 
-void asmPop(aoStr *buf, char *reg) {
+void asmPop(AoStr *buf, char *reg) {
     aoStrCatPrintf(buf,"pop    %%%s\n\t", reg);
     stack_pointer -= 8;
     if (stack_pointer < 0) {
@@ -247,13 +247,13 @@ void asmPop(aoStr *buf, char *reg) {
     }
 }
 
-void asmCall(aoStr *buf, char *fname) {
+void asmCall(AoStr *buf, char *fname) {
     char *_fname = asmNormaliseFunctionName(fname);
     aoStrCatPrintf(buf,"call   %s\n\t", _fname);
 }
 
 /* Save a global variable */
-void asmGSave(aoStr *buf, char *name, AstType *type, int offset) {
+void asmGSave(AoStr *buf, char *name, AstType *type, int offset) {
     assert(type->kind != AST_TYPE_ARRAY);
     char *reg;
 
@@ -268,7 +268,7 @@ void asmGSave(aoStr *buf, char *name, AstType *type, int offset) {
     }
 }
 
-void asmPlaceString(aoStr *buf, aoStr *str, int offset) {
+void asmPlaceString(AoStr *buf, AoStr *str, int offset) {
     int i = 0;
     /* Place string on the stack character by character */
     for (; i < (int)str->len; ++i) {
@@ -281,7 +281,7 @@ void asmPlaceString(aoStr *buf, aoStr *str, int offset) {
             -(offset - i));
 }
 
-void asmGLoad(aoStr *buf, AstType *type, aoStr *label, int offset) {
+void asmGLoad(AoStr *buf, AstType *type, AoStr *label, int offset) {
     char *reg = NULL;
 
     if (type->kind == AST_TYPE_ARRAY) {
@@ -312,7 +312,7 @@ void asmGLoad(aoStr *buf, AstType *type, aoStr *label, int offset) {
     }
 }
 
-void asmLLoad(aoStr *buf, AstType *type, int offset) {
+void asmLLoad(AoStr *buf, AstType *type, int offset) {
     char *reg = NULL;
 
     switch (type->kind) {
@@ -334,7 +334,7 @@ void asmLLoad(aoStr *buf, AstType *type, int offset) {
     }
 }
 
-void asmLSave(aoStr *buf, AstType *type, int offset) {
+void asmLSave(AoStr *buf, AstType *type, int offset) {
     char *reg, *mov;
     switch (type->kind) {
         case AST_TYPE_FLOAT:
@@ -348,7 +348,7 @@ void asmLSave(aoStr *buf, AstType *type, int offset) {
     }
 }
 
-void AstUpCastInt(aoStr *buf, AstType *type, int issigned) {
+void AstUpCastInt(AoStr *buf, AstType *type, int issigned) {
     switch(type->kind) {
     case AST_TYPE_CHAR:
         if (issigned) aoStrCatPrintf(buf, "movsbq   %%al, %%rax\n\t");
@@ -361,7 +361,7 @@ void AstUpCastInt(aoStr *buf, AstType *type, int issigned) {
     }
 }
 
-void asmDownCastInt(aoStr *buf, AstType *type, int issigned) {
+void asmDownCastInt(AoStr *buf, AstType *type, int issigned) {
     switch(type->kind) {
     case AST_TYPE_INT:
         if (issigned) aoStrCatPrintf(buf, "movsx  %%al, %%rax\n\t");
@@ -370,12 +370,12 @@ void asmDownCastInt(aoStr *buf, AstType *type, int issigned) {
     }
 }
 
-void asmFloatToInt(aoStr *buf, AstType *type) {
+void asmFloatToInt(AoStr *buf, AstType *type) {
     if (type->kind == AST_TYPE_FLOAT)
         aoStrCatPrintf(buf, "cvttsd2si %%xmm0, %%eax\n\t");
 }
 
-void asmCast(aoStr *buf, AstType *from, AstType *to) {
+void asmCast(AoStr *buf, AstType *from, AstType *to) {
     if (from->kind == to->kind && from->size == to->size) return;
     if (astIsIntType(from) && to->kind == AST_TYPE_FLOAT) {
         asmToFloat(buf, from);
@@ -391,12 +391,12 @@ void asmCast(aoStr *buf, AstType *from, AstType *to) {
         asmFloatToInt(buf, from);
 }
 
-void asmTypeCast(Cctrl *cc, aoStr *buf, Ast *ast) {
+void asmTypeCast(Cctrl *cc, AoStr *buf, Ast *ast) {
     asmExpression(cc,buf,ast->operand);
     asmCast(buf,ast->operand->type,ast->type);
 }
 
-void asmAssignDerefInternal(aoStr *buf, AstType *type, int offset) {
+void asmAssignDerefInternal(AoStr *buf, AstType *type, int offset) {
     char *reg,*mov;
     aoStrCatPrintf(buf, "# ASSIGN DREF INTERNAL START: %s\n\t",
             astKindToString(type->kind));
@@ -424,13 +424,13 @@ void asmAssignDerefInternal(aoStr *buf, AstType *type, int offset) {
     aoStrCatPrintf(buf, "# ASSIGN DREF INTERNAL end\n\t");
 }
 
-void asmAssignDeref(Cctrl *cc,aoStr *buf, Ast *ast) {
+void asmAssignDeref(Cctrl *cc,AoStr *buf, Ast *ast) {
     asmPush(buf, REG_RAX);
     asmExpression(cc,buf,ast->operand);
     asmAssignDerefInternal(buf,ast->operand->type->ptr, 0);
 }
 
-void asmLoadDeref(aoStr *buf, AstType *result, AstType *op_type, int off) {
+void asmLoadDeref(AoStr *buf, AstType *result, AstType *op_type, int off) {
     char *reg,*ptr_mov;
     if (op_type->kind == AST_TYPE_POINTER &&
             op_type->ptr->kind == AST_TYPE_ARRAY) {
@@ -472,7 +472,7 @@ void asmLoadDeref(aoStr *buf, AstType *result, AstType *op_type, int off) {
             astKindToString(op_type->kind));
 }
 
-void asmPointerArithmetic(Cctrl *cc, aoStr *buf, long op, Ast *LHS, Ast *RHS) {
+void asmPointerArithmetic(Cctrl *cc, AoStr *buf, long op, Ast *LHS, Ast *RHS) {
     //assert(LHS->type->kind == AST_TYPE_POINTER);
     int size;
     char *fn;
@@ -525,7 +525,7 @@ void asmPointerArithmetic(Cctrl *cc, aoStr *buf, long op, Ast *LHS, Ast *RHS) {
     aoStrCatPrintf(buf, "# Pointer Arithmetic end\n\t");
 }
 
-void asmAssignClassRef(Cctrl *cc, aoStr *buf, Ast *cls, AstType *field, int offset) {
+void asmAssignClassRef(Cctrl *cc, AoStr *buf, Ast *cls, AstType *field, int offset) {
     int total_offset;
     switch (cls->kind) {
         case AST_LVAR:
@@ -591,7 +591,7 @@ void asmAssignClassRef(Cctrl *cc, aoStr *buf, Ast *cls, AstType *field, int offs
     }
 }
 
-void asmLoadClassRef(Cctrl *cc, aoStr *buf, Ast *cls, AstType *field, int offset) {
+void asmLoadClassRef(Cctrl *cc, AoStr *buf, Ast *cls, AstType *field, int offset) {
     int total_offset;
     switch (cls->kind) {
         case AST_LVAR:
@@ -623,7 +623,7 @@ void asmLoadClassRef(Cctrl *cc, aoStr *buf, Ast *cls, AstType *field, int offset
     }
 }
 
-void asmAssign(Cctrl *cc, aoStr *buf, Ast *variable) {
+void asmAssign(Cctrl *cc, AoStr *buf, Ast *variable) {
     if (variable->kind == AST_DEFAULT_PARAM) {
         variable = variable->declvar;
     }
@@ -648,7 +648,7 @@ void asmAssign(Cctrl *cc, aoStr *buf, Ast *variable) {
         break;
 
     case AST_GVAR: {
-        aoStr *label = asmGetGlabel(variable);
+        AoStr *label = asmGetGlabel(variable);
         asmGSave(buf,label->data,variable->type,0);
         break;
     }
@@ -658,7 +658,7 @@ void asmAssign(Cctrl *cc, aoStr *buf, Ast *variable) {
     }
 }
 
-void asmCompare(Cctrl *cc, aoStr *buf, char *instruction, Ast *ast) {
+void asmCompare(Cctrl *cc, AoStr *buf, char *instruction, Ast *ast) {
     Ast *LHS,*RHS;
     LHS = ast->left;
     RHS = ast->right;
@@ -748,7 +748,7 @@ void asmCompare(Cctrl *cc, aoStr *buf, char *instruction, Ast *ast) {
     }
 }
 
-void asmBinaryOpIntArithmetic(Cctrl *cc,aoStr *buf, Ast *ast, int reverse) {
+void asmBinaryOpIntArithmetic(Cctrl *cc,AoStr *buf, Ast *ast, int reverse) {
     aoStrCatPrintf(buf, "# INt arithmetic START \n\t");
     char *op = NULL;
     Ast *LHS,*RHS;
@@ -824,7 +824,7 @@ void asmBinaryOpIntArithmetic(Cctrl *cc,aoStr *buf, Ast *ast, int reverse) {
     aoStrCatPrintf(buf, "# INt arithmetic END \n\t");
 }
 
-void asmBinaryOpFloatArithmetic(Cctrl *cc, aoStr *buf, Ast *ast, int reverse) {
+void asmBinaryOpFloatArithmetic(Cctrl *cc, AoStr *buf, Ast *ast, int reverse) {
     char *op;
     Ast *LHS,*RHS;
     LHS = ast->left;
@@ -861,7 +861,7 @@ void asmBinaryOpFloatArithmetic(Cctrl *cc, aoStr *buf, Ast *ast, int reverse) {
     aoStrCatPrintf(buf, "%s     %%xmm1, %%xmm0\n\t", op);
 }
 
-void asmLoadConvert(aoStr *buf, AstType *to, AstType *from) {
+void asmLoadConvert(AoStr *buf, AstType *to, AstType *from) {
     (void)from;
     if (to->kind == AST_TYPE_FLOAT) {
         asmToFloat(buf,to);
@@ -870,7 +870,7 @@ void asmLoadConvert(aoStr *buf, AstType *to, AstType *from) {
     }
 }
 
-void asmSaveConvert(aoStr *buf, AstType *to, AstType *from) {
+void asmSaveConvert(AoStr *buf, AstType *to, AstType *from) {
     if (astIsIntType(from) && astIsFloatType(to)) {
         aoStrCatPrintf(buf, "cvtsi2ss %%eax, %%xmm0\n\t");
     } else if (astIsFloatType(from) && astIsFloatType(to)) {
@@ -900,10 +900,10 @@ static char *asmGetCompartor(long op) {
  * '0' < ch > '9'
  * Etc...
  * */
-void asmRangeOperation(Cctrl *cc, aoStr *buf, Ast *ast) {
+void asmRangeOperation(Cctrl *cc, AoStr *buf, Ast *ast) {
     char *op2 = asmGetCompartor(ast->kind);
     char *op1 = asmGetCompartor(ast->left->kind);
-    aoStr *label_end = astMakeLabel();
+    AoStr *label_end = astMakeLabel();
 
     aoStrCatPrintf(buf, "# RANGE Start\n\t");
     asmExpression(cc,buf,ast->left->left);
@@ -956,7 +956,7 @@ int asmShouldReverseMaths(Ast *RHS) {
          RHS->right->kind == AST_ASM_FUNCALL);
 }
 
-void asmBinOpFunctionAssign(Cctrl *cc, aoStr *buf, Ast *fnptr, Ast *fn) {
+void asmBinOpFunctionAssign(Cctrl *cc, AoStr *buf, Ast *fnptr, Ast *fn) {
     (void)cc;
     switch (fn->kind) {
         case AST_FUNC: {
@@ -992,7 +992,7 @@ void asmBinOpFunctionAssign(Cctrl *cc, aoStr *buf, Ast *fnptr, Ast *fn) {
     }
 }
 
-void asmBinaryOp(Cctrl *cc, aoStr *buf, Ast *ast) {
+void asmBinaryOp(Cctrl *cc, AoStr *buf, Ast *ast) {
     if (ast->kind == '=') {
         /* If it is compound and the value is being assigned to the return of 
          * a function we need to perform the integer arithmetic in reversed 
@@ -1050,7 +1050,7 @@ void asmBinaryOp(Cctrl *cc, aoStr *buf, Ast *ast) {
     }
 }
 
-void asmPreIncrDecr(Cctrl *cc, aoStr *buf, Ast *ast, char *op) {
+void asmPreIncrDecr(Cctrl *cc, AoStr *buf, Ast *ast, char *op) {
     asmExpression(cc,buf,ast->operand);
     int size = 1;
     if (ast->operand->type->ptr) {
@@ -1073,7 +1073,7 @@ void asmPreIncrDecr(Cctrl *cc, aoStr *buf, Ast *ast, char *op) {
     }
 }
 
-void asmIncrDecr(Cctrl *cc, aoStr *buf, Ast *ast, char *op) {
+void asmIncrDecr(Cctrl *cc, AoStr *buf, Ast *ast, char *op) {
     asmExpression(cc,buf,ast->operand);
     asmPush(buf, REG_RAX);
     int size = 1;
@@ -1095,7 +1095,7 @@ void asmIncrDecr(Cctrl *cc, aoStr *buf, Ast *ast, char *op) {
 }
 
 /* This function is seriouly bjorked */
-void asmAddr(Cctrl *cc, aoStr *buf, Ast *ast) {
+void asmAddr(Cctrl *cc, AoStr *buf, Ast *ast) {
     aoStrCatPrintf(buf, "# ADDR %s START %s \n\t", 
         astKindToString(ast->operand->kind), 
         astKindToString(ast->operand->type->kind));
@@ -1162,7 +1162,7 @@ void asmAddr(Cctrl *cc, aoStr *buf, Ast *ast) {
         astKindToString(ast->operand->type->kind));
 }
 
-int asmPlaceArgs(Cctrl *cc, aoStr *buf, List *argv, int reverse) {
+int asmPlaceArgs(Cctrl *cc, AoStr *buf, List *argv, int reverse) {
     int r = 0;
     Ast *ast;
     if (reverse) {
@@ -1185,14 +1185,14 @@ int asmPlaceArgs(Cctrl *cc, aoStr *buf, List *argv, int reverse) {
     return align(r,8);
 }
 
-void asmPopIntArgs(aoStr *buf, List *argv) {
+void asmPopIntArgs(AoStr *buf, List *argv) {
     int count = listCount(argv);
     for (int i = count - 1; i >= 0; --i) {
         asmPop(buf, REGISTERS[i]);
     }
 }
 
-void asmPopFloatArgs(aoStr *buf, List *argv) {
+void asmPopFloatArgs(AoStr *buf, List *argv) {
     int count = listCount(argv);
     for (int i = count - 1; i >= 0; --i) {
         asmPopXMM(buf,i);
@@ -1204,7 +1204,7 @@ void asmPopFloatArgs(aoStr *buf, List *argv) {
 #define FUN_EXISTS 0x1
 #define FUN_EXTERN 0x2
 #define FUN_VARARG 0x4
-void asmPrepFuncCallArgs(Cctrl *cc, aoStr *buf, Ast *funcall) {
+void asmPrepFuncCallArgs(Cctrl *cc, AoStr *buf, Ast *funcall) {
     int int_cnt,float_cnt,stack_cnt,stackoffset,needs_padding,var_arg_start,argc,
         flags;
     List *int_args, *float_args, *stack_args;
@@ -1384,13 +1384,13 @@ void asmPrepFuncCallArgs(Cctrl *cc, aoStr *buf, Ast *funcall) {
 }
 
 /* Function call for ASM, PTR and normal functions */
-void asmFunCall(Cctrl *cc, aoStr *buf, Ast *ast) {
+void asmFunCall(Cctrl *cc, AoStr *buf, Ast *ast) {
     asmPrepFuncCallArgs(cc,buf,ast);
 }
 
 /* This is also used for initalising classes as they are treated much in the 
  * same way as arrays */
-void asmArrayInit(Cctrl *cc, aoStr *buf, Ast *ast, AstType *type, int offset) {
+void asmArrayInit(Cctrl *cc, AoStr *buf, Ast *ast, AstType *type, int offset) {
     for (int i = 0; i < ast->arrayinit->size; ++i) {
         Ast *tmp = vecGet(Ast *,ast->arrayinit, i);
         if (tmp->kind == AST_ARRAY_INIT) {
@@ -1416,7 +1416,7 @@ void asmArrayInit(Cctrl *cc, aoStr *buf, Ast *ast, AstType *type, int offset) {
     }
 }
 
-void asmHandleSwitch(Cctrl *cc, aoStr *buf, Ast *ast) {
+void asmHandleSwitch(Cctrl *cc, AoStr *buf, Ast *ast) {
     /* create jump table */
     PtrVec *cases = ast->cases;
     Ast **jump_table = ast->jump_table_order;
@@ -1432,8 +1432,8 @@ void asmHandleSwitch(Cctrl *cc, aoStr *buf, Ast *ast) {
      * expression from cond */
     asmExpression(cc,buf,ast->switch_cond);
 
-    aoStr *end_label;
-    aoStr *jump_table_start = astMakeLabel();
+    AoStr *end_label;
+    AoStr *jump_table_start = astMakeLabel();
 
     if (ast->case_default) end_label = ast->case_default->case_label;
     else                   end_label = ast->case_end_label;
@@ -1504,8 +1504,8 @@ void asmHandleSwitch(Cctrl *cc, aoStr *buf, Ast *ast) {
     aoStrCatPrintf(buf, "%s:\n\t", ast->case_end_label->data);
 }
 
-void asmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
-    aoStr *label_begin, *label_end;
+void asmExpression(Cctrl *cc, AoStr *buf, Ast *ast) {
+    AoStr *label_begin, *label_end;
 
     switch (ast->kind) {
     case AST_LITERAL: {
@@ -2022,7 +2022,7 @@ void asmExpression(Cctrl *cc, aoStr *buf, Ast *ast) {
     }
 }
 
-void asmDataInternal(aoStr *buf, Ast *data) {
+void asmDataInternal(AoStr *buf, Ast *data) {
     if (data->kind == AST_STRING) {
         aoStrCatPrintf(buf,".quad %s\n\t",data->slabel->data);
         return;
@@ -2061,8 +2061,8 @@ void asmDataInternal(aoStr *buf, Ast *data) {
     }
 }
 
-void asmInitialiseEmptyGlobal(aoStr *buf, Ast *global, int zerofill) {
-    aoStr *label = asmGetGlabel(global);
+void asmInitialiseEmptyGlobal(AoStr *buf, Ast *global, int zerofill) {
+    AoStr *label = asmGetGlabel(global);
     int size = global->type->size;
 
 #if IS_MACOS
@@ -2083,11 +2083,11 @@ void asmInitialiseEmptyGlobal(aoStr *buf, Ast *global, int zerofill) {
 #endif
 }
 
-void asmGlobalVar(StrMap *seen_globals, aoStr *buf, Ast* ast) {
+void asmGlobalVar(StrMap *seen_globals, AoStr *buf, Ast* ast) {
     Ast *declvar = ast->declvar;
     Ast *declinit = ast->declinit;
-    aoStr *varname = declvar->gname;
-    aoStr *label = asmGetGlabel(declvar);
+    AoStr *varname = declvar->gname;
+    AoStr *label = asmGetGlabel(declvar);
 
     if (strMapGetLen(seen_globals,varname->data,varname->len)) {
         return;
@@ -2150,7 +2150,7 @@ void asmGlobalVar(StrMap *seen_globals, aoStr *buf, Ast* ast) {
     }
 }
 
-void asmDataSection(Cctrl *cc, aoStr *buf) {
+void asmDataSection(Cctrl *cc, AoStr *buf) {
     aoStrCatFmt(buf, "sign_bit:\n\t.quad 0x8000000000000000\n");
     aoStrCatFmt(buf, "one_dbl:\n\t.double 1.0\n");
 
@@ -2168,7 +2168,7 @@ void asmDataSection(Cctrl *cc, aoStr *buf) {
     strMapIteratorRelease(it);
 } 
 
-void asmStoreParam(aoStr *buf, int *_ireg, int *_arg, int offset) {
+void asmStoreParam(AoStr *buf, int *_ireg, int *_arg, int offset) {
     int arg = *_arg, ireg = *_ireg;
     if (ireg == 6) {
         aoStrCatPrintf(buf,
@@ -2182,7 +2182,7 @@ void asmStoreParam(aoStr *buf, int *_ireg, int *_arg, int offset) {
         *_ireg = ireg;
     }
 }
-void asmStoreParamFloat(aoStr *buf, int *_freg, int *_arg, int offset) {
+void asmStoreParamFloat(AoStr *buf, int *_freg, int *_arg, int offset) {
     int arg = *_arg, freg = *_freg;
     if (freg == 9) {
         aoStrCatPrintf(buf,
@@ -2205,7 +2205,7 @@ void asmGetRegisterCounts(List *params, int *ireg, int *freg) {
     }
 }
 
-int asmFunctionInit(Cctrl *cc, aoStr *buf, Ast *func) {
+int asmFunctionInit(Cctrl *cc, AoStr *buf, Ast *func) {
     (void)cc;
     int offset = 0;
     int ireg = 0, freg = 0, locals = 0, arg = 2;
@@ -2304,11 +2304,11 @@ int asmFunctionInit(Cctrl *cc, aoStr *buf, Ast *func) {
     return stack_space;
 }
 
-void asmFunctionLeave(aoStr *buf) {
+void asmFunctionLeave(AoStr *buf) {
     aoStrCatPrintf(buf,"leave\n\tret\n");
 }
 
-int asmHasRet(aoStr *buf) {
+int asmHasRet(AoStr *buf) {
     static char *match = "leave\n\tret\n";
     int len = 11;
     int curlen = buf->len-1;
@@ -2324,7 +2324,7 @@ int asmHasRet(aoStr *buf) {
     return 1;
 }
 
-void asmFunction(Cctrl *cc, aoStr *buf, Ast *func) {
+void asmFunction(Cctrl *cc, AoStr *buf, Ast *func) {
     assert(func->kind == AST_FUNC);
     cc->stack_local_space = asmFunctionInit(cc,buf,func);
     asmExpression(cc,buf,func->body);
@@ -2333,7 +2333,7 @@ void asmFunction(Cctrl *cc, aoStr *buf, Ast *func) {
     }
 }
 
-void asmPasteAsmBlocks(aoStr *buf, Cctrl *cc) {
+void asmPasteAsmBlocks(AoStr *buf, Cctrl *cc) {
     List *it = cc->asm_blocks->next;
     List *func_it;
     Ast *asm_block, *asm_func;
@@ -2361,7 +2361,7 @@ void asmPasteAsmBlocks(aoStr *buf, Cctrl *cc) {
     }
 }
 
-void asmInitaliser(Cctrl *cc, aoStr *buf) {
+void asmInitaliser(Cctrl *cc, AoStr *buf) {
     if (listEmpty(cc->initalisers)) return;
     char *fname = NULL;
     int locals = 0, stack_space;
@@ -2412,10 +2412,10 @@ void asmInitaliser(Cctrl *cc, aoStr *buf) {
 }
 
 /* Create assembly */
-aoStr *asmGenerate(Cctrl *cc) {
+AoStr *asmGenerate(Cctrl *cc) {
     Ast *ast;
     StrMap *seen_globals = strMapNew(32);
-    aoStr *asmbuf = aoStrAlloc(1<<10);
+    AoStr *asmbuf = aoStrAlloc(1<<10);
  
     if (!listEmpty(cc->initalisers)) {
         has_initialisers = 1;

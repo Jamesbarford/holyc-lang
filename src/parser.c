@@ -28,7 +28,7 @@ Ast *parseCompoundStatement(Cctrl *cc);
 AstType *parseClassDef(Cctrl *cc, int is_intrinsic);
 AstType *parseUnionDef(Cctrl *cc);
 
-static aoStr *getRangeLoopIdx(void) {
+static AoStr *getRangeLoopIdx(void) {
     static int id = 0;
     return aoStrPrintf("___tmp%d___", ++id);
 }
@@ -151,17 +151,17 @@ void parseFlattenAnnonymous(AstType *anon, StrMap *fields_dict,
 
 typedef struct ClsField {
     AstType *type;
-    aoStr *field_name;
+    AoStr *field_name;
 } ClsField;
 
-ClsField *clsFieldNew(AstType *type, aoStr *field_name) {
+ClsField *clsFieldNew(AstType *type, AoStr *field_name) {
     ClsField *f = (ClsField *)malloc(sizeof(ClsField));
     f->type = type;
     f->field_name = field_name;
     return f;
 }
 
-List *parseClassOrUnionFields(Cctrl *cc, aoStr *name,
+List *parseClassOrUnionFields(Cctrl *cc, AoStr *name,
         unsigned int (*computeSize)(List *), unsigned int *_size)
 {
     unsigned int size;
@@ -169,7 +169,7 @@ List *parseClassOrUnionFields(Cctrl *cc, aoStr *name,
     int fnptr_name_len;
     Lexeme *tok, *tok_name;
     AstType *next_type = NULL, *base_type = NULL, *field_type = NULL;
-    aoStr  *field_name = NULL;
+    AoStr  *field_name = NULL;
     List *fields_list;
 
     tok = cctrlTokenGet(cc);
@@ -317,7 +317,7 @@ StrMap *parseClassOffsets(Cctrl *cc,
                           int *aligned_size, 
                           List *fields, 
                           AstType *base_class,
-                          aoStr *clsname,
+                          AoStr *clsname,
                           int is_intrinsic)
 {
     int offset,size,padding;
@@ -357,7 +357,7 @@ StrMap *parseClassOffsets(Cctrl *cc,
     listForEach(fields) {
         ClsField *cls_field = (ClsField *)it->value;
         field = cls_field->type;
-        aoStr *field_name = cls_field->field_name;
+        AoStr *field_name = cls_field->field_name;
 
         if (field_name == NULL && parseIsClassOrUnion(field->kind)) {
             if (cc->flags & CCTRL_SAVE_ANONYMOUS) {
@@ -409,7 +409,7 @@ StrMap *parseUnionOffsets(Cctrl *cc, int *real_size, List *fields) {
     listForEach(fields) {
         ClsField *cls_field = (ClsField *)it->value;
         field = cls_field->type;
-        aoStr *field_name = cls_field->field_name;
+        AoStr *field_name = cls_field->field_name;
         if (max_size < field->size) {
             max_size = field->size;
         }
@@ -435,7 +435,7 @@ AstType *parseClassOrUnion(Cctrl *cc, StrMap *env,
         unsigned int (*computeSize)(List *),
         int is_intrinsic)
 {
-    aoStr *tag = NULL;
+    AoStr *tag = NULL;
     int aligned_size = 0;
     unsigned int class_size;
     Lexeme *tok = cctrlTokenGet(cc);
@@ -700,7 +700,7 @@ Ast *parseOptExpr(Cctrl *cc) {
 
 Ast *parseDesugarArrayLoop(Cctrl *cc, Ast *iteratee, Ast *static_array) {
     /* Create a temporay variable as the counter */
-    aoStr *range_tmp_var = getRangeLoopIdx();
+    AoStr *range_tmp_var = getRangeLoopIdx();
     Ast *counter_var = astLVar(ast_int_type,range_tmp_var->data,
                                range_tmp_var->len);
 
@@ -767,7 +767,7 @@ void parseAssertContainerHasFields(Cctrl *cc, AstType *size_field,
 Ast *parseCreateForRange(Cctrl *cc, Ast *iteratee,
                          Ast *size_ref, Ast *entries_ref)
 {
-    aoStr *range_tmp_var = getRangeLoopIdx();
+    AoStr *range_tmp_var = getRangeLoopIdx();
     Ast *counter_var = astLVar(ast_int_type,range_tmp_var->data,
                                range_tmp_var->len);
     Ast *counter = astDecl(counter_var,astI64Type(0));
@@ -906,7 +906,7 @@ Ast *parseForLoopInitialiser(Cctrl *cc) {
 
 Ast *parseForStatement(Cctrl *cc) {
     Ast *forinit, *forcond, *forstep, *forbody;
-    aoStr *for_begin, *for_end, *for_middle,
+    AoStr *for_begin, *for_end, *for_middle,
           *prev_begin, *prev_end;
     cctrlTokenExpect(cc,'(');
 
@@ -957,7 +957,7 @@ Ast *parseForStatement(Cctrl *cc) {
 
 Ast *parseWhileStatement(Cctrl *cc) {
     Ast *whilecond, *whilebody;
-    aoStr *while_begin, *while_end,
+    AoStr *while_begin, *while_end,
           *prev_begin, *prev_end;
     cctrlTokenExpect(cc,'(');
 
@@ -989,7 +989,7 @@ Ast *parseWhileStatement(Cctrl *cc) {
 Ast *parseDoWhileStatement(Cctrl *cc) {
     Ast *whilecond, *whilebody;
     Lexeme *tok;
-    aoStr *while_begin, *while_end,
+    AoStr *while_begin, *while_end,
           *prev_begin, *prev_end;
     
 
@@ -1094,7 +1094,7 @@ Ast *parseCaseLabel(Cctrl *cc, Lexeme *tok) {
     }
     Ast *case_, *prev, *case_expr = NULL;
     Lexeme *peek;
-    aoStr *label;
+    AoStr *label;
     int begining,end;
     int ok = 1;
 
@@ -1181,7 +1181,7 @@ Ast *parseDefaultStatement(Cctrl *cc) {
     }
     Lexeme *peek;
     List *stmts = listNew();
-    aoStr *default_label = astMakeLabel();
+    AoStr *default_label = astMakeLabel();
     /* set here so this is non-null for the next call to parseStatement */
     cc->tmp_default_case = astDefault(default_label,stmts);
 
@@ -1204,7 +1204,7 @@ Ast *parseSwitchStatement(Cctrl *cc) {
     Ast *cond, *tmp, *original_default_label;
     Lexeme *peek;
     PtrVec *original_cases;
-    aoStr *end_label,*tmp_name,*original_break;
+    AoStr *end_label,*tmp_name,*original_break;
     int switch_bounds_checked = 1;
     char terminating_char = ')';
 
@@ -1264,15 +1264,15 @@ Ast *parseSwitchStatement(Cctrl *cc) {
 
 /* Concatinate the label of the goto with the name of the function 
  * currently being parsed to be able to have uniqe goto labels  */
-aoStr *createFunctionLevelGotoLabel(Cctrl *cc, Lexeme *tok) {
-    aoStr *label = aoStrNew();
+AoStr *createFunctionLevelGotoLabel(Cctrl *cc, Lexeme *tok) {
+    AoStr *label = aoStrNew();
     aoStrCatFmt(label,".%S_%.*s",cc->tmp_fname,tok->len,tok->start);
     return label;
 }
 
 Ast *parseStatement(Cctrl *cc) {
     Lexeme *tok, *peek;
-    aoStr *label;
+    AoStr *label;
     Ast *ret, *ast;
     StrMap *env;
     tok = cctrlTokenGet(cc);
@@ -1526,9 +1526,9 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
         cctrlTokenGet(cc);
         Lexeme *peek = cctrlTokenPeek(cc);
         if (tokenPunctIs(peek,'{')) {
-            aoStr *fname_duped = aoStrDupRaw(fname,len);
-            aoStr *asm_fname = astNormaliseFunctionName(fname_duped->data);
-            aoStr *prev_asm_name = cc->tmp_asm_fname;
+            AoStr *fname_duped = aoStrDupRaw(fname,len);
+            AoStr *asm_fname = astNormaliseFunctionName(fname_duped->data);
+            AoStr *prev_asm_name = cc->tmp_asm_fname;
             cc->tmp_asm_fname = asm_fname;
             Ast *asm_block = prsAsm(cc,1);
 
@@ -1683,7 +1683,7 @@ Ast *parseFunctionOrDef(Cctrl *cc, AstType *rettype, char *fname, int len, int i
 
 Ast *parseAsmFunctionBinding(Cctrl *cc) {
     Lexeme *tok;
-    aoStr *asm_fname, *c_fname;
+    AoStr *asm_fname, *c_fname;
     AstType *rettype;
     Ast *asm_func;
     int has_var_args = 0, is_inline = 0;

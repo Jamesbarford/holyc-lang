@@ -188,7 +188,7 @@ struct IrValue {
     /* @Bug
      * Used for any arbitrary string, this is not on the union as globals and
      * globally defined functions need a label/name and would conflict */
-    aoStr *name;
+    AoStr *name;
     unsigned long flags;
 
     union {
@@ -204,17 +204,17 @@ struct IrValue {
          * putting in a file for an assembler to read, the `str_real_len` 
          * is the length of the string without escape sequences. */
         struct {
-            aoStr *str;
+            AoStr *str;
             int str_real_len;
         };
 
         struct {
-            aoStr *gname;
+            AoStr *gname;
             IrValue *value;
         } global;
 
         struct {
-            aoStr *label;
+            AoStr *label;
             int nesting;
             int length_per_array;
             PtrVec *values; /* `PtrVec<IrValue *>` recurisve array definition,
@@ -249,7 +249,7 @@ struct IrInstr {
     union {
         IrCmpKind cmp_kind;
       /* either an unresolved `goto label;` or a a `label:` */
-        aoStr *unresolved_label;
+        AoStr *unresolved_label;
 
         struct {
             List *cases; /* `List<IrPair *>`
@@ -274,7 +274,7 @@ struct IrFunction {
                           * how we produce assembly */
     IrValue *return_value; /* Not sure if this is needed but for printing as a 
                            * string it looks pretty! */
-    aoStr *name;          /* Function name */
+    AoStr *name;          /* Function name */
     IrProgram *program;   /* A pointer to the program */
     PtrVec *params;       /* Parameter list, `PtrVec<IrValue *>` */
     List *blocks;         /* Basic blocks, `List<IrBlock *>` */
@@ -284,11 +284,11 @@ struct IrFunction {
     Map *cfg;             /* The interconnectivity between nodes: 
                            * `Map<long, IrBlockMapping> [id] => {id, id...}` */
     int has_var_args;
-    Map *allocas;         /* `Map<aoStr *, IrInstr *>` a map of alloca 
+    Map *allocas;         /* `Map<AoStr *, IrInstr *>` a map of alloca 
                            * instructions, makes it easier to determine if 
                            * they are used. */
-    Map *stores; /* `Map<aoStr *, IrInstr *>` a map of store instructions */
-    Map *loads;  /* `Map<aoStr *, IrInstr *>` a map of load instructions */
+    Map *stores; /* `Map<AoStr *, IrInstr *>` a map of store instructions */
+    Map *loads;  /* `Map<AoStr *, IrInstr *>` a map of load instructions */
 };
 
 struct IrProgram {
@@ -298,10 +298,10 @@ struct IrProgram {
      * is kinds nasty having both an Ast and Ir later in the codegen phase.
      */
     PtrVec *asm_functions;    /* `PtrVec<IrValue *>` - Raw assembly functions */
-    Map *global_variables;    /* `Map<aoStr *, IrValue *>` */
+    Map *global_variables;    /* `Map<AoStr *, IrValue *>` */
     StrMap *strings;          /* `StrMap<IrValue *>` */
     Map *arrays;              /* @Improve, we flatten the array and store it 
-                               * which feels perhaps wrong? `Map<aoStr *, IrValue *>` */
+                               * which feels perhaps wrong? `Map<AoStr *, IrValue *>` */
     StrMap *floats;           /* `StrMap<IrValue>` We store all floats, which
                                * will become a bit like global variables. This is
                                * because you cannot treat floats as immediates */
@@ -369,17 +369,17 @@ void irMemoryStats(void);
 void *irArenaAlloc(unsigned int size);
 
 
-aoStr *irFunctionToString(IrFunction *ir_func);
-aoStr *irFunctionCFGToString(IrFunction *func);
-aoStr *irProgramToString(IrProgram *ir_program);
-aoStr *irValueToString(IrValue *ir_value);
-aoStr *irInstrToString(IrInstr *ir_instr);
+AoStr *irFunctionToString(IrFunction *ir_func);
+AoStr *irFunctionCFGToString(IrFunction *func);
+AoStr *irProgramToString(IrProgram *ir_program);
+AoStr *irValueToString(IrValue *ir_value);
+AoStr *irInstrToString(IrInstr *ir_instr);
 const char *irValueKindToString(IrValueKind ir_value_kind);
 const char *irValueTypeToString(IrValueType ir_value_type);
 const char *irOpcodeToString(IrInstr *ir_instr);
 unsigned long irValueHash(IrValue *value);
 long irValueKeyLen(IrValue *value);
-aoStr *irValueKeyStringify(IrValue *value);
+AoStr *irValueKeyStringify(IrValue *value);
 
 Set *irValueSetNew(void);
 Map *irStrValueMapNew(void);

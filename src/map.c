@@ -505,8 +505,8 @@ int intMapHas(IntMap *map, long key) {
     return idx != HT_DELETED;
 }
 
-aoStr *intMapToString(IntMap *map, char *delimiter, aoStr *(*stringify_value)(void *)) {
-    aoStr *buf = aoStrNew();
+AoStr *intMapToString(IntMap *map, char *delimiter, AoStr *(*stringify_value)(void *)) {
+    AoStr *buf = aoStrNew();
     unsigned long map_size = map->size;
 
     if (map_size == 0) {
@@ -518,7 +518,7 @@ aoStr *intMapToString(IntMap *map, char *delimiter, aoStr *(*stringify_value)(vo
     IntMapIterator *it = intMapIteratorNew(map);
     IntMapNode *entry;
     while ((entry = intMapNext(it)) != NULL) {
-        aoStr *value_string = stringify_value(entry->value);
+        AoStr *value_string = stringify_value(entry->value);
         if ((i + 1) == map_size) {
             aoStrCatFmt(buf,"[%I] => %S",entry->key,value_string);
         } else {
@@ -531,8 +531,8 @@ aoStr *intMapToString(IntMap *map, char *delimiter, aoStr *(*stringify_value)(vo
     return buf;
 }
 
-aoStr *intMapKeysToString(IntMap *map) {
-    aoStr *buf = aoStrNew();
+AoStr *intMapKeysToString(IntMap *map) {
+    AoStr *buf = aoStrNew();
     unsigned long map_size = map->size;
 
     if (map_size == 0) {
@@ -815,7 +815,7 @@ StrMapNode *strMapFindByValue(StrMap *map,
     return found;
 }
 
-int strMapAddAoStr(StrMap *map, aoStr *key, void *value) {
+int strMapAddAoStr(StrMap *map, AoStr *key, void *value) {
     return strMapAddLen(map,key->data,key->len,value);
 }
 
@@ -852,7 +852,7 @@ int strMapAddOrErr(StrMap *map, char *key, void *value) {
     return strMapAddLenOrErr(map,key,key_len,value);
 }
 
-int strMapAddAoStrOrErr(StrMap *map, aoStr *key, void *value) {
+int strMapAddAoStrOrErr(StrMap *map, AoStr *key, void *value) {
     return strMapAddLenOrErr(map,key->data,key->len,value);
 }
 
@@ -889,7 +889,7 @@ void *strMapGetLen(StrMap *map, char *key, long key_len) {
     return NULL;
 }
 
-void *strMapGetAoStr(StrMap *map, aoStr *key) {
+void *strMapGetAoStr(StrMap *map, AoStr *key) {
     return strMapGetLen(map,key->data,key->len);
 }
 
@@ -935,7 +935,7 @@ StrMapNode *strMapNext(StrMapIterator *it) {
 }
 
 char *strMapToString(StrMap *map, char *(*stringify_value)(void *)) {
-    aoStr *str = aoStrNew();
+    AoStr *str = aoStrNew();
     unsigned long map_size = map->size;
 
     if (map_size == 0) {
@@ -962,7 +962,7 @@ char *strMapToString(StrMap *map, char *(*stringify_value)(void *)) {
 }
 
 char *strMapKeysToString(StrMap *map) {
-    aoStr *str = aoStrNew();
+    AoStr *str = aoStrNew();
     unsigned long map_size = map->size;
 
     if (map_size == 0) {
@@ -1165,8 +1165,8 @@ void intSetIterRelease(IntSetIter *it) {
     if (it) free(it);
 }
 
-aoStr *intSetToString(IntSet *iset) {
-    aoStr *buf = aoStrNew();
+AoStr *intSetToString(IntSet *iset) {
+    AoStr *buf = aoStrNew();
     unsigned long set_size = iset->size;
 
     if (set_size == 0) {
@@ -1192,11 +1192,11 @@ aoStr *intSetToString(IntSet *iset) {
 
 /*================ Generic Set Implementation ===============================*/
 
-static aoStr *setTypeToString(Set *set);
+static AoStr *setTypeToString(Set *set);
 
-static aoStr *setStats(Set *set) {
-    aoStr *buf = aoStrNew();
-    aoStr *type = setTypeToString(set);
+static AoStr *setStats(Set *set) {
+    AoStr *buf = aoStrNew();
+    AoStr *type = setTypeToString(set);
     aoStrCatFmt(buf, "%S Stats {\n", type);
     aoStrCatFmt(buf, "  capacity = %U\n"
                      "  size = %U\n"
@@ -1212,7 +1212,7 @@ static aoStr *setStats(Set *set) {
 }
 
 void setPrintStats(Set *set) {
-    aoStr *stats = setStats(set);
+    AoStr *stats = setStats(set);
     printf("%s\n",stats->data);
     aoStrRelease(stats);
 }
@@ -1344,7 +1344,7 @@ static int setResize(Set *set) {
 int setAdd(Set *set, void *key) {
     if (set->size >= set->threashold) {
 #ifdef DEBUG
-        aoStr *stats = setStats(set);
+        AoStr *stats = setStats(set);
         printf("%s\n",stats->data);
         aoStrRelease(stats);
         loggerPanic("Set with size: %lu and Capacity %lu not big enough for debug mode\n",
@@ -1467,7 +1467,7 @@ void setIterRelease(SetIter *it) {
     if (it) free(it);
 }
 
-static aoStr *setTypeToString(Set *set) {
+static AoStr *setTypeToString(Set *set) {
     if (is_terminal) {
         return aoStrPrintf(ESC_GREEN"Set"ESC_RESET"<"ESC_CYAN"%s"
                            ESC_RESET">",
@@ -1477,9 +1477,9 @@ static aoStr *setTypeToString(Set *set) {
     }
 }
 
-aoStr *setToString(Set *set) {
-    aoStr *buf = aoStrNew();
-    aoStr *type = setTypeToString(set);
+AoStr *setToString(Set *set) {
+    AoStr *buf = aoStrNew();
+    AoStr *type = setTypeToString(set);
 
     aoStrCatFmt(buf, "%S", type);
     if (set->size == 0) {
@@ -1499,7 +1499,7 @@ aoStr *setToString(Set *set) {
 
     SetIter *it = setIterNew(set);
     while (setIterNext(it)) {
-        aoStr *str_val = set->type->stringify(it->value);
+        AoStr *str_val = set->type->stringify(it->value);
         aoStrCatAoStr(buf, str_val);
         aoStrRelease(str_val);
 
@@ -1513,7 +1513,7 @@ aoStr *setToString(Set *set) {
 }
 
 void setPrint(Set *set) {
-    aoStr *str = setToString(set);
+    AoStr *str = setToString(set);
     printf("%s\n",str->data);
     aoStrRelease(str);
 }
@@ -1574,7 +1574,7 @@ Set *setCopy(Set *set) {
     return copy;
 }
 
-aoStr *setAoStrPassThrough(aoStr *value) {
+AoStr *setAoStrPassThrough(AoStr *value) {
     return value;
 }
 
@@ -1583,7 +1583,7 @@ SetType aostr_set_type = {
     .hash          = (setValueHash *)aoStrHashFunction,
     .stringify     = (setValueToString *)setAoStrPassThrough,
     .value_release = NULL,
-    .type          = "aoStr *",
+    .type          = "AoStr *",
 };
 
 SetType int_set_type = {
@@ -1597,7 +1597,7 @@ SetType int_set_type = {
 /*================ Generic Map Implementation ===============================*/
 /* @TODO - use this everywhere */
 
-static aoStr *mapTypeToString(Map *map) {
+static AoStr *mapTypeToString(Map *map) {
     /* I'm staring at maps a lot and it is nicer to colour them */
     if (is_terminal) {
         return aoStrPrintf(ESC_GREEN"Map"ESC_RESET"<"ESC_CYAN"%s"
@@ -1913,9 +1913,9 @@ void mapIterRelease(MapIter *it) {
     if (it) free(it);
 }
 
-static aoStr *mapStats(Map *map) {
-    aoStr *buf = aoStrNew();
-    aoStr *type = mapTypeToString(map);
+static AoStr *mapStats(Map *map) {
+    AoStr *buf = aoStrNew();
+    AoStr *type = mapTypeToString(map);
     aoStrCatFmt(buf, "%S Stats {\n", type);
     aoStrCatFmt(buf, "  capacity = %U\n"
                      "  size = %U\n"
@@ -1931,15 +1931,15 @@ static aoStr *mapStats(Map *map) {
 }
 
 void mapPrintStats(Map *map) {
-    aoStr *stats = mapStats(map);
+    AoStr *stats = mapStats(map);
     printf("%s\n",stats->data);
     aoStrRelease(stats);
 }
 
 /* Convert the map to a string */
-aoStr *mapToString(Map *map, char *delimiter) {
-    aoStr *buf = aoStrNew();
-    aoStr *type = mapTypeToString(map);
+AoStr *mapToString(Map *map, char *delimiter) {
+    AoStr *buf = aoStrNew();
+    AoStr *type = mapTypeToString(map);
     if (map->size == 0) {
         aoStrCatLen(buf, str_lit(" {}"));
         aoStrRelease(type);
@@ -1951,8 +1951,8 @@ aoStr *mapToString(Map *map, char *delimiter) {
     MapIter *it = mapIterNew(map);
     while (mapIterNext(it)) {
         MapNode *n = it->node;
-        aoStr *value_string = map->type->value_to_string(n->value);
-        aoStr *key_string = map->type->key_to_string(n->key);
+        AoStr *value_string = map->type->value_to_string(n->value);
+        AoStr *key_string = map->type->key_to_string(n->key);
         if (it->idx == map->size) {
             aoStrCatFmt(buf,"  [%S] => %S",key_string, value_string);
         } else {
@@ -1967,8 +1967,8 @@ aoStr *mapToString(Map *map, char *delimiter) {
     return buf;
 }
 
-aoStr *mapKeysToString(Map *map) {
-    aoStr *buf = aoStrNew();
+AoStr *mapKeysToString(Map *map) {
+    AoStr *buf = aoStrNew();
     if (map->size == 0) {
         aoStrCatLen(buf, str_lit(" {}"));
         return buf;
@@ -1978,7 +1978,7 @@ aoStr *mapKeysToString(Map *map) {
     MapIter *it = mapIterNew(map);
     while (mapIterNext(it)) {
         MapNode *n = it->node;
-        aoStr *key_string = map->type->key_to_string(n->key);
+        AoStr *key_string = map->type->key_to_string(n->key);
         if (it->idx == map->size) {
             aoStrCatFmt(buf,"%S",key_string);
         } else {
@@ -1992,7 +1992,7 @@ aoStr *mapKeysToString(Map *map) {
 }
 
 void mapPrint(Map *map) {
-    aoStr *map_str = mapToString(map, ",\n");
+    AoStr *map_str = mapToString(map, ",\n");
     printf("%s\n\n",map_str->data);
     aoStrRelease(map_str);
 }
@@ -2015,7 +2015,7 @@ unsigned long intMapKeyHash(void *key) {
     return (unsigned long)(long)key;
 }
 
-aoStr *intMapKeyToString(void *key) {
+AoStr *intMapKeyToString(void *key) {
     return aoStrPrintf("%ld", (long)key);
 }
 

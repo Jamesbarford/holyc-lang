@@ -11,49 +11,47 @@
 #include <stddef.h>
 #include <sys/types.h>
 
-typedef struct aoStr aoStr;
-
-typedef struct aoStr {
+typedef struct AoStr {
     char *data;
     size_t len;
     size_t capacity;
-} aoStr;
+} AoStr;
 
-aoStr *aoStrAlloc(size_t capacity);
-aoStr *aoStrNew(void);
-void aoStrRelease(aoStr *buf);
+AoStr *aoStrAlloc(size_t capacity);
+AoStr *aoStrNew(void);
+void aoStrRelease(AoStr *buf);
 
-int aoStrExtendBuffer(aoStr *buf, size_t additional);
-void aoStrToLowerCase(aoStr *buf);
-void aoStrToUpperCase(aoStr *buf);
-void aoStrPutChar(aoStr *buf, char ch);
-void aoStrRepeatChar(aoStr *buf, char ch, int times);
-int aoStrEq(aoStr *b1, aoStr *b2);
-aoStr *aoStrDupCString(char *s);
-aoStr *aoStrDupRaw(char *s, size_t len);
-aoStr *aoStrDup(aoStr *buf);
+int aoStrExtendBuffer(AoStr *buf, size_t additional);
+void aoStrToLowerCase(AoStr *buf);
+void aoStrToUpperCase(AoStr *buf);
+void aoStrPutChar(AoStr *buf, char ch);
+void aoStrRepeatChar(AoStr *buf, char ch, int times);
+int aoStrEq(AoStr *b1, AoStr *b2);
+AoStr *aoStrDupCString(char *s);
+AoStr *aoStrDupRaw(char *s, size_t len);
+AoStr *aoStrDup(AoStr *buf);
 
-char *aoStrMove(aoStr *buf);
+char *aoStrMove(AoStr *buf);
 
-void aoStrCatLen(aoStr *buf, const void *d, size_t len);
-void aoStrCatAoStr(aoStr *buf, aoStr *s2);
-void aoStrCat(aoStr *buf, const void *d);
-void aoStrCatRepeat(aoStr *buf, char *str, int times);
-void aoStrCatPrintf(aoStr *b, const char *fmt, ...);
-void aoStrCatFmt(aoStr *buf, const char *fmt, ...);
-aoStr *aoStrPrintf(const char *fmt, ...);
-aoStr *aoStrEscapeString(aoStr *buf);
-aoStr *aoStrEncode(aoStr *buf);
+void aoStrCatLen(AoStr *buf, const void *d, size_t len);
+void aoStrCatAoStr(AoStr *buf, AoStr *s2);
+void aoStrCat(AoStr *buf, const void *d);
+void aoStrCatRepeat(AoStr *buf, char *str, int times);
+void aoStrCatPrintf(AoStr *b, const char *fmt, ...);
+void aoStrCatFmt(AoStr *buf, const char *fmt, ...);
+AoStr *aoStrPrintf(const char *fmt, ...);
+AoStr *aoStrEscapeString(AoStr *buf);
+AoStr *aoStrEncode(AoStr *buf);
 
-void aoStrArrayRelease(aoStr **arr, int count);
-aoStr **aoStrSplit(char *to_split, char delimiter, int *count);
+void aoStrArrayRelease(AoStr **arr, int count);
+AoStr **aoStrSplit(char *to_split, char delimiter, int *count);
 char *mprintf(const char *fmt, ...);
 char *mprintFmt(const char *fmt, ...);
 char *mprintVa(const char *fmt, va_list ap, ssize_t *_len);
-aoStr *aoStrError(void);
-aoStr *aoStrIntToHumanReadableBytes(long bytes);
-unsigned long aoStrHashFunction(aoStr *str);
-size_t aoStrGetLen(aoStr *buf);
-aoStr *aoStrIdentity(aoStr *buf);
+AoStr *aoStrError(void);
+AoStr *aoStrIntToHumanReadableBytes(long bytes);
+unsigned long aoStrHashFunction(AoStr *str);
+size_t aoStrGetLen(AoStr *buf);
+AoStr *aoStrIdentity(AoStr *buf);
 
 #endif

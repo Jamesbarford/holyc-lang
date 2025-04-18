@@ -4,6 +4,6 @@
 #include "aostr.h"
 #include "ir-types.h"
 
-aoStr *aarch64CodeGen(IrProgram *ir_program);
+AoStr *aarch64CodeGen(IrProgram *ir_program);
 
 #endif

@@ -170,9 +170,9 @@ Cctrl *cctrlNew(void) {
     cc->token_buffer = NULL;
 
     int len;
-    aoStr **str_array = aoStrSplit(x86_registers,',',&len);
+    AoStr **str_array = aoStrSplit(x86_registers,',',&len);
     for (int i = 0; i < len; ++i) {
-        aoStr *upper_reg = aoStrDup(str_array[i]);
+        AoStr *upper_reg = aoStrDup(str_array[i]);
         aoStrToUpperCase(upper_reg);
         char *reg = aoStrMove(str_array[i]);
         strMapAdd(cc->x86_registers,reg,reg);
@@ -426,8 +426,8 @@ Lexeme *cctrlAsmTokenGet(Cctrl *cc) {
     return token;
 }
 
-aoStr *cctrlSeverityMessage(int severity) {
-    aoStr *buf = aoStrNew();
+AoStr *cctrlSeverityMessage(int severity) {
+    AoStr *buf = aoStrNew();
     if (is_terminal) {
         switch (severity) {
             case CCTRL_ERROR:
@@ -469,8 +469,8 @@ aoStr *cctrlSeverityMessage(int severity) {
     return buf;
 }
 
-void cctrlFileAndLine(Cctrl *cc, aoStr *buf, ssize_t lineno, ssize_t char_pos, char *msg, int severity) {
-    aoStr *severity_msg = cctrlSeverityMessage(severity);
+void cctrlFileAndLine(Cctrl *cc, AoStr *buf, ssize_t lineno, ssize_t char_pos, char *msg, int severity) {
+    AoStr *severity_msg = cctrlSeverityMessage(severity);
 
     aoStrCatFmt(buf,"%S%s", severity_msg, msg);
     if (buf->data[buf->len - 1] != '\n') {
@@ -508,7 +508,7 @@ char *lexemeToColor(Cctrl *cc, Lexeme *tok, int is_err) {
             default: return mprintf("%.*s",tok->len, tok->start);
         }
     } else if (is_terminal && is_err) {
-        aoStr *buf = aoStrNew();
+        AoStr *buf = aoStrNew();
         aoStrCat(buf,ESC_BOLD_RED);
         switch (tok->tk_type) {
             case TK_KEYWORD: aoStrCatFmt(buf, "%.*s", tok->len,tok->start); break;
@@ -581,7 +581,7 @@ ssize_t cctrlGetErrorIdx(Cctrl *cc, ssize_t line, char ch,
 }
 
 void cctrlCreateColoredLine(Cctrl *cc,
-                            aoStr *buf,
+                            AoStr *buf,
                             ssize_t lineno,
                             int should_color_err,
                             char *suggestion,
@@ -598,7 +598,7 @@ void cctrlCreateColoredLine(Cctrl *cc,
     }
     Lexeme *cur_tok = cctrlTokenPeek(cc);
 
-    aoStr *colored_buffer = aoStrNew();
+    AoStr *colored_buffer = aoStrNew();
     long offset = -1;
     long tok_len = -1;
     Lexeme tok;
@@ -638,7 +638,7 @@ void cctrlCreateColoredLine(Cctrl *cc,
     aoStrRelease(colored_buffer);
 }
 
-aoStr *cctrlCreateErrorLine(Cctrl *cc,
+AoStr *cctrlCreateErrorLine(Cctrl *cc,
                             ssize_t lineno, 
                             char *msg,
                             int severity,
@@ -646,7 +646,7 @@ aoStr *cctrlCreateErrorLine(Cctrl *cc,
 {
     char *color = severity == CCTRL_ERROR || CCTRL_ICE ? ESC_BOLD_RED : CCTRL_WARN ? ESC_BOLD_YELLOW : ESC_CYAN;
     if (!cc->lexer_) {
-        aoStr *buf = aoStrNew();
+        AoStr *buf = aoStrNew();
         cctrlFileAndLine(cc,buf,lineno,-1,msg,severity);
         if (is_terminal) {
             aoStrCat(buf, ESC_CYAN"     |\n"ESC_RESET);
@@ -658,7 +658,7 @@ aoStr *cctrlCreateErrorLine(Cctrl *cc,
 
     const char *line_buffer = lexerReportLine(cc->lexer_,lineno);
     Lexeme *cur_tok = cctrlTokenPeek(cc);
-    aoStr *buf = aoStrNew();
+    AoStr *buf = aoStrNew();
     long char_pos = cctrlGetCharErrorIdx(cc,cur_tok, line_buffer);
 
     long offset = -1;
@@ -706,9 +706,9 @@ aoStr *cctrlCreateErrorLine(Cctrl *cc,
     return buf;
 }
 
-aoStr *cctrlMessagVnsPrintF(Cctrl *cc, char *fmt, va_list ap, int severity) {
+AoStr *cctrlMessagVnsPrintF(Cctrl *cc, char *fmt, va_list ap, int severity) {
     char *msg = mprintVa(fmt, ap, NULL);
-    aoStr *bold_msg = aoStrNew();
+    AoStr *bold_msg = aoStrNew();
     if (is_terminal) {
         aoStrCatFmt(bold_msg, ESC_BOLD"%s"ESC_CLEAR_BOLD, msg);
     } else {
@@ -716,33 +716,33 @@ aoStr *cctrlMessagVnsPrintF(Cctrl *cc, char *fmt, va_list ap, int severity) {
     }
     Lexeme *cur_tok = cctrlTokenPeek(cc);
     if (cur_tok) {
-        aoStr *buf = cctrlCreateErrorLine(cc,cur_tok->line,bold_msg->data,severity,NULL);
+        AoStr *buf = cctrlCreateErrorLine(cc,cur_tok->line,bold_msg->data,severity,NULL);
         aoStrRelease(bold_msg);
         return buf;
     }
     return bold_msg;
 }
 
-aoStr *cctrlMessagVnsPrintFWithSuggestion(Cctrl *cc, char *fmt, va_list ap, 
+AoStr *cctrlMessagVnsPrintFWithSuggestion(Cctrl *cc, char *fmt, va_list ap, 
                                           int severity, char *suggestion)
 {
     char *msg = mprintVa(fmt, ap, NULL);
-    aoStr *bold_msg = aoStrNew();
+    AoStr *bold_msg = aoStrNew();
     if (is_terminal) {
         aoStrCatFmt(bold_msg, ESC_BOLD"%s"ESC_CLEAR_BOLD, msg);
     } else {
         aoStrCatFmt(bold_msg, "%s", msg);
     }
     Lexeme *cur_tok = cctrlTokenPeek(cc);
-    aoStr *buf = cctrlCreateErrorLine(cc,cur_tok->line,bold_msg->data,severity,suggestion);
+    AoStr *buf = cctrlCreateErrorLine(cc,cur_tok->line,bold_msg->data,severity,suggestion);
     aoStrRelease(bold_msg);
     return buf;
 }
 
-aoStr *cctrlMessagePrintF(Cctrl *cc, int severity, char *fmt, ...) {
+AoStr *cctrlMessagePrintF(Cctrl *cc, int severity, char *fmt, ...) {
     va_list ap;
     va_start(ap,fmt);
-    aoStr *buf = cctrlMessagVnsPrintF(cc,fmt,ap,severity);
+    AoStr *buf = cctrlMessagVnsPrintF(cc,fmt,ap,severity);
     va_end(ap);
     return buf;
 }
@@ -750,7 +750,7 @@ aoStr *cctrlMessagePrintF(Cctrl *cc, int severity, char *fmt, ...) {
 void cctrlInfo(Cctrl *cc, char *fmt, ...) {
     va_list ap;
     va_start(ap,fmt);
-    aoStr *buf = cctrlMessagVnsPrintF(cc,fmt,ap,CCTRL_INFO);
+    AoStr *buf = cctrlMessagVnsPrintF(cc,fmt,ap,CCTRL_INFO);
     fprintf(stderr,"%s\n",buf->data);
     aoStrRelease(buf);
     va_end(ap);
@@ -759,7 +759,7 @@ void cctrlInfo(Cctrl *cc, char *fmt, ...) {
 void cctrlWarning(Cctrl *cc, char *fmt, ...) {
     va_list ap;
     va_start(ap,fmt);
-    aoStr *buf = cctrlMessagVnsPrintF(cc,fmt,ap,CCTRL_WARN);
+    AoStr *buf = cctrlMessagVnsPrintF(cc,fmt,ap,CCTRL_WARN);
     fprintf(stderr,"%s\n",buf->data);
     aoStrRelease(buf);
     va_end(ap);
@@ -768,7 +768,7 @@ void cctrlWarning(Cctrl *cc, char *fmt, ...) {
 void cctrlRaiseException(Cctrl *cc, char *fmt, ...) {
     va_list ap;
     va_start(ap,fmt);
-    aoStr *buf = cctrlMessagVnsPrintF(cc,fmt,ap,CCTRL_ERROR);
+    AoStr *buf = cctrlMessagVnsPrintF(cc,fmt,ap,CCTRL_ERROR);
     fprintf(stderr,"%s\n",buf->data);
     aoStrRelease(buf);
     va_end(ap);
@@ -778,7 +778,7 @@ void cctrlRaiseException(Cctrl *cc, char *fmt, ...) {
 void cctrlRaiseSuggestion(Cctrl *cc, char *suggestion, char *fmt, ...) {
     va_list ap;
     va_start(ap,fmt);
-    aoStr *buf = cctrlMessagVnsPrintFWithSuggestion(cc,fmt,ap,CCTRL_ERROR,suggestion);
+    AoStr *buf = cctrlMessagVnsPrintFWithSuggestion(cc,fmt,ap,CCTRL_ERROR,suggestion);
     fprintf(stderr,"%s\n",buf->data);
     aoStrRelease(buf);
     va_end(ap);
@@ -788,7 +788,7 @@ void cctrlRaiseSuggestion(Cctrl *cc, char *suggestion, char *fmt, ...) {
 void cctrlIce(Cctrl *cc, char *fmt, ...) {
     va_list ap;
     va_start(ap,fmt);
-    aoStr *buf = cctrlMessagVnsPrintF(cc,fmt,ap,CCTRL_ICE);
+    AoStr *buf = cctrlMessagVnsPrintF(cc,fmt,ap,CCTRL_ICE);
     fprintf(stderr,"%s\n",buf->data);
     aoStrRelease(buf);
     va_end(ap);
@@ -831,11 +831,11 @@ void cctrlTokenExpect(Cctrl *cc, long expected) {
         } else {
             cctrlRewindUntilStrMatch(cc,tok->start,tok->len,NULL);
             cctrlTokenRewind(cc);
-            aoStr *info_msg = cctrlMessagePrintF(cc,CCTRL_INFO,"Previous line was");
+            AoStr *info_msg = cctrlMessagePrintF(cc,CCTRL_INFO,"Previous line was");
             cctrlTokenGet(cc);
 
 
-            aoStr *err_msg = cctrlMessagePrintF(cc,CCTRL_ERROR,"Syntax error, got an unexpected %s `%.*s`, perhaps you meant `%c`?",
+            AoStr *err_msg = cctrlMessagePrintF(cc,CCTRL_ERROR,"Syntax error, got an unexpected %s `%.*s`, perhaps you meant `%c`?",
                     lexemeTypeToString(tok->tk_type), 
                     tok->len, tok->start,
                     (char)expected);
@@ -848,17 +848,17 @@ void cctrlTokenExpect(Cctrl *cc, long expected) {
     }
 }
 
-aoStr *cctrlRaiseFromTo(Cctrl *cc, int severity, char *suggestion, char from, 
+AoStr *cctrlRaiseFromTo(Cctrl *cc, int severity, char *suggestion, char from, 
                         char to, char *fmt, va_list ap)
 {
     char *color = severity == CCTRL_ERROR || CCTRL_ICE ? ESC_BOLD_RED : CCTRL_WARN ? ESC_BOLD_YELLOW : ESC_CYAN;
     char *msg = mprintVa(fmt, ap, NULL);
-    aoStr *bold_msg = aoStrNew();
+    AoStr *bold_msg = aoStrNew();
     aoStrCatFmt(bold_msg, ESC_BOLD"%s"ESC_CLEAR_BOLD, msg);
     Lexeme *cur_tok = cctrlTokenPeek(cc);
 
     char *line_buffer = lexerReportLine(cc->lexer_, cur_tok->line);
-    aoStr *buf = aoStrNew();
+    AoStr *buf = aoStrNew();
     /* This is not a terribly efficient way of getting an error message */
     long char_pos = cctrlGetCharErrorIdx(cc,cur_tok, line_buffer);
     long from_idx = cctrlGetErrorIdx(cc,cur_tok->line,from, line_buffer);
@@ -897,7 +897,7 @@ aoStr *cctrlRaiseFromTo(Cctrl *cc, int severity, char *suggestion, char from,
 void cctrlRaiseExceptionFromTo(Cctrl *cc, char *suggestion, char from, char to, char *fmt, ...) {
     va_list ap;
     va_start(ap,fmt);
-    aoStr *buf = cctrlRaiseFromTo(cc,CCTRL_ERROR,suggestion,from,to,fmt,ap);
+    AoStr *buf = cctrlRaiseFromTo(cc,CCTRL_ERROR,suggestion,from,to,fmt,ap);
     fprintf(stderr,"%s\n",buf->data);
     va_end(ap);
     aoStrRelease(buf);
@@ -907,7 +907,7 @@ void cctrlRaiseExceptionFromTo(Cctrl *cc, char *suggestion, char from, char to, 
 void cctrlWarningFromTo(Cctrl *cc, char *suggestion, char from, char to, char *fmt, ...) {
     va_list ap;
     va_start(ap,fmt);
-    aoStr *buf = cctrlRaiseFromTo(cc,CCTRL_WARN,suggestion,from,to,fmt,ap);
+    AoStr *buf = cctrlRaiseFromTo(cc,CCTRL_WARN,suggestion,from,to,fmt,ap);
     fprintf(stderr,"%s\n",buf->data);
     va_end(ap);
     aoStrRelease(buf);

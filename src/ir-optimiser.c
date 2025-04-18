@@ -14,7 +14,7 @@
 
 int irInstrHasSideEffects(IrInstr *instr);
 int irFnCallReturnUsed(IrBlock *block, IrLivenessInfo *info, IrInstr *instr);
-aoStr *irMemLocation(IrValue *value);
+AoStr *irMemLocation(IrValue *value);
 void irReplaceAllUses(IrFunction *func, IrValue *old_value, IrValue *new_value);
 void irBlockRemoveNops(IrBlock *block);
 int irCanPromoteAlloca(IrFunction *func, IrInstr *instr);
@@ -43,10 +43,10 @@ IrLivenessInfo *irLivenessGetInfo(IrLivenessAnalysis *liveness, IrBlock *block) 
     return (IrLivenessInfo *)intMapGet(liveness->block_info, block->id);
 }
 
-aoStr *irLivenessInfoToString(IrLivenessInfo *info) {
-    aoStr *buf = aoStrNew();
+AoStr *irLivenessInfoToString(IrLivenessInfo *info) {
+    AoStr *buf = aoStrNew();
     aoStrCatFmt(buf, "IrLivenessInfo {\n");
-    aoStr *tmp = setToString(info->live_in);
+    AoStr *tmp = setToString(info->live_in);
     aoStrCatFmt(buf, "  live_in = %S\n", tmp);
     aoStrRelease(tmp);
     tmp = setToString(info->live_out);
@@ -211,12 +211,12 @@ IrLivenessInfo *irComputeBlockUseDef(IrBlock *block) {
     return info;
 }
 
-aoStr *irLivenessAnalysisToString(IrLivenessAnalysis *analysis) {
-    aoStr *buf = aoStrNew();
+AoStr *irLivenessAnalysisToString(IrLivenessAnalysis *analysis) {
+    AoStr *buf = aoStrNew();
     aoStrCatFmt(buf, "IrLivenessAnalysis {\n");
-    aoStr *tmp = intMapToString(analysis->block_info,
+    AoStr *tmp = intMapToString(analysis->block_info,
                                 ",\n",
-                                (aoStr *(*)(void *))&irLivenessInfoToString);
+                                (AoStr *(*)(void *))&irLivenessInfoToString);
     aoStrCatFmt(buf, "%S\n}\n", tmp);
     aoStrRelease(tmp);
     return buf;
@@ -461,7 +461,7 @@ int irFnCallReturnUsed(IrBlock *block, IrLivenessInfo *info, IrInstr *instr) {
     return 0;
 }
 
-aoStr *irMemLocation(IrValue *value) {
+AoStr *irMemLocation(IrValue *value) {
     /* @Bug
      * Get element pointer might be a problem */
     return value->name;
@@ -483,8 +483,8 @@ int irStoreIsReadBefore(IrFunction *func, IrBlock *block, IrInstr *instr) {
     while (list_node != block->instructions) {
         IrInstr *needle = getValue(IrInstr *, list_node);
         if (needle->opcode == IR_OP_LOAD) {
-            aoStr *store_location = irMemLocation(needle->op1);
-            aoStr *load_location = irMemLocation(needle->op2);
+            AoStr *store_location = irMemLocation(needle->op1);
+            AoStr *load_location = irMemLocation(needle->op2);
             /* Is this the same location? */
             if (aoStrEq(store_location, load_location)) {
                 return 1;
@@ -672,8 +672,8 @@ void irPerformCopyPropagation(IrFunction *func) {
                     }
                 }
             } else if (instr->opcode == IR_OP_LOAD) {
-                aoStr *memory_location = irMemLocation(instr->op1);
-                if (!memory_location) continue; //|| irCouldModifyMemory(instr)) continue;
+                AoStr *memory_location = irMemLocation(instr->op1);
+                if (!memory_location || irCouldModifyMemory(instr)) continue;
 
                 if (mapHas(mem_values, memory_location)) {
                     IrValue *value = mapGet(mem_values, memory_location);
@@ -685,8 +685,9 @@ void irPerformCopyPropagation(IrFunction *func) {
                     mapAdd(mem_values, memory_location, instr->op1);
                 }
             } else if (instr->opcode == IR_OP_STORE && instr->op1->kind != IR_VALUE_CONST_INT) {
-                aoStr *memory_location = irMemLocation(instr->result);
-                if (!memory_location) continue;
+                AoStr *memory_location = irMemLocation(instr->result);
+                //if (!memory_location) continue;
+                if (!memory_location || irCouldModifyMemory(instr)) continue;
                 mapAdd(mem_values, memory_location, instr->op1);
 
                 /* Check if the store is immediately used */
@@ -697,12 +698,12 @@ void irPerformCopyPropagation(IrFunction *func) {
                     if (next->opcode == IR_OP_LOAD) {
                         /* @Speed & Simplicity, the 'name' on the value should 
                          * _really_ be an int, then all comparisons are cheap */
-                        aoStr *load_location = irMemLocation(next->op1);
+                        AoStr *load_location = irMemLocation(next->op1);
                         if (aoStrEq(memory_location, load_location)) {
                             store_needed = 1;
                         }
                     } else if (next->opcode == IR_OP_STORE) {
-                        aoStr *next_location = irMemLocation(next->result);
+                        AoStr *next_location = irMemLocation(next->result);
                         if (aoStrEq(memory_location, next_location)) {
                             /* The store is overwritten before being read */
                             store_needed = 0;
@@ -764,7 +765,7 @@ void irEliminateRedundantLoads(IrFunction *func) {
             IrInstr *instr = getValue(IrInstr *, it);
 
             if (instr->opcode == IR_OP_LOAD) {
-                aoStr *memory_location = irMemLocation(instr->op1);
+                AoStr *memory_location = irMemLocation(instr->op1);
                 if (mapHas(load_map, memory_location)) {
                     IrValue *prev = mapGet(load_map, memory_location);
                     irReplaceAllUses(func, instr->result, prev);
@@ -799,7 +800,7 @@ void irEliminateRedundantStores(IrFunction *func) {
         listForEach(block->instructions) {
             IrInstr *instr = getValue(IrInstr *, it);
             if (instr->opcode == IR_OP_STORE) {
-                aoStr *memory_location = irMemLocation(instr->op1);
+                AoStr *memory_location = irMemLocation(instr->op1);
                 if (!memory_location) continue;
 
                 if (mapHas(store_map, memory_location)) {
@@ -845,10 +846,10 @@ void irPerformLoadStoreForwarding(IrFunction *func) {
             IrInstr *instr = getValue(IrInstr *, it);
 
             if (instr->opcode == IR_OP_STORE) {
-                aoStr *memory_location = irMemLocation(instr->result);
+                AoStr *memory_location = irMemLocation(instr->result);
                 mapAdd(last_store, memory_location, instr->op1);
             } else if (instr->opcode == IR_OP_LOAD) {
-                aoStr *memory_location = irMemLocation(instr->result);
+                AoStr *memory_location = irMemLocation(instr->result);
                 if (mapHas(last_store, memory_location)) {
                     IrValue *stored = mapGet(last_store, memory_location);
                     irReplaceAllUses(func, instr->result, stored);
@@ -914,11 +915,11 @@ void irEliminateDeadStores(IrFunction *func) {
                 IrInstr *instr = getValue(IrInstr *, it);
 
                 if (instr->opcode == IR_OP_LOAD) {
-                    aoStr *memory_location = irMemLocation(instr->op1);
+                    AoStr *memory_location = irMemLocation(instr->op1);
                     if (!memory_location) continue;
                     setAdd(mem_uses, memory_location);
                 } else if (instr->opcode == IR_OP_STORE) {
-                    aoStr *memory_location = irMemLocation(instr->op1);
+                    AoStr *memory_location = irMemLocation(instr->op1);
                     if (memory_location && setHas(mem_uses, memory_location)) {
                         instr->opcode = IR_OP_NOP;
                         continue;
@@ -938,7 +939,8 @@ void irEliminateDeadStores(IrFunction *func) {
                         }
                     }
                 } else if (instr->result && instr->result->kind == IR_VALUE_TEMP) {
-                    aoStr *memory_location = irMemLocation(instr->result);
+                    AoStr *memory_location = irMemLocation(instr->result);
+                    //if (!memory_location) continue;
                     if (!memory_location) continue;
                     setAdd(mem_uses, memory_location);
                 }
@@ -954,7 +956,7 @@ void irEliminateDeadStores(IrFunction *func) {
                             IrInstr *inner_instr = getValue(IrInstr *, it);
                             
                             if (inner_instr->opcode == IR_OP_ALLOCA) {
-                                aoStr *memory_location = irMemLocation(inner_instr->result);
+                                AoStr *memory_location = irMemLocation(inner_instr->result);
                                 setAdd(mem_uses, memory_location);
                             }
                         }
@@ -971,9 +973,10 @@ void irEliminateDeadStores(IrFunction *func) {
             listForEach(block->instructions) {
                 IrInstr *instr = getValue(IrInstr *, it);
                 if (instr->opcode == IR_OP_STORE) {
-                    aoStr *memory_location = irMemLocation(instr->op1);
+                    AoStr *memory_location = irMemLocation(instr->op1);
                     if (!memory_location) continue;
                     if (!setHas(mem_uses, memory_location)) {
+                        debug("%s:%d - %s\n",__func__,__LINE__,irInstrToString(instr)->data);
                         instr->opcode = IR_OP_NOP;
                         changed = 1;
                     }
@@ -1147,6 +1150,9 @@ void irEliminateDeadAllocas(IrFunction *func) {
                         listForEach(block->instructions) {
                             IrInstr *inner_instr = getValue(IrInstr *, it);
                             if (inner_instr->opcode == IR_OP_ALLOCA) {
+                                if (!instr->result) {
+                                    debug("%s\n", irInstrToString(instr)->data);
+                                }
                                 setAdd(used_allocas, instr->result->name);
                             }
                         }
@@ -1273,22 +1279,22 @@ IrLivenessAnalysis *irEliminateDeadCode(IrFunction *func,
     return liveness;
 }
 
+void irScanner(IrFunction *func) {
+
+}
+
 void irOptimiseFunction(IrFunction *func) {
     int i = 0;
     while (i  < 5) {
         IrLivenessAnalysis *analysis = irLivenessAnalysis(func);
         analysis = irEliminateDeadCode(func, analysis);
+        irPerformCopyPropagation(func);
         irPerformLoadStoreForwarding(func);
         irEliminateRedundantLoads(func);
-        irEliminateRedundantStores(func);
-        irPerformCopyPropagation(func);
-        analysis = irEliminateDeadCode(func, analysis);
-        irPerformCopyPropagation(func);
         //irEliminateDeadStores(func);
         irEliminateRedundantStores(func);
-        irFoldParameterLoads(func);
         irEliminateDeadAllocas(func);
-        irPerformCopyPropagation(func);
+        //irFoldParameterLoads(func);
         i++;
     }
 }
