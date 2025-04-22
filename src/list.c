@@ -179,8 +179,21 @@ void listUnlink(List *list, List *node) {
     }
     /* We have at least one other entry in the list so can safely remove 
      * the node */
-    node->next->prev = node->prev;
-    node->prev->next = node->next;
+    List *next = node->next;
+    List *prev = node->prev;
+
+    /* Before;
+     * Prev2 <-> Prev <-> Node <-> Next <-> Next2
+     *
+     * After;
+     * Prev2 <-> Prev <-> Next <-> Next2
+     * */
+    next->prev = node->prev;
+    prev->next = next;
+
+    //prev->next = next;
+    //node->next->prev = node->prev;
+    //node->prev->next = node->next;
 }
 
 /* Node becomes the new head and everything from the old head to the node 
@@ -221,6 +234,14 @@ List *listCopy(List *l) {
 List *listTail(List *ll) {
     if (listEmpty(ll)) return NULL;
     return ll->prev;
+}
+
+void *listNext(List *ll) {
+    if (listEmpty(ll)) return NULL;
+    if (ll->next && ll->next->value) {
+        return ll->next->value;
+    }
+    return NULL;
 }
 
 #ifdef LIST_TEST

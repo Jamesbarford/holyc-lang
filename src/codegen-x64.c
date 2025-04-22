@@ -490,15 +490,15 @@ static void x64StringGen(X64Ctx *ctx) {
     if (ctx->ir_program->strings->size) {
         StrMapIterator *iter = strMapIteratorNew(ctx->ir_program->strings);
         StrMapNode *it = NULL;
-        AoStr shell;
-        memset(&shell,0,sizeof(AoStr));
+        AoStr string_label;
+        memset(&string_label,0,sizeof(AoStr));
 
         while ((it = strMapNext(iter)) != NULL) {
             IrValue *value = (IrValue *)it->value;
             if (value->kind == IR_VALUE_GLOBAL) continue;
-            shell.data = it->key;
-            shell.len = it->key_len;
-            x64EmitString(ctx, &shell, value);
+            string_label.data = it->key;
+            string_label.len = it->key_len;
+            x64EmitString(ctx, &string_label, value);
         }
         strMapIteratorRelease(iter);
     }
@@ -960,8 +960,8 @@ void x64GetElementPointerClass(X64Ctx *ctx, IrInstr *instr, IrInstr *next_instr)
     assert(instr->op2 != NULL);
     X64Reg reg = {0};
     X64Reg reg2 = {0};
-    int const_offset = instr->op2->kind == IR_VALUE_CONST_INT ? instr->op2->i64 : 0;
-    aoStrCatFmt(ctx->buf, "#GEP - offset; %I\n\t", const_offset);
+    long const_offset = instr->op2->kind == IR_VALUE_CONST_INT ? instr->op2->i64 : 0;
+    aoStrCatFmt(ctx->buf, "# GEP - offset; %I\n\t", const_offset);
 
     /* If we are storing something on a stack allocated class we treat the 
      * class as though it were a series of local variable allocated from the 
@@ -1010,7 +1010,7 @@ void x64GetElementPointerClass(X64Ctx *ctx, IrInstr *instr, IrInstr *next_instr)
 
     x64FreeRegisterByName(ctx, reg.name);
     x64FreeRegisterByName(ctx, reg2.name);
-    aoStrCatFmt(ctx->buf, "#GEP - end;\n\t");
+    aoStrCatFmt(ctx->buf, "# GEP - end;\n\t");
 }
 
 void x64GetElementPointer(X64Ctx *ctx, IrInstr *instr, IrInstr *next_instr) {
@@ -1074,7 +1074,7 @@ void x64GenerateInstruction(X64Ctx *ctx, IrInstr *instr, IrInstr *next_instr) {
                 x64FreeFloatRegister(&ctx->reg_state, reg, instr->result);
             } else {
                 X64Reg reg = {0};
-                aoStrCatFmt(ctx->buf,"#loading start %s\n\t", irInstrToString(instr)->data);
+                aoStrCatFmt(ctx->buf,"# loading start %s\n\t", irInstrToString(instr)->data);
 
                 const char *mov_instr = x64GetMovInstr(instr->op1);
                 x64GenLoad(ctx, &reg, mov_instr, instr->op1, 0);
@@ -1085,7 +1085,7 @@ void x64GenerateInstruction(X64Ctx *ctx, IrInstr *instr, IrInstr *next_instr) {
 
                 x64GenStoreInstr(ctx, instr, reg.name);
                 x64FreeRegisterByName(ctx, reg.name);
-                aoStrCatFmt(ctx->buf,"#loading end\n\t");
+                aoStrCatFmt(ctx->buf,"# loading end\n\t");
             }
             break;
         }
@@ -1118,7 +1118,7 @@ void x64GenerateInstruction(X64Ctx *ctx, IrInstr *instr, IrInstr *next_instr) {
                  * movq %rbx, -64(%rbp) # STORE %t7
                  */
 
-                aoStrCatFmt(ctx->buf,"#storing start %s\n\t", irInstrToString(instr)->data);
+                aoStrCatFmt(ctx->buf,"# storing start %s\n\t", irInstrToString(instr)->data);
 
                 switch (instr->result->type) {
                     case IR_TYPE_PTR: {
@@ -1127,7 +1127,10 @@ void x64GenerateInstruction(X64Ctx *ctx, IrInstr *instr, IrInstr *next_instr) {
                         aoStrCatFmt(ctx->buf, "# %S\n\t", irInstrToString(instr));
                         const char *mov_instr2 = x64GetMovInstr(instr->result);
                         x64GenLoad(ctx, &reg2, mov_instr2, instr->result, 0);
-                        aoStrCatFmt(ctx->buf, "movq %s, (%s) #e\n\t", reg.name, reg2.name);
+                        x64GenStore(ctx, instr->result, reg.name);
+                        aoStrCatFmt(ctx->buf, "movq (%s), %s # dref? \n\t",
+                                    reg.name,
+                                    reg2.name);
                         x64FreeRegisterByName(ctx, reg.name);
                         x64FreeRegisterByName(ctx, reg2.name);
                         break;
@@ -1158,7 +1161,7 @@ void x64GenerateInstruction(X64Ctx *ctx, IrInstr *instr, IrInstr *next_instr) {
                     }
                 }
 
-                aoStrCatFmt(ctx->buf,"#storing end\n\t");
+                aoStrCatFmt(ctx->buf,"# storing end\n\t");
             }
 
             break;

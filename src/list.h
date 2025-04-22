@@ -23,6 +23,7 @@ void listInit(List *l);
 List *listNew(void);
 int listEmpty(List *l);
 int listIsOne(List *l);
+void *listNext(List *ll);
 void listAppend(List *head, void *value);
 void listPrepend(List *head, void *value);
 void listInsertBefore(List *ll, List *new_node);

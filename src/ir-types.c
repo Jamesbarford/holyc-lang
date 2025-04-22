@@ -2,6 +2,7 @@
 
 #include "aostr.h"
 #include "arena.h"
+#include "debug.h"
 #include "map.h"
 #include "list.h"
 #include "util.h"
@@ -120,6 +121,41 @@ void irArrayInitToString(AoStr *buf, IrValue *ir_value) {
     }
 }
 
+const char *irRegTypeToString(IrRegType type) {
+    switch (type) {
+        case IR_REG_REAL:  return is_terminal ? ESC_PURPLE"real"ESC_RESET: "real";
+        case IR_REG_TMP:   return is_terminal ? ESC_PURPLE"tmp"ESC_RESET: "tmp";
+        case IR_REG_SPILL: return is_terminal ? ESC_PURPLE"spill"ESC_RESET: "spill";
+        default: loggerPanic("IrRegType `%d` not handled\n", (int)type);
+    }
+}
+
+AoStr *irRegToString(IrReg *reg) {
+    AoStr *buf = aoStrNew();
+    const char *type_str = irRegTypeToString(reg->type);
+    AoStr *id_str = debugColourInt((long)reg->id);
+    AoStr *offset_str = debugColourInt((long)reg->offset);
+    aoStrCatFmt(buf, "IrReg {\n"
+                     "  type: %s,\n"
+                     "  id: %S,\n"
+                     "  offset: %S\n"
+                     "}", type_str, id_str, offset_str);
+    aoStrRelease(id_str);
+    aoStrRelease(offset_str);
+    return buf;
+}
+
+AoStr *irRegToStringTuple(IrReg *reg) {
+    AoStr *buf = aoStrNew();
+    const char *type_str = irRegTypeToString(reg->type);
+    AoStr *id_str = debugColourInt((long)reg->id);
+    AoStr *offset_str = debugColourInt((long)reg->offset);
+    aoStrCatFmt(buf, "(%s, %S, %S)", type_str, id_str, offset_str);
+    aoStrRelease(id_str);
+    aoStrRelease(offset_str);
+    return buf;
+}
+
 AoStr *irValueToString(IrValue *ir_value) {
     AoStr *buf = aoStrNew();
 
@@ -127,9 +163,27 @@ AoStr *irValueToString(IrValue *ir_value) {
         irArrayInitToString(buf,ir_value);
     } else {
         switch (ir_value->kind) {
-            case IR_VALUE_CONST_INT:   aoStrCatFmt(buf, "%I", ir_value->i64); break;
-            case IR_VALUE_CONST_FLOAT: aoStrCatFmt(buf, "%f", ir_value->f64); break;
-            case IR_VALUE_CONST_STR:   aoStrCatFmt(buf, "\"%S\"", ir_value->str); break;
+            case IR_VALUE_CONST_INT: {
+                AoStr *colour_int = debugColourInt(ir_value->i64);
+                aoStrCatAoStr(buf, colour_int);
+                aoStrRelease(colour_int);
+                break;
+            }
+
+            case IR_VALUE_CONST_FLOAT: {
+                AoStr *colour_float = debugColourFloat(ir_value->f64);
+                aoStrCatAoStr(buf, colour_float);
+                aoStrRelease(colour_float);
+                break;
+            }
+
+            case IR_VALUE_CONST_STR: {
+                AoStr *colour_str = debugColourAoStr(ir_value->str);
+                aoStrCatAoStr(buf, colour_str);
+                aoStrRelease(colour_str);
+                break;
+            }
+
             case IR_VALUE_GLOBAL: {
                 if (is_terminal) {
                     aoStrCatFmt(buf, ESC_WHITE"global "ESC_RESET"%S", ir_value->name);
@@ -195,6 +249,7 @@ const char *irOpcodeToString(IrInstr *ir_instr) {
     IrOpcode opcode = ir_instr->opcode;
     const char *ir_op_str;
     switch (opcode) {
+        case IR_OP_NOP:      ir_op_str = "nop"; break;
         case IR_OP_ALLOCA:   ir_op_str = "alloca"; break;
         case IR_OP_LOAD:     ir_op_str = "load"; break;
         case IR_OP_STORE:    ir_op_str = "store"; break;
@@ -512,10 +567,55 @@ AoStr *irFunctionCFGToString(IrFunction *func) {
     return buf;
 }
 
+AoStr *irLivenessInfoToString(IrLivenessInfo *info) {
+    AoStr *buf = aoStrNew();
+    aoStrCatFmt(buf, "IrLivenessInfo {\n");
+    AoStr *tmp = setToString(info->live_in);
+    aoStrCatFmt(buf, "  live_in = %S\n", tmp);
+    aoStrRelease(tmp);
+    tmp = setToString(info->live_out);
+    aoStrCatFmt(buf, "  live_out = %S\n", tmp);
+    aoStrRelease(tmp);
+    tmp = setToString(info->def);
+    aoStrCatFmt(buf, "  def      = %S\n", tmp);
+    aoStrRelease(tmp);
+    tmp = setToString(info->use);
+    aoStrCatFmt(buf, "  use      = %S\n", tmp);
+    aoStrRelease(tmp);
+    aoStrCatFmt(buf, "\n}\n");
+    return buf;
+}
+
+void irValuePrint(IrValue *ir_value) {
+    AoStr *str = irValueToString(ir_value);
+    AoStr *buf = aoStrNew();
+    if (is_terminal) {
+        aoStrCatFmt(buf, ESC_GREEN"IrValue "ESC_RESET"%S", str);
+    } else {
+        aoStrCatFmt(buf, "IrValue %S", str);
+    }
+    printf("%s\n",str->data);
+    aoStrRelease(str);
+    aoStrRelease(buf);
+}
+
+void irInstrPrint(IrInstr *ir_instr) {
+    AoStr *buf = aoStrNew();
+    AoStr *str = irInstrToString(ir_instr);
+    if (is_terminal) {
+        aoStrCatFmt(buf, ESC_GREEN"IrInstr "ESC_RESET"%S", str);
+    } else {
+        aoStrCatFmt(buf, "IrInstr %S", str);
+    }
+    printf("%s\n",buf->data);
+    aoStrRelease(str);
+    aoStrRelease(buf);
+}
+
 /*==================== DATA STRUCTURE SPECIALISATION =========================*/
 
 unsigned long irValueHash(IrValue *value) {
-   // assert(value->name);
+    assert(value->name);
     return aoStrHashFunction(value->name);
 }
 
@@ -525,16 +625,26 @@ long irValueKeyLen(IrValue *value) {
 }
 
 AoStr *irValueKeyStringify(IrValue *value) {
-    return value->name;
+    if (is_terminal) {
+        return aoStrPrintf(ESC_PURPLE"%s"ESC_RESET, value->name->data);
+    } else {
+        return aoStrDup(value->name);
+    }
+}
+
+int irValueNameMatch(IrValue *v1, IrValue *v2) {
+    AoStr *n1 = irValueGetName(v1);
+    AoStr *n2 = irValueGetName(v2);
+    return n1 && n2 && (n1 == n2 || aoStrEq(n1, n2));
 }
 
 /* `Set<IrValue *>` */
 static SetType ir_value_set = {
-    .match = (setValueMatch *)irValuesEq,
-    .stringify = (setValueToString *)irValueKeyStringify,
-    .hash = (setValueHash *)irValueHash,
+    .match         = (setValueMatch *)irValueNameMatch,
+    .stringify     = (setValueToString *)irValueKeyStringify,
+    .hash          = (setValueHash *)irValueHash,
     .value_release = NULL, /* The set does not own the memory */
-    .type = "IrValue *",
+    .type          = "IrValue *",
 };
 
 /* `Set<IrValue *>` */
@@ -542,64 +652,93 @@ Set *irValueSetNew(void) {
     return setNew(16, &ir_value_set);
 }
 
-/* create a `Map<AoStr *, IrValue *>` */
+void irValueVecStringify(AoStr *buf, IrValue *value) {
+    AoStr *ir_value_str = irValueToString(value);
+    aoStrCatAoStr(buf, ir_value_str); 
+    aoStrRelease(ir_value_str);
+}
+
+static VecType ir_value_vec = {
+    .stringify = (vecValueStringify *)irValueVecStringify,
+    .match     = (setValueMatch *)irValueNameMatch,
+    .release   = NULL,
+    .type_str  = "IrValue *",
+};
+
+Vec *irValueVecNew(void) {
+    return vecNew(&ir_value_vec);
+}
+
+/* `Map<AoStr *, IrValue *>` */
 static MapType str_irvalue_map_type = {
-    .match = (mapKeyMatch *)aoStrEq,
-    .hash = (mapKeyHash *)aoStrHashFunction,
-    .get_key_len = (mapKeyLen *)aoStrGetLen,
-    .key_to_string = (mapKeyToString *)aoStrIdentity,
+    .match           = (mapKeyMatch *)aoStrEq,
+    .hash            = (mapKeyHash *)aoStrHashFunction,
+    .get_key_len     = (mapKeyLen *)aoStrGetLen,
+    .key_to_string   = (mapKeyToString *)debugColourAoStr,
     .value_to_string = (mapValueToString *)&irValueToString,
-    .value_release = NULL,
-    .value_type = "IrValue *",
-    .key_type = "AoStr *",
+    .value_release   = NULL,
+    .value_type      = "IrValue *",
+    .key_type        = "AoStr *",
 };
 
-/* create a `Map<long, IrValue *>` */
+/* `Map<long, IrValue *>` */
 static MapType int_irvalue_map_type = {
-    .match = (mapKeyMatch *)intMapKeyMatch,
-    .hash = (mapKeyHash *)intMapKeyHash,
-    .get_key_len = (mapKeyLen *)intMapKeyLen,
-    .key_to_string = (mapKeyToString *)intMapKeyToString,
+    .match           = (mapKeyMatch *)intMapKeyMatch,
+    .hash            = (mapKeyHash *)intMapKeyHash,
+    .get_key_len     = (mapKeyLen *)intMapKeyLen,
+    .key_to_string   = (mapKeyToString *)debugColourIntAsPtr,
     .value_to_string = (mapValueToString *)&irValueToString,
-    .value_release = NULL,
-    .value_type = "IrValue *",
-    .key_type = "long",
+    .value_release   = NULL,
+    .value_type      = "IrValue *",
+    .key_type        = "long",
 };
 
-/* create a `Map<long, IrBlock *>` */
+/* `Map<long, IrBlock *>` */
 static MapType int_irblock_map_type = {
-    .match = (mapKeyMatch *)intMapKeyMatch,
-    .hash = (mapKeyHash *)intMapKeyHash,
-    .get_key_len = (mapKeyLen *)intMapKeyLen,
-    .key_to_string = (mapKeyToString *)intMapKeyToString,
+    .match           = (mapKeyMatch *)intMapKeyMatch,
+    .hash            = (mapKeyHash *)intMapKeyHash,
+    .get_key_len     = (mapKeyLen *)intMapKeyLen,
+    .key_to_string   = (mapKeyToString *)debugColourIntAsPtr,
     .value_to_string = (mapValueToString *)&irBlockToStringSimplified,
-    .value_release = NULL,
-    .value_type = "IrBlock *",
-    .key_type = "long",
+    .value_release   = NULL,
+    .value_type      = "IrBlock *",
+    .key_type        = "long",
 };
 
-/* create a `Map<AoStr *, IrInstr *>` */
+/* `Map<AoStr *, IrInstr *>` */
 static MapType str_irinstr_map_type = {
-    .match = (mapKeyMatch *)aoStrEq,
-    .hash = (mapKeyHash *)aoStrHashFunction,
-    .get_key_len = (mapKeyLen *)aoStrGetLen,
-    .key_to_string = (mapKeyToString *)aoStrIdentity,
+    .match           = (mapKeyMatch *)aoStrEq,
+    .hash            = (mapKeyHash *)aoStrHashFunction,
+    .get_key_len     = (mapKeyLen *)aoStrGetLen,
+    .key_to_string   = (mapKeyToString *)debugColourIntAsPtr,
     .value_to_string = (mapValueToString *)&irInstrToString,
-    .value_release = NULL,
-    .value_type = "IrInstr *",
-    .key_type = "long",
+    .value_release   = NULL,
+    .value_type      = "IrInstr *",
+    .key_type        = "AoStr *",
 };
 
-/* create a `Map<long, IrBlock *>` */
+/* `Map<long, IrBlock *>` */
 static MapType int_blockmapping_map_type = {
-    .match = (mapKeyMatch *)intMapKeyMatch,
-    .hash = (mapKeyHash *)intMapKeyHash,
-    .get_key_len = (mapKeyLen *)intMapKeyLen,
-    .key_to_string = (mapKeyToString *)intMapKeyToString,
+    .match           = (mapKeyMatch *)intMapKeyMatch,
+    .hash            = (mapKeyHash *)intMapKeyHash,
+    .get_key_len     = (mapKeyLen *)intMapKeyLen,
+    .key_to_string   = (mapKeyToString *)debugColourIntAsPtr,
     .value_to_string = (mapValueToString *)&irBlockMappingToStringCallback,
-    .value_release = NULL,
-    .value_type = "IrBlockMapping *",
-    .key_type = "long",
+    .value_release   = NULL,
+    .value_type      = "IrBlockMapping *",
+    .key_type        = "long",
+};
+
+ /* `Map<IrLivenessInfo *>`*/
+static MapType ir_liveness_map = {
+    .match           = (mapKeyMatch *)intMapKeyMatch,
+    .hash            = (mapKeyHash *)intMapKeyHash,
+    .get_key_len     = (mapKeyLen *)intMapKeyLen,
+    .key_to_string   = (mapKeyToString *)debugColourIntAsPtr,
+    .value_to_string = (mapValueToString *)&irLivenessInfoToString,
+    .value_release   = NULL,
+    .value_type      = "IrLivenessInfo *",
+    .key_type        = "long",
 };
 
 /* create a `Map<AoStr *, IrValue *>` */
@@ -625,6 +764,9 @@ Map *irIntBlockMappingMapNew(void) {
     return mapNew(16, &int_blockmapping_map_type);
 }
 
+Map *irLivenessMap(void) {
+    return mapNew(16, &ir_liveness_map);
+}
 
 /*==================== TYPE CONSTRUCTORS =====================================*/
 IrBlockMapping *irBlockMappingNew(int id) {
@@ -653,6 +795,11 @@ IrValue *irValueNew(IrValueType ir_type, IrValueKind ir_kind) {
     ir_value->kind = ir_kind;
     ir_value->version = 1;
     return ir_value;
+}
+
+AoStr *irValueGetName(IrValue *value) {
+    if (value && value->name != NULL) return value->name;
+    return NULL;
 }
 
 /* This is very easy to inline */

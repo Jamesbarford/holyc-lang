@@ -72,7 +72,7 @@ int irAreCompatibleCmpTypes(IrValueType t1, IrValueType t2) {
 }
 
 int irValuesEq(IrValue *v1, IrValue *v2) {
-    if (!v2) return 0;
+    if (!v2 || !v1) return 0;
     if (v1 == v2) return 1;
     if (v1->kind == v2->kind && v1->type == v2->type && aoStrEq(v1->name, v2->name)) {
         return 1;

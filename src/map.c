@@ -1,4 +1,5 @@
 #include <limits.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -238,6 +239,214 @@ void *ptrVecRemove(PtrVec *vec,
     return NULL;
 }
 
+/*====== GENERIC VECTOR ======================================================*/
+
+Vec *vecNew(VecType *type) {
+    Vec *vec = (Vec *)malloc(sizeof(Vec));
+    vec->size = 0;
+
+#ifndef DEBUG
+    vec->capacity = 16;
+    vec->entries = (void **)malloc(sizeof(void *) * vec->capacity);
+#else
+    vec->capacity = VEC_DEBUG_SIZE;
+#endif
+    memset(vec->entries, 0, sizeof(void *) * vec->capacity);
+    assert(type);
+    vec->type = type;
+    return vec;
+}
+
+void vecReserve(Vec *vec, unsigned long capacity) {
+#ifndef DEBUG
+    if (capacity > vec->capacity) {
+        void **new_entries = malloc(sizeof(void *) * capacity);
+        assert(new_entries != NULL);
+        memcpy(new_entries, vec->entries, sizeof(void *) * vec->size);
+        free(vec->entries);
+        vec->entries = new_entries;
+        vec->capacity = capacity;
+    }
+#else
+    (void)capacity;
+    AoStr *type = vecTypeToString(vec->type->type_str);
+    fprintf(stderr, "%s with capacity %lu not big enough for Debug Mode!\n",
+            type->data,
+            vec->capacity);
+    aoStrRelease(type);
+    exit(1);
+#endif
+}
+
+Vec *vecNewFrom(VecType *type, ...) {
+    va_list ap;
+    va_start(ap, type);
+
+    Vec *vec = vecNew(type);
+    void *value = NULL;
+    while (1) {
+        if ((value = va_arg(ap, void *)) == NULL) {
+            break;
+        }
+        vecPush(vec, value);
+    }
+    va_end(ap);
+    return vec;
+}
+
+void vecPush(Vec *vec, void *value) {
+    if (vec->size + 1 >= vec->capacity) {
+        vecReserve(vec, vec->capacity * 2);
+    }
+    vec->entries[vec->size++] = value;
+}
+
+void *vecPop(Vec *vec, int *_ok) {
+    if (vec->size == 0) {
+        *_ok = 0;
+        return NULL;
+    }
+    void *value = vec->entries[--vec->size];
+    return value;
+}
+
+int vecRemoveAt(Vec *vec, unsigned long idx) {
+    if (idx >= vec->size) return 0;
+
+    if (vec->type->release) {
+        vec->type->release(vec->entries[idx]);
+    }
+    unsigned long elements_to_move = vec->size - idx - 1;
+    if (elements_to_move > 0) {
+        memmove(&vec->entries[idx],
+                &vec->entries[idx + 1],
+                elements_to_move * sizeof(void *));
+    }
+    vec->size--;
+    return 1;
+}
+
+int vecRemove(Vec *vec, void *value) {
+    unsigned long idx = 0;
+    int found = 0;
+    for (unsigned long i = 0; i < vec->size; ++i) {
+        if (vec->type->match(vec->entries[i], value)) {
+            idx = i;
+            found = 1;
+            break;
+        }
+    }
+
+    if (found) {
+        if (vec->type->release) {
+            vec->type->release(vec->entries[idx]);
+        }
+        unsigned long elements_to_move = vec->size - idx - 1;
+        if (elements_to_move > 0) {
+            memmove(&vec->entries[idx],
+                    &vec->entries[idx + 1],
+                    elements_to_move * sizeof(void *));
+        }
+        vec->size--;
+    }
+    
+    return found;
+}
+
+void vecInsertAt(Vec *vec, void *value, unsigned long idx) {
+    if (vec->size + 1 >= vec->capacity) {
+        vecReserve(vec, vec->capacity * 2);
+    }
+    if (idx >= vec->size) {
+        fprintf(stderr, "Vec - idx %lu is out of range", idx);
+    }
+    unsigned long elements_to_move = vec->size - idx;
+    memmove(&vec->entries[idx + 1],
+            &vec->entries[idx],
+            elements_to_move * sizeof(void *));
+    vec->entries[idx] = value;
+    vec->size++;
+}
+
+void *vecGetAt(Vec *vec, unsigned long idx) {
+#ifdef DEBUG
+    if (idx >= vec->size) {
+        fprintf(stderr, "Vec - idx %lu is out of range for Vec of size %lu",
+                idx, vec->size);
+    }
+#endif
+    return vec->entries[idx];
+}
+
+int vecHas(Vec *vec, void *needle) {
+    for (unsigned long i = 0; i < vec->size; ++i) {
+        if (vec->type->match(vec->entries[i], needle)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void vecClear(Vec *vec) {
+    if (vec->size != 0) {
+        int (*free_value)(void *) = vec->type->release;
+        if (free_value) {
+            for (unsigned long i = 0; i < vec->size; ++i) {
+                free_value(vec->entries[i]);
+            }
+        }
+        vec->size = 0;
+    }
+}
+
+void vecRelease(Vec *vec) {
+    vecClear(vec);
+#ifndef DEBUG
+    free(vec->entries);
+#endif
+    free(vec);
+}
+
+AoStr *vecTypeToString(char *type) {
+    if (is_terminal) {
+        return aoStrPrintf(ESC_GREEN"Vec"ESC_RESET"<"ESC_CYAN"%s"ESC_RESET">",type);
+    } else {
+        return aoStrPrintf("Vec<%s>", type);
+    }
+}
+
+/* Simply get the contents of the array without the type information */
+AoStr *vecEntriesToString(Vec *vec) {
+    AoStr *buf = aoStrNew();
+    if (vec->size == 0) {
+        aoStrCatLen(buf, str_lit("[]"));
+        return buf;
+    }
+    aoStrCatLen(buf, str_lit("["));
+    for (unsigned long i = 0; i < vec->size; ++i) {
+        vec->type->stringify(buf, vec->entries[i]);
+        if (i + 1 != vec->size) {
+            aoStrCatLen(buf, str_lit(", "));
+        }
+    }
+    aoStrPutChar(buf, ']');
+    return buf;
+}
+
+AoStr *vecToString(Vec *vec) {
+    AoStr *buf = vecTypeToString(vec->type->type_str);
+    AoStr *entries_str = vecEntriesToString(vec);
+    aoStrCatFmt(buf, " %S", entries_str);
+    return buf;
+}
+
+void vecPrint(Vec *vec) {
+    AoStr *vec_str = vecToString(vec);
+    printf("%s\n",vec_str->data);
+    aoStrRelease(vec_str);
+}
+
+/*====== HASH TABLES =========================================================*/
 static unsigned long intMapHashFunction(long key, unsigned long mask) {
     return key & mask;
 }
@@ -323,15 +532,15 @@ static unsigned long intMapGetNextIdx(IntMap *map, long key, int *_is_free) {
     unsigned long mask = map->mask;
     unsigned long idx = key & mask;
     IntMapNode *cur;
+    *_is_free = 1;
 
     while ((cur = map->entries[idx]) != NULL) {
         if (cur->key == key || cur->key == HT_DELETED) {
             *_is_free = 0;
-            return idx;
+            break;
         }
         idx = (idx + 1) & mask;
     }
-    *_is_free = 1;
     return idx;
 }
 
@@ -1170,7 +1379,7 @@ AoStr *intSetToString(IntSet *iset) {
     unsigned long set_size = iset->size;
 
     if (set_size == 0) {
-        aoStrCatLen(buf,str_lit("{}"));
+        aoStrCatLen(buf,str_lit(" {}"));
         return buf;
     }
 
@@ -1483,13 +1692,13 @@ AoStr *setToString(Set *set) {
 
     aoStrCatFmt(buf, "%S", type);
     if (set->size == 0) {
-        aoStrCatLen(buf, str_lit("{}"));
+        aoStrCatLen(buf, str_lit(" {}"));
         aoStrRelease(type);
         return buf;
     }
 
     if (!set->type->stringify) {
-        aoStrCatLen(buf, str_lit("{...}"));
+        aoStrCatLen(buf, str_lit(" {...}"));
         aoStrRelease(type);
         return buf;
     }
@@ -1503,7 +1712,7 @@ AoStr *setToString(Set *set) {
         aoStrCatAoStr(buf, str_val);
         aoStrRelease(str_val);
 
-        if (((int)it->vecidx + 1) != set->indexes->size) {
+        if ((int)it->idx != set->indexes->size) {
             aoStrCatLen(buf, str_lit(", "));
         }
     }
@@ -1821,6 +2030,27 @@ int mapHas(Map *map, void *key) {
     return 1;
 }
 
+/* Check map has all of the values */
+int mapHasAll(Map *map, ...) {
+    va_list ap;
+    va_start(ap, map);
+    void *value = va_arg(ap, void *);
+    int retval = 1;
+
+    while (value != NULL) {
+        int ok = 0;
+        mapGetIdx(map, value, &ok);
+        if (ok == 0) {
+            retval = 0;
+            goto out;
+        }
+        value = va_arg(ap, void *);
+    }
+out:
+    va_end(ap);
+    return retval;
+}
+
 void *mapGetAt(Map *map, unsigned long index) {
     for (unsigned long i = index; i < (unsigned long)map->indexes->size; ++i) {
         long vec_idx = map->indexes->entries[i];
@@ -1941,7 +2171,7 @@ AoStr *mapToString(Map *map, char *delimiter) {
     AoStr *buf = aoStrNew();
     AoStr *type = mapTypeToString(map);
     if (map->size == 0) {
-        aoStrCatLen(buf, str_lit(" {}"));
+        aoStrCatFmt(buf, "%S {}", type);
         aoStrRelease(type);
         return buf;
     }
@@ -1954,7 +2184,7 @@ AoStr *mapToString(Map *map, char *delimiter) {
         AoStr *value_string = map->type->value_to_string(n->value);
         AoStr *key_string = map->type->key_to_string(n->key);
         if (it->idx == map->size) {
-            aoStrCatFmt(buf,"  [%S] => %S",key_string, value_string);
+            aoStrCatFmt(buf,"  [%S] => %S", key_string, value_string);
         } else {
             aoStrCatFmt(buf,"  [%S] => %S%s", key_string, value_string, delimiter);
         }

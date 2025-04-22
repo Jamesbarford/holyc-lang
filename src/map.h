@@ -60,6 +60,59 @@ void *ptrVecRemove(PtrVec *vec, void *entry,
 void ptrVecClear(PtrVec *vec, void (*free_entry_fnptr)(void *value));
 void ptrVecRelease(PtrVec *vec);
 
+/*====== GENERIC VECTOR ======================================================*/
+typedef struct Vec Vec;
+typedef struct VecType VecType;
+
+typedef void (vecValueStringify)(AoStr *buf, void *);
+typedef int (vecValueMatch)(void *, void *);
+typedef int (vecValueRelease)(void *);
+
+struct VecType {
+    /* For printing the vector */
+    vecValueStringify *stringify;
+    /* For matching values in the vector */
+    vecValueMatch *match;
+    /* Optional call back for freeing the value when removing the value,
+     * freeing the vector or clearing the vector*/
+    vecValueRelease *release;
+    /* For pretty printing the `Vec<...>`*/
+    char *type_str;
+};
+
+
+/* For pointers */
+struct Vec {
+    unsigned long size;
+    unsigned long capacity;
+#ifdef DEBUG
+    void *entries[VEC_DEBUG_SIZE];
+#else
+    void **entries;
+#endif
+    VecType *type;
+};
+
+Vec *vecNew(VecType *type);
+Vec *vecNewFrom(VecType *type, ...);
+void vecReserve(Vec *vec, unsigned long capacity);
+void vecPush(Vec *vec, void *value);
+void *vecPop(Vec *vec, int *_ok);
+int vecRemove(Vec *vec, void *value);
+int vecRemoveAt(Vec *vec, unsigned long idx);
+void vecInsertAt(Vec *vec, void *value, unsigned long idx);
+void *vecGetAt(Vec *vec, unsigned long idx);
+int vecHas(Vec *vec, void *needle);
+void vecRelease(Vec *vec);
+void vecClear(Vec *vec);
+AoStr *vecTypeToString(char *type_str);
+AoStr *vecEntriesToString(Vec *vec);
+AoStr *vecToString(Vec *vec);
+void vecPrint(Vec *vec);
+
+
+/*====== HASH TABLES =========================================================*/
+
 typedef struct IntMapNode {
     long key;
     void *value;
@@ -283,6 +336,7 @@ int mapAdd(Map *map, void *key, void *value);
 int mapAddOrErr(Map *map, void *key, void *value);
 void mapRemove(Map *map, void *key);
 int mapHas(Map *map, void *key);
+int mapHasAll(Map *map, ...);
 void *mapGet(Map *map, void *key);
 void *mapGetAt(Map *map, unsigned long index);
 void mapClear(Map *map);

@@ -16,10 +16,11 @@ add_definitions(-DINSTALL_PREFIX="${CMAKE_INSTALL_PREFIX}")
 
 # Add debugging symbols for Debug builds
 set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g")
+
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     add_compile_definitions(DEBUG)
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address")
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address")
+    #set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address")
+    #set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address")
 endif()
 
 if (HCC_LINK_SQLITE3)
@@ -50,6 +51,7 @@ set(SOURCES
     codegen-x64.c
     codegen-aarch64.c
     compile.c
+    debug.c
     ir.c
     ir-interp.c
     ir-optimiser.c
@@ -81,6 +83,7 @@ set(HEADERS
     codegen-aarch64.h
     compile.h
     config.h
+    debug.h
     ir.h
     ir-interp.h
     ir-optimiser.h

@@ -1304,8 +1304,7 @@ IrValue *irExpression(IrCtx *ctx, IrFunction *func, Ast *ast) {
             IrValueType ir_value_type = irConvertType(ast->type);
             IrValue *ir_load_dest = irTmpVariable(ir_value_type);
             irLoad(ir_block, ir_load_dest, local_fnptr);
-            /* @Tracking Update where the variable is? */
-            strMapAddAoStr(func->variables,ast->tmp_fnptr_name,ir_load_dest);
+            strMapAddAoStr(func->variables, ast->tmp_fnptr_name, ir_load_dest);
             return ir_load_dest;
         }
 
@@ -2790,10 +2789,10 @@ IrFunction *irLowerFunction(IrCtx *ctx, IrProgram *program, Ast *ast_function) {
         irResolveGotos(ctx, func);
     }
 
+    irSimplifyBlocks(func);
     if (ctx->optimise) {
-        irSimplifyBlocks(func);
         irOptimiseFunction(func);
-        //irSimplifyBlocks(func);
+        irSimplifyBlocks(func);
     }
 
     return func;
