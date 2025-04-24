@@ -99,6 +99,7 @@ void aoStrRepeatChar(AoStr *buf, char ch, int times) {
 }
 
 int aoStrEq(AoStr *b1, AoStr *b2) {
+    if (b1 == b2) return 1;
     size_t l1 = b1->len;
     size_t l2 = b2->len;
     return l1==l2&&!memcmp(b1->data, b2->data, l1);
