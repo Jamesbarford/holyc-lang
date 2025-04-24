@@ -249,7 +249,7 @@ struct IrInstr {
     IrValue *result;            /* Destination if any */
     IrValue *op1;               /* First operand if any */
     IrValue *op2;               /* Second operand if any */
-    IrValue *op3;               /* 3rd operand if any */
+    IrValue *op3;               /* @Delete 3rd operand if any */
     IrBlock *target_block;      /* For control flow instructions */
     IrBlock *fallthrough_block; /* For conditional flow */
     unsigned long flags;
@@ -375,7 +375,6 @@ void irMemoryRelease(void);
 void irMemoryStats(void);
 void *irArenaAlloc(unsigned int size);
 
-
 AoStr *irFunctionToString(IrFunction *ir_func);
 AoStr *irBlockToString(IrFunction *func, IrBlock *ir_block);
 AoStr *irFunctionCFGToString(IrFunction *func);
@@ -385,6 +384,7 @@ AoStr *irInstrToString(IrInstr *ir_instr);
 void irValuePrint(IrValue *ir_value);
 void irInstrPrint(IrInstr *ir_instr);
 const char *irValueKindToString(IrValueKind ir_value_kind);
+const char *irValueKindToPrettyString(IrValueKind ir_value_kind);
 const char *irValueTypeToString(IrValueType ir_value_type);
 const char *irOpcodeToString(IrInstr *ir_instr);
 unsigned long irValueHash(IrValue *value);

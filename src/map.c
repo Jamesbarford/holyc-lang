@@ -1636,11 +1636,15 @@ void setRelease(Set *set) {
     }
 }
 
-SetIter *setIterNew(Set *set) {
-    SetIter *it = (SetIter *)malloc(sizeof(SetIter));
+void setIterInit(SetIter *it, Set *set) {
     it->idx = 0;
     it->vecidx = 0;
     it->set = set;
+}
+
+SetIter *setIterNew(Set *set) {
+    SetIter *it = (SetIter *)malloc(sizeof(SetIter));
+    setIterInit(it, set);
     return it;
 }
 
@@ -1686,38 +1690,36 @@ static AoStr *setTypeToString(Set *set) {
     }
 }
 
-AoStr *setToString(Set *set) {
+AoStr *setEntriesToString(Set *set) {
     AoStr *buf = aoStrNew();
-    AoStr *type = setTypeToString(set);
-
-    aoStrCatFmt(buf, "%S", type);
-    if (set->size == 0) {
-        aoStrCatLen(buf, str_lit(" {}"));
-        aoStrRelease(type);
-        return buf;
-    }
 
     if (!set->type->stringify) {
-        aoStrCatLen(buf, str_lit(" {...}"));
-        aoStrRelease(type);
+        aoStrCatLen(buf, str_lit("{...}"));
         return buf;
     }
 
-    aoStrCatFmt(buf, " {", type);
-    aoStrRelease(type);
-
-    SetIter *it = setIterNew(set);
-    while (setIterNext(it)) {
-        AoStr *str_val = set->type->stringify(it->value);
+    aoStrPutChar(buf, '{');
+    SetIter it;
+    setIterInit(&it, set);
+    while (setIterNext(&it)) {
+        AoStr *str_val = set->type->stringify(it.value);
         aoStrCatAoStr(buf, str_val);
         aoStrRelease(str_val);
-
-        if ((int)it->idx != set->indexes->size) {
+        if ((int)it.idx != set->indexes->size) {
             aoStrCatLen(buf, str_lit(", "));
         }
     }
-    aoStrCatLen(buf, str_lit("}"));
-    setIterRelease(it);
+    aoStrPutChar(buf, '}');
+    return buf;
+}
+
+AoStr *setToString(Set *set) {
+    AoStr *buf = aoStrNew();
+    AoStr *type = setTypeToString(set);
+    AoStr *entries_str = setEntriesToString(set);
+    aoStrCatFmt(buf, "%S %S", type, entries_str);
+    aoStrRelease(type);
+    aoStrRelease(entries_str);
     return buf;
 }
 

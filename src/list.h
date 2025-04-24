@@ -1,6 +1,8 @@
 #ifndef LIST_H
 #define LIST_H
 
+#include "aostr.h"
+
 /* @Performance
  * We need a linked list with a bit more umphh, currently splicing the list is 
  * a nightmare */
@@ -24,6 +26,7 @@ List *listNew(void);
 int listEmpty(List *l);
 int listIsOne(List *l);
 void *listNext(List *ll);
+void *listPrev(List *ll);
 void listAppend(List *head, void *value);
 void listPrepend(List *head, void *value);
 void listInsertBefore(List *ll, List *new_node);
@@ -40,5 +43,7 @@ void listMergeAppend(List *l1, List *l2);
 void listMergePrepend(List *l1, List *l2);
 List *listCopy(List *l);
 List *listTail(List *ll);
+AoStr *listToString(List *ll, const char *type, void (*to_string)(AoStr *buf, void *value));
+void listPrint(List *ll, const char *type, void (*to_string)(AoStr *buf, void *value));
 
 #endif // !LIST_H

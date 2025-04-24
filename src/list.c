@@ -2,7 +2,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "aostr.h"
 #include "list.h"
+#include "util.h"
 
 void listInit(List *ll) {
     ll->next = ll->prev = ll;
@@ -242,6 +244,38 @@ void *listNext(List *ll) {
         return ll->next->value;
     }
     return NULL;
+}
+
+void *listPrev(List *ll) {
+    if (listEmpty(ll)) return NULL;
+    if (ll->prev && ll->prev->value) {
+        return ll->prev->value;
+    }
+    return NULL;
+}
+
+AoStr *listToString(List *ll, const char *type, void (*to_string)(AoStr *buf, void *value)) {
+    AoStr *buf = aoStrNew();
+    if (is_terminal) {
+        aoStrCatFmt(buf, ESC_GREEN"List"ESC_RESET"<"ESC_CYAN"%s"ESC_RESET">", type);
+    } else {
+        aoStrCatFmt(buf, "List<%s>", type);
+    }
+    aoStrCatLen(buf, str_lit(" ["));
+    listForEach(ll) {
+        to_string(buf, it->value);
+        if (ll != it->next) {
+            aoStrCatLen(buf, str_lit(", "));
+        }
+    }
+    aoStrPutChar(buf, ']');
+    return buf;
+}
+
+void listPrint(List *ll, const char *type, void (*to_string)(AoStr *buf, void *value)) {
+    AoStr *list_str = listToString(ll, type, to_string);
+    printf("%s\n",list_str->data);
+    aoStrRelease(list_str);
 }
 
 #ifdef LIST_TEST

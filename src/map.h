@@ -80,7 +80,6 @@ struct VecType {
     char *type_str;
 };
 
-
 /* For pointers */
 struct Vec {
     unsigned long size;
@@ -422,10 +421,12 @@ void *setGetAt(Set *set, long index);
 void setClear(Set *set);
 void setRelease(Set *set);
 SetIter *setIterNew(Set *set);
+void setIterInit(SetIter *it, Set *set);
 void *setNext(SetIter *it);
 int setIterNext(SetIter *it);
 void setIterRelease(SetIter *it);
 AoStr *setToString(Set *set);
+AoStr *setEntriesToString(Set *set);
 int setEq(Set *s1, Set *s2);
 /* Add all of `s2` to `s1` */
 Set *setUnion(Set *s1, Set *s2);

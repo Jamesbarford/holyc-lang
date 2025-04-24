@@ -82,6 +82,112 @@ const char *irValueKindToString(IrValueKind ir_value_kind) {
     return kind_str;
 }
 
+const char *irValueKindToPrettyString(IrValueKind ir_value_kind) {
+    const char *kind_str = NULL;
+    switch (ir_value_kind) {
+        case IR_VALUE_CONST_INT: {
+            if (is_terminal) {
+                kind_str = ESC_PURPLE"const int"ESC_RESET;
+            } else {
+                kind_str = "const int";
+            }
+            break;
+        }
+
+        case IR_VALUE_CONST_FLOAT: {
+            if (is_terminal) {
+                kind_str = ESC_PURPLE"const float"ESC_RESET;
+            } else {
+                kind_str = "const float";
+            }
+            break;
+        }
+
+        case IR_VALUE_CONST_STR: {
+            if (is_terminal) {
+                kind_str = ESC_PURPLE"const str"ESC_RESET;
+            } else {
+                kind_str = "const str";
+            }
+            break;
+        }
+
+        case IR_VALUE_GLOBAL: {
+            if (is_terminal) {
+                kind_str = ESC_PURPLE"global"ESC_RESET;
+            } else {
+                kind_str = "global";
+            }
+            break;
+        }
+
+        case IR_VALUE_PARAM: {
+            if (is_terminal) {
+                kind_str = ESC_PURPLE"param"ESC_RESET;
+            } else {
+                kind_str = "param";
+            }
+            break;
+        }
+
+        case IR_VALUE_LOCAL: {
+            if (is_terminal) {
+                kind_str = ESC_PURPLE"local"ESC_RESET;
+            } else {
+                kind_str = "local";
+            }
+            break;
+        }
+
+        case IR_VALUE_TEMP: {
+            if (is_terminal) {
+                kind_str = ESC_PURPLE"tmp"ESC_RESET;
+            } else {
+                kind_str = "tmp";
+            }
+            break;
+        }
+
+        case IR_VALUE_PHI: {
+            if (is_terminal) {
+                kind_str = ESC_PURPLE"phi"ESC_RESET;
+            } else {
+                kind_str = "phi";
+            }
+            break;
+        }
+
+        case IR_VALUE_LABEL: {
+            if (is_terminal) {
+                kind_str = ESC_PURPLE"label"ESC_RESET;
+            } else {
+                kind_str = "label";
+            }
+            break;
+        }
+
+        case IR_VALUE_UNDEFINED: {
+            if (is_terminal) {
+                kind_str = ESC_PURPLE"undefined"ESC_RESET;
+            } else {
+                kind_str = "undefined";
+            }
+            break;
+        }
+
+        case IR_VALUE_UNRESOLVED: {
+            if (is_terminal) {
+                kind_str = ESC_PURPLE"unresolved"ESC_RESET;
+            } else {
+                kind_str = "unresolved";
+            }
+            break;
+        }
+        default: loggerPanic("Unhandled IrValueKind: %d\n", ir_value_kind);
+    }
+    return kind_str;
+}
+
 /**
  * @Bug - Non breaking as in principle the array will still work.
  * Because we flatten something like: 
@@ -208,9 +314,9 @@ AoStr *irValueToString(IrValue *ir_value) {
             default: loggerPanic("Unhandled IrValueKind: %d\n", ir_value->kind);
         }
 
+        const char *ir_value_kind_str = irValueKindToPrettyString(ir_value->kind);
         const char *ir_value_type_str = irValueTypeToString(ir_value->type);
-        aoStrPutChar(buf,' ');
-        aoStrCatFmt(buf,"%s",ir_value_type_str);
+        aoStrCatFmt(buf," %s %s",ir_value_type_str, ir_value_kind_str);
     }
     return buf;
 }
@@ -571,7 +677,7 @@ AoStr *irLivenessInfoToString(IrLivenessInfo *info) {
     AoStr *buf = aoStrNew();
     aoStrCatFmt(buf, "IrLivenessInfo {\n");
     AoStr *tmp = setToString(info->live_in);
-    aoStrCatFmt(buf, "  live_in = %S\n", tmp);
+    aoStrCatFmt(buf, "  live_in  = %S\n", tmp);
     aoStrRelease(tmp);
     tmp = setToString(info->live_out);
     aoStrCatFmt(buf, "  live_out = %S\n", tmp);
@@ -658,6 +764,7 @@ void irValueVecStringify(AoStr *buf, IrValue *value) {
     aoStrRelease(ir_value_str);
 }
 
+/* `Vec<IrValue *>` */
 static VecType ir_value_vec = {
     .stringify = (vecValueStringify *)irValueVecStringify,
     .match     = (setValueMatch *)irValueNameMatch,
@@ -665,6 +772,7 @@ static VecType ir_value_vec = {
     .type_str  = "IrValue *",
 };
 
+/* `Vec<IrValue *>` */
 Vec *irValueVecNew(void) {
     return vecNew(&ir_value_vec);
 }
@@ -746,6 +854,7 @@ Map *irStrValueMapNew(void) {
     return mapNew(32, &str_irvalue_map_type);
 }
 
+/* `Map<AoStr *, IrInstr *>` */
 Map *irStrInstrMapNew(void) {
     return mapNew(32, &str_irinstr_map_type);
 }
@@ -760,10 +869,12 @@ Map *irIntBlockMapNew(void) {
     return mapNew(8, &int_irblock_map_type);
 }
 
+/* `Map<long, IrBlock *>` */
 Map *irIntBlockMappingMapNew(void) {
     return mapNew(16, &int_blockmapping_map_type);
 }
 
+/* `Map<long IrLivenessInfo *>`*/
 Map *irLivenessMap(void) {
     return mapNew(16, &ir_liveness_map);
 }

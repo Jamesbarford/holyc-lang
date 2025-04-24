@@ -36,14 +36,87 @@ static MapType ir_value_chain_map = {
     .hash            = (mapKeyHash *)&aoStrHashFunction,
     .get_key_len     = (mapKeyLen *)&aoStrGetLen,
     .key_to_string   = (mapKeyToString *)&debugColourAoStr,
-    .value_to_string = (mapValueToString *)&vecEntriesToString,
+    .value_to_string = (mapValueToString *)&setEntriesToString,
     .value_release   = NULL,
-    .value_type      = "Vec<IrValue *>",
+    .value_type      = "Set<IrValue *>",
     .key_type        = "AoStr *",       
 };
 
 Map *irValueChainMap(void) {
     return mapNew(16, &ir_value_chain_map);
+}
+
+typedef struct IrInstrIter {
+    List *block_it;
+    List *blocks;
+    List *instr_it;
+    IrBlock *block;
+    IrInstr *instr;
+} IrInstrIter;
+
+void irInstrIterNextInit(IrInstrIter *it, IrFunction *func) {
+    it->blocks = func->blocks;
+    it->block_it = it->blocks->next;
+    it->block = it->block_it->value;
+    it->instr_it = it->block->instructions->next;
+    it->instr = it->instr_it->value;
+}
+
+/* Iterate through instructions */
+int irInstrIterNext(IrInstrIter *it) {
+    if (it->instr_it != it->block->instructions) {
+        IrInstr *value = it->instr_it->value;
+        it->instr_it = it->instr_it->next;
+        it->instr = value;
+        return 1;
+    } else if (it->block_it != it->blocks) {
+        it->block_it = it->block_it->next;
+        while (it->block_it != it->blocks) {
+            it->block = it->block_it->value;
+            if (!listEmpty(it->block->instructions)) {
+                it->instr_it = it->block->instructions->next;
+                it->instr = it->instr_it->value;
+                /* Set iterator to next instruction */
+                it->instr_it = it->instr_it->next;
+                return 1;
+            }
+            it->block_it = it->block_it->next;
+        }
+        return 0;
+    }
+    return 0;
+}
+
+void irInstrIterPrevInit(IrInstrIter *it, IrFunction *func) {
+    it->blocks = func->blocks;
+    it->block_it = it->blocks->prev;
+    it->block = it->block_it->value;
+    it->instr_it = it->block->instructions->prev;
+    it->instr = it->instr_it->value;
+}
+
+int irInstrIterPrev(IrInstrIter *it) {
+    if (it->instr_it != it->block->instructions) {
+        IrInstr *value = it->instr_it->value;
+        it->instr_it = it->instr_it->prev;
+        it->instr = value;
+        return 1;
+    } else if (it->block_it != it->blocks) {
+        it->block_it = it->block_it->prev;
+        while (it->block_it != it->blocks) {
+            it->block = it->block_it->value;
+            if (!listEmpty(it->block->instructions)) {
+                it->instr_it = it->block->instructions->prev;
+                it->instr = it->instr_it->value;
+                /* Set iterator to prev instruction */
+                it->instr_it = it->instr_it->prev;
+                return 1;
+            }
+            it->block_it = it->block_it->prev;
+        }
+        return 0;
+    }
+    return 0;
 }
 
 /*============================================================================*/
@@ -576,52 +649,51 @@ int irValueMaybeMatch(IrValue *v1, IrValue *v2) {
 void irReplaceAllUses(IrFunction *func, IrValue *old_value, IrValue *new_value) {
     if (old_value == new_value) return;
 
-    listForEach(func->blocks) {
-        IrBlock *block = getValue(IrBlock *, it);
-        if (block->removed) continue;
 
-        listForEach(block->instructions) {
-            IrInstr *instr = getValue(IrInstr *, it);
-            /* Do not change the result field as that may change the definition 
-             * of the instruction not its result */
-            if (instr->opcode != IR_OP_ALLOCA && instr->opcode != IR_OP_STORE) {
-                if (irValueMaybeMatch(instr->result, old_value)) {
-                    instr->result = new_value;
+    IrInstrIter it;
+    irInstrIterNextInit(&it, func);
+    while (irInstrIterNext(&it)) {
+        IrInstr *instr = it.instr;
+        /* Do not change the result field as that may change the definition 
+         * of the instruction not its result */
+        if (instr->opcode != IR_OP_ALLOCA && instr->opcode != IR_OP_STORE) {
+            if (irValueMaybeMatch(instr->result, old_value)) {
+                instr->result = new_value;
+            }
+        }
+
+        if (irValueMaybeMatch(instr->result, old_value)) instr->result = new_value;
+        if (irValueMaybeMatch(instr->op1, old_value)) instr->op1 = new_value;
+        if (irValueMaybeMatch(instr->op2, old_value)) instr->op2 = new_value;
+        if (irValueMaybeMatch(instr->op3, old_value)) instr->op3 = new_value;
+
+        if (instr->opcode == IR_OP_PHI) {
+            for (int i = 0; i < instr->extra.phi.pairs->size; ++i) {
+                IrPair *pair = vecGet(IrPair *, instr->extra.phi.pairs, i);
+                if (irValueMaybeMatch(pair->ir_value, old_value)) {
+                    pair->ir_value = new_value;
                 }
             }
+        }
 
-            if (irValueMaybeMatch(instr->op1, old_value)) instr->op1 = new_value;
-            if (irValueMaybeMatch(instr->op2, old_value)) instr->op2 = new_value;
-            if (irValueMaybeMatch(instr->op3, old_value)) instr->op3 = new_value;
-
-            if (instr->opcode == IR_OP_PHI) {
-                for (int i = 0; i < instr->extra.phi.pairs->size; ++i) {
-                    IrPair *pair = vecGet(IrPair *, instr->extra.phi.pairs, i);
-                    if (irValueMaybeMatch(pair->ir_value, old_value)) {
-                        pair->ir_value = new_value;
+        /* See if it is used in a function argument */
+        if (instr->opcode == IR_OP_CALL) {
+            PtrVec *fn_args = instr->op1->array_.values;
+            if (fn_args) {
+                for (int i = 0; i < fn_args->size; ++i) {
+                    IrValue *ir_value = vecGet(IrValue *,fn_args,i);
+                    if (irValueMaybeMatch(ir_value, old_value)) {
+                        fn_args->entries[i] = new_value;
                     }
                 }
             }
+        }
 
-            /* See if it is used in a function argument */
-            if (instr->opcode == IR_OP_CALL) {
-                PtrVec *fn_args = instr->op1->array_.values;
-                if (fn_args) {
-                    for (int i = 0; i < fn_args->size; ++i) {
-                        IrValue *ir_value = vecGet(IrValue *,fn_args,i);
-                        if (irValueMaybeMatch(ir_value, old_value)) {
-                            fn_args->entries[i] = new_value;
-                        }
-                    }
-                }
-            }
-
-            if (instr->opcode == IR_OP_SWITCH) {
-                listForEach(instr->extra.cases) {
-                    IrPair *pair = getValue(IrPair *, it);
-                    if (irValueMaybeMatch(pair->ir_value, old_value)) {
-                        pair->ir_value = new_value;
-                    }
+        if (instr->opcode == IR_OP_SWITCH) {
+            listForEach(instr->extra.cases) {
+                IrPair *pair = getValue(IrPair *, it);
+                if (irValueMaybeMatch(pair->ir_value, old_value)) {
+                    pair->ir_value = new_value;
                 }
             }
         }
@@ -1315,6 +1387,181 @@ void irForwardPropagate(IrFunction *func, AoStr *target_name, IrValue *replaceme
     }
 }
 
+static void irChainReplaceAllUses(Map *chain_map, IrFunction *func, IrValue *old_value, IrValue *new_value) {
+    if (old_value == new_value) return;
+
+    IrInstrIter it;
+    irInstrIterNextInit(&it, func);
+    while (irInstrIterNext(&it)) {
+        IrInstr *instr = it.instr;
+        /* Do not change the result field as that may change the definition 
+         * of the instruction not its result */
+        if (instr->opcode != IR_OP_ALLOCA && instr->opcode != IR_OP_STORE) {
+            if (irValueMaybeMatch(instr->result, old_value)) {
+                instr->result = new_value;
+            }
+        }
+
+        if (irValueMaybeMatch(instr->result, old_value)) instr->result = new_value;
+        if (irValueMaybeMatch(instr->op1, old_value)) instr->op1 = new_value;
+        if (irValueMaybeMatch(instr->op2, old_value)) instr->op2 = new_value;
+        if (irValueMaybeMatch(instr->op3, old_value)) instr->op3 = new_value;
+
+        if (instr->opcode == IR_OP_PHI) {
+            for (int i = 0; i < instr->extra.phi.pairs->size; ++i) {
+                IrPair *pair = vecGet(IrPair *, instr->extra.phi.pairs, i);
+                if (irValueMaybeMatch(pair->ir_value, old_value)) {
+                    pair->ir_value = new_value;
+                }
+            }
+        }
+
+        /* See if it is used in a function argument */
+        if (instr->opcode == IR_OP_CALL) {
+            PtrVec *fn_args = instr->op1->array_.values;
+            if (fn_args) {
+                for (int i = 0; i < fn_args->size; ++i) {
+                    IrValue *ir_value = vecGet(IrValue *,fn_args,i);
+                    if (irValueMaybeMatch(ir_value, old_value)) {
+                        fn_args->entries[i] = new_value;
+                    }
+                }
+            }
+        }
+
+        if (instr->opcode == IR_OP_SWITCH) {
+            listForEach(instr->extra.cases) {
+                IrPair *pair = getValue(IrPair *, it);
+                if (irValueMaybeMatch(pair->ir_value, old_value)) {
+                    pair->ir_value = new_value;
+                }
+            }
+        }
+    }
+
+    /* Update function parameters */
+    for (int i = 0; i < func->params->size; ++i) {
+        IrValue *param = vecGet(IrValue *, func->params, i);
+        if (irValueMaybeMatch(param, old_value)) {
+            func->params->entries[i] = new_value;
+        }
+    }
+
+    /* Update global initialisers */
+    MapIter *iter = mapIterNew(func->program->global_variables);
+    while (mapIterNext(iter)) {
+        IrValue *global = getValue(IrValue *, iter->node);
+        if (global->kind == IR_VALUE_GLOBAL && irValueMaybeMatch(global->global.value, old_value)) {
+            global->global.value = new_value;
+        }
+    }
+    mapIterRelease(iter);
+
+    /* Prevent the chains from updating to an incorrect value */
+    iter = mapIterNew(chain_map);
+    mapRemove(chain_map, old_value->name);
+    while (mapIterNext(iter)) {
+        setRemove(iter->node->value, old_value);
+    }
+    mapIterRelease(iter);
+}
+
+static void irMapChain(Map *chain_map, IrInstr *instr, IrInstr *maybe_prev_instr) {
+    AoStr *result_name = irValueGetName(instr->result);
+    AoStr *op1_name = irValueGetName(instr->op1);
+    AoStr *op2_name = irValueGetName(instr->op2);
+
+    /* If the instruction is a call and the next operation is to store
+     * the return value... we'll update the return value to be the 
+     * store operation's variable and mark the store as obsolete. */
+    switch (instr->opcode) {
+        case IR_OP_CALL: {
+            if (result_name && maybe_prev_instr) {
+                if (maybe_prev_instr->opcode == IR_OP_STORE &&
+                        aoStrEq(maybe_prev_instr->op1->name, result_name)) {
+                    debug("OP_CALL RESULT: `%s`\n",
+                            irInstrToString(instr)->data);
+                }
+            }
+            break;
+        }
+
+        case IR_OP_RET: {
+            Set *new_chain = irValueSetNew();
+            mapAdd(chain_map, result_name, new_chain);
+            break;
+        }
+        case IR_OP_ALLOCA: {
+            if (!mapHas(chain_map, result_name)) {
+                Set *new_chain = irValueSetNew();
+                mapAdd(chain_map, result_name, new_chain);
+            }
+            break;
+        }
+
+        /* As we are iterating backwards we can obliterate the load IF 
+         * we have already seen the temporaries that are being used as the 
+         * result */
+        case IR_OP_LOAD: {
+            if (mapHas(chain_map, result_name) && mapHas(chain_map, op1_name)) {
+                Set *chain = mapGet(chain_map, result_name);
+                setAdd(chain, instr->op1);
+            }
+            break;
+        }
+
+        case IR_OP_STORE: {
+            if (!mapHas(chain_map, result_name)) {
+                loggerWarning("Expected %s to have been added to the "
+                        "chain, as it should have been allocated\n",
+                        result_name->data);
+            } else {
+                Set *chain = mapGet(chain_map, result_name);
+                setAdd(chain, instr->op1);
+            }
+            break;
+        }
+
+
+        default: {
+            if (irInstrHasPtr(instr)) return;
+
+            if (result_name && op1_name && op2_name) {
+                /* This is going to be some maths or get element
+                 * pointer type operation */
+                if (!mapHas(chain_map, result_name)) {
+                    Set *new_chain = irValueSetNew();
+                    mapAdd(chain_map, result_name, new_chain);
+                }
+                if (!mapHas(chain_map, op1_name)) {
+                    Set *new_chain = irValueSetNew();
+                    mapAdd(chain_map, op1_name, new_chain);
+                }
+                if (!mapHas(chain_map, op2_name)) {
+                    Set *new_chain = irValueSetNew();
+                    mapAdd(chain_map, op2_name, new_chain);
+                }
+            } else if (result_name && op1_name) {
+                if (!mapHas(chain_map, result_name)) {
+                    Set *chain = irValueSetNew();
+                    setAdd(chain, instr->op1);
+                    mapAdd(chain_map, result_name, chain);
+                } else {
+                    Set *chain = mapGet(chain_map, result_name);
+                    setAdd(chain, instr->op1);
+                }
+            } else if (result_name && !mapHas(chain_map, result_name)) {
+                Set *chain = irValueSetNew();
+                if (instr->op1) {
+                    setAdd(chain, instr->op1);
+                }
+                mapAdd(chain_map, result_name, chain);
+            }
+            break;
+        }
+    }
+}
+
 /* This is correct as we are nuking redundant loads, stores and temporary 
  * variables. Which means when passing things off to the register allocator 
  * there are less things to allocate and the register allocator decides what 
@@ -1330,90 +1577,63 @@ int irBuildDefUseChain(IrFunction *func) {
 
     for (int i = 0; i < func->params->size; ++i) {
         IrValue *val = func->params->entries[i];
-        mapAdd(chain_map, val->name, irValueVecNew());
+        mapAdd(chain_map, val->name, irValueSetNew());
     }
 
     int iters = 0;
     int changed = 1;
+    IrInstrIter it;
     while (changed) {
         changed = 0;
 
+        irInstrIterPrevInit(&it, func);
         /* Stage 1 is find a chain of usage, this will nuke almost all loads
          * as we are going to assign a load to a stack slot in the codegen 
          * so perhaps this function actually de-optimises? The code starts to 
          * look more clearer in any case */
-        listForEach(func->blocks) {
-            IrBlock *block = getValue(IrBlock *, it);
-          //  debug("%s\n", irBlockToString(func, block)->data);
-            if (block->removed) continue;
-            listForEach(block->instructions) {
-                IrInstr *instr = getValue(IrInstr *, it);
-                IrInstr *maybe_next_instr = listNext(it);
+        for (int i = 0 ; i < 2; ++i) {
+            while (irInstrIterPrev(&it)) {
+                IrInstr *maybe_prev_instr = listPrev(it.instr_it);
+                irMapChain(chain_map, it.instr, maybe_prev_instr);
+            }
+        }
+
+
+        irInstrIterNextInit(&it, func);
+        while (irInstrIterNext(&it)) {
+            IrInstr *instr = it.instr;
+            if (instr->opcode == IR_OP_LOAD) {
                 AoStr *result_name = irValueGetName(instr->result);
                 AoStr *op1_name = irValueGetName(instr->op1);
-                AoStr *op2_name = irValueGetName(instr->op2);
-
-                /* If the instruction is a call and the next operation is to store
-                 * the return value... we'll update the return value to be the 
-                 * store operation's variable and mark the store as obsolete. */
-                if (instr->opcode == IR_OP_CALL) {
-                    if (result_name && maybe_next_instr) {
-                        if (maybe_next_instr->opcode == IR_OP_STORE &&
-                            aoStrEq(maybe_next_instr->op1->name, result_name)) {
-                            debug("OP_CALL RESULT: `%s`\n",
-                                  irInstrToString(instr)->data);
-                        }
-                    }
-                } else if (instr->opcode == IR_OP_ALLOCA) {
-                    mapAdd(chain_map, result_name, irValueVecNew());
-                } else if (instr->opcode == IR_OP_STORE) {
-                    if (!mapHas(chain_map, result_name)) {
-                        loggerWarning("Expected %s to have been added to the "
-                                "chain, as it should have been allocated\n",
-                                result_name->data);
-                    } else {
-                        Vec *chain = mapGet(chain_map, result_name);
-                        vecPush(chain, instr->op1);
-                    }
-                } else {
-                    if (irInstrHasPtr(instr)) continue;
-
-                    if (result_name && op1_name && op2_name) {
-                        /* This is going to be some maths or get element
-                         * pointer type operation */
-                        if (!mapHas(chain_map, result_name)) {
-                            Vec *new_chain = irValueVecNew();
-                            mapAdd(chain_map, result_name, new_chain);
-                        }
-
-                    } else if (result_name && op1_name) {
-                        if (!mapHas(chain_map, result_name) && mapHas(chain_map, op1_name)) {
-                            Vec *chain = irValueVecNew();
-                            vecPush(chain, instr->op1);
-                            mapAdd(chain_map, result_name, chain);
-                        }
+                if (mapHas(chain_map, result_name)) {
+                    Set *chain = mapGet(chain_map, result_name);
+                    if (chain->size) {
+                        irChainReplaceAllUses(chain_map, func, instr->op1, instr->result);
+                        instr->op1 = instr->result;
+                        instr->opcode = IR_OP_NOP;
+                        changed = 1;
                     }
                 }
-            }
-        } /* Block loop */
-
-        listForEach(func->blocks) {
-            IrBlock *block = getValue(IrBlock *, it);
-            if (block->removed) continue;
-            listForEach(block->instructions) {
-                IrInstr *instr = getValue(IrInstr *, it);
-                
-                /* Now we replace usages */
-                if (instr->opcode == IR_OP_LOAD) {
-                    AoStr *result_name = irValueGetName(instr->result);
-                    AoStr *op1_name = irValueGetName(instr->op1);
-                    if (mapHas(chain_map, result_name)) {
-                        Vec *chain = mapGet(chain_map, result_name);
-                        instr->result = chain->entries[0];
+            } else if (instr->opcode == IR_OP_STORE) {
+                AoStr *result_name = irValueGetName(instr->result);
+                AoStr *op1_name = irValueGetName(instr->op1);
+                if (mapHas(chain_map, result_name)) {
+                    Set *chain = mapGet(chain_map, result_name);
+                    if (chain->size) {
+                        irChainReplaceAllUses(chain_map, func, instr->op1, instr->result);
                         if (aoStrEq(result_name, op1_name)) {
                             instr->opcode = IR_OP_NOP;
                             changed = 1;
                         }
+                    }
+                }
+            } else if (instr->opcode == IR_OP_RET) {
+                AoStr *result_name = irValueGetName(instr->result);
+                if (mapHas(chain_map, result_name)) {
+                    Set *chain = mapGet(chain_map, result_name);
+                    if (chain->size) {
+                        instr->result = setGetAt(chain, 0);
+                        changed = 1;
                     }
                 }
             }
@@ -1439,7 +1659,12 @@ int irBuildDefUseChain(IrFunction *func) {
 void irOptimiseFunction(IrFunction *func) {
     int changed = 1;
     int iters = 0;
-    while (changed && iters < 4) {
+    debug("PRE OPTIMISAION;\n");
+    printf("%s\n", irFunctionToString(func)->data);
+    debug("================\n");
+
+    while (changed && iters < 2) {
+        debug("ITER; %d\n", iters);
         IrLivenessAnalysis *analysis = irLivenessAnalysis(func);
         analysis = irEliminateDeadCode(func, analysis);
         irLivenessAnalysisPrint(analysis);
@@ -1448,6 +1673,7 @@ void irOptimiseFunction(IrFunction *func) {
             changed = 0;
         }
         printf("%s\n", irFunctionToString(func)->data);
+        debug("================\n");
         // irPerformLoadStoreForwarding(func);
         // irEliminateRedundantLoads(func);
         // irEliminateDeadStores(func);
