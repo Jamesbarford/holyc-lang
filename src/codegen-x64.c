@@ -961,7 +961,6 @@ void x64GetElementPointerClass(X64Ctx *ctx, IrInstr *instr, IrInstr *next_instr)
     X64Reg reg = {0};
     X64Reg reg2 = {0};
     long const_offset = instr->op2->kind == IR_VALUE_CONST_INT ? instr->op2->i64 : 0;
-    aoStrCatFmt(ctx->buf, "# GEP - offset; %I\n\t", const_offset);
 
     /* If we are storing something on a stack allocated class we treat the 
      * class as though it were a series of local variable allocated from the 
@@ -1010,7 +1009,6 @@ void x64GetElementPointerClass(X64Ctx *ctx, IrInstr *instr, IrInstr *next_instr)
 
     x64FreeRegisterByName(ctx, reg.name);
     x64FreeRegisterByName(ctx, reg2.name);
-    aoStrCatFmt(ctx->buf, "# GEP - end;\n\t");
 }
 
 void x64GetElementPointer(X64Ctx *ctx, IrInstr *instr, IrInstr *next_instr) {
@@ -1424,7 +1422,7 @@ static int x64ReserveStackSlot(X64Ctx *ctx, IrValue *local, int offset) {
     }
 
     int size = 8;
-    if (local->type == IR_TYPE_I8) size = 1;
+    if      (local->type == IR_TYPE_I8) size = 1;
     else if (local->type == IR_TYPE_I16) size = 2;
     else if (local->type == IR_TYPE_I32) size = 4;
     else if (local->type == IR_TYPE_I64) size = 8;
@@ -1440,37 +1438,46 @@ static int x64ReserveStackSlot(X64Ctx *ctx, IrValue *local, int offset) {
     }
 
     size = alignTo(size, 8);
-    offset -= size;
 
     assert(local->name);
     mapAdd(ctx->var_offsets, local->name, ptrcast(offset));
+    offset -= size;
+    return offset;
+}
+
+static int x64ReserveAlloca(X64Ctx *ctx, IrInstr *instr, int offset) {
+    if (mapGet(ctx->var_offsets, instr->result->name) != NULL) {
+        return offset;
+    }
+    int size = instr->op1->i64;
+    if (size == 0) return offset;
+
+    size = alignTo(size, 8);
+
+    assert(instr->result->name);
+    mapAdd(ctx->var_offsets, instr->result->name, ptrcast(offset));
+    offset -= size;
     return offset;
 }
 
 static void x64CalculateFunctionStack(X64Ctx *ctx, IrFunction *func) {
     mapClear(ctx->var_offsets);
     ctx->stack_size = 0;
-    int offset = 0;
+    int offset = -8;
 
     for (int i = 0; i < func->params->size; ++i) {
         IrValue *param = vecGet(IrValue *, func->params, i);
         offset = x64ReserveStackSlot(ctx, param, offset);
     }
 
-    listForEach(func->blocks) {
-        IrBlock *block = listValue(IrBlock *, it);
-
-        /* We count up all of the ALLOCA instructions, calculate the stack 
-         * space */
-        listForEach(block->instructions) {
-            IrInstr *instr = listValue(IrInstr *, it);
-
-            if (instr->opcode == IR_OP_ALLOCA) {
-                offset = x64ReserveStackSlot(ctx, instr->result, offset);
-            } else if (instr->result != NULL) {
-                if (instr->result->kind == IR_VALUE_TEMP) {
-                    offset = x64ReserveStackSlot(ctx, instr->result, offset);
-                }
+    IrInstrIter it;
+    for (irInstrIterNextInit(&it, func); irInstrIterNext(&it); ) {
+        IrInstr *instr = it.instr;
+        if (instr->opcode == IR_OP_ALLOCA) {
+            offset = x64ReserveAlloca(ctx, instr, offset);
+        } else if (instr->result != NULL) {
+            if (instr->result->kind == IR_VALUE_TEMP) {
+                // offset = x64ReserveStackSlot(ctx, instr->result, offset);
             }
         }
     }

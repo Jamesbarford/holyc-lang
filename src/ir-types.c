@@ -539,6 +539,17 @@ AoStr *irInstrToString(IrInstr *ir_instr) {
             break;
         }
 
+        case IR_OP_RET: {
+            if (ir_instr->result) {
+                AoStr *ir_value_str = irValueToString(ir_instr->result);
+                aoStrCatFmt(buf, "%s %S", op, ir_value_str);
+                aoStrRelease(ir_value_str);
+            } else {
+                aoStrCatFmt(buf, "%s", op);
+            }
+            break;
+        }
+
         default: {
             aoStrCatFmt(buf, "%s", op);
             for (int i = 0; i < (int)static_size(ir_values); i++) {
@@ -892,6 +903,71 @@ Map *irIntBlockMappingMapNew(void) {
 /* `Map<long IrLivenessInfo *>`*/
 Map *irLivenessMap(void) {
     return mapNew(16, &ir_liveness_map);
+}
+
+void irInstrIterNextInit(IrInstrIter *it, IrFunction *func) {
+    it->blocks = func->blocks;
+    it->block_it = it->blocks->next;
+    it->block = it->block_it->value;
+    it->instr_it = it->block->instructions->next;
+    it->instr = it->instr_it->value;
+}
+
+/* Iterate through instructions */
+int irInstrIterNext(IrInstrIter *it) {
+    if (it->instr_it != it->block->instructions) {
+        IrInstr *value = it->instr_it->value;
+        it->instr_it = it->instr_it->next;
+        it->instr = value;
+        return 1;
+    } else if (it->block_it != it->blocks) {
+        it->block_it = it->block_it->next;
+        while (it->block_it != it->blocks) {
+            it->block = it->block_it->value;
+            if (!listEmpty(it->block->instructions)) {
+                it->instr_it = it->block->instructions->next;
+                it->instr = it->instr_it->value;
+                /* Set iterator to next instruction */
+                it->instr_it = it->instr_it->next;
+                return 1;
+            }
+            it->block_it = it->block_it->next;
+        }
+        return 0;
+    }
+    return 0;
+}
+
+void irInstrIterPrevInit(IrInstrIter *it, IrFunction *func) {
+    it->blocks = func->blocks;
+    it->block_it = it->blocks->prev;
+    it->block = it->block_it->value;
+    it->instr_it = it->block->instructions->prev;
+    it->instr = it->instr_it->value;
+}
+
+int irInstrIterPrev(IrInstrIter *it) {
+    if (it->instr_it != it->block->instructions) {
+        IrInstr *value = it->instr_it->value;
+        it->instr_it = it->instr_it->prev;
+        it->instr = value;
+        return 1;
+    } else if (it->block_it != it->blocks) {
+        it->block_it = it->block_it->prev;
+        while (it->block_it != it->blocks) {
+            it->block = it->block_it->value;
+            if (!listEmpty(it->block->instructions)) {
+                it->instr_it = it->block->instructions->prev;
+                it->instr = it->instr_it->value;
+                /* Set iterator to prev instruction */
+                it->instr_it = it->instr_it->prev;
+                return 1;
+            }
+            it->block_it = it->block_it->prev;
+        }
+        return 0;
+    }
+    return 0;
 }
 
 /*==================== TYPE CONSTRUCTORS =====================================*/

@@ -104,79 +104,6 @@ Map *irGepChainMap(void) {
     return mapNew(16, &ir_gep_chain_map);
 }
 
-typedef struct IrInstrIter {
-    List *block_it;
-    List *blocks;
-    List *instr_it;
-    IrBlock *block;
-    IrInstr *instr;
-} IrInstrIter;
-
-void irInstrIterNextInit(IrInstrIter *it, IrFunction *func) {
-    it->blocks = func->blocks;
-    it->block_it = it->blocks->next;
-    it->block = it->block_it->value;
-    it->instr_it = it->block->instructions->next;
-    it->instr = it->instr_it->value;
-}
-
-/* Iterate through instructions */
-int irInstrIterNext(IrInstrIter *it) {
-    if (it->instr_it != it->block->instructions) {
-        IrInstr *value = it->instr_it->value;
-        it->instr_it = it->instr_it->next;
-        it->instr = value;
-        return 1;
-    } else if (it->block_it != it->blocks) {
-        it->block_it = it->block_it->next;
-        while (it->block_it != it->blocks) {
-            it->block = it->block_it->value;
-            if (!listEmpty(it->block->instructions)) {
-                it->instr_it = it->block->instructions->next;
-                it->instr = it->instr_it->value;
-                /* Set iterator to next instruction */
-                it->instr_it = it->instr_it->next;
-                return 1;
-            }
-            it->block_it = it->block_it->next;
-        }
-        return 0;
-    }
-    return 0;
-}
-
-void irInstrIterPrevInit(IrInstrIter *it, IrFunction *func) {
-    it->blocks = func->blocks;
-    it->block_it = it->blocks->prev;
-    it->block = it->block_it->value;
-    it->instr_it = it->block->instructions->prev;
-    it->instr = it->instr_it->value;
-}
-
-int irInstrIterPrev(IrInstrIter *it) {
-    if (it->instr_it != it->block->instructions) {
-        IrInstr *value = it->instr_it->value;
-        it->instr_it = it->instr_it->prev;
-        it->instr = value;
-        return 1;
-    } else if (it->block_it != it->blocks) {
-        it->block_it = it->block_it->prev;
-        while (it->block_it != it->blocks) {
-            it->block = it->block_it->value;
-            if (!listEmpty(it->block->instructions)) {
-                it->instr_it = it->block->instructions->prev;
-                it->instr = it->instr_it->value;
-                /* Set iterator to prev instruction */
-                it->instr_it = it->instr_it->prev;
-                return 1;
-            }
-            it->block_it = it->block_it->prev;
-        }
-        return 0;
-    }
-    return 0;
-}
-
 /*============================================================================*/
 
 IrLivenessInfo *irLivenessInfoNew(void) {
@@ -1419,6 +1346,7 @@ static void irChainReplaceAllUses(Map *chain_map, IrFunction *func, IrValue *old
 
     /* Prevent the chains from updating to an incorrect value */
     iter = mapIterNew(chain_map);
+    printf("%s\n", irValueToString(old_value)->data);
     mapRemove(chain_map, old_value->name);
     while (mapIterNext(iter)) {
         setRemove(iter->node->value, old_value);
@@ -1467,9 +1395,17 @@ static void irBuildChain(Map *chain_map, IrInstr *instr, IrInstr *maybe_prev_ins
             break;
         }
 
+        case IR_OP_GEP:
+            /* This will be explicitly handled in a separate pass */
+            break;
+
         case IR_OP_RET: {
-            Set *new_chain = irValueSetNew();
-            mapAdd(chain_map, result_name, new_chain);
+            if (instr->result && instr->result->type == IR_TYPE_VOID) {
+                instr->result = NULL;
+            } else if (instr->result) {
+                Set *new_chain = irValueSetNew();
+                mapAdd(chain_map, result_name, new_chain);
+            }
             break;
         }
 
@@ -1493,7 +1429,8 @@ static void irBuildChain(Map *chain_map, IrInstr *instr, IrInstr *maybe_prev_ins
         }
 
         case IR_OP_STORE: {
-            if (mapHas(chain_map, result_name)) {
+            /* If op1->name is NULL that means it is probably a constant */
+            if (mapHas(chain_map, result_name) && instr->op1->name != NULL) {
                 Set *chain = mapGet(chain_map, result_name);
                 setAdd(chain, instr->op1);
             }
@@ -1595,7 +1532,7 @@ static int irChainCollapse(IrFunction *func, Map *chain_map) {
 
             case IR_OP_RET: {
                 AoStr *result_name = irValueGetName(instr->result);
-                if (mapHas(chain_map, result_name)) {
+                if (result_name && mapHas(chain_map, result_name)) {
                     Set *chain = mapGet(chain_map, result_name);
                     if (chain->size) {
                         instr->result = setGetAt(chain, 0);
@@ -1652,10 +1589,10 @@ int irReduceLoadStoreChain(IrFunction *func) {
             }
         }
 
+        mapPrint(chain_map);
         /* Eliminate as many instructions as possible */
         changed = irChainCollapse(func, chain_map);
 
-        mapPrint(chain_map);
 
         if (changed) {
             listForEach(func->blocks) {
@@ -1734,7 +1671,7 @@ void irOptimiseFunction(IrFunction *func) {
         if (irReduceLoadStoreChain(func) != 0) {
             changed = 1;
         }
-        
+
         if (irReduceGepStoreChains(func) != 0) {
             changed = 1;
         }

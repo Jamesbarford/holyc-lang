@@ -171,6 +171,7 @@ typedef struct IrBlock {
      *                           the other blocks information */
 } IrBlock;
 
+
 #define IR_VALUE_ADDR   (1<<0)
 #define IR_FN_VAL_USED  (1<<1)
 #define IR_VALUE_IS_ARG (1<<2)
@@ -198,6 +199,7 @@ struct IrValue {
      * globally defined functions need a label/name and would conflict */
     AoStr *name;
     unsigned long flags;
+    IrReg reg;
 
     union {
         long i64;   /* For integer constants */
@@ -368,6 +370,19 @@ typedef struct IrCtx {
     IrArrayCtx array_;
 } IrCtx;
 
+/* Iterator for all instructions across basic blocks */
+typedef struct IrInstrIter {
+    List *block_it;
+    List *blocks;
+    List *instr_it;
+    IrBlock *block;
+    IrInstr *instr;
+} IrInstrIter;
+
+void irInstrIterNextInit(IrInstrIter *it, IrFunction *func);
+int irInstrIterNext(IrInstrIter *it);
+void irInstrIterPrevInit(IrInstrIter *it, IrFunction *func);
+int irInstrIterPrev(IrInstrIter *it);
 
 /* The memory arena for the IR */
 void irArenaInit(unsigned int capacity);
