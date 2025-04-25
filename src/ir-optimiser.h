@@ -1,8 +1,11 @@
 #ifndef IR_OPTIMISER_H__
 #define IR_OPTIMISER_H__
 
+#include "aostr.h"
+#include "map.h"
+
 AoStr *irLivenessAnalysisToString(IrLivenessAnalysis *analysis);
-IrLivenessAnalysis *irLivenessAnalysis(IrFunction *func);
+Map *irLivenessAnalysis(IrFunction *func);
 int irInstrHasSideEffects(IrInstr *instr);
 int irFnCallReturnUsed(IrBlock *block, IrLivenessInfo *info, IrInstr *instr);
 AoStr *irMemLocation(IrValue *value);
@@ -22,6 +25,6 @@ void irEliminateDeadAllocas(IrFunction *func);
 void irPerformLoadStoreForwarding(IrFunction *func);
 void irPerformCopyPropagation(IrFunction *func);
 void irFoldParameterLoads(IrFunction *func);
-IrLivenessAnalysis *irEliminateDeadCode(IrFunction *func, IrLivenessAnalysis *liveness);
+Map *irEliminateDeadCode(IrFunction *func, Map *liveness);
 
 #endif

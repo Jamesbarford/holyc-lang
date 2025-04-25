@@ -171,8 +171,9 @@ typedef struct IrBlock {
      *                           the other blocks information */
 } IrBlock;
 
-#define IR_VALUE_ADDR  (1<<0)
-#define IR_FN_VAL_USED (1<<1)
+#define IR_VALUE_ADDR   (1<<0)
+#define IR_FN_VAL_USED  (1<<1)
+#define IR_VALUE_IS_ARG (1<<2)
 
 typedef enum IrRegType {
     IR_REG_REAL,
@@ -197,7 +198,6 @@ struct IrValue {
      * globally defined functions need a label/name and would conflict */
     AoStr *name;
     unsigned long flags;
-    IrReg reg;
 
     union {
         long i64;   /* For integer constants */

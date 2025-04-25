@@ -23,7 +23,6 @@ int irInstrLive(IrBlock *block, IrLivenessInfo *info, IrInstr *instr);
 /* Optimisation passese */
 void irEliminateRedundantLoads(IrFunction *func);
 void irEliminateRedundantStores(IrFunction *func);
-void irEliminateDeadStores(IrFunction *func);
 void irEliminateDeadAllocas(IrFunction *func);
 void irPerformLoadStoreForwarding(IrFunction *func);
 void irPerformCopyPropagation(IrFunction *func);
@@ -31,19 +30,78 @@ void irFoldParameterLoads(IrFunction *func);
 
 
 /*====== DATA STRUCTURES =====================================================*/
+/* `Map<AoStr *, Set<IrValue *>>`*/
 static MapType ir_value_chain_map = {
     .match           = (mapKeyMatch *)&aoStrEq,
     .hash            = (mapKeyHash *)&aoStrHashFunction,
     .get_key_len     = (mapKeyLen *)&aoStrGetLen,
     .key_to_string   = (mapKeyToString *)&debugColourAoStr,
     .value_to_string = (mapValueToString *)&setEntriesToString,
-    .value_release   = NULL,
+    .value_release   = (mapValueRelease *)&setRelease,
     .value_type      = "Set<IrValue *>",
-    .key_type        = "AoStr *",       
+    .key_type        = "AoStr *",
 };
 
+/* `Map<AoStr *, Set<IrValue *>>`*/
 Map *irValueChainMap(void) {
     return mapNew(16, &ir_value_chain_map);
+}
+
+/* This can _only_ be used for get element pointer instructions */
+unsigned long irInstrGepHash(IrInstr *instr) {
+    assert(instr->opcode == IR_OP_GEP);
+    const size_t capacity = 32;
+    char tmp[capacity];
+    AoStr tmp_str = {
+        .capacity = capacity,
+        .data = tmp,
+        .len = 0,
+    };
+
+    if (instr->op2->name != NULL) {
+        tmp_str.len = snprintf(tmp, sizeof(tmp), "%s%s",instr->op1->name->data,
+                                                        instr->op2->name->data);
+    } else if (instr->op2->kind == IR_VALUE_CONST_INT) {
+        tmp_str.len = snprintf(tmp, sizeof(tmp), "%s%ld",instr->op1->name->data,
+                                                        instr->op2->i64);
+    } else {
+        loggerPanic("Unhandled hash for; %s\n", irInstrToString(instr)->data);
+    }
+
+    debug("%s\n", tmp);
+    return aoStrHashFunction(&tmp_str);
+}
+
+int irInstrGepMatch(IrInstr *i1, IrInstr *i2) {
+    if (i1->opcode != IR_OP_GEP) return 0;
+    if (i2->opcode != IR_OP_GEP) return 0;
+    if (i1->op1->type == i2->op1->type && i1->op2->type == i2->op2->type) {
+        if (aoStrEq(i1->op1->name, i2->op1->name)) {
+            if (i1->op2->kind == IR_VALUE_CONST_INT) {
+                return i1->op2->i64 == i2->op2->i64;
+            } else if (i1->op2->name && i2->op2->name) {
+                return aoStrEq(i1->op2->name, i2->op2->name);
+            }
+        }
+    }
+    return 0;
+}
+
+/* `Map<IrInstr *, Set<IrValue *>>`*/
+static MapType ir_gep_chain_map = {
+    .match           = (mapKeyMatch *)&irInstrGepMatch,
+    .hash            = (mapKeyHash *)&irInstrGepHash,
+    .get_key_len     = (mapKeyLen *)&aoStrGetLen,
+    .key_to_string   = (mapKeyToString *)&irInstrToString,
+    .value_to_string = (mapValueToString *)&setEntriesToString,
+    .value_release   = (mapValueRelease *)&setRelease,
+    .value_type      = "Set<IrValue *>",
+    .key_type        = "IrInstr *",
+};
+
+/* `Map<AoStr *, Set<IrValue *>>`*/
+Map *irGepChainMap(void) {
+    return mapNew(16, &ir_gep_chain_map);
 }
 
 typedef struct IrInstrIter {
@@ -309,14 +367,13 @@ void irLivenessAnalysisPrint(IrLivenessAnalysis *analysis) {
     aoStrRelease(str);
 }
 
-IrLivenessAnalysis *irLivenessAnalysis(IrFunction *func) {
-    IrLivenessAnalysis *analysis = malloc(sizeof(IrLivenessAnalysis));
-    analysis->block_info = irLivenessMap();
+Map *irLivenessAnalysis(IrFunction *func) {
+    Map *liveness_map = irLivenessMap();
 
     listForEachReverse(func->blocks) {
         IrBlock *block = listValue(IrBlock *, it);
         IrLivenessInfo *info = irComputeBlockUseDef(block);
-        mapAdd(analysis->block_info, block->id, info);
+        mapAdd(liveness_map, block->id, info);
     }
 
     int changed = 1;
@@ -324,7 +381,7 @@ IrLivenessAnalysis *irLivenessAnalysis(IrFunction *func) {
         changed = 0;
         listForEachReverse(func->blocks) {
             IrBlock *block = listValue(IrBlock *, it);
-            IrLivenessInfo *info = mapGet(analysis->block_info, block->id);
+            IrLivenessInfo *info = mapGet(liveness_map, block->id);
             Map *successors = irBlockGetSuccessors(func, block);
 
             /* Get the successors from the CFG */
@@ -335,13 +392,13 @@ IrLivenessAnalysis *irLivenessAnalysis(IrFunction *func) {
                 /* Add all elements from the successor live_in to live_out */
                 while (mapIterNext(&iter)) {
                     IrBlock *successor_block = getValue(IrBlock *, iter.node);
-                    IrLivenessInfo *successor_info = irLivenessGetInfo(analysis, successor_block);
+                    IrLivenessInfo *successor_info = mapGet(liveness_map, block->id);
                     if (successor_info) {
-                        SetIter *set_iter = setIterNew(successor_info->live_in);
-                        SetFor(set_iter, set_value) {
-                            setAdd(new_live_out, set_value); 
+                        SetIter set_iter;
+                        setIterInit(&set_iter, successor_info->live_in);
+                        for (setIterInit(&set_iter, successor_info->live_in); setIterNext(&set_iter); ) {
+                            setAdd(new_live_out, set_iter.value); 
                         }
-                        setIterRelease(set_iter);
                     }
                 }
 
@@ -369,7 +426,9 @@ IrLivenessAnalysis *irLivenessAnalysis(IrFunction *func) {
         }
     }
 
-    return analysis;
+    IrLivenessInfo *info = mapGet(liveness_map, 0);
+    setPrint(info->def);
+    return liveness_map;
 }
 
 int irInstrHasSideEffects(IrInstr *instr) {
@@ -419,25 +478,23 @@ int irInstrLive(IrBlock *block, IrLivenessInfo *info, IrInstr *instr) {
         return 0;
     }
 
-    SetIter *iter = NULL;
+    SetIter iter;
     if (instr->opcode == IR_OP_PHI) {
-        for (iter = setIterNew(info->live_out); setIterNext(iter); ) {
-            IrValue *value = getValue(IrValue *, iter);
+        for (setIterInit(&iter, info->live_out); setIterNext(&iter); ) {
+            IrValue *value = iter.value;
             if (value == instr->result) {
                 return 1;
             }
         }
-        setIterRelease(iter);
     }
 
     /* Does the instruction live outside of this block? */
-    for (iter = setIterNew(info->live_out); setIterNext(iter); ) {
-        IrValue *value = getValue(IrValue *, iter);
+    for (setIterInit(&iter, info->live_out); setIterNext(&iter); ) {
+        IrValue *value = iter.value;
         if (value == instr->result) {
             return 1;
         }
     }
-    setIterRelease(iter);
 
     /* Check if it is used in any subsequent instruction */
     List *cur_list_node = NULL;
@@ -505,6 +562,7 @@ int irFnCallReturnUsed(IrBlock *block, IrLivenessInfo *info, IrInstr *instr) {
     /* Does the temorary live outside of this block? */
     SetIter *iter = NULL;
     if (instr->result->flags & IR_FN_VAL_USED) return 1;
+    if (!info) return 1;
 
     for (iter = setIterNew(info->live_out); setIterNext(iter); ) {
         IrValue *value = getValue(IrValue *, iter);
@@ -985,102 +1043,6 @@ void irReplaceLoadStores(IrFunction *func, IrValue *stack_slot, IrValue *reg_val
     mapRelease(block_values);
 }
 
-void irEliminateDeadStores(IrFunction *func) {
-    int changed = 1;
-    Set *mem_uses = setNew(32, &aostr_set_type);
-
-    while (changed) {
-        changed = 0;
-
-        /* First pass is to find all loads */
-        listForEach(func->blocks) {
-            IrBlock *block = getValue(IrBlock *, it);
-            if (block->removed) continue;
-
-            listForEach(block->instructions) {
-                IrInstr *instr = getValue(IrInstr *, it);
-
-                if (instr->opcode == IR_OP_LOAD) {
-                    AoStr *memory_location = irMemLocation(instr->op1);
-                    if (!memory_location) continue;
-                    setAdd(mem_uses, memory_location);
-                } else if (instr->opcode == IR_OP_STORE) {
-                    AoStr *memory_location = irMemLocation(instr->op1);
-                    if (memory_location && setHas(mem_uses, memory_location)) {
-                        instr->opcode = IR_OP_NOP;
-                        continue;
-                    }
-                }
-                /* Check if function arguments use it */
-                else  if (instr->opcode == IR_OP_CALL) {
-                    PtrVec *fn_args = instr->op1->array_.values;
-                    if (fn_args && fn_args->size > 0) {
-                        /* We could analyse the body of a function pointer, however 
-                         * this is conservative and simply returns true */
-                        for (int i = 0; i < fn_args->size; ++i) {
-                            IrValue *ir_value = vecGet(IrValue *,fn_args,i);
-                            if (ir_value->name) {
-                                setAdd(mem_uses, ir_value->name);
-                            }
-                        }
-                    }
-                } else if (instr->result && instr->result->kind == IR_VALUE_TEMP) {
-                    AoStr *memory_location = irMemLocation(instr->result);
-                    //if (!memory_location) continue;
-                    if (!memory_location) continue;
-                    setAdd(mem_uses, memory_location);
-                }
-                /* Check for implicit memory reads like function calls */
-                else if (irCouldReadMemory(instr) && instr->opcode != IR_OP_LOAD) {
-                    /* This defensively assumes it could read any memory and 
-                     * marks allocas as possibly read */
-                    listForEach(func->blocks) {
-                        IrBlock *block = getValue(IrBlock *, it);
-                        if (block->removed) continue;
-
-                        listForEach(block->instructions) {
-                            IrInstr *inner_instr = getValue(IrInstr *, it);
-                            
-                            if (inner_instr->opcode == IR_OP_ALLOCA) {
-                                AoStr *memory_location = irMemLocation(inner_instr->result);
-                                setAdd(mem_uses, memory_location);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        /* Pass two */
-        listForEach(func->blocks) {
-            IrBlock *block = getValue(IrBlock *, it);
-            if (block->removed) continue;
-
-            listForEach(block->instructions) {
-                IrInstr *instr = getValue(IrInstr *, it);
-                if (instr->opcode == IR_OP_STORE) {
-                    AoStr *memory_location = irMemLocation(instr->op1);
-                    if (!memory_location) continue;
-                    if (!setHas(mem_uses, memory_location)) {
-                        debug("%s:%d - %s\n",__func__,__LINE__,irInstrToString(instr)->data);
-                        instr->opcode = IR_OP_NOP;
-                        changed = 1;
-                    }
-                }
-            }
-        }
-
-        /* Remove noops */
-        listForEach(func->blocks) {
-            IrBlock *block = getValue(IrBlock *, it);
-            if (block->removed) continue;
-            irBlockRemoveNops(block);
-        }
-
-        setClear(mem_uses);
-    }
-}
-
 int irInstrCouldUsePointer(IrFunction *func, IrInstr *instr) {
     /* CASE 1: Direct memory operations - these explicitly use pointers */
     if (instr->opcode == IR_OP_LOAD || instr->opcode == IR_OP_STORE) {
@@ -1314,9 +1276,7 @@ void irFoldParameterLoads(IrFunction *func) {
 }
 
 /* @Optimiser - This is veering on optimisiation */
-IrLivenessAnalysis *irEliminateDeadCode(IrFunction *func,
-                                        IrLivenessAnalysis *liveness)
-{
+Map *irEliminateDeadCode(IrFunction *func, Map *liveness) {
     int changed = 1;
     int re_compute = 0;
 
@@ -1326,7 +1286,7 @@ IrLivenessAnalysis *irEliminateDeadCode(IrFunction *func,
         listForEach(func->blocks) {
             IrBlock *block = getValue(IrBlock *, it);
             if (block->removed) continue;
-            IrLivenessInfo *info = irLivenessGetInfo(liveness, block);
+            IrLivenessInfo *info = mapGet(liveness, ptrcast(block->id));
             List *dead_list = listNew();
 
             listForEach(block->instructions) {
@@ -1466,7 +1426,24 @@ static void irChainReplaceAllUses(Map *chain_map, IrFunction *func, IrValue *old
     mapIterRelease(iter);
 }
 
-static void irMapChain(Map *chain_map, IrInstr *instr, IrInstr *maybe_prev_instr) {
+/**
+ * Creates various mappings between variable definitions and their usage. For example; 
+ * ```
+ * store %t1, %t2
+ * add   %t3, %t1, %t4
+ * ret   %t3
+ * ```
+ * Would map
+ * ```
+ * %t1 => %t2
+ * ```
+ * Which would optimise to;
+ * ```
+ * add   %t3, %2, %t4
+ * ret   %t3
+ * ```
+ * Thus removing a store */
+static void irBuildChain(Map *chain_map, IrInstr *instr, IrInstr *maybe_prev_instr) {
     AoStr *result_name = irValueGetName(instr->result);
     AoStr *op1_name = irValueGetName(instr->op1);
     AoStr *op2_name = irValueGetName(instr->op2);
@@ -1477,10 +1454,14 @@ static void irMapChain(Map *chain_map, IrInstr *instr, IrInstr *maybe_prev_instr
     switch (instr->opcode) {
         case IR_OP_CALL: {
             if (result_name && maybe_prev_instr) {
+                /* We want to tee this up to eliminate the store instruction */
                 if (maybe_prev_instr->opcode == IR_OP_STORE &&
                         aoStrEq(maybe_prev_instr->op1->name, result_name)) {
-                    debug("OP_CALL RESULT: `%s`\n",
-                            irInstrToString(instr)->data);
+                    if (!mapHas(chain_map, result_name)) {
+                        Set *new_chain = irValueSetNew();
+                        setAdd(new_chain, maybe_prev_instr->result);
+                        mapAdd(chain_map, result_name, new_chain);
+                    }
                 }
             }
             break;
@@ -1491,6 +1472,7 @@ static void irMapChain(Map *chain_map, IrInstr *instr, IrInstr *maybe_prev_instr
             mapAdd(chain_map, result_name, new_chain);
             break;
         }
+
         case IR_OP_ALLOCA: {
             if (!mapHas(chain_map, result_name)) {
                 Set *new_chain = irValueSetNew();
@@ -1511,17 +1493,12 @@ static void irMapChain(Map *chain_map, IrInstr *instr, IrInstr *maybe_prev_instr
         }
 
         case IR_OP_STORE: {
-            if (!mapHas(chain_map, result_name)) {
-                loggerWarning("Expected %s to have been added to the "
-                        "chain, as it should have been allocated\n",
-                        result_name->data);
-            } else {
+            if (mapHas(chain_map, result_name)) {
                 Set *chain = mapGet(chain_map, result_name);
                 setAdd(chain, instr->op1);
             }
             break;
         }
-
 
         default: {
             if (irInstrHasPtr(instr)) return;
@@ -1562,6 +1539,80 @@ static void irMapChain(Map *chain_map, IrInstr *instr, IrInstr *maybe_prev_instr
     }
 }
 
+/* Collapses what I'm calling chains of variable references */
+static int irChainCollapse(IrFunction *func, Map *chain_map) {
+    IrInstrIter it;
+    irInstrIterNextInit(&it, func);
+    int changed = 0;
+
+    while (irInstrIterNext(&it)) {
+        IrInstr *instr = it.instr;
+        switch (instr->opcode) {
+            case IR_OP_LOAD: {
+                AoStr *result_name = irValueGetName(instr->result);
+                AoStr *op1_name = irValueGetName(instr->op1);
+                if (mapHas(chain_map, result_name)) {
+                    Set *chain = mapGet(chain_map, result_name);
+                    if (chain->size) {
+                        irChainReplaceAllUses(chain_map, func, instr->op1, instr->result);
+                        instr->op1 = instr->result;
+                        instr->opcode = IR_OP_NOP;
+                        changed = 1;
+                    }
+                }
+                break;
+            }
+
+            case IR_OP_STORE: {
+                AoStr *result_name = irValueGetName(instr->result);
+                AoStr *op1_name = irValueGetName(instr->op1);
+                if (mapHas(chain_map, result_name)) {
+                    Set *chain = mapGet(chain_map, result_name);
+                    if (chain->size) {
+                        irChainReplaceAllUses(chain_map, func, instr->op1, instr->result);
+                        if (aoStrEq(result_name, op1_name)) {
+                            instr->opcode = IR_OP_NOP;
+                            changed = 1;
+                        }
+                    }
+                }
+                break;
+            }
+
+            case IR_OP_CALL: {
+                AoStr *result_name = irValueGetName(instr->result);
+                if (result_name && mapHas(chain_map, result_name)) {
+                    Set *chain = mapGet(chain_map, result_name);
+                    if (chain->size) {
+                        IrValue *replacement = setGetAt(chain, 0);
+                        irChainReplaceAllUses(chain_map, func, instr->result, replacement);
+                        instr->result = replacement;
+                        changed = 1;
+                    }
+                }
+                break;
+            }
+
+            case IR_OP_RET: {
+                AoStr *result_name = irValueGetName(instr->result);
+                if (mapHas(chain_map, result_name)) {
+                    Set *chain = mapGet(chain_map, result_name);
+                    if (chain->size) {
+                        instr->result = setGetAt(chain, 0);
+                        changed = 1;
+                    }
+                }
+                break;
+            }
+
+            default:
+                break;
+        }
+    }
+
+    return changed;
+}
+
 /* This is correct as we are nuking redundant loads, stores and temporary 
  * variables. Which means when passing things off to the register allocator 
  * there are less things to allocate and the register allocator decides what 
@@ -1572,7 +1623,7 @@ static void irMapChain(Map *chain_map, IrInstr *instr, IrInstr *maybe_prev_instr
  * variable has to be in a specific register simpler as we'd mark it as unusable 
  * in the allocator. This in turn makes it easier to pass values between HolyC 
  * and inline assembly */
-int irBuildDefUseChain(IrFunction *func) {
+int irReduceLoadStoreChain(IrFunction *func) {
     Map *chain_map = irValueChainMap();
 
     for (int i = 0; i < func->params->size; ++i) {
@@ -1593,51 +1644,16 @@ int irBuildDefUseChain(IrFunction *func) {
          * look more clearer in any case */
         for (int i = 0 ; i < 2; ++i) {
             while (irInstrIterPrev(&it)) {
-                IrInstr *maybe_prev_instr = listPrev(it.instr_it);
-                irMapChain(chain_map, it.instr, maybe_prev_instr);
+                /* The instruction behind the one we are looking at, as we are
+                 * iterating in reverse this is, in the view of the linked list
+                 * the `next`, node */
+                IrInstr *maybe_prev_instr = listNext(it.instr_it->next);
+                irBuildChain(chain_map, it.instr, maybe_prev_instr);
             }
         }
 
-
-        irInstrIterNextInit(&it, func);
-        while (irInstrIterNext(&it)) {
-            IrInstr *instr = it.instr;
-            if (instr->opcode == IR_OP_LOAD) {
-                AoStr *result_name = irValueGetName(instr->result);
-                AoStr *op1_name = irValueGetName(instr->op1);
-                if (mapHas(chain_map, result_name)) {
-                    Set *chain = mapGet(chain_map, result_name);
-                    if (chain->size) {
-                        irChainReplaceAllUses(chain_map, func, instr->op1, instr->result);
-                        instr->op1 = instr->result;
-                        instr->opcode = IR_OP_NOP;
-                        changed = 1;
-                    }
-                }
-            } else if (instr->opcode == IR_OP_STORE) {
-                AoStr *result_name = irValueGetName(instr->result);
-                AoStr *op1_name = irValueGetName(instr->op1);
-                if (mapHas(chain_map, result_name)) {
-                    Set *chain = mapGet(chain_map, result_name);
-                    if (chain->size) {
-                        irChainReplaceAllUses(chain_map, func, instr->op1, instr->result);
-                        if (aoStrEq(result_name, op1_name)) {
-                            instr->opcode = IR_OP_NOP;
-                            changed = 1;
-                        }
-                    }
-                }
-            } else if (instr->opcode == IR_OP_RET) {
-                AoStr *result_name = irValueGetName(instr->result);
-                if (mapHas(chain_map, result_name)) {
-                    Set *chain = mapGet(chain_map, result_name);
-                    if (chain->size) {
-                        instr->result = setGetAt(chain, 0);
-                        changed = 1;
-                    }
-                }
-            }
-        }
+        /* Eliminate as many instructions as possible */
+        changed = irChainCollapse(func, chain_map);
 
         mapPrint(chain_map);
 
@@ -1656,6 +1672,52 @@ int irBuildDefUseChain(IrFunction *func) {
     return iters;
 }
 
+/* Split this out for simplicity though it could quite possibly be merged 
+ * with `irReduceLoadStoreChain(...)` */
+int irReduceGepStoreChains(IrFunction *func) {
+    int changed = 1;
+    int iters = 0;
+    Map *chain_map = irGepChainMap();
+
+    while (changed) {
+        changed = 0;
+        IrInstrIter it;
+        irInstrIterPrevInit(&it, func);
+        while (irInstrIterPrev(&it)) {
+            IrInstr *instr = it.instr;
+            if (instr->opcode == IR_OP_GEP) {
+                if (!mapHas(chain_map, instr)) {
+                    Set *chain = irValueSetNew();
+                    setAdd(chain, instr->result);
+                    mapAdd(chain_map, instr, chain);
+                } else {
+                    Set *chain = mapGet(chain_map, instr);
+                    setAdd(chain, instr->result);
+                }
+            }
+        }
+
+        MapIter map_iter;
+        for (mapIterInit(chain_map, &map_iter); mapIterNext(&map_iter); ) {
+            IrInstr *instr = map_iter.node->key;
+            Set *values = map_iter.node->value;
+            SetIter set_iter;
+            for (setIterInit(&set_iter, values); setIterNext(&set_iter); ) {
+                IrValue *value = set_iter.value;
+                if (value == instr->result) continue;
+                irReplaceAllUses(func, value, instr->result);
+                changed = 1;
+            }
+        }
+
+        mapPrint(chain_map);
+        mapClear(chain_map);
+    }
+    mapRelease(chain_map);
+
+    return iters;
+}
+
 void irOptimiseFunction(IrFunction *func) {
     int changed = 1;
     int iters = 0;
@@ -1665,21 +1727,20 @@ void irOptimiseFunction(IrFunction *func) {
 
     while (changed && iters < 2) {
         debug("ITER; %d\n", iters);
-        IrLivenessAnalysis *analysis = irLivenessAnalysis(func);
-        analysis = irEliminateDeadCode(func, analysis);
-        irLivenessAnalysisPrint(analysis);
-        // irPerformCopyPropagation(func);
-        if (irBuildDefUseChain(func) != 0) {
-            changed = 0;
+        Map *liveness_map = irLivenessAnalysis(func);
+        mapPrint(liveness_map);
+        liveness_map = irEliminateDeadCode(func, liveness_map);
+         irPerformCopyPropagation(func);
+        if (irReduceLoadStoreChain(func) != 0) {
+            changed = 1;
         }
+        
+        if (irReduceGepStoreChains(func) != 0) {
+            changed = 1;
+        }
+
         printf("%s\n", irFunctionToString(func)->data);
         debug("================\n");
-        // irPerformLoadStoreForwarding(func);
-        // irEliminateRedundantLoads(func);
-        // irEliminateDeadStores(func);
-        // irEliminateRedundantStores(func);
-        // irEliminateDeadAllocas(func);
-        // irFoldParameterLoads(func);
         iters++;
     }
 }

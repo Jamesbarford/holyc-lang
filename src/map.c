@@ -1435,7 +1435,6 @@ Set *setNew(unsigned long capacity, SetType *type) {
 #else
     set->capacity = capacity;
 #endif
-
     set->mask = set->capacity - 1;
     set->threashold = (unsigned long)(HT_LOAD * set->capacity);
 
@@ -1446,7 +1445,7 @@ Set *setNew(unsigned long capacity, SetType *type) {
         node->key = NULL;
     }
 #else
-    set->entries = (void **)calloc(set->capacity, sizeof(void *));
+    set->entries = (SetNode *)calloc(set->capacity, sizeof(SetNode));
 #endif
     set->indexes = intVecNew();
     set->type = type;
@@ -1733,17 +1732,15 @@ void setPrint(Set *set) {
 int setEq(Set *s1, Set *s2) {
     if (s1->size != s2->size) return 0;
     int retval = 1;
-    SetIter *it = setIterNew(s1);
+    SetIter it;
 
-    SetFor(it, value) {
-        if (!setHas(s2, value)) {
+    for (setIterInit(&it, s1); setIterNext(&it); ) {
+        if (!setHas(s2, it.value)) {
             retval = 0;
-            goto out;
+            break;
         }
     }
 
-out:
-    setIterRelease(it);
     return retval;
 }
 
@@ -1839,6 +1836,8 @@ Map *mapNew(unsigned long capacity, MapType *type) {
     map->indexes = intVecNew();
     map->parent = NULL;
     map->type = type;
+    map->cached_key = (void *)ULONG_MAX;
+    map->cached_idx = ULONG_MAX;
     return map;
 }
 
@@ -2089,9 +2088,10 @@ void *mapGet(Map *map, void *key) {
 }
 
 void mapClear(Map *map) {
-    MapIter *it = mapIterNew(map);
-    while (mapIterNext(it)) {
-        MapNode *n = it->node;
+    MapIter it;
+    mapIterInit(map, &it);
+    while (mapIterNext(&it)) {
+        MapNode *n = it.node;
         n->flags = MAP_FLAG_FREE;
         if (map->type->value_release) map->type->value_release(n->value);
         if (map->type->key_release) map->type->key_release(n->key);
@@ -2101,7 +2101,6 @@ void mapClear(Map *map) {
     }
     map->size = 0;
     intVecClear(map->indexes);
-    mapIterRelease(it);
 }
 
 void mapRelease(Map *map) {

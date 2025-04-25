@@ -264,6 +264,15 @@ AoStr *irRegToStringTuple(IrReg *reg) {
 
 AoStr *irValueToString(IrValue *ir_value) {
     AoStr *buf = aoStrNew();
+    AoStr *flags_str = NULL;
+    
+    if (ir_value->flags != 0) {
+        flags_str = aoStrPrintf(ESC_BLUE"0b"ESC_RESET);
+        for (int i = 4; i >= 0; --i) {
+            int bit = (ir_value->flags >> i) & 1;
+            aoStrCatFmt(flags_str, ESC_BLUE"%i"ESC_RESET, bit);
+        }
+    }
 
     if (ir_value->type == IR_TYPE_ARRAY_INIT) {
         irArrayInitToString(buf,ir_value);
@@ -316,7 +325,13 @@ AoStr *irValueToString(IrValue *ir_value) {
 
         const char *ir_value_kind_str = irValueKindToPrettyString(ir_value->kind);
         const char *ir_value_type_str = irValueTypeToString(ir_value->type);
-        aoStrCatFmt(buf," %s %s",ir_value_type_str, ir_value_kind_str);
+        if (flags_str) {
+            aoStrCatFmt(buf," %s %S %s",ir_value_type_str, flags_str, ir_value_kind_str);
+            aoStrRelease(flags_str);
+        } else {
+            aoStrCatFmt(buf," %s %s",ir_value_type_str, ir_value_kind_str);
+        }
+
     }
     return buf;
 }
