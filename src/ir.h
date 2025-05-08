@@ -9,6 +9,7 @@ void irMemoryRelease(void);
 void irMemoryStats(void);
 IrProgram *irLowerAst(Cctrl *cc);
 
+IrCtx *irCtxNew(void);
 int irCouldReadMemory(IrInstr *instr);
 void irDump(Cctrl *cc);
 
