@@ -808,9 +808,8 @@ void asmBinaryOpIntArithmetic(Cctrl *cc,aoStr *buf, Ast *ast, int reverse) {
 
     if (ast->kind == '/' || ast->kind == '%') {
         aoStrCatPrintf(buf, "movq   $0, %%rdx\n\t");
-        aoStrCatPrintf(buf, "cqto\n\t");
-        if (is_unsinged) aoStrCatPrintf(buf, "divq  %%rcx\n\t");
-        else             aoStrCatPrintf(buf, "idivq  %%rcx\n\t");
+        if (is_unsinged) { aoStrCatPrintf(buf, "divq  %%rcx\n\t"); }
+        else             { aoStrCatPrintf(buf, "cqto\n\t"); aoStrCatPrintf(buf, "idivq  %%rcx\n\t"); }
         if (ast->kind == '%') {
             aoStrCatPrintf(buf, "movq   %%rdx, %%rax\n\t");
         }
