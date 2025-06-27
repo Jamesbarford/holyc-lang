@@ -28,7 +28,8 @@ https://holyc-lang.com/
     alt="alt text"
     title="introduction header"/>
 </p>
-A holyc compiler built from scratch in C. Currently it is non optimising,
+
+A HolyC compiler built from scratch in C. Currently it is non optimising,
 walking the AST and compiling it directly to x86_64 assembly code as text which 
 is fed into gcc to assemble. Floating point arithmetic is supported as are most
 of the major language features. There is experimental support for transpiling 
@@ -36,7 +37,7 @@ HolyC to C.
 
 <p align="center">
   <img 
-    src="/assets/ExampleHeader.png?raw=true"
+    src="/assets/ExamplesHeader.png?raw=true"
     alt="alt text"
     title="examples header"/>
 </p>
