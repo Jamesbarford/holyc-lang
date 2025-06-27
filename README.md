@@ -9,6 +9,13 @@
     height="230"/>
 </p>
 
+<p align="center">
+  <img 
+    src="/assets/Introduction.png?raw=true"
+    alt="alt text"
+    title="introduction header"/>
+</p>
+
 _An implementation of Terry A. Davis's HolyC_
 
 ```hc
