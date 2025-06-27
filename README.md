@@ -9,13 +9,6 @@
     height="230"/>
 </p>
 
-<p align="center">
-  <img 
-    src="/assets/Introduction.png?raw=true"
-    alt="alt text"
-    title="introduction header"/>
-</p>
-
 _An implementation of Terry A. Davis's HolyC_
 
 ```hc
@@ -29,14 +22,24 @@ Main;
 Full documentation for the language and this compiler can be found here: 
 https://holyc-lang.com/
 
-## Introduction
+<p align="center">
+  <img 
+    src="/assets/IntroductionHeader.png?raw=true"
+    alt="alt text"
+    title="introduction header"/>
+</p>
 A holyc compiler built from scratch in C. Currently it is non optimising,
 walking the AST and compiling it directly to x86_64 assembly code as text which 
 is fed into gcc to assemble. Floating point arithmetic is supported as are most
 of the major language features. There is experimental support for transpiling 
 HolyC to C.
 
-## Example
+<p align="center">
+  <img 
+    src="/assets/ExampleHeader.png?raw=true"
+    alt="alt text"
+    title="examples header"/>
+</p>
 Below is a snippet of code showing some of the features supported by this holyc
 compiler. Namely inheritance, loops, `printf` by using a string and loops. All
 c-like control flows are supported by the compiler.
@@ -69,6 +72,12 @@ U0 ExampleFunction(U0)
 ExampleFunction;
 ```
 
+<p align="center">
+  <img 
+    src="/assets/EtceteraHeader.png?raw=true"
+    alt="alt text"
+    title="etcetera header"/>
+</p>
 ## Compatibility
 Currently this holyc compiler will compile holyc source code to an x86_64 
 compatible binary which has been tested on amd linux and an intel mac.
