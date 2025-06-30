@@ -433,7 +433,7 @@ Ast *findFunctionDecl(Cctrl *cc, char *fname, int len) {
 }
 
 PtrVec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
-    List *var_args = NULL;
+    List *var_args = NULL, *parameter = NULL;
     Ast *ast, *param = NULL;
     AstType *check;
     Lexeme *tok;
@@ -454,20 +454,6 @@ PtrVec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
         } else {
             param = NULL;
         }
-
-        if (tokenPunctIs(tok, ',')) {
-            if (param && param->kind == AST_DEFAULT_PARAM) {
-                ast = param->declinit;
-                ptrVecPush(argv_vec, ast);
-            } else {
-                ptrVecPush(argv_vec, NULL);
-            }
-
-            cctrlTokenGet(cc);
-            tok = cctrlTokenPeek(cc);
-            continue;
-        }
-
         ast = parseExpr(cc,16);
         if (ast == NULL) {
             if (param && param->kind == AST_DEFAULT_PARAM) {
@@ -513,6 +499,12 @@ PtrVec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
                    tok->len, tok->start);
         }
 
+        if (parameter && parameter->next != parameter) {
+            if (param->kind != AST_VAR_ARGS) {
+                parameter = parameter->next;
+                param = parameter->value;
+            }
+        }
         tok = cctrlTokenPeek(cc);
     }
 
