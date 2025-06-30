@@ -451,8 +451,6 @@ PtrVec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
     while (tok && !tokenPunctIs(tok, terminator)) {
         if (params && vecInBounds(params, param_idx)) {
             param = params->entries[param_idx++];
-        } else {
-            param = NULL;
         }
 
         if (tokenPunctIs(tok, ',')) {
