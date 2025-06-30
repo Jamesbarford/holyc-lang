@@ -154,7 +154,7 @@ PtrVec *parseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
         return params;
     }
     cctrlTokenRewind(cc);
-
+    
     while (1) {
         pname = cctrlTokenPeek(cc);
 
@@ -164,7 +164,7 @@ PtrVec *parseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
             var = astVarArgs();
             strMapAdd(cc->localenv,var->argc->lname->data,var->argc);
             strMapAdd(cc->localenv,var->argv->lname->data,var->argv);
-
+            
             ptrVecPush(params, var);
 
             if (cc->tmp_locals) {
@@ -347,7 +347,7 @@ static AstType *parseArrayDimensionsInternal(Cctrl *cc, AstType *base_type) {
                 } else {
                     goto invalid_subscript;
                 }
-
+                
                 Lexeme *le = strMapGet(cc->macro_defs,lname->data);
                 if (le->tk_type != TK_I64) {
                     goto invalid_subscript;
@@ -386,7 +386,7 @@ AstType *parseArrayDimensions(Cctrl *cc, AstType *base_type) {
         return type;
     }
     return base_type;
-}
+} 
 
 /* Calls TokenGet internally so ensure you are 1 token behind the type */
 AstType *parseFullType(Cctrl *cc) {
@@ -451,6 +451,8 @@ PtrVec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
     while (tok && !tokenPunctIs(tok, terminator)) {
         if (params && vecInBounds(params, param_idx)) {
             param = params->entries[param_idx++];
+        } else {
+            param = NULL;
         }
 
         if (tokenPunctIs(tok, ',')) {
@@ -586,7 +588,7 @@ Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
             cctrlTokenRewind(cc);
             peek = cctrlTokenPeek(cc);
         }
-
+        
         cctrlRaiseException(cc,"Function: %.*s() not defined",len,fname);
     }
 
@@ -611,8 +613,8 @@ Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
 }
 
 /* parse either a function call or a variable being used */
-static Ast *parseIdentifierOrFunction(Cctrl *cc,
-                                      char *name,
+static Ast *parseIdentifierOrFunction(Cctrl *cc, 
+                                      char *name, 
                                       int len,
                                       int can_call_function)
 {
@@ -648,8 +650,8 @@ static Ast *parseIdentifierOrFunction(Cctrl *cc,
         cctrlTokenRewind(cc);
         if (can_call_function) {
             /* Function calls with no arguments are 'Function;' */
-            if ((tokenPunctIs(tok,';') || tokenPunctIs(tok,',') ||
-                tokenPunctIs(tok,')'))
+            if ((tokenPunctIs(tok,';') || tokenPunctIs(tok,',') || 
+                tokenPunctIs(tok,')'))  
                     && parseIsFunction(ast)) {
                 if (ast->flags & AST_FLAG_INLINE && !(cc->flags & CCTRL_TRANSPILING)) {
                     if (ast->kind == AST_ASM_FUNC_BIND || ast->kind == AST_ASM_FUNCDEF) {
@@ -754,7 +756,7 @@ static Ast *parsePrimary(Cctrl *cc) {
 
 static int parseGetPriority(Lexeme *tok) {
     switch (tok->i64) {
-    case TK_ARROW:
+    case TK_ARROW: 
     case '.':
     case '(':
         return 1;
@@ -764,8 +766,8 @@ static int parseGetPriority(Lexeme *tok) {
 
     case '!':
     case '~':
-    case TK_PLUS_PLUS:
-    case TK_MINUS_MINUS:
+    case TK_PLUS_PLUS: 
+    case TK_MINUS_MINUS: 
     case TK_PRE_PLUS_PLUS:
     case TK_PRE_MINUS_MINUS:
         return 3;
@@ -781,7 +783,7 @@ static int parseGetPriority(Lexeme *tok) {
     case TK_SHR:
         return 6;
 
-    case TK_LESS_EQU:
+    case TK_LESS_EQU: 
     case TK_GREATER_EQU:
     case '<':
     case '>':
@@ -791,7 +793,7 @@ static int parseGetPriority(Lexeme *tok) {
     case TK_NOT_EQU:
         return 8;
 
-    case '^':
+    case '^': 
         return 9;
     case '&':
         return 10;
@@ -805,15 +807,15 @@ static int parseGetPriority(Lexeme *tok) {
         return 13;
 
     case '=':
-    case TK_ADD_EQU:
-    case TK_SUB_EQU:
-    case TK_MUL_EQU:
-    case TK_DIV_EQU:
-    case TK_MOD_EQU:
-    case TK_AND_EQU:
-    case TK_OR_EQU:
-    case TK_XOR_EQU:
-    case TK_SHL_EQU:
+    case TK_ADD_EQU: 
+    case TK_SUB_EQU: 
+    case TK_MUL_EQU: 
+    case TK_DIV_EQU: 
+    case TK_MOD_EQU: 
+    case TK_AND_EQU: 
+    case TK_OR_EQU:  
+    case TK_XOR_EQU: 
+    case TK_SHL_EQU: 
     case TK_SHR_EQU:
         return 14;
 
@@ -861,14 +863,14 @@ Ast *parseGetClassField(Cctrl *cc, Ast *cls) {
                             tok->start);
     }
 
-    // XXX: This is hacky and only for recusive data types
+    // XXX: This is hacky and only for recusive data types 
     if (type->fields == NULL && cls->kind == AST_DEREF) {
         type = cls->cls->type;
     }
     AstType *field = strMapGetLen(type->fields, tok->start, tok->len);
     if (!field) {
         cctrlRewindUntilStrMatch(cc, tok->start, tok->len, NULL);
-        cctrlRaiseException(cc,"Property: %.*s does not exist on class",
+        cctrlRaiseException(cc,"Property: %.*s does not exist on class", 
                 tok->len, tok->start);
     }
     aoStr *field_name = aoStrDupRaw(tok->start, tok->len);
@@ -915,7 +917,7 @@ Ast *parseCreateBinaryOp(Cctrl *cc, long operation, Ast *left, Ast *right) {
         binop->type = ast_int_type;
     }
     return binop;
-
+    
 }
 
 Ast *parseExpr(Cctrl *cc, int prec) {
@@ -950,7 +952,7 @@ Ast *parseExpr(Cctrl *cc, int prec) {
         }
 
         if (tokenPunctIs(tok,'(')) {
-            /* XXX: Should this check still be here ? Not sure as
+            /* XXX: Should this check still be here ? Not sure as 
              * casting _anything_ makes sense */
             // assertLValue(LHS,cc->lineno);
             AstType *type = parseDeclSpec(cc);
@@ -998,7 +1000,7 @@ Ast *parseExpr(Cctrl *cc, int prec) {
                         astKindToHumanReadable(LHS), ast_str);
             }
         }
-
+        
         next_prec = prec2;
         if (tok->i64 == '=') {
             next_prec++;
@@ -1017,7 +1019,7 @@ Ast *parseExpr(Cctrl *cc, int prec) {
                                  err_lvar,
                                  punct_str,
                                  lexemeTypeToString(peek->tk_type),
-                                 peek->len,
+                                 peek->len, 
                                  peek->start);
         }
 
@@ -1026,7 +1028,7 @@ Ast *parseExpr(Cctrl *cc, int prec) {
             if (!ok) {
                 typeCheckWarn(cc,compound_assign,LHS,RHS);
             }
-            LHS = parseCreateBinaryOp(cc,'=', LHS,
+            LHS = parseCreateBinaryOp(cc,'=', LHS, 
                     parseCreateBinaryOp(cc,compound_assign, LHS, RHS));
         } else {
             if (tok->i64 == '=') {
@@ -1075,7 +1077,7 @@ Ast *parseSizeof(Cctrl *cc) {
 
     /* If we have a string we want the _true_ length of it which as the string
      * is escaped needs to be calculated manually. */
-    long size = 0;
+    long size = 0; 
     if (ast && ast->kind == AST_STRING) {
         size = ast->real_len;
     } else {
@@ -1092,7 +1094,7 @@ Ast *parsePostFixExpr(Cctrl *cc) {
     AstType *type;
     Lexeme *tok,*peek;
 
-    /* parse primary rightly or wrongly, amongst other things, either gets a
+    /* parse primary rightly or wrongly, amongst other things, either gets a 
      * variable or parses a function call. */
     if ((ast = parsePrimary(cc)) == NULL) {
         return NULL;
@@ -1118,7 +1120,7 @@ Ast *parsePostFixExpr(Cctrl *cc) {
                 cctrlTokenExpect(cc,')');
                 ast = astCast(ast,type);
                 continue;
-            } else if (ast->kind == AST_CLASS_REF) {
+            } else if (ast->kind == AST_CLASS_REF) { 
                 int len = strlen(ast->field);
                 PtrVec *argv = parseArgv(cc,ast,')',ast->field,len);
                 ast = astFunctionPtrCall(
@@ -1137,7 +1139,7 @@ Ast *parsePostFixExpr(Cctrl *cc) {
                 char *var_str = astLValueToString(ast,0);
                 cctrlRaiseException(cc,"Pointer expected got a %s `%s %s`",
                                         astTypeKindToHumanReadable(ast->type),
-                                        type_str,
+                                        type_str, 
                                         var_str);
             }
             ast = astUnaryOperator(ast->type->ptr,AST_DEREF,ast);
@@ -1146,7 +1148,7 @@ Ast *parsePostFixExpr(Cctrl *cc) {
             continue;
         }
 
-        if (tokenPunctIs(tok,TK_PLUS_PLUS) ||
+        if (tokenPunctIs(tok,TK_PLUS_PLUS) || 
             tokenPunctIs(tok,TK_MINUS_MINUS)) {
             if (!assertLValue(ast)) {
                 char *ast_str = astLValueToString(ast,0);
@@ -1253,7 +1255,7 @@ Ast *parseUnaryExpr(Cctrl *cc) {
 
         return astUnaryOperator(type, unary_op, operand);
     }
-
+    
     cctrlTokenRewind(cc);
     return parsePostFixExpr(cc);
 }
