@@ -6,7 +6,10 @@
 #include "ast.h"
 #include "cctrl.h"
 #include "cli.h"
+#include "codegen-x64.h"
 #include "compile.h"
+#include "ir-types.h"
+#include "ir.h"
 #include "memory.h"
 #include "x86.h"
 #include "lexer.h"
@@ -45,7 +48,10 @@ AoStr *compileToAsm(Cctrl *cc) {
         return NULL;
     }
 
-    AoStr *asmbuf = asmGenerate(cc);
+    /* Old way of generating code;
+     * AoStr *asmbuf = asmGenerate(cc); */
+    IrProgram *ir_program = irLowerAst(cc);
+    AoStr *asmbuf = x64CodeGen(ir_program);
     return asmbuf;
 }
 

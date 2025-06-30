@@ -1,5 +1,5 @@
 C_COMPILER     ?= gcc
-BUILD_TYPE     ?= Release
+BUILD_TYPE     ?= Debug
 INSTALL_PREFIX ?= /usr/local
 CFLAGS         ?= '-Wextra -Wall -Wpedantic -Wno-implicit-fallthrough'
 
@@ -25,7 +25,8 @@ all:
 		-DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
 		-DCMAKE_INSTALL_PREFIX=$(INSTALL_PREFIX) \
 		-DCMAKE_C_FLAGS=$(CFLAGS) \
-		&& $(MAKE) -C ./build -j2
+		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+		&& $(MAKE) -C ./build -j && cp ./build/compile_commands.json ./src
 
 install:
 	$(MAKE) -C ./build install

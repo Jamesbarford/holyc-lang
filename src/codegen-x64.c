@@ -685,6 +685,10 @@ void x64GenStore(X64Ctx *ctx, IrValue *dest, char *reg) {
         case IR_VALUE_LOCAL:
         case IR_VALUE_PARAM: {
             long offset = (long)mapGet(ctx->var_offsets, dest->name);
+            if (offset == 0) {
+                loggerPanic("No offset for: %s\n",
+                        irValueToString(dest)->data);
+            }
             assert(offset != 0);
             aoStrCatFmt(ctx->buf, "movq %s, %I(%%rbp) # STORE %S\n\t", reg, offset, dest->name);
             break;
@@ -1415,7 +1419,6 @@ void x64GenerateInstruction(X64Ctx *ctx, IrInstr *instr, IrInstr *next_instr) {
     }
 }
 
-
 static int x64ReserveStackSlot(X64Ctx *ctx, IrValue *local, int offset) {
     if (mapGet(ctx->var_offsets, local->name) != NULL) {
         return offset;
@@ -1477,7 +1480,8 @@ static void x64CalculateFunctionStack(X64Ctx *ctx, IrFunction *func) {
             offset = x64ReserveAlloca(ctx, instr, offset);
         } else if (instr->result != NULL) {
             if (instr->result->kind == IR_VALUE_TEMP) {
-                // offset = x64ReserveStackSlot(ctx, instr->result, offset);
+                debug("%s\n",irInstrToString(instr)->data);
+                offset = x64ReserveStackSlot(ctx, instr->result, offset);
             }
         }
     }
