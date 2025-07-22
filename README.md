@@ -135,7 +135,7 @@ options can be displayed by running `hcc --help`
 - `break` and `continue` allowed in loops.
 - You can call any libc code by declaring the prototype with 
   `extern "c" <type> <function_name>`. Then call the function as you usually
-  would. See [here](https://holyc-lang.com/learn-functions.html) for examples.
+  would. See [here](https://holyc-lang.com/docs/language-spec/learn-functions) for examples.
 
 
 ## Control Flow Graph Example
