@@ -43,7 +43,7 @@ static const char *cfgPrintGetLoopColor(int depth) {
 }
 
 typedef struct CfgGraphVizBuilder {
-    aoStr *viz;
+    AoStr *viz;
     CFG *cfg;
     /* Need a counter to graphviz does not merge loops */
     int loop_cnt;
@@ -74,9 +74,9 @@ static void cfgGraphVizBuilderInit(CfgGraphVizBuilder *builder) {
     builder->return_idx = 0;
 }
 
-static aoStr *bbAstArrayToString(PtrVec *ast_array, int ast_count) {
+static AoStr *bbAstArrayToString(PtrVec *ast_array, int ast_count) {
     if (ast_count == 0) return NULL;
-    aoStr *ast_str = aoStrAlloc(256);
+    AoStr *ast_str = aoStrAlloc(256);
     char *lvalue_str;
     for (int i = 0; i < ast_count; ++i) {
         Ast *ast = vecGet(Ast *,ast_array,i);
@@ -91,7 +91,7 @@ static aoStr *bbAstArrayToString(PtrVec *ast_array, int ast_count) {
 
 static void cfgBranchPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     char *fillcolor;
-    aoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size-1);
+    AoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size-1);
     Ast *cond = (Ast *)bb->ast_array->entries[bb->ast_array->size-1];
 
     assert(cond != NULL);
@@ -117,7 +117,7 @@ static void cfgBranchPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
 
 static void cfgDoWhileCondPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     char *fillcolor = "lightpink";
-    aoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size-1);
+    AoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size-1);
     Ast *cond = (Ast *)bb->ast_array->entries[bb->ast_array->size-1];
 
     if (bb->prev->flags & BB_FLAG_LOOP_HEAD) {
@@ -140,7 +140,7 @@ static void cfgDoWhileCondPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
 }
 
 static void cfgLoopPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
-    aoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size);
+    AoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size);
 
     aoStrCatPrintf(builder->viz,
             "    bb%d [shape=record,style=filled,fillcolor=lightgreen,label=\"{\\<bb %d\\>|\n",
@@ -156,7 +156,7 @@ static void cfgLoopPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
 }
 
 static void cfgBreakPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
-    aoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size);
+    AoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size);
 
     aoStrCatPrintf(builder->viz,
             "    bb%d [shape=record,style=filled,fillcolor=violet,label=\"{\\<bb %d\\>\n",
@@ -170,7 +170,7 @@ static void cfgBreakPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
 }
 
 static void cfgDefaultPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
-    aoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size);
+    AoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size);
     aoStrCatPrintf(builder->viz,
             "    bb%d [shape=record,style=filled,fillcolor=lightgrey,label=\"{\\<bb %d\\>",
             bb->block_no,
@@ -201,7 +201,7 @@ static void cfgHeadPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
 }
 
 static void cfgReturnPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
-    aoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size);
+    AoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size);
 
     aoStrCatPrintf(builder->viz,
             "    bb%d [shape=record,style=filled,fillcolor=lightgrey,label=\"{\\<bb %d\\>",
@@ -221,7 +221,7 @@ static void cfgReturnPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
 static void cfgCasePrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     int ast_count = bb->ast_array->size;
     PtrVec *ast_array = bb->ast_array;
-    aoStr *ast_str = aoStrAlloc(256);
+    AoStr *ast_str = aoStrAlloc(256);
     char *lvalue_str;
     Ast *_case = vecGet(Ast *,ast_array,0);
 
@@ -255,10 +255,10 @@ static void cfgCasePrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
 }
 
 static void cfgSwitchPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
-    aoStr *ast_str = aoStrAlloc(256);
+    AoStr *ast_str = aoStrAlloc(256);
     char *lvalue_str;
     
-    aoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size-1);
+    AoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size-1);
     
     Ast *ast = vecGet(Ast *,bb->ast_array,bb->ast_array->size - 1);
     lvalue_str = astLValueToString(ast,(LEXEME_ENCODE_PUNCT|LEXEME_GRAPH_VIZ_ENCODE_PUNCT));
@@ -283,7 +283,7 @@ static void cfgSwitchPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
 }
 
 static void cfgContinuePrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
-    aoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size);
+    AoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size);
     aoStrCatPrintf(builder->viz,
             "    bb%d [shape=record,style=filled,fillcolor=violet,label=\"{\\<bb %d\\>\n",
             bb->block_no,
@@ -691,7 +691,7 @@ static void cfgCreateGraphViz(CfgGraphVizBuilder *builder, CFG *cfg) {
 }
 
 void cfgBuilderWriteToFile(CfgGraphVizBuilder *builder, char *filename) {
-    aoStr *cfg_string = builder->viz;
+    AoStr *cfg_string = builder->viz;
     int fd = open(filename,O_CREAT|O_TRUNC|O_RDWR,0644);
     if (fd == -1) {
         loggerPanic("Failed to open file '%s': %s\n",

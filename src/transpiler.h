@@ -4,6 +4,6 @@
 #include "cli.h"
 #include "cctrl.h"
 
-aoStr *transpileToC(Cctrl *cc, CliArgs *args);
+AoStr *transpileToC(Cctrl *cc, CliArgs *args);
 
 #endif // TRANSPILER_H

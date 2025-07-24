@@ -119,7 +119,7 @@ unsigned long roundUpToNextPowerOf2(unsigned long v);
 StrMap *strMapNew(unsigned long capacity);
 StrMap *strMapNewWithParent(unsigned long capacity, StrMap *parent);
 void *strMapGetLen(StrMap *map, char *key, long key_len);
-void *strMapGetAoStr(StrMap *map, aoStr *key);
+void *strMapGetAoStr(StrMap *map, AoStr *key);
 void *strMapGet(StrMap *map, char *key);
 int strMapAddLen(StrMap *map, char *key, long key_len, void *value);
 int strMapAdd(StrMap *map, char *key, void *value);

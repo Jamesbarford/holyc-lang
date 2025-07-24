@@ -335,7 +335,7 @@ static AstType *parseArrayDimensionsInternal(Cctrl *cc, AstType *base_type) {
                  * feature that likely will never be used */
                 Ast *left = size->left;
                 Ast *right = size->right;
-                aoStr *lname = NULL;
+                AoStr *lname = NULL;
                 int literal;
 
                 if (left->kind == AST_LVAR && right->kind == AST_LITERAL) {
@@ -729,7 +729,7 @@ static Ast *parsePrimary(Cctrl *cc) {
         return ast;
     case TK_STR: {
         long real_len = 0;
-        aoStr *str = aoStrNew();
+        AoStr *str = aoStrNew();
         cctrlTokenRewind(cc);
         /* Concatinate adjacent strings together */
         while ((tok = cctrlTokenGet(cc)) != NULL && tok->tk_type == TK_STR) {
@@ -871,7 +871,7 @@ Ast *parseGetClassField(Cctrl *cc, Ast *cls) {
         cctrlRaiseException(cc,"Property: %.*s does not exist on class", 
                 tok->len, tok->start);
     }
-    aoStr *field_name = aoStrDupRaw(tok->start, tok->len);
+    AoStr *field_name = aoStrDupRaw(tok->start, tok->len);
     return astClassRef(field, cls, aoStrMove(field_name));
 }
 

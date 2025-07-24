@@ -26,7 +26,7 @@ const char *memPoolErrorToString(MemPool *pool) {
 }
 
 char *memSegmentToString(MemSegment *segment) {
-    aoStr *str = aoStrNew();
+    AoStr *str = aoStrNew();
     aoStrCatPrintf(str,
             "MemSegment {\n  id = %u;\n  buffer = %p;\n  allocated = %u;\n}",
             segment->id,segment->buffer,segment->allocated);
@@ -34,7 +34,7 @@ char *memSegmentToString(MemSegment *segment) {
 }
 
 char *memChunkToString(MemChunk *chunk) {
-    aoStr *str = aoStrNew();
+    AoStr *str = aoStrNew();
     aoStrCatPrintf(str,
             "MemChunk {\n"
             "  segment_id = %u;\n"
@@ -51,7 +51,7 @@ char *memChunkToString(MemChunk *chunk) {
  * really for actual use. */
 char *memPoolToString(MemPool *pool) {
     pthread_mutex_lock(&pool->mutex);
-    aoStr *str = aoStrAlloc(2048);
+    AoStr *str = aoStrAlloc(2048);
 
     aoStrCatPrintf(str,"MemPool {\n  segment_count = %u;\n"
                            "  segment_capacity = %u;\n"

@@ -149,10 +149,10 @@ typedef struct Lexeme {
 } Lexeme;
 
 typedef struct LexFile {
-    aoStr *filename; /* name of the file */
+    AoStr *filename; /* name of the file */
     char *ptr; /* Where we are in the file */
     int lineno; /* line number in the file */
-    aoStr *src; /* source */
+    AoStr *src; /* source */
 } LexFile;
 
 typedef struct Lexer {
@@ -186,7 +186,7 @@ Lexeme *lexemeNew(char *start, int len);
 Lexeme *lexemeSentinal(void);
 void lexSetBuiltinRoot(Lexer *l, char *root);
 void lexInit(Lexer *l, char *source, int flag);
-void lexPushFile(Lexer *l, aoStr *filename);
+void lexPushFile(Lexer *l, AoStr *filename);
 int lex(Lexer *l, Lexeme *le);
 Lexeme *lexToken(StrMap *macro_defs, Lexer *l);
 void lexemePrint(Lexeme *le);

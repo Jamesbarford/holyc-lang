@@ -111,14 +111,14 @@ typedef struct Cctrl {
 
     /* When parsing & converting to assembly these keep a reference to the
      * current loop's labels */
-    aoStr *tmp_loop_begin;
-    aoStr *tmp_loop_end;
+    AoStr *tmp_loop_begin;
+    AoStr *tmp_loop_end;
 
     /* Temporary asm function name */
-    aoStr *tmp_asm_fname;
+    AoStr *tmp_asm_fname;
 
     /* Temporary name of the function being parsed */
-    aoStr *tmp_fname;
+    AoStr *tmp_fname;
 
     /* current line number */
     ssize_t lineno;
@@ -160,6 +160,6 @@ __noreturn void cctrlIce(Cctrl *cc, char *fmt, ...);
 Ast *cctrlGetOrSetString(Cctrl *cc, char *str, int len, long real_len);
 void cctrlRewindUntilPunctMatch(Cctrl *cc, long ch, int *_count);
 void cctrlRewindUntilStrMatch(Cctrl *cc, char *str, int len, int *_count);
-aoStr *cctrlMessagePrintF(Cctrl *cc, int severity, char *fmt,...);
+AoStr *cctrlMessagePrintF(Cctrl *cc, int severity, char *fmt,...);
 
 #endif // !CCTRL_H

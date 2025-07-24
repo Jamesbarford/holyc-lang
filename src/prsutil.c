@@ -106,7 +106,7 @@ void assertTokenIsTerminator(Cctrl *cc, Lexeme *tok, long terminator_flags) {
     }
 
     cctrlRewindUntilPunctMatch(cc,tok->i64,NULL);
-    aoStr *info_msg = NULL;
+    AoStr *info_msg = NULL;
     Lexeme *next = cctrlTokenPeek(cc);
     if (tok->line != next->line) {
         ssize_t next = cc->lineno+1;
@@ -119,7 +119,7 @@ void assertTokenIsTerminator(Cctrl *cc, Lexeme *tok, long terminator_flags) {
         cctrlRewindUntilPunctMatch(cc,tok->i64,NULL);
         cctrlTokenGet(cc);
     }
-    aoStr *error_msg = cctrlMessagePrintF(cc,CCTRL_ERROR,"Unexpected %s `%.*s` %s",lexemeTypeToString(tok->tk_type),
+    AoStr *error_msg = cctrlMessagePrintF(cc,CCTRL_ERROR,"Unexpected %s `%.*s` %s",lexemeTypeToString(tok->tk_type),
                                                     tok->len,tok->start,
                                                    assertionTerminatorMessage(cc,
                                                    tok,terminator_flags));
@@ -451,8 +451,8 @@ void assertUniqueSwitchCaseLabels(PtrVec *case_vector, Ast *case_) {
 }
 
 void typeCheckWarn(Cctrl *cc, long op, Ast *expected, Ast *actual) {
-    aoStr *expected_type = astTypeToColorAoStr(expected->type);
-    aoStr *actual_type = astTypeToColorAoStr(actual->type);
+    AoStr *expected_type = astTypeToColorAoStr(expected->type);
+    AoStr *actual_type = astTypeToColorAoStr(actual->type);
     char *actual_str = astToString(actual);
 
 
@@ -486,8 +486,8 @@ void typeCheckReturnTypeWarn(Cctrl *cc, Ast *maybe_func,
     }
 
     char *expected = astTypeToColorString(cc->tmp_rettype);
-    aoStr *got = astTypeToColorAoStr(check);
-    aoStr *ast_str = astLValueToAoStr(retval,0);
+    AoStr *got = astTypeToColorAoStr(check);
+    AoStr *ast_str = astLValueToAoStr(retval,0);
 
 
     char *msg = mprintf(ESC_BOLD"%s unexpected return value '%s' of type '%s' expected '%s'"ESC_CLEAR_BOLD,

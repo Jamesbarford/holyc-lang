@@ -399,7 +399,7 @@ int intMapHas(IntMap *map, long key) {
 }
 
 char *intMapToString(IntMap *map, char *(*stringify_value)(void *)) {
-    aoStr *str = aoStrNew();
+    AoStr *str = aoStrNew();
     unsigned long map_size = map->size;
 
     if (map_size == 0) {
@@ -426,7 +426,7 @@ char *intMapToString(IntMap *map, char *(*stringify_value)(void *)) {
 }
 
 char *intMapKeysToString(IntMap *map) {
-    aoStr *str = aoStrNew();
+    AoStr *str = aoStrNew();
     unsigned long map_size = map->size;
 
     if (map_size == 0) {
@@ -742,7 +742,7 @@ void *strMapGetLen(StrMap *map, char *key, long key_len) {
     return NULL;
 }
 
-void *strMapGetAoStr(StrMap *map, aoStr *key) {
+void *strMapGetAoStr(StrMap *map, AoStr *key) {
     return strMapGetLen(map,key->data,key->len);
 }
 
@@ -959,7 +959,7 @@ void intSetIteratorRelease(IntSetIterator *it) {
 }
 
 char *intSetToString(IntSet *iset) {
-    aoStr *str = aoStrNew();
+    AoStr *str = aoStrNew();
     unsigned long set_size = iset->size;
 
     if (set_size == 0) {

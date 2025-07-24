@@ -12,15 +12,15 @@
 #include "util.h"
 
 typedef struct AsmUnit {
-    aoStr *op1;
-    aoStr *op2;
-    aoStr *op3;
+    AoStr *op1;
+    AoStr *op2;
+    AoStr *op3;
     int op_count;
 } AsmUnit;
 
 /* format the assembly based on how many characters there are for the 
  * mneumonic */
-static inline char *getTabs(aoStr *str) {
+static inline char *getTabs(AoStr *str) {
     switch (str->len) {
         case 2: return "\t\t";
         case 3: return "\t\t";
@@ -29,7 +29,7 @@ static inline char *getTabs(aoStr *str) {
     }
 }
 
-void prsAsmMem(Cctrl *cc, aoStr *buf) {
+void prsAsmMem(Cctrl *cc, AoStr *buf) {
     Lexeme *tok;
     tok = cctrlAsmTokenGet(cc);
     if (tok->tk_type != TK_IDENT) {
@@ -40,7 +40,7 @@ void prsAsmMem(Cctrl *cc, aoStr *buf) {
     aoStrToLowerCase(buf);
 }
 
-void prsAsmOffset(Cctrl *cc, aoStr *buf, Lexeme *tok) {
+void prsAsmOffset(Cctrl *cc, AoStr *buf, Lexeme *tok) {
     if (tok->tk_type != TK_I64) {
         cctrlRaiseException(cc,"Expected TK_I64 type got: %s",lexemeToString(tok));
     }
@@ -55,7 +55,7 @@ void prsAsmOffset(Cctrl *cc, aoStr *buf, Lexeme *tok) {
     aoStrCatFmt(buf, "(%.*s)",tok->len,tok->start);
 }
 
-void prsAsmImm(Cctrl *cc, aoStr *buf, Lexeme *tok) {
+void prsAsmImm(Cctrl *cc, AoStr *buf, Lexeme *tok) {
     Lexeme *next;
     switch (tok->tk_type) {
         case TK_PUNCT:
@@ -107,7 +107,7 @@ void prsAsmImm(Cctrl *cc, aoStr *buf, Lexeme *tok) {
     }
 }
 
-void prsAsmLabel(Cctrl *cc, aoStr *buf) {
+void prsAsmLabel(Cctrl *cc, AoStr *buf) {
     Lexeme *tok = cctrlAsmTokenGet(cc);
     if (!tokenPunctIs(tok,'@')) {
         cctrlRaiseException(cc,": Labels must be: '@@<int>'");
@@ -120,7 +120,7 @@ void prsAsmLabel(Cctrl *cc, aoStr *buf) {
     
     long label_num = tok->i64;
     Lexeme *next = cctrlTokenPeek(cc);
-    aoStr *label = aoStrDup(cc->tmp_asm_fname);
+    AoStr *label = aoStrDup(cc->tmp_asm_fname);
     aoStrToLowerCase(label);
     if (tokenPunctIs(next,':')) {
         aoStrCatFmt(buf, ".%S_%U:",label,label_num);
@@ -131,7 +131,7 @@ void prsAsmLabel(Cctrl *cc, aoStr *buf) {
     aoStrRelease(label);
 }
 
-void prsAsmPunct(Cctrl *cc, Lexeme *tok, aoStr *buf) {
+void prsAsmPunct(Cctrl *cc, Lexeme *tok, AoStr *buf) {
     switch (tok->i64) {
         case '[':
             prsAsmMem(cc,buf);
@@ -157,7 +157,7 @@ void prsAsmPunct(Cctrl *cc, Lexeme *tok, aoStr *buf) {
 
 /* Custom assembly to AT&T */
 Ast *prsAsmToATT(Cctrl *cc, int parse_one) {
-    aoStr *op1 = NULL, *op2 = NULL, *op3 = NULL, *asm_code = NULL, *curblock = NULL, *stdfunc = NULL, *curfunc = NULL;
+    AoStr *op1 = NULL, *op2 = NULL, *op3 = NULL, *asm_code = NULL, *curblock = NULL, *stdfunc = NULL, *curfunc = NULL;
     List *asm_functions;
     Ast *asm_function, *asm_block;
     Lexeme *tok, *next;

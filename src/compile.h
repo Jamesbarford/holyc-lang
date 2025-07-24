@@ -8,8 +8,8 @@
 int compileToAst(Cctrl *cc, CliArgs *args, int lexer_flags);
 void compileToTokens(Cctrl *cc, CliArgs *args, int lexer_flags);
 
-aoStr *compileToAsm(Cctrl *cc);
-void compileAssembleToFile(aoStr *asmbuf, char *filename);
+AoStr *compileToAsm(Cctrl *cc);
+void compileAssembleToFile(AoStr *asmbuf, char *filename);
 void compilePrintAst(Cctrl *cc);
 
 

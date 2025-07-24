@@ -381,7 +381,7 @@ char *lexemeToString(Lexeme *tok) {
     if (!tok) {
         return "(null)";
     }
-    aoStr *str = aoStrNew();
+    AoStr *str = aoStrNew();
     char *tmp;
     switch (tok->tk_type) {
         case TK_COMMENT: {
@@ -562,13 +562,13 @@ char *lexReadfile(char *path, ssize_t *_len) {
     return buf;
 }
 
-void lexPushFile(Lexer *l, aoStr *filename) {
+void lexPushFile(Lexer *l, AoStr *filename) {
     /* We need to save what we are currently lexing and 
      * make the file we've just seen the file we want to lex */
     LexFile *f = (LexFile *)malloc(sizeof(LexFile));
     ssize_t file_len = 0;
     char *src = lexReadfile(filename->data, &file_len);
-    aoStr *src_code = aoStrNew();
+    AoStr *src_code = aoStrNew();
     src_code->data = src;
     src_code->len = file_len;
     src_code->capacity = 0;
@@ -1237,12 +1237,12 @@ error:
     return 0;
 }
 
-int lexHasFile(Lexer *l, aoStr *file) {
+int lexHasFile(Lexer *l, AoStr *file) {
     return strMapGet(l->seen_files,file->data) != NULL;
 }
 
 void lexInclude(Lexer *l) {
-    aoStr *ident, *include_path;
+    AoStr *ident, *include_path;
     Lexeme next;
 
     lex(l, &next);
@@ -1276,7 +1276,7 @@ void lexInclude(Lexer *l) {
 Lexeme *lexDefine(StrMap *macro_defs, Lexer *l) {
     int tk_type,iters;
     Lexeme next,*start,*end,*expanded,*macro;
-    aoStr *ident;
+    AoStr *ident;
     PtrVec *tokens = ptrVecNew();
 
 
@@ -1690,7 +1690,7 @@ void lexReleaseAllFiles(Lexer *l) {
 }
 
 char *lexerReportLine(Lexer *l, ssize_t lineno) {
-    aoStr *buf = aoStrAlloc(256);
+    AoStr *buf = aoStrAlloc(256);
 
     char *ptr = l->cur_file->src->data;
     ssize_t size = l->cur_file->src->len;
