@@ -228,7 +228,7 @@ Ast *prsAsmToATT(Cctrl *cc, int parse_one) {
                         /* Create an ast */
                         asm_function = astAsmFunctionDef(curfunc,curblock);
                         listAppend(asm_functions,asm_function);
-                        if (!strMapAddOrErr(cc->asm_functions, curfunc->data, asm_function)) {
+                        if (!mapAddOrErr(cc->asm_functions, curfunc->data, asm_function)) {
                             cctrlIce(cc, "Already defined assembly function: %s", curfunc->data);
                         }
                         curblock = aoStrNew();
@@ -281,8 +281,7 @@ Ast *prsAsmToATT(Cctrl *cc, int parse_one) {
                                 /* Only a few functions get called as one 
                                  * operation */
                                 aoStrToLowerCase(op1);
-                                if (strMapGetLen(cc->libc_functions,
-                                            op1->data,op1->len) != NULL) {
+                                if (setHasLen(cc->libc_functions, op1->data,op1->len)) {
                                     stdfunc = astNormaliseFunctionName(op1->data);
                                     aoStrCatFmt(curblock,"%S\n",stdfunc);
                                     aoStrRelease(stdfunc);
@@ -298,8 +297,8 @@ Ast *prsAsmToATT(Cctrl *cc, int parse_one) {
                                 int is_call = op1->len == 4 && !strncasecmp(op1->data,str_lit("call"));
 
                                 if (is_call) {
-                                    if (strMapGetAoStr(cc->global_env, op2) != NULL || 
-                                        strMapGetAoStr(cc->libc_functions, op2) != NULL) {
+                                    if (mapGetLen(cc->global_env, op2->data, op2->len) != NULL || 
+                                        setHasLen(cc->libc_functions, op2->data, op2->len)) {
                                         stdfunc = astNormaliseFunctionName(op2->data);
                                         aoStrCatFmt(curblock,"%S\n",stdfunc);
                                         aoStrRelease(stdfunc);
@@ -376,7 +375,7 @@ Ast *prsAsmToATT(Cctrl *cc, int parse_one) {
         aoStrCatLen(asm_code,curblock->data,curblock->len);
         asm_function = astAsmFunctionDef(curfunc,curblock);
         listAppend(asm_functions,asm_function);
-        if (!strMapAddOrErr(cc->asm_functions, curfunc->data, asm_function)) {
+        if (!mapAddOrErr(cc->asm_functions, curfunc->data, asm_function)) {
             cctrlIce(cc, "Already defined assembly function: %s", curfunc->data);
         }
     }

@@ -7,10 +7,10 @@
 #include "arena.h"
 #include "ast.h"
 #include "config.h"
+#include "containers.h"
 #include "list.h"
 #include "lexer.h"
 #include "map.h"
-#include "memory.h"
 #include "util.h"
 
 static Arena ast_arena;
@@ -42,6 +42,19 @@ static Ast *astAlloc(void) {
 static AstType *astTypeAlloc(void) {
     return (AstType *)arenaAlloc(&ast_arena, sizeof(AstType));
 }
+
+void astVecStringify(AoStr *buf, void *_ast) {
+    char *ast_str = astToString((Ast *)_ast);
+    aoStrCatFmt(buf, "%s", ast_str);
+}
+
+/* `Vec<Ast *>` vector does not own the `Ast` pointers */
+static VecType vec_ast_unowned_type = {
+    .stringify = astVecStringify,
+    .match     = NULL,
+    .release   = NULL,
+    .type_str  = "Ast *",
+};
 
 AstType *ast_u8_type = &(AstType){.kind = AST_TYPE_CHAR, .size = 1, .ptr = NULL,.issigned=0};
 AstType *ast_i8_type = &(AstType){.kind = AST_TYPE_CHAR, .size = 1, .ptr = NULL,.issigned=1};
@@ -1013,6 +1026,14 @@ static AoStr *astTypeToAoStrInternal(AstType *type) {
         aoStrCatPrintf(str,str_lit("auto"));
         return str;
 
+    case AST_TYPE_INLINE:
+        aoStrCatPrintf(str,str_lit("inline"));
+        return str;
+
+    case AST_TYPE_VIS_MODIFIER:
+        aoStrCatPrintf(str,str_lit("vis modifier"));
+        return str;
+
     default:
         loggerPanic("Unknown type: %d\n", type->kind);
     }
@@ -1792,6 +1813,12 @@ char *_astToStringRec(Ast *ast, int depth) {
 /* Convert an Ast to a string */
 char *astToString(Ast *ast) {
     return _astToStringRec(ast,0);
+}
+
+AoStr *astToAoStr(Ast *ast) {
+    AoStr *str = aoStrNew();
+    _astToString(str,ast, 0);
+    return str;
 }
 
 /* This can only be used for lvalues */

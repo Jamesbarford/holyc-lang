@@ -432,7 +432,7 @@ StrMap *parseUnionOffsets(Cctrl *cc, int *real_size, List *fields) {
     return fields_dict;
 }
 
-AstType *parseClassOrUnion(Cctrl *cc, StrMap *env,
+AstType *parseClassOrUnion(Cctrl *cc, Map *env,
         int is_class,
         unsigned int (*computeSize)(List *),
         int is_intrinsic)
@@ -444,7 +444,7 @@ AstType *parseClassOrUnion(Cctrl *cc, StrMap *env,
     AstType *prev = NULL, *ref = NULL, *base_class = NULL;
     List *fields = NULL;
     StrMap *fields_dict;
-    cc->localenv = strMapNewWithParent(32, cc->localenv);
+    cc->localenv = cctrlCreateAstMap(cc->localenv);
 
     if (tok->tk_type == TK_IDENT) {
         tag = aoStrDupRaw(tok->start,tok->len);
@@ -458,7 +458,7 @@ AstType *parseClassOrUnion(Cctrl *cc, StrMap *env,
             if (tok->tk_type != TK_IDENT) {
                 cctrlRaiseException(cc, "Expected Identifier for class inheritance");
             }
-            base_class = strMapGetLen(cc->clsdefs,tok->start,tok->len);
+            base_class = mapGetLen(cc->clsdefs,tok->start,tok->len);
             if (base_class == NULL) {
                 cctrlRaiseException(cc,"class %.*s has not been defined\n",
                         tok->len,tok->start);
@@ -473,7 +473,7 @@ AstType *parseClassOrUnion(Cctrl *cc, StrMap *env,
     }
 
     if (tag) {
-        prev = strMapGetLen(env, tag->data, tag->len);
+        prev = mapGetLen(env, tag->data, tag->len);
     }
 
     fields = parseClassOrUnionFields(cc,tag,computeSize,&class_size);
@@ -505,7 +505,7 @@ AstType *parseClassOrUnion(Cctrl *cc, StrMap *env,
     }
     if (!is_class) ref->kind = AST_TYPE_UNION;
     if (tag) {
-        strMapAdd(env,tag->data,ref);
+        mapAdd(env,tag->data,ref);
     }
     return ref;
 }
@@ -607,7 +607,7 @@ Ast *parseDecl(Cctrl *cc) {
         return NULL;
     }
     var = astLVar(type,varname->start,varname->len);
-    if (!strMapAddOrErr(cc->localenv,var->lname->data,var)) {
+    if (!mapAddOrErr(cc->localenv,var->lname->data,var)) {
         cctrlRaiseException(cc,"variable %s already declared",astLValueToString(var,0));
     }
     if (cc->tmp_locals) {
@@ -716,9 +716,9 @@ Ast *parseDesugarArrayLoop(Cctrl *cc, Ast *iteratee, Ast *static_array) {
         iteratee->type = deref_type;
     }
 
-    strMapAddLen(cc->localenv,range_tmp_var->data,
+    mapAddLen(cc->localenv,range_tmp_var->data,
                  range_tmp_var->len,counter_var);
-    strMapAdd(cc->localenv,iteratee->lname->data,iteratee);
+    mapAdd(cc->localenv,iteratee->lname->data,iteratee);
 
     if (cc->tmp_locals) {
         listAppend(cc->tmp_locals,counter_var);
@@ -774,9 +774,9 @@ Ast *parseCreateForRange(Cctrl *cc, Ast *iteratee,
                                range_tmp_var->len);
     Ast *counter = astDecl(counter_var,astI64Type(0));
 
-    strMapAddLen(cc->localenv,range_tmp_var->data,
+    mapAddLen(cc->localenv,range_tmp_var->data,
                  range_tmp_var->len,counter_var);
-    strMapAdd(cc->localenv,iteratee->lname->data,iteratee);
+    mapAdd(cc->localenv,iteratee->lname->data,iteratee);
     if (cc->tmp_locals) {
         listAppend(cc->tmp_locals,counter_var);
         listAppend(cc->tmp_locals,iteratee);
@@ -882,7 +882,7 @@ Ast *parseForLoopInitialiser(Cctrl *cc) {
 
         /* can be : for an auto loop or ';' for a normal loop */
         tok = cctrlTokenPeek(cc); 
-        if (!strMapAddOrErr(cc->localenv,init_var->lname->data,init_var)) {
+        if (!mapAddOrErr(cc->localenv,init_var->lname->data,init_var)) {
             cctrlRaiseException(cc,"variable `%s` already declared!",
                     astLValueToString(init_var,0));
         }
@@ -922,7 +922,7 @@ Ast *parseForStatement(Cctrl *cc) {
     cc->tmp_loop_begin = for_middle;
     cc->tmp_loop_end = for_end;
 
-    cc->localenv = strMapNewWithParent(32, cc->localenv);
+    cc->localenv = cctrlCreateAstMap(cc->localenv);
     forinit = parseForLoopInitialiser(cc);
     //parseOptDeclOrStmt(cc);
 
@@ -971,7 +971,7 @@ Ast *parseWhileStatement(Cctrl *cc) {
     cc->tmp_loop_begin = while_begin;
     cc->tmp_loop_end = while_end;
 
-    cc->localenv = strMapNewWithParent(32, cc->localenv);
+    cc->localenv = cctrlCreateAstMap(cc->localenv);
     whilecond = parseExpr(cc,16);
     cctrlTokenExpect(cc,')');
 
@@ -1003,7 +1003,7 @@ Ast *parseDoWhileStatement(Cctrl *cc) {
     cc->tmp_loop_begin = while_begin;
     cc->tmp_loop_end = while_end;
 
-    cc->localenv = strMapNewWithParent(32, cc->localenv);
+    cc->localenv = cctrlCreateAstMap(cc->localenv);
 
     Lexeme *peek = cctrlTokenPeek(cc);
     if (!parseValidPostControlFlowToken(peek)) {
@@ -1072,7 +1072,7 @@ Ast *parseReturnStatement(Cctrl *cc) {
 
     AstType *ok = astTypeCheck(cc->tmp_rettype,retval,'\0');
     if (!ok) {
-        Ast *func = strMapGet(cc->global_env,cc->tmp_fname->data);
+        Ast *func = mapGet(cc->global_env, cc->tmp_fname->data);
         typeCheckReturnTypeWarn(cc,func,check,retval);
     }
     if (maybe_fn->flags & AST_FLAG_INLINE && !(cc->flags & CCTRL_TRANSPILING)) {
@@ -1274,7 +1274,7 @@ Ast *parseStatement(Cctrl *cc) {
     Lexeme *tok, *peek;
     AoStr *label;
     Ast *ret, *ast;
-    StrMap *env;
+    Map *env;
     tok = cctrlTokenGet(cc);
 
     if (tok->tk_type == TK_KEYWORD) {
@@ -1311,7 +1311,7 @@ Ast *parseStatement(Cctrl *cc) {
                             PUNCT_TERM_SEMI|PUNCT_TERM_COMMA);
 
                     cc->localenv = env;
-                    strMapAdd(env,gvar_ast->gname->data,gvar_ast);
+                    mapAdd(env,gvar_ast->gname->data,gvar_ast);
                     listAppend(cc->ast_list,ast);
                     return ast;
                 }
@@ -1346,7 +1346,7 @@ Ast *parseStatement(Cctrl *cc) {
                     ast = astDecl(gvar_ast,NULL);
                 }
                 cc->localenv = env;
-                strMapAdd(env,gvar_ast->gname->data,gvar_ast);
+                mapAdd(env,gvar_ast->gname->data,gvar_ast);
                 listAppend(cc->ast_list,ast);
                 return ast;
             }
@@ -1435,7 +1435,7 @@ void parseCompoundStatementInternal(Cctrl *cc, Ast *body) {
     Ast *stmt, *var;
     AstType *base_type, *type, *next_type;
     Lexeme *tok, *varname, *peek;
-    cc->localenv = strMapNewWithParent(32, cc->localenv);
+    cc->localenv = cctrlCreateAstMap(cc->localenv);
     tok = NULL;
 
     tok = cctrlTokenPeek(cc);
@@ -1458,7 +1458,7 @@ void parseCompoundStatementInternal(Cctrl *cc, Ast *body) {
                     }
                     type = parseArrayDimensions(cc,next_type);
                     var = astLVar(type,varname->start,varname->len);
-                    if (!strMapAddOrErr(cc->localenv,var->lname->data,var)) {
+                    if (!mapAddOrErr(cc->localenv,var->lname->data,var)) {
                         cctrlRewindUntilStrMatch(cc,var->lname->data,var->lname->len,NULL);
                         cctrlRaiseException(cc,"variable `%s` already declared",
                                 astLValueToString(var,0));
@@ -1466,7 +1466,7 @@ void parseCompoundStatementInternal(Cctrl *cc, Ast *body) {
                 } else {
                     cctrlTokenGet(cc);
                     var = parseFunctionPointer(cc,next_type);
-                    strMapAdd(cc->localenv,var->fname->data,var);
+                    mapAdd(cc->localenv,var->fname->data,var);
                 }
 
                 if (cc->tmp_locals) {
@@ -1541,11 +1541,11 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
                     astMakeFunctionType(rettype, params),
                     asm_fname,asm_fname,params);
 
-            if (!strMapAddOrErr(cc->asm_functions, asm_fname->data, asm_func)) {
+            if (!mapAddOrErr(cc->asm_functions, asm_fname->data, asm_func)) {
                 cctrlIce(cc, "Already defined assembly function: %s", asm_fname->data);
             }
 
-            if (!strMapAddOrErr(cc->global_env, fname_duped->data, asm_func)) {
+            if (!mapAddOrErr(cc->global_env, fname_duped->data, asm_func)) {
                 cctrlIce(cc, "Already defined assembly function: %s as a non Assembly function", asm_fname->data);
             }
 
@@ -1567,18 +1567,18 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
     Ast *func_body = astCompountStatement(body);
     AstType *fn_type = NULL;
 
-    cc->localenv = strMapNewWithParent(32, cc->localenv);
+    cc->localenv = cctrlCreateAstMap(cc->localenv);
     cc->tmp_locals = locals;
 
     /* Upgrade a prototype to an actual function */
-    func = strMapGetLen(cc->global_env,fname,len);
+    func = mapGetLen(cc->global_env, fname, len);
     if (!func) {
         cc->tmp_params = params;
         cc->tmp_rettype = rettype;
         fn_type = astMakeFunctionType(cc->tmp_rettype, params);
         func = astFunction(fn_type,fname,len,params,NULL,locals,
                 has_var_args);
-        strMapAdd(cc->global_env,func->fname->data,func);
+        mapAdd(cc->global_env, func->fname->data, func);
     } else {
         switch (func->kind) {
             case AST_EXTERN_FUNC:
@@ -1639,7 +1639,7 @@ Ast *parseExternFunctionProto(Cctrl *cc, AstType *rettype, char *fname, int len)
     int has_var_args = 0;
     PtrVec *params;
     Lexeme *tok;
-    cc->localenv = strMapNewWithParent(32, cc->localenv);
+    cc->localenv = cctrlCreateAstMap(cc->localenv);
     cc->tmp_locals = NULL;
 
     params = parseParams(cc,')', &has_var_args,1);
@@ -1652,14 +1652,14 @@ Ast *parseExternFunctionProto(Cctrl *cc, AstType *rettype, char *fname, int len)
     AstType *type = astMakeFunctionType(rettype, params);
     func = astFunction(type,fname,len,params,NULL,NULL,0);
     func->kind = AST_EXTERN_FUNC;
-    strMapAdd(cc->global_env,func->fname->data,func);
+    mapAdd(cc->global_env,func->fname->data,func);
     return func;
 }
 
 Ast *parseFunctionOrDef(Cctrl *cc, AstType *rettype, char *fname, int len, int is_inline) {
     int has_var_args = 0;
     cctrlTokenExpect(cc,'(');
-    cc->localenv = strMapNewWithParent(32, cc->localenv);
+    cc->localenv = cctrlCreateAstMap(cc->localenv);
     cc->tmp_locals = listNew();
 
     PtrVec *params = parseParams(cc,')',&has_var_args,1);
@@ -1674,7 +1674,7 @@ Ast *parseFunctionOrDef(Cctrl *cc, AstType *rettype, char *fname, int len, int i
         AstType *type = astMakeFunctionType(rettype, params);
         Ast *fn = astFunction(type,fname,len,params,NULL,NULL,has_var_args);
         fn->kind = AST_FUN_PROTO;
-        strMapAdd(cc->global_env,fn->fname->data,fn);
+        mapAdd(cc->global_env,fn->fname->data,fn);
         return fn;
     }
 }
@@ -1693,7 +1693,7 @@ Ast *parseAsmFunctionBinding(Cctrl *cc) {
     }
 
     asm_fname = aoStrDupRaw(tok->start,tok->len);
-    Ast *asm_blk = strMapGetLen(cc->asm_functions, asm_fname->data, asm_fname->len);
+    Ast *asm_blk = mapGetLen(cc->asm_functions, asm_fname->data, asm_fname->len);
 
     rettype = parseDeclSpec(cc);
 
@@ -1707,7 +1707,7 @@ Ast *parseAsmFunctionBinding(Cctrl *cc) {
         cctrlRaiseException(cc,"line %d: ASM function requires c function name");
     }
     c_fname = aoStrDupRaw(tok->start,tok->len);
-    cc->localenv = strMapNewWithParent(32, cc->localenv);
+    cc->localenv = cctrlCreateAstMap(cc->localenv);
     cctrlTokenExpect(cc,'(');
 
     PtrVec *params = parseParams(cc,')',&has_var_args,0);
@@ -1723,7 +1723,7 @@ Ast *parseAsmFunctionBinding(Cctrl *cc) {
 
     cc->localenv = NULL;
     /* Map a c function to an ASM function */
-    strMapAdd(cc->asm_funcs,c_fname->data,asm_func);
+    mapAdd(cc->asm_funcs,c_fname->data,asm_func);
     cctrlTokenExpect(cc,';');
     if (is_inline) {
         asm_func->flags |= AST_FLAG_INLINE;
@@ -1862,7 +1862,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
                 cctrlTokenExpect(cc,';');
                 *is_global = 1;
                 return ast;
-            } else if ((variable = strMapGetLen(cc->global_env,tok->start, tok->len))) {
+            } else if ((variable = mapGetLen(cc->global_env,tok->start, tok->len))) {
                 cctrlTokenRewind(cc);
                 ast = parseExpr(cc,16);
                 cctrlTokenExpect(cc,';');
@@ -1923,7 +1923,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
             Ast *ast_decl = astDecl(variable,NULL);
 
             listAppend(cc->ast_list,ast_decl);
-            strMapAdd(cc->global_env,variable->gname->data,variable);
+            mapAdd(cc->global_env,variable->gname->data,variable);
             cctrlTokenRewind(cc);
 
             Ast *ast_expr = parseExpr(cc,16); // parseVariableInitialiser(cc,variable,PUNCT_TERM_COMMA|PUNCT_TERM_SEMI);
@@ -1939,7 +1939,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
             return ast_expr;
         } else if (type->kind == AST_TYPE_ARRAY) {
             variable = astGVar(type,name->start,name->len,0);
-            strMapAdd(cc->global_env,variable->gname->data,variable);
+            mapAdd(cc->global_env,variable->gname->data,variable);
             ast = parseVariableInitialiser(cc,variable,PUNCT_TERM_COMMA|PUNCT_TERM_SEMI);
             if (type->kind == AST_TYPE_AUTO) {
                 parseAssignAuto(cc,ast);
@@ -1954,7 +1954,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
         if (tokenPunctIs(tok,';') || tokenPunctIs(tok, ',')) {
             cctrlTokenGet(cc);
             variable = astGVar(type,name->start,name->len,0);
-            strMapAdd(cc->global_env,variable->gname->data,variable);
+            mapAdd(cc->global_env,variable->gname->data,variable);
             return astDecl(variable,NULL);
         }
         cctrlRaiseException(cc,"Cannot handle '%s'",lexemeToString(tok));

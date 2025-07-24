@@ -573,3 +573,110 @@ AoStr *aoStrIntToHumanReadableBytes(long bytes) {
     }
     return str;
 }
+
+/* Murmur hash function modified to return a `unsigned long` */
+static unsigned long murmur(const char *key, unsigned long len, unsigned long seed) {
+    const unsigned char *data = (const unsigned char*)key;
+    const int nblocks = len / 8;
+
+    unsigned long h1 = seed;
+    unsigned long h2 = seed;
+
+    const unsigned long c1 = 0x87c37b91114253d5ULL;
+    const unsigned long c2 = 0x4cf5ad432745937fULL;
+
+#define ROT(x,n1,n2) ((x << n1) | (x >> n2))
+
+    // Body
+    const unsigned long *blocks = (const unsigned long *)(data);
+
+    for (int i = 0; i < nblocks; i++) {
+        unsigned long k1 = blocks[i];
+
+        k1 *= c1; 
+        k1 = ROT(k1, 31 ,33);
+        k1 *= c2; 
+
+        h1 ^= k1;
+        h1 = ROT(h1, 27, 37);
+        h1 += h2;
+        h1 = h1*5 + 0x52dce729;
+
+        h2 ^= k1;
+        h2 = ROT(h2, 41, 23);
+        h2 += h1;
+        h2 = h2*5 + 0x38495ab5;
+    }
+
+    // Tail
+    const unsigned char *tail = (const unsigned char*)(data + nblocks*8);
+    unsigned long k1 = 0;
+
+    switch (len & 7) {
+    case 7: k1 ^= ((unsigned long)tail[6]) << 48;
+    case 6: k1 ^= ((unsigned long)tail[5]) << 40;
+    case 5: k1 ^= ((unsigned long)tail[4]) << 32;
+    case 4: k1 ^= ((unsigned long)tail[3]) << 24;
+    case 3: k1 ^= ((unsigned long)tail[2]) << 16;
+    case 2: k1 ^= ((unsigned long)tail[1]) << 8;
+    case 1: k1 ^= ((unsigned long)tail[0]);
+            k1 *= c1; 
+            k1 = ROT(k1,31,33);
+            k1 *= c2; 
+            h1 ^= k1;
+    case 0:
+            break;
+    }
+
+    // Finalization
+    h1 ^= len;
+    h2 ^= len;
+
+    h1 += h2;
+    h2 += h1;
+
+    // Mixing functions from the 128-bit finalization
+    h1 ^= h1 >> 33;
+    h1 *= 0xff51afd7ed558ccdULL;
+    h1 ^= h1 >> 33;
+    h1 *= 0xc4ceb9fe1a85ec53ULL;
+    h1 ^= h1 >> 33;
+
+    h2 ^= h2 >> 33;
+    h2 *= 0xff51afd7ed558ccdULL;
+    h2 ^= h2 >> 33;
+    h2 *= 0xc4ceb9fe1a85ec53ULL;
+    h2 ^= h2 >> 33;
+
+    h1 += h2;
+
+    // We only need 64 bits, so just return h1
+    return h1;
+#undef ROT
+}
+
+/* Seed for the murmur hash function, this is a meme number but works
+ * surprisingly well */
+#define MURMUR_HASH_SEED (0xBABECAFE69)
+unsigned long cstringMurmur(char *data, long len) {
+    return murmur(data, len, MURMUR_HASH_SEED);
+}
+
+unsigned long aoStrHashFunction(AoStr *str) {
+    return cstringMurmur(str->data, str->len);
+}
+
+size_t aoStrGetLen(AoStr *buf) {
+    return buf->len;
+}
+
+AoStr *aoStrIdentity(AoStr *buf) {
+    return buf;
+}
+
+int aoStrEq(AoStr *b1, AoStr *b2) {
+    if (b1 == b2) return 1;
+    size_t l1 = b1->len;
+    size_t l2 = b2->len;
+    return l1==l2&&!memcmp(b1->data, b2->data, l1);
+}

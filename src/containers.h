@@ -125,6 +125,7 @@ Map *mapNew(unsigned long capacity, MapType *type);
 Map *mapNewWithParent(Map *parent, unsigned long capacity, MapType *type);
 int mapAdd(Map *map, void *key, void *value);
 int mapAddOrErr(Map *map, void *key, void *value);
+int mapAddLen(Map *map, char *key, long key_len, void *value);
 void mapRemove(Map *map, void *key);
 int mapHas(Map *map, void *key);
 int mapHasAll(Map *map, ...);
@@ -140,6 +141,7 @@ void mapIterRelease(MapIter *it);
 AoStr *mapToString(Map *map, char *delimiter);
 AoStr *mapKeysToString(Map *map);
 void mapPrint(Map *map);
+void mapMerge(Map *map1, Map *map2);
 void mapPrintStats(Map *map);
 
 int mapIntKeyMatch(void *a, void *b);
@@ -166,11 +168,13 @@ typedef int (setValueMatch)(void *v1, void *v2);
 typedef unsigned long (setValueHash)(void *value);
 typedef AoStr *(setValueToString)(void *value);
 typedef AoStr *(setValueRelease)(void *value);
+typedef long (setKeyLen)(void *key);
 
 struct SetType {
     setValueMatch *match;
-    setValueToString *stringify;
     setValueHash *hash;
+    setKeyLen* get_key_len;
+    setValueToString *stringify;
     setValueRelease *value_release;
     const char *type;
 };
@@ -178,6 +182,7 @@ struct SetType {
 struct SetNode {
     int free;
     void *key;
+    long key_len;
 };
 
 extern SetType set_aostr_type;
@@ -215,6 +220,7 @@ Set *setNew(unsigned long capacity, SetType *type);
 int setAdd(Set *set, void *key);
 void *setRemove(Set *set, void *key);
 int setHas(Set *set, void *key);
+int setHasLen(Set *set, char *key, long len);
 void *setGetAt(Set *set, long index);
 void setClear(Set *set);
 void setRelease(Set *set);
@@ -234,5 +240,7 @@ Set *setDifference(Set *s1, Set *s2);
 Set *setCopy(Set *set);
 void setPrint(Set *set);
 void setPrintStats(Set *set);
+
+extern SetType set_cstring_type;
 
 #endif

@@ -405,6 +405,7 @@ char *astKindToString(int kind);
 char *astFunctionToString(Ast *func);
 char *astFunctionNameToString(AstType *rettype, char *fname, int len);
 char *astToString(Ast *ast);
+AoStr *astToAoStr(Ast *ast);
 char *astLValueToString(Ast *ast, unsigned long lexme_flags);
 AoStr *astLValueToAoStr(Ast *ast, unsigned long lexeme_flags);
 void astPrint(Ast *ast);

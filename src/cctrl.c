@@ -18,6 +18,65 @@
 #include "util.h"
 #include "version.h"
 
+/* `Map<char *, Ast *>` Map does not own either the key nor the Ast */
+MapType map_cstring_ast_type = {
+    .match           = mapCStringEq,
+    .hash            = mapCStringHash,
+    .get_key_len     = mapCStringLen,
+    .key_to_string   = mapCStringToString,
+    .key_release     = NULL,
+    .value_to_string = (mapValueToString *)astToAoStr, 
+    .value_release   = NULL,
+    .key_type        = "char *",
+    .value_type      = "Ast *",
+};
+
+/* `Map<char *, AstType *>` Map does not own either the key nor the AstType */
+MapType map_cstring_asttype_type = {
+    .match           = mapCStringEq,
+    .hash            = mapCStringHash,
+    .get_key_len     = mapCStringLen,
+    .key_to_string   = mapCStringToString,
+    .key_release     = NULL,
+    .value_to_string = (mapValueToString *)astTypeToColorAoStr,
+    .value_release   = NULL,
+    .key_type        = "char *",
+    .value_type      = "AstType *",
+};
+
+/* `Map<char *, Lexeme *>` Map does not own either the key nor the Lexeme */
+MapType map_cstring_lexeme_type = {
+    .match           = mapCStringEq,
+    .hash            = mapCStringHash,
+    .get_key_len     = mapCStringLen,
+    .key_to_string   = mapCStringToString,
+    .key_release     = NULL,
+    .value_to_string = (mapValueToString *)lexemeToAoStr,
+    .value_release   = NULL,
+    .key_type        = "char *",
+    .value_type      = "Lexeme *",
+};
+
+MapType map_cstring_cstring_type = {
+    .match           = mapCStringEq,
+    .hash            = mapCStringHash,
+    .get_key_len     = mapCStringLen,
+    .key_to_string   = mapCStringToString,
+    .key_release     = NULL,
+    .value_to_string = mapCStringToString,
+    .value_release   = NULL,
+    .key_type        = "char *",
+    .value_type      = "char *",
+};
+
+Map *cctrlCreateLexemeMap(void) {
+    return mapNew(32, &map_cstring_lexeme_type);
+}
+
+Map *cctrlCreateAstMap(Map *parent) {
+    return mapNewWithParent(parent, 32, &map_cstring_ast_type);
+}
+
 static char *x86_registers = "rax,rbx,rcx,rdx,rsi,rdi,rbp,rsp,r8,r9,r10,r11,r12,"
     "r13,r14,r15,cs,ds,es,fs,gs,ss,rip,rflags,st0,st1,st2,st3,st4,st5,st6,st7,"
     "mm0,mm1,mm2,mm3,mm4,mm5,mm6,mm7,xmm0,xmm1,xmm2,xmm3,xmm4,xmm5,xmm6,xmm7,"
@@ -66,23 +125,23 @@ static void cctrlAddBuiltinMacros(Cctrl *cc) {
     long bufsize = sizeof(char)*128;
 
     Lexeme *le = lexemeSentinal();
-    if (IS_BSD)   strMapAdd(cc->macro_defs,"IS_BSD",le);
-    if (IS_LINUX) strMapAdd(cc->macro_defs,"IS_LINUX",le);
+    if (IS_BSD)   mapAdd(cc->macro_defs,"IS_BSD",le);
+    if (IS_LINUX) mapAdd(cc->macro_defs,"IS_LINUX",le);
 
 #ifdef IS_MACOS
     strMapAdd(cc->macro_defs,"IS_MACOS",le);
 #endif
     
     if (IS_X86_64)      {
-        strMapAdd(cc->macro_defs,"IS_X86_64",le);
+        mapAdd(cc->macro_defs,"IS_X86_64",le);
         le = lexemeNew("X86_64",6);
         le->tk_type = TK_STR;
-        strMapAdd(cc->macro_defs,"__ARCH__",le);
+        mapAdd(cc->macro_defs,"__ARCH__",le);
     } else if (IS_ARM_64) {
-        strMapAdd(cc->macro_defs,"IS_ARM_64",le);
+        mapAdd(cc->macro_defs,"IS_ARM_64",le);
         le = lexemeNew("ARM_64",6);
         le->tk_type = TK_STR;
-        strMapAdd(cc->macro_defs,"__ARCH__",le);
+        mapAdd(cc->macro_defs,"__ARCH__",le);
     }
 
     struct timeval tm;
@@ -101,14 +160,14 @@ static void cctrlAddBuiltinMacros(Cctrl *cc) {
     time[len] = '\0';
     le = lexemeNew(time,len);
     le->tk_type = TK_STR;
-    strMapAdd(cc->macro_defs,"__TIME__",le);
+    mapAdd(cc->macro_defs,"__TIME__",le);
 
     len = snprintf(date,bufsize,"%04d/%02d/%02d",
             ptm->tm_year+1900,ptm->tm_mon+1,ptm->tm_mday);
     date[len] = '\0';
     le = lexemeNew(date,len);
     le->tk_type = TK_STR;
-    strMapAdd(cc->macro_defs,"__DATE__",le);
+    mapAdd(cc->macro_defs,"__DATE__",le);
 
     len = snprintf(time_stamp,bufsize,
             "%d-%02d-%02d %02d:%02d:%02d",
@@ -118,22 +177,22 @@ static void cctrlAddBuiltinMacros(Cctrl *cc) {
     date[len] = '\0';
     le = lexemeNew(time_stamp,len);
     le->tk_type = TK_STR;
-    strMapAdd(cc->macro_defs,"__TIMESTAMP__",le);
+    mapAdd(cc->macro_defs,"__TIMESTAMP__",le);
 
 #ifdef HCC_LINK_SQLITE3
     le = lexemeSentinal();
-    strMapAdd(cc->macro_defs,"__HCC_LINK_SQLITE3__",le);
+    mapAdd(cc->macro_defs,"__HCC_LINK_SQLITE3__",le);
 #endif
 
     le = lexemeNew((char *)cctrlGetVersion(),len);
     le->tk_type = TK_STR;
-    strMapAdd(cc->macro_defs,"__HCC_VERSION__",le);
+    mapAdd(cc->macro_defs,"__HCC_VERSION__",le);
 }
 
-Cctrl *ccMacroProcessor(StrMap *macro_defs) {
+Cctrl *ccMacroProcessor(Map *macro_defs) {
     Cctrl *cc = (Cctrl *)malloc(sizeof(Cctrl));
     cc->macro_defs = macro_defs;
-    cc->strs = strMapNew(32);
+    cc->strs = mapNew(32, &map_cstring_ast_type);
     cc->ast_list = NULL;
     return cc;
 }
@@ -143,17 +202,17 @@ Cctrl *cctrlNew(void) {
     Cctrl *cc = (Cctrl *)malloc(sizeof(Cctrl));
 
     cc->flags = 0;
-    cc->global_env = strMapNew(32);
-    cc->clsdefs = strMapNew(32);
-    cc->uniondefs = strMapNew(32);
-    cc->symbol_table = strMapNew(32);
-    cc->asm_funcs = strMapNew(32);
-    cc->macro_defs = strMapNew(32);
-    cc->x86_registers = strMapNew(32);
-    cc->libc_functions = strMapNew(32);
-    cc->strs = strMapNew(32);
+    cc->global_env = mapNew(32, &map_cstring_ast_type);
+    cc->clsdefs = mapNew(32, &map_cstring_asttype_type);
+    cc->uniondefs = mapNew(32, &map_cstring_asttype_type);
+    cc->symbol_table = mapNew(32, &map_cstring_asttype_type);
+    cc->asm_funcs = mapNew(32, &map_cstring_ast_type);
+    cc->macro_defs = cctrlCreateLexemeMap();
+    cc->x86_registers = setNew(32, &set_cstring_type);
+    cc->libc_functions = setNew(32, &set_cstring_type);
+    cc->strs = mapNew(32, &map_cstring_ast_type);
     cc->asm_blocks = listNew();
-    cc->asm_functions = strMapNew(32);
+    cc->asm_functions = mapNew(32, &map_cstring_ast_type);
     cc->ast_list = listNew();
     cc->initalisers = listNew();
     cc->initaliser_locals = listNew();
@@ -174,16 +233,16 @@ Cctrl *cctrlNew(void) {
         AoStr *upper_reg = aoStrDup(str_array[i]);
         aoStrToUpperCase(upper_reg);
         char *reg = aoStrMove(str_array[i]);
-        strMapAdd(cc->x86_registers,reg,reg);
+        setAdd(cc->x86_registers,reg);
         reg = aoStrMove(upper_reg);
-        strMapAdd(cc->x86_registers,reg,reg);
+        setAdd(cc->x86_registers,reg);
     }
     free(str_array);
 
     str_array = aoStrSplit(libc_functions,',',&len);
     for (int i = 0; i < len; ++i) {
         char *libc_func = aoStrMove(str_array[i]);
-        strMapAdd(cc->libc_functions,libc_func,libc_func);
+        setAdd(cc->libc_functions,libc_func);
     }
     free(str_array);
 
@@ -194,16 +253,17 @@ Cctrl *cctrlNew(void) {
         type->issigned = built_in->issigned;
         type->kind = built_in->kind;
         type->ptr = NULL;
-        strMapAdd(cc->symbol_table, built_in->name, type);
+        mapAdd(cc->symbol_table, built_in->name, type);
     }
 
+    mapPrint(cc->symbol_table);
     cctrlAddBuiltinMacros(cc);
 
     Ast *cmd_args = astGlobalCmdArgs();
     listAppend(cc->ast_list,cmd_args->argc);
     listAppend(cc->ast_list,cmd_args->argv);
-    strMapAdd(cc->global_env,"argc",cmd_args->argc->declvar);
-    strMapAdd(cc->global_env,"argv",cmd_args->argv->declvar);
+    mapAdd(cc->global_env,"argc",cmd_args->argc->declvar);
+    mapAdd(cc->global_env,"argv",cmd_args->argv->declvar);
     return cc;
 }
 
@@ -343,7 +403,7 @@ Lexeme *cctrlMaybeExpandToken(Cctrl *cc, Lexeme *token) {
         return token;
     }
 
-    Lexeme *maybe_define = strMapGetLen(cc->macro_defs, token->start, token->len);
+    Lexeme *maybe_define = mapGetLen(cc->macro_defs, token->start, token->len);
     if (maybe_define) {
         if (cc->flags & CCTRL_PASTE_DEFINES) {
             return token;
@@ -408,9 +468,8 @@ Lexeme *cctrlAsmTokenGet(Cctrl *cc) {
         /* If the token is a register as defined by the string at the top of 
          * this file we may it AT&T syntax `RAX` -> `%rax`. Which saves a 
          * massive headache in prsasm.c */
-        char *x86_register = NULL;
-        if ((x86_register = strMapGetLen(cc->x86_registers,token->start,token->len))) {
-            char *reg = mprintFmt("%%%s",x86_register);
+        if (setHasLen(cc->x86_registers,token->start,token->len)) {
+            char *reg = mprintFmt("%%%.*s", token->len, token->start);
             char *ptr = reg;
             while (*ptr) {
                 *ptr = tolower(*ptr);
@@ -914,20 +973,20 @@ Ast *cctrlGetVar(Cctrl *cc, char *varname, int len) {
     Ast *ast_var;
     Lexeme *tok;
 
-    if (cc->localenv && (ast_var = strMapGetLen(cc->localenv, varname, len)) != NULL) {
+    if (cc->localenv && (ast_var = mapGetLen(cc->localenv, varname, len)) != NULL) {
         return ast_var;
     }
 
-    if ((ast_var = strMapGetLen(cc->global_env, varname, len)) != NULL) {
+    if ((ast_var = (Ast *)mapGetLen(cc->global_env, varname, len)) != NULL) {
         return ast_var;
     }
 
-    if ((ast_var = strMapGetLen(cc->asm_funcs, varname, len)) != NULL) {
+    if ((ast_var = mapGetLen(cc->asm_funcs, varname, len)) != NULL) {
         return ast_var;
     }
 
     /* Expand a macro definition */
-    if ((tok = strMapGetLen(cc->macro_defs, varname, len)) != NULL) {
+    if ((tok = mapGetLen(cc->macro_defs, varname, len)) != NULL) {
         switch (tok->tk_type) {
         case TK_I64:
             if (cc->flags & CCTRL_PASTE_DEFINES) {
@@ -955,14 +1014,14 @@ Ast *cctrlGetVar(Cctrl *cc, char *varname, int len) {
 AstType *cctrlGetKeyWord(Cctrl *cc, char *name, int len) {
     AstType *type;
     assert(name != NULL);
-    if ((type = strMapGetLen(cc->symbol_table,name,len)) != NULL) {
+    if ((type = mapGetLen(cc->symbol_table, name, len)) != NULL) {
         return type;
     }
     /* Classes are types */
-    if ((type = strMapGetLen(cc->clsdefs,name,len)) != NULL) {
+    if ((type = mapGetLen(cc->clsdefs,name,len)) != NULL) {
         return type;
     }
-    if ((type = strMapGetLen(cc->uniondefs,name,len)) != NULL) {
+    if ((type = mapGetLen(cc->uniondefs,name,len)) != NULL) {
         return type;
     }
     return NULL;
@@ -974,7 +1033,7 @@ int cctrlIsKeyword(Cctrl *cc, char *name, int len) {
 
 void cctrlSetCommandLineDefines(Cctrl *cc, List *defines_list) {
     listForEach(defines_list) {
-        strMapAdd(cc->macro_defs,(char*)it->value,lexemeSentinal());
+        mapAdd(cc->macro_defs,(char*)it->value,lexemeSentinal());
     }
 }
 
@@ -982,10 +1041,10 @@ void cctrlSetCommandLineDefines(Cctrl *cc, List *defines_list) {
 Ast *cctrlGetOrSetString(Cctrl *cc, char *str, int len, long real_len) {
     Ast *ast_str = NULL;
     if (cc->strs) {
-        ast_str = strMapGetLen(cc->strs, str, len);
+        ast_str = mapGetLen(cc->strs, str, len);
         if (!ast_str) {
             ast_str = astString(str,len,real_len);
-            strMapAddLen(cc->strs,ast_str->sval->data,len,ast_str);
+            mapAddLen(cc->strs, ast_str->sval->data, len, ast_str);
         }
     } else {
         ast_str = astString(str,len,real_len);

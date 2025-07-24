@@ -276,7 +276,8 @@ Set *setNew(unsigned long capacity, SetType *type) {
     set->mask = set->capacity - 1;
     set->threashold = (unsigned long)(MAP_LOAD * set->capacity);
 
-    set->entries = (SetNode *)calloc(set->capacity, sizeof(SetNode));
+    set->entries = (SetNode *)malloc(set->capacity * sizeof(SetNode));
+    memset(set->entries, 1, set->capacity * sizeof(SetNode));
     set->indexes = vecNew(&vec_unsigned_long_type);
     set->type = type;
     return set;
@@ -287,7 +288,7 @@ static unsigned long setGetNextIdx(Set *set, void *key, int *_is_free) {
     unsigned long idx = hash & set->mask;
     SetNode *cur = &set->entries[idx];
 
-    while (!cur->free) { 
+    while (!cur->free) {
         if (cur && set->type->match(cur->key, key)) {
             *_is_free = 0;
             return idx;
@@ -316,6 +317,23 @@ static unsigned long setGetIdx(Set *set, void *key, int *_ok) {
     return 0;
 }
 
+static unsigned long setGetCStringIdx(Set *set, char *key, long len, int *_ok) {
+    unsigned long hash = cstringMurmur(key, len);
+    unsigned long idx = hash & set->mask;
+    SetNode *cur = &set->entries[idx];
+
+    while (!cur->free) { 
+        if (cur->key_len == len && !memcmp(cur->key, key, len)) {
+            *_ok = 1;
+            return idx;
+        }
+        idx = (idx + 1) & set->mask;
+        cur = &set->entries[idx];
+    }
+    *_ok = 0;
+    return 0;
+}
+
 static int setResize(Set *set) {
     unsigned long new_capacity = set->capacity << 1;
     unsigned long new_mask = new_capacity - 1;
@@ -323,7 +341,7 @@ static int setResize(Set *set) {
     Vec *old_index_entries = set->indexes;
     int indexes_size = set->indexes->size;
 
-    SetNode *new_entries = (SetNode *)malloc(new_capacity * sizeof(SetNode *));
+    SetNode *new_entries = (SetNode *)malloc(new_capacity * sizeof(SetNode));
     /* OOM */
     if (new_entries == NULL) {
         return 0;
@@ -339,9 +357,7 @@ static int setResize(Set *set) {
     memset(new_entries, 1, new_capacity * sizeof(SetNode  *));
 
     set->mask = new_mask;
-#ifndef DEBUG
     set->entries = new_entries;
-#endif
     set->capacity = new_capacity;
 
     long new_size = 0;
@@ -354,6 +370,7 @@ static int setResize(Set *set) {
             SetNode *new_node = &new_entries[idx];
             new_node->free = 0;
             new_node->key = old->key;
+            new_node->key_len = old->key_len;
             new_indexes[new_size] = (void *)(long)new_idx;
             /* keep track of the new size of this Set */
             new_size++;
@@ -375,11 +392,6 @@ static int setResize(Set *set) {
 
 int setAdd(Set *set, void *key) {
     if (set->size >= set->threashold) {
-#ifdef DEBUG
-        AoStr *stats = setStats(set);
-        printf("%s\n",stats->data);
-        aoStrRelease(stats);
-#endif
         if (!setResize(set)) {
             /* This means we have run out of memory */
             return 0;
@@ -394,11 +406,12 @@ int setAdd(Set *set, void *key) {
         SetNode *node = &set->entries[idx];
         node->free = 0;
         node->key = key;
+        node->key_len = set->type->get_key_len(key);
         vecPushInt(set->indexes, idx);
         set->size++;
         return 1;
     }
-    
+
     return 0;
 }
 
@@ -412,6 +425,7 @@ void *setRemove(Set *set, void *key) {
         void *key = node->key;
         node->free = 1;
         node->key = NULL;
+        node->key_len = 0;
         set->size--;
         return key;
     }
@@ -421,6 +435,12 @@ void *setRemove(Set *set, void *key) {
 int setHas(Set *set, void *key) {
     int ok = 0;
     setGetIdx(set, key, &ok);
+    return ok == 1;
+}
+
+int setHasLen(Set *set, char *key, long len) {
+    int ok = 0;
+    setGetCStringIdx(set, key, len, &ok);
     return ok == 1;
 }
 
@@ -608,6 +628,7 @@ AoStr *setAoStrPassThrough(AoStr *value) {
 SetType set_aostr_type = {
     .match         = (setValueMatch *)aoStrEq,
     .hash          = (setValueHash *)aoStrHashFunction,
+    .get_key_len   = (setKeyLen *)aoStrGetLen,
     .stringify     = (setValueToString *)setAoStrPassThrough,
     .value_release = NULL,
     .type          = "AoStr *",
@@ -616,9 +637,19 @@ SetType set_aostr_type = {
 SetType set_int_type = {
     .match         = (mapKeyMatch *)mapIntKeyMatch,
     .hash          = (mapKeyHash *)mapIntKeyHash,
+    .get_key_len   = mapIntKeyLen,
     .stringify     = (mapKeyToString *)mapIntToString,
     .value_release = NULL,
     .type          = "long",
+};
+
+SetType set_cstring_type = {
+    .match         = mapCStringEq,
+    .hash          = mapCStringHash,
+    .get_key_len   = mapCStringLen,
+    .stringify     = mapCStringToString,
+    .value_release = NULL,
+    .type          = "char *",
 };
 
 /*================ Generic Map Implementation ===============================*/
@@ -735,7 +766,7 @@ static unsigned long mapGetCStringNextIdx(Map *map,
          * add*/
         else if (cur->flags & MAP_FLAG_TAKEN &&
                  cur->key_len == key_len &&
-                 map->type->match(cur->key, key))
+                 !memcmp(cur->key, key, key_len))
         {
             *_is_free = 0;
             break;
@@ -759,7 +790,7 @@ static unsigned long mapGetCStringIdx(Map *map,
     /* We are only interested in TAKEN nodes */
     while (cur->flags & MAP_FLAG_TAKEN) {
         /* We know something is in this position as it is flagged as TAKEN */
-        if (cur->key_len == key_len && map->type->match(cur->key, key)) {
+        if (cur->key_len == key_len && !memcmp(cur->key, key, key_len)) {
             *_ok = 1;
             return idx;
         }
@@ -784,7 +815,7 @@ static int mapResize(Map *map) {
         return 0;
     }
 
-    MapNode *new_entries = (MapNode *)calloc(new_capacity, sizeof(MapNode));
+    MapNode *new_entries = (MapNode *)malloc(new_capacity * sizeof(MapNode));
     /* OOM */
     if (new_entries == NULL) {
         free(new_indexes);
@@ -792,12 +823,12 @@ static int mapResize(Map *map) {
     }
 
     map->mask = new_mask;
-#ifndef DEBUG
     map->entries = new_entries;
-#endif
     map->capacity = new_capacity;
     long new_size = 0;
     int is_cstring_key = strncmp(map->type->key_type, str_lit("char *"));
+
+    memset(map->entries, 1, sizeof(MapNode) * map->capacity);
 
     /* Keeps insertion order, and does not have to go over the capacity of 
      * the hashtable which should in theory be faster, but there are more 
@@ -891,10 +922,6 @@ int mapAdd(Map *map, void *key, void *value) {
 
 int mapAddOrErr(Map *map, void *key, void *value) {
     if (map->size >= map->threashold) {
-#ifdef DEBUG
-        mapPrintStats(map);
-        loggerPanic("Map capacity of %lu is not big enough!\n", map->capacity);
-#endif
         if (!mapResize(map)) {
             /* This means we have run out of memory */
             return 0;
@@ -1041,11 +1068,18 @@ void mapClear(Map *map) {
     vecClear(map->indexes);
 }
 
+void mapMerge(Map *map1, Map *map2) {
+    MapIter it;
+    mapIterInit(map2, &it);
+    while (mapIterNext(&it)) {
+        MapNode *n = it.node;
+        mapAddOrErr(map1, n->key, n->value);
+    }
+}
+
 void mapRelease(Map *map) {
     mapClear(map);
-#ifndef DEBUG
     free(map->entries);
-#endif
     vecRelease(map->indexes);
     free(map);
 }
@@ -1204,16 +1238,16 @@ void mapAoStrRelease(void *s) {
 }
 
 unsigned long mapCStringHashLen(void *str, long len) {
-    AoStr s = {.data = str, .len = len, .capacity = 0};
-    return aoStrHashFunction(&s);
+    return cstringMurmur(str, len);
 }
 
 unsigned long mapCStringHash(void *str) {
-    AoStr s = {.data = str, .len = strlen(str), .capacity = 0};
-    return aoStrHashFunction(&s);
+    long len = strlen(str);
+    return cstringMurmur(str, len);
 }
 
 int mapCStringEq(void *s1, void *s2) {
+    if (s1 == NULL || s2 == NULL) return 0;
     long s1_len = strlen(s1);
     long s2_len = strlen(s2);
     return s1_len == s2_len && !memcmp(s1, s2, s1_len);

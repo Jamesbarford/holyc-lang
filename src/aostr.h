@@ -50,4 +50,10 @@ char *mprintVa(const char *fmt, va_list ap, ssize_t *_len);
 AoStr *aoStrError(void);
 AoStr *aoStrIntToHumanReadableBytes(long bytes);
 
+unsigned long aoStrHashFunction(AoStr *buf);
+unsigned long cstringMurmur(char *data, long len);
+size_t aoStrGetLen(AoStr *buf);
+AoStr *aoStrIdentity(AoStr *buf);
+int aoStrEq(AoStr *b1, AoStr *b2);
+
 #endif

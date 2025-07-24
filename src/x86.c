@@ -9,6 +9,7 @@
 #include "ast.h"
 #include "cctrl.h"
 #include "config.h"
+#include "containers.h"
 #include "lexer.h"
 #include "list.h"
 #include "map.h"
@@ -1210,7 +1211,7 @@ void asmPrepFuncCallArgs(Cctrl *cc, AoStr *buf, Ast *funcall) {
     Ast *tmp, *fun, *arg, *funparam;
 
     flags = 0;
-    fun = strMapGetLen(cc->global_env,funcall->fname->data,funcall->fname->len);
+    fun = mapGetLen(cc->global_env,funcall->fname->data,funcall->fname->len);
     funarg = funparam = NULL;
 
     /* This should exist on the AST */
@@ -2155,9 +2156,11 @@ void asmDataSection(Cctrl *cc, AoStr *buf) {
     aoStrCatFmt(buf, "sign_bit:\n\t.quad 0x8000000000000000\n");
     aoStrCatFmt(buf, "one_dbl:\n\t.double 1.0\n");
 
-    StrMapIterator *it = strMapIteratorNew(cc->strs);
-    StrMapNode *n = NULL;
-    while ((n = strMapNext(it)) != NULL) {
+    MapIter it;
+    mapIterInit(cc->strs, &it);
+
+    while (mapIterNext(&it)) {
+        MapNode *n = it.node;
         Ast *ast = (Ast *)n->value;
         assert(ast->kind == AST_STRING);
         aoStrCatFmt(buf,
@@ -2166,7 +2169,6 @@ void asmDataSection(Cctrl *cc, AoStr *buf) {
                 ast->slabel, ast->sval);
     }
     aoStrPutChar(buf,'\t');
-    strMapIteratorRelease(it);
 } 
 
 void asmStoreParam(AoStr *buf, int *_ireg, int *_arg, int offset) {

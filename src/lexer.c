@@ -14,13 +14,12 @@
 #include "map.h"
 #include "lexer.h"
 #include "list.h"
-#include "memory.h"
 #include "prslib.h"
 #include "prsutil.h"
 #include "util.h"
 
 /* prototypes */
-int lexPreProcIf(StrMap *macro_defs, Lexer *l);
+int lexPreProcIf(Map *macro_defs, Lexer *l);
 
 static Arena lexeme_arena;
 static int lexeme_arena_init = 0;
@@ -377,40 +376,40 @@ char *lexemePunctToStringWithFlags(long op, unsigned long flags) {
     else                             return lexemePunctToString(op);
 }
 
-char *lexemeToString(Lexeme *tok) {
+AoStr *lexemeToAoStr(Lexeme *tok) {
     if (!tok) {
-        return "(null)";
+        return aoStrPrintf("(null)");
     }
     AoStr *str = aoStrNew();
     char *tmp;
     switch (tok->tk_type) {
         case TK_COMMENT: {
             aoStrCatPrintf(str,"TK_COMMENT    %.*s",tok->len,tok->start);
-            return aoStrMove(str);
+            return str;
         }
         case TK_IDENT:
             aoStrCatPrintf(str,"TK_IDENT      %.*s",tok->len,tok->start);
-            return aoStrMove(str);
+            return str;
         case TK_CHAR_CONST:
             aoStrCatPrintf(str,"TK_CHAR_CONST %x",tok->i64);
-            return aoStrMove(str);
+            return str;
         case TK_PUNCT: {
             tmp = lexemePunctToString(tok->i64);
             aoStrCatPrintf(str,"TK_PUNCT      %s", tmp);
-            return aoStrMove(str);
+            return str;
         }
         case TK_I64:
             aoStrCatPrintf(str,"TK_I64        %lld",tok->i64);
-            return aoStrMove(str);
+            return str;
         case TK_F64:
             aoStrCatPrintf(str,"TK_F64        %g",tok->f64);
-            return aoStrMove(str);
+            return str;
         case TK_STR:
             aoStrCatPrintf(str,"TK_STR        \"%.*s\"",tok->len,tok->start);
-            return aoStrMove(str);
+            return str;
         case TK_EOF:
             aoStrCatPrintf(str,"TK_EOF");
-            return aoStrMove(str);
+            return str;
         case TK_KEYWORD: {
             aoStrCatPrintf(str,"TK_KEYWORD    ");
             switch (tok->i64) {
@@ -477,11 +476,15 @@ char *lexemeToString(Lexeme *tok) {
                     loggerPanic("line %d: Keyword %.*s: is not defined\n",
                             tok->line,tok->len,tok->start);
             }
-            return aoStrMove(str);
+            return str;
         }
     }
     loggerPanic("line %d: Unexpected type %s |%.*s|\n",
             tok->line,lexemeTypeToString(tok->tk_type),tok->len,tok->start);
+}
+
+char *lexemeToString(Lexeme *tok) {
+    return aoStrMove(lexemeToAoStr(tok));
 }
 
 /* Print one lexeme */
@@ -1273,7 +1276,7 @@ void lexInclude(Lexer *l) {
     }
 }
 
-Lexeme *lexDefine(StrMap *macro_defs, Lexer *l) {
+Lexeme *lexDefine(Map *macro_defs, Lexer *l) {
     int tk_type,iters;
     Lexeme next,*start,*end,*expanded,*macro;
     AoStr *ident;
@@ -1296,7 +1299,7 @@ Lexeme *lexDefine(StrMap *macro_defs, Lexer *l) {
         if (!lex(l,&next)) break;
 
         if (next.tk_type == TK_IDENT) {
-            if ((macro = strMapGetLen(macro_defs,next.start,next.len)) != NULL) {
+            if ((macro = mapGetLen(macro_defs,next.start,next.len)) != NULL) {
                 ptrVecPush(tokens, lexemeCopy(macro));
                 tk_type = macro->tk_type;
                 continue;
@@ -1324,7 +1327,7 @@ Lexeme *lexDefine(StrMap *macro_defs, Lexer *l) {
     end = tokens->entries[tokens->size - 1];
 
     if (start == end && iters == 1) {
-        strMapAdd(macro_defs,ident->data,lexemeSentinal());
+        mapAdd(macro_defs,ident->data,lexemeSentinal());
         ptrVecRelease(tokens);
         return NULL;
     }
@@ -1336,7 +1339,7 @@ Lexeme *lexDefine(StrMap *macro_defs, Lexer *l) {
 
     if (start == end) {
         expanded = lexemeCopy(start);
-        strMapAdd(macro_defs,ident->data,expanded);
+        mapAdd(macro_defs,ident->data,expanded);
     } else {
         /* XXX: this is a hack as sometimes the number of tokens in a macro 
          * will exceed what is allowed in our ring buffer. Conveniently PtrVec 
@@ -1376,7 +1379,7 @@ Lexeme *lexDefine(StrMap *macro_defs, Lexer *l) {
             }
             expanded->line = start->line;
         }
-        strMapAdd(macro_defs,ident->data,expanded);
+        mapAdd(macro_defs,ident->data,expanded);
     }
     for (ssize_t i = 0; i < tokens->size; ++i) {
         lexemeFree(tokens->entries[i]);
@@ -1385,7 +1388,7 @@ Lexeme *lexDefine(StrMap *macro_defs, Lexer *l) {
     return expanded;
 }
 
-void lexUndef(StrMap *macro_defs, Lexer *l) {
+void lexUndef(Map *macro_defs, Lexer *l) {
     Lexeme next;
     char tmp[256];
     int tmp_len = 0;
@@ -1397,10 +1400,10 @@ void lexUndef(StrMap *macro_defs, Lexer *l) {
     tmp_len = snprintf(tmp,sizeof(tmp),"%.*s",
             next.len,next.start);
     tmp[tmp_len] = '\0';
-    strMapRemove(macro_defs,tmp);
+    mapRemove(macro_defs,tmp);
 }
 
-int lexPreProcIf(StrMap *macro_defs, Lexer *l) {
+int lexPreProcIf(Map *macro_defs, Lexer *l) {
     int tk_type,iters,should_collect;
     PtrVec *macro_tokens;
     Lexeme next,*start,*end,*expanded,*macro;
@@ -1430,7 +1433,7 @@ int lexPreProcIf(StrMap *macro_defs, Lexer *l) {
         } 
 
         if (next.tk_type == TK_IDENT) {
-            if ((macro = strMapGetLen(macro_defs,next.start,next.len)) != NULL) {
+            if ((macro = mapGetLen(macro_defs,next.start,next.len)) != NULL) {
                 ptrVecPush(macro_tokens,lexemeCopy(macro));
                 tk_type = macro->tk_type;
             }
@@ -1494,7 +1497,7 @@ int lexPreProcIf(StrMap *macro_defs, Lexer *l) {
 }
 
 /* Decide if we should collect tokens or not */
-int lexPreProcBoolean(Lexer *l, StrMap *macro_defs, Lexeme *le) {
+int lexPreProcBoolean(Lexer *l, Map *macro_defs, Lexeme *le) {
     Lexeme next,*macro;
 
     switch (le->i64) {
@@ -1512,7 +1515,7 @@ int lexPreProcBoolean(Lexer *l, StrMap *macro_defs, Lexeme *le) {
 
         case KW_PP_IF_DEF: {
             lex(l,&next);
-            if ((macro = strMapGetLen(macro_defs,next.start,next.len)) != NULL) {
+            if ((macro = mapGetLen(macro_defs,next.start,next.len)) != NULL) {
                 l->collecting = 1;
                 l->skip_else = 1;
                 return 1;
@@ -1525,7 +1528,7 @@ int lexPreProcBoolean(Lexer *l, StrMap *macro_defs, Lexeme *le) {
 
         case KW_PP_IF_NDEF: {
             lex(l,&next);
-            if ((macro = strMapGetLen(macro_defs,next.start,next.len)) == NULL) {
+            if ((macro = mapGetLen(macro_defs,next.start,next.len)) == NULL) {
                 l->collecting = 0;
                 l->skip_else = 1;
                 return 1;
@@ -1549,7 +1552,7 @@ int lexPreProcBoolean(Lexer *l, StrMap *macro_defs, Lexeme *le) {
         case KW_PP_ELIF_DEF: {
             if (l->skip_else) return 0;
             lex(l,&next);
-            if ((macro = strMapGetLen(macro_defs,next.start,next.len)) != NULL) {
+            if ((macro = mapGetLen(macro_defs,next.start,next.len)) != NULL) {
                 l->collecting = 1;
                 l->skip_else = 1;
                 return 1;
@@ -1576,7 +1579,7 @@ int lexPreProcBoolean(Lexer *l, StrMap *macro_defs, Lexeme *le) {
     }
 }
 
-Lexeme *lexToken(StrMap *macro_defs, Lexer *l) {
+Lexeme *lexToken(Map *macro_defs, Lexer *l) {
     Lexeme le,next,*copy;
 
     macro_proccessor->macro_defs = macro_defs;

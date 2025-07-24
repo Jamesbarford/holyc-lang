@@ -4,6 +4,7 @@
 #include <sys/types.h>
 
 #include "aostr.h"
+#include "containers.h"
 #include "map.h"
 #include "list.h"
 
@@ -188,13 +189,14 @@ void lexSetBuiltinRoot(Lexer *l, char *root);
 void lexInit(Lexer *l, char *source, int flag);
 void lexPushFile(Lexer *l, AoStr *filename);
 int lex(Lexer *l, Lexeme *le);
-Lexeme *lexToken(StrMap *macro_defs, Lexer *l);
+Lexeme *lexToken(Map *macro_defs, Lexer *l);
 void lexemePrint(Lexeme *le);
 char *lexemeTypeToString(int tk_type);
 char *lexemePunctToString(long op);
 char *lexemePunctToStringWithFlags(long op, unsigned long flags);
 char *lexemePunctToEncodedString(long op);
 char *lexemeToString(Lexeme *tok);
+AoStr *lexemeToAoStr(Lexeme *tok);
 void lexReleaseAllFiles(Lexer *l);
 int tokenPunctIs(Lexeme *tok, long ch);
 int tokenIdentIs(Lexeme *tok, char *ident, int len);

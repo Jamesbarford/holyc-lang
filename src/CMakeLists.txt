@@ -47,6 +47,7 @@ set(SOURCES
     cfg-print.c
     cfg.c
     cli.c
+    containers.c
     compile.c
     lexer.c
     list.c
@@ -72,6 +73,7 @@ set(HEADERS
     cli.h
     compile.h
     config.h
+    containers.h
     lexer.h
     list.h
     map.h

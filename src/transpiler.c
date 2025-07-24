@@ -7,7 +7,6 @@
 #include "aostr.h"
 #include "ast.h"
 #include "cctrl.h"
-#include "compile.h"
 #include "lexer.h"
 #include "list.h"
 #include "map.h"
@@ -615,7 +614,7 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
         break;
     
     case AST_ASM_FUNCALL: {
-        Ast *asm_stmt = strMapGet(ctx->cc->asm_functions, ast->fname->data);
+        Ast *asm_stmt = mapGet(ctx->cc->asm_functions, ast->fname->data);
         char *substitution_name = transpileGetFunctionSub(ast->fname->data,
                                                           ast->fname->len);
         AoStr *asm_fname = asm_stmt ? asm_stmt->fname : ast->fname;
@@ -1347,19 +1346,20 @@ static void transpileFields(TranspileCtx *ctx,
     strMapIteratorRelease(it);
 }
 
-void transpileClassDefinitions(Cctrl *cc, TranspileCtx *ctx, StrMap *built_in_types) {
-    StrMapIterator *it = strMapIteratorNew(cc->clsdefs);
-    StrMapNode *n = NULL;
+void transpileClassDefinitions(Cctrl *cc, TranspileCtx *ctx, Map *built_in_types) {
     AoStr *buf = ctx->buf;
     ssize_t indent = 4;
     StrMap *seen = strMapNew(32);
+    MapIter it;
+    mapIterInit(cc->clsdefs, &it);
 
-    while ((n = strMapNext(it)) != NULL) {
+    while (mapIterNext(&it)) {
+        MapNode *n = it.node;
         if (!transpileCtxShouldEmitType(ctx, n->key, n->key_len)) {
             continue;
         }
         
-        if (strMapGetLen(built_in_types,n->key,n->key_len)) {
+        if (mapGetLen(built_in_types,n->key,n->key_len)) {
             if (!strMapGetLen(ctx->used_types, n->key,n->key_len)) {
                 continue;
             }
@@ -1375,17 +1375,18 @@ void transpileClassDefinitions(Cctrl *cc, TranspileCtx *ctx, StrMap *built_in_ty
         transpileFields(ctx,cls->fields,seen,n->key,buf,&indent);
         aoStrCatFmt(buf, "} %s;\n\n", n->key);
     }
-    strMapIteratorRelease(it);
     strMapRelease(seen);
 }
 
 void transpileUnionDefinitions(Cctrl *cc, TranspileCtx *ctx) {
-    StrMapIterator *it = strMapIteratorNew(cc->uniondefs);
-    StrMapNode *n = NULL;
     ssize_t indent = 4;
     AoStr *buf = ctx->buf;
     StrMap *seen = strMapNew(32);
-    while ((n = strMapNext(it)) != NULL) {
+    MapIter it;
+    mapIterInit(cc->clsdefs, &it);
+
+    while (mapIterNext(&it)) {
+        MapNode *n = it.node;
         if (!transpileCtxShouldEmitType(ctx, n->key, n->key_len)) {
             continue;
         }
@@ -1400,15 +1401,16 @@ void transpileUnionDefinitions(Cctrl *cc, TranspileCtx *ctx) {
         transpileFields(ctx,cls->fields,seen,n->key,buf,&indent);
         aoStrCatFmt(buf, "} %s;\n\n", n->key);
     }
-    strMapIteratorRelease(it);
     strMapRelease(seen);
 }
 
 void transpileDefines(Cctrl *cc, TranspileCtx *ctx) {
     AoStr *buf = ctx->buf;
-    StrMapIterator *it = strMapIteratorNew(cc->macro_defs);
-    StrMapNode *n = NULL;
-    while ((n = strMapNext(it)) != NULL) {
+    MapIter it;
+    mapIterInit(cc->macro_defs, &it);
+
+    while (mapIterNext(&it)) {
+        MapNode *n = it.node;
         Lexeme *tok = (Lexeme *)n->value;
         if (!transpileCtxShouldEmitDefine(ctx, n->key, n->key_len)) {
             continue;
@@ -1433,7 +1435,6 @@ void transpileDefines(Cctrl *cc, TranspileCtx *ctx) {
         }
 
     }
-    strMapIteratorRelease(it);
 }
 
 AoStr *transpileFunction(Ast *fn, TranspileCtx *ctx) {
@@ -1486,7 +1487,7 @@ char *transpileFormatAsmLine(Cctrl *cc, char *line) {
 
             /* If we have a HC function name use that rather than the raw 
              * assembly function name */
-            Ast *maybe_asm_fn = strMapGet(cc->asm_functions, tmp_fname);
+            Ast *maybe_asm_fn = mapGet(cc->asm_functions, tmp_fname);
             if (maybe_asm_fn) {
                 AoStr *name = astNormaliseFunctionName(maybe_asm_fn->fname->data);
                 len = snprintf(buffer,sizeof(buffer),"call %s", name->data);
@@ -1623,7 +1624,7 @@ void transpileAstList(Cctrl *cc, TranspileCtx *ctx) {
             aoStrRepeatChar(ctx->buf, '\n', 2);
             strMapAdd(seen, ast->fname->data, ast);
         } else if (ast->kind == AST_ASM_FUNC_BIND) {
-            Ast *asm_stmt = strMapGet(cc->asm_functions, ast->asmfname->data);
+            Ast *asm_stmt = mapGet(cc->asm_functions, ast->asmfname->data);
             if (asm_stmt) {
                 if (strMapGet(seen, ast->asmfname->data) != NULL) continue;
                 AoStr *asm_func = transpileAsmFunction(cc, ast, asm_stmt, ctx);
@@ -1657,8 +1658,8 @@ AoStr *transpileToC(Cctrl *cc, CliArgs *args) {
     transpileInitMaps();
     
     cc->flags |= (CCTRL_SAVE_ANONYMOUS|CCTRL_PASTE_DEFINES|CCTRL_PRESERVE_SIZEOF|CCTRL_TRANSPILING);
-    StrMap *built_in_types = strMapNew(32);
-    StrMap *clsdefs = cc->clsdefs;
+    Map *built_in_types = mapNew(32, &map_cstring_asttype_type);
+    Map *clsdefs = cc->clsdefs;
 
     AoStr *builtin_path = aoStrPrintf("%s/include/tos.HH", args->install_dir);
     char *root = mprintf("%s/include",args->install_dir);
@@ -1678,7 +1679,7 @@ AoStr *transpileToC(Cctrl *cc, CliArgs *args) {
     lexPushFile(l,aoStrDupRaw(args->infile,strlen(args->infile)));
     cctrlInitParse(cc,l);
     cc->clsdefs = clsdefs;
-    strMapMerge(clsdefs, built_in_types);
+    mapMerge(clsdefs, built_in_types);
     parseToAst(cc);
     lexReleaseAllFiles(l);
     listRelease(l->files,NULL);

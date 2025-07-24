@@ -13,7 +13,6 @@
 #include "map.h"
 #include "prsutil.h"
 #include "prslib.h"
-#include "util.h"
 
 static AstType *parseArrayDimensionsInternal(Cctrl *cc, AstType *base_type);
 Ast *parseSubscriptExpr(Cctrl *cc, Ast *ast);
@@ -162,8 +161,8 @@ PtrVec *parseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
         if (tokenPunctIs(pname, TK_ELLIPSIS)) {
             cctrlTokenGet(cc);
             var = astVarArgs();
-            strMapAdd(cc->localenv,var->argc->lname->data,var->argc);
-            strMapAdd(cc->localenv,var->argv->lname->data,var->argv);
+            mapAdd(cc->localenv,var->argc->lname->data,var->argc);
+            mapAdd(cc->localenv,var->argv->lname->data,var->argv);
             
             ptrVecPush(params, var);
 
@@ -195,7 +194,7 @@ PtrVec *parseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
                     type = astMakePointerType(type->ptr);
                 }
                 var = parseFunctionPointer(cc,type);
-                if (!strMapAddOrErr(cc->localenv,var->fname->data,var)) {
+                if (!mapAddOrErr(cc->localenv,var->fname->data,var)) {
                     cctrlRaiseException(cc,"variable %s already declared",
                             astLValueToString(var,0));
                 }
@@ -245,7 +244,7 @@ PtrVec *parseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
         if (tokenPunctIs(tok, '=')) {
             var = parseDefaultFunctionParam(cc,var);
             if (store) {
-                if (!strMapAddOrErr(cc->localenv,var->declvar->lname->data,var)) {
+                if (!mapAddOrErr(cc->localenv,var->declvar->lname->data,var)) {
                     cctrlRaiseException(cc,"variable %s already declared",
                             astLValueToString(var,0));
                 }
@@ -253,7 +252,7 @@ PtrVec *parseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
             tok = cctrlTokenGet(cc);
         } else {
             if (store) {
-                if (!strMapAddOrErr(cc->localenv,var->lname->data,var)) {
+                if (!mapAddOrErr(cc->localenv,var->lname->data,var)) {
                         cctrlRaiseException(cc,"variable %s already declared",
                             astLValueToString(var,0));
                 }
@@ -348,7 +347,7 @@ static AstType *parseArrayDimensionsInternal(Cctrl *cc, AstType *base_type) {
                     goto invalid_subscript;
                 }
                 
-                Lexeme *le = strMapGet(cc->macro_defs,lname->data);
+                Lexeme *le = mapGet(cc->macro_defs,lname->data);
                 if (le->tk_type != TK_I64) {
                     goto invalid_subscript;
                 }
@@ -415,17 +414,17 @@ void parseDeclInternal(Cctrl *cc, Lexeme **tok, AstType **type) {
 
 Ast *findFunctionDecl(Cctrl *cc, char *fname, int len) {
     Ast *decl;
-    if ((decl = strMapGetLen(cc->global_env,fname,len)) != NULL) {
+    if ((decl = mapGetLen(cc->global_env,fname,len)) != NULL) {
         if (decl->kind == AST_FUNC ||
             decl->kind == AST_EXTERN_FUNC ||
             decl->kind == AST_FUN_PROTO || decl->kind == AST_ASM_FUNC_BIND) {
             return decl;
         }
-    } else if (cc->localenv && (decl = strMapGetLen(cc->localenv,fname,len)) != NULL) {
+    } else if (cc->localenv && (decl = mapGetLen(cc->localenv,fname,len)) != NULL) {
         if (decl->kind == AST_FUNPTR || decl->kind == AST_LVAR) {
             return decl;
         }
-    } else if ((decl = strMapGetLen(cc->asm_funcs,fname,len)) != NULL) {
+    } else if ((decl = mapGetLen(cc->asm_funcs,fname,len)) != NULL) {
         /* Assembly function */
         return decl;
     }

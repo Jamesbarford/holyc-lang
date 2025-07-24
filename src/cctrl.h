@@ -6,6 +6,7 @@
 #include "aostr.h"
 #include "ast.h"
 #include "config.h"
+#include "containers.h"
 #include "map.h"
 #include "lexer.h"
 
@@ -44,41 +45,41 @@ typedef struct Cctrl {
     unsigned long flags;
     /* The global environment for user defined types, functions and global
      * variables */
-    StrMap *global_env;
+    Map *global_env;
 
     /* key words defined in the language */
-    StrMap *symbol_table;
+    Map *symbol_table;
 
     /* Class definitions */
-    StrMap *clsdefs;
+    Map *clsdefs;
 
     /* Union definitions */
-    StrMap *uniondefs;
+    Map *uniondefs;
 
     /* Local environment for a function */
-    StrMap *localenv;
+    Map *localenv;
 
     /* assembly functions that have been bound to HC, this is the HC 
      * name, not the assembly name */
-    StrMap *asm_funcs;
+    Map *asm_funcs;
 
     /* Macro definitions */
-    StrMap *macro_defs;
+    Map *macro_defs;
 
     /* Registers */
-    StrMap *x86_registers;
+    Set *x86_registers;
 
     /* libc function names */
-    StrMap *libc_functions;
+    Set *libc_functions;
 
     /* Assembly function name to assembly block mapping */
-    StrMap *asm_functions;
+    Map *asm_functions;
 
     /* asm blocks */
     List *asm_blocks;
 
     /* Strings */
-    StrMap *strs;
+    Map *strs;
 
     /* The Ast Tree */
     List *ast_list;
@@ -132,10 +133,15 @@ typedef struct Cctrl {
     Lexer *lexer_;
 } Cctrl;
 
+/* `Map<char *, Ast *>` Map does not own either the key nor the Ast */
+extern MapType map_cstring_ast_type;
+/* `Map<char *, Ast *>` Map does not own either the key nor the Ast */
+extern MapType map_cstring_asttype_type;
+
 /* Instantiate a new compiler control struct */
 Cctrl *cctrlNew(void);
 /* Slimmed down Cctrl, for expanding macros */
-Cctrl *ccMacroProcessor(StrMap *macro_defs);
+Cctrl *ccMacroProcessor(Map *macro_defs);
 Lexeme *cctrlTokenGet(Cctrl *cc);
 Lexeme *cctrlAsmTokenGet(Cctrl *cc);
 Lexeme *cctrlTokenPeek(Cctrl *cc);
@@ -161,5 +167,8 @@ Ast *cctrlGetOrSetString(Cctrl *cc, char *str, int len, long real_len);
 void cctrlRewindUntilPunctMatch(Cctrl *cc, long ch, int *_count);
 void cctrlRewindUntilStrMatch(Cctrl *cc, char *str, int len, int *_count);
 AoStr *cctrlMessagePrintF(Cctrl *cc, int severity, char *fmt,...);
+
+Map *cctrlCreateAstMap(Map *parent);
+Map *cctrlCreateLexemeMap(void);
 
 #endif // !CCTRL_H
