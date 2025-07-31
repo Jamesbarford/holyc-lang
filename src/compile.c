@@ -39,23 +39,21 @@ void compilePrintAst(Cctrl *cc) {
     }
 }
 
-aoStr *compileToAsm(Cctrl *cc) {
+AoStr *compileToAsm(Cctrl *cc) {
     if (cc->ast_list == NULL) {
         loggerWarning("Create AST before compiling AST\n");
         return NULL;
     }
 
-    aoStr *asmbuf = asmGenerate(cc);
+    AoStr *asmbuf = asmGenerate(cc);
     return asmbuf;
 }
 
 void compileToTokens(Cctrl *cc, CliArgs *args, int lexer_flags) {
     Lexer *l = (Lexer *)globalArenaAllocate(sizeof(Lexer));
-    StrMap *seen_files = strMapNew(32);
     char *root_dir = mprintf("%s/include/", args->install_dir);
 
     lexInit(l,NULL,CCF_PRE_PROC|lexer_flags);
-    l->seen_files = seen_files;
     l->lineno = 1;
     lexSetBuiltinRoot(l,root_dir);
 
@@ -66,12 +64,12 @@ void compileToTokens(Cctrl *cc, CliArgs *args, int lexer_flags) {
         lexemePrint(token);
     }
 
-    strMapRelease(seen_files);
+    setRelease(l->seen_files);
 }
 
 int compileToAst(Cctrl *cc, CliArgs *args, int lexer_flags) {
     Lexer *l = (Lexer *)globalArenaAllocate(sizeof(Lexer));
-    aoStr *builtin_path = aoStrPrintf("%s/include/tos.HH", args->install_dir);
+    AoStr *builtin_path = aoStrPrintf("%s/include/tos.HH", args->install_dir);
     char *root_dir = mprintf("%s/include/", args->install_dir);
 
     lexInit(l,NULL,CCF_PRE_PROC|lexer_flags);

@@ -10,10 +10,8 @@
 #include "cctrl.h"
 #include "lexer.h"
 #include "list.h"
-#include "map.h"
 #include "prsutil.h"
 #include "prslib.h"
-#include "util.h"
 
 static AstType *parseArrayDimensionsInternal(Cctrl *cc, AstType *base_type);
 Ast *parseSubscriptExpr(Cctrl *cc, Ast *ast);
@@ -110,7 +108,7 @@ AstType *parseFunctionPointerType(Cctrl *cc,
     *fnptr_name_len = fname->len;
     cctrlTokenExpect(cc,')');
     cctrlTokenExpect(cc,'(');
-    PtrVec *params = parseParams(cc,')',&has_var_args,0);
+    Vec *params = parseParams(cc,')',&has_var_args,0);
     return astMakeFunctionType(rettype,params);
 }
 
@@ -141,8 +139,8 @@ Ast *parseDefaultFunctionParam(Cctrl *cc, Ast *var) {
     return astFunctionDefaultParam(var,init);
 }
 
-PtrVec *parseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
-    PtrVec *params = ptrVecNew();
+Vec *parseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
+    Vec *params = astVecNew();
 
     Lexeme *tok, *pname;
     AstType *type;
@@ -162,10 +160,10 @@ PtrVec *parseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
         if (tokenPunctIs(pname, TK_ELLIPSIS)) {
             cctrlTokenGet(cc);
             var = astVarArgs();
-            strMapAdd(cc->localenv,var->argc->lname->data,var->argc);
-            strMapAdd(cc->localenv,var->argv->lname->data,var->argv);
+            mapAdd(cc->localenv,var->argc->lname->data,var->argc);
+            mapAdd(cc->localenv,var->argv->lname->data,var->argv);
             
-            ptrVecPush(params, var);
+            vecPush(params, var);
 
             if (cc->tmp_locals) {
                 listAppend(cc->tmp_locals, var->argc);
@@ -195,14 +193,14 @@ PtrVec *parseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
                     type = astMakePointerType(type->ptr);
                 }
                 var = parseFunctionPointer(cc,type);
-                if (!strMapAddOrErr(cc->localenv,var->fname->data,var)) {
+                if (!mapAddOrErr(cc->localenv,var->fname->data,var)) {
                     cctrlRaiseException(cc,"variable %s already declared",
                             astLValueToString(var,0));
                 }
                 if (cc->tmp_locals) {
                     listAppend(cc->tmp_locals, var);
                 }
-                ptrVecPush(params, var);
+                vecPush(params, var);
 
                 tok = cctrlTokenGet(cc);
                 if (tokenPunctIs(tok, '=')) {
@@ -223,7 +221,7 @@ PtrVec *parseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
                 if (cc->tmp_locals) {
                     listAppend(cc->tmp_locals, var);
                 }
-                ptrVecPush(params, var);
+                vecPush(params, var);
 
                 if (tokenPunctIs(pname, terminator)) {
                     return params;
@@ -245,7 +243,7 @@ PtrVec *parseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
         if (tokenPunctIs(tok, '=')) {
             var = parseDefaultFunctionParam(cc,var);
             if (store) {
-                if (!strMapAddOrErr(cc->localenv,var->declvar->lname->data,var)) {
+                if (!mapAddOrErr(cc->localenv,var->declvar->lname->data,var)) {
                     cctrlRaiseException(cc,"variable %s already declared",
                             astLValueToString(var,0));
                 }
@@ -253,7 +251,7 @@ PtrVec *parseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
             tok = cctrlTokenGet(cc);
         } else {
             if (store) {
-                if (!strMapAddOrErr(cc->localenv,var->lname->data,var)) {
+                if (!mapAddOrErr(cc->localenv,var->lname->data,var)) {
                         cctrlRaiseException(cc,"variable %s already declared",
                             astLValueToString(var,0));
                 }
@@ -264,7 +262,7 @@ PtrVec *parseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
             listAppend(cc->tmp_locals, var);
         }
 
-        ptrVecPush(params, var);
+        vecPush(params, var);
 
         if (tokenPunctIs(tok,terminator)) {
             return params;
@@ -335,7 +333,7 @@ static AstType *parseArrayDimensionsInternal(Cctrl *cc, AstType *base_type) {
                  * feature that likely will never be used */
                 Ast *left = size->left;
                 Ast *right = size->right;
-                aoStr *lname = NULL;
+                AoStr *lname = NULL;
                 int literal;
 
                 if (left->kind == AST_LVAR && right->kind == AST_LITERAL) {
@@ -348,7 +346,7 @@ static AstType *parseArrayDimensionsInternal(Cctrl *cc, AstType *base_type) {
                     goto invalid_subscript;
                 }
                 
-                Lexeme *le = strMapGet(cc->macro_defs,lname->data);
+                Lexeme *le = mapGet(cc->macro_defs,lname->data);
                 if (le->tk_type != TK_I64) {
                     goto invalid_subscript;
                 }
@@ -415,50 +413,50 @@ void parseDeclInternal(Cctrl *cc, Lexeme **tok, AstType **type) {
 
 Ast *findFunctionDecl(Cctrl *cc, char *fname, int len) {
     Ast *decl;
-    if ((decl = strMapGetLen(cc->global_env,fname,len)) != NULL) {
+    if ((decl = mapGetLen(cc->global_env,fname,len)) != NULL) {
         if (decl->kind == AST_FUNC ||
             decl->kind == AST_EXTERN_FUNC ||
             decl->kind == AST_FUN_PROTO || decl->kind == AST_ASM_FUNC_BIND) {
             return decl;
         }
-    } else if (cc->localenv && (decl = strMapGetLen(cc->localenv,fname,len)) != NULL) {
+    } else if (cc->localenv && (decl = mapGetLen(cc->localenv,fname,len)) != NULL) {
         if (decl->kind == AST_FUNPTR || decl->kind == AST_LVAR) {
             return decl;
         }
-    } else if ((decl = strMapGetLen(cc->asm_funcs,fname,len)) != NULL) {
+    } else if ((decl = mapGetLen(cc->asm_funcs,fname,len)) != NULL) {
         /* Assembly function */
         return decl;
     }
     return NULL;
 }
 
-PtrVec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
+Vec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
     List *var_args = NULL;
     Ast *ast, *param = NULL;
     AstType *check;
     Lexeme *tok;
-    PtrVec *params = NULL;
+    Vec *params = NULL;
     int param_idx = 0;
 
     if (decl) {
         params = decl->params;
     }
 
-    PtrVec *argv_vec = ptrVecNew();
+    Vec *argv_vec = astVecNew();
 
     tok = cctrlTokenPeek(cc);
 
     while (tok && !tokenPunctIs(tok, terminator)) {
-        if (params && vecInBounds(params, param_idx)) {
+        if (params && vecGetAt(params, param_idx)) {
             param = params->entries[param_idx++];
         }
 
         if (tokenPunctIs(tok, ',')) {
             if (param && param->kind == AST_DEFAULT_PARAM) {
                 ast = param->declinit;
-                ptrVecPush(argv_vec, ast);
+                vecPush(argv_vec, ast);
             } else {
-                ptrVecPush(argv_vec, NULL);
+                vecPush(argv_vec, NULL);
             }
 
             cctrlTokenGet(cc);
@@ -475,7 +473,7 @@ PtrVec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
 
         if (param != NULL && param->kind == AST_VAR_ARGS) {
             if (decl && decl->kind == AST_EXTERN_FUNC) {
-                ptrVecPush(argv_vec,ast);
+                vecPush(argv_vec,ast);
             } else {
                 /* Will merge this to the end of the arguments list */
                 if (var_args == NULL) {
@@ -493,7 +491,7 @@ PtrVec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
                             expected,got,len,fname);
                 }
             }
-            ptrVecPush(argv_vec,ast);
+            vecPush(argv_vec,ast);
         }
 
         tok = cctrlTokenGet(cc);
@@ -516,10 +514,9 @@ PtrVec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
 
     if (var_args) {
         /* set the argument count and merge lists */
-        ptrVecPush(argv_vec,astI64Type(listCount(var_args)));
+        vecPush(argv_vec,astI64Type(listCount(var_args)));
         listForEach(var_args) {
-
-            ptrVecPush(argv_vec,(Ast*)it->value);
+            vecPush(argv_vec,(Ast*)it->value);
         }
     }
 
@@ -530,7 +527,7 @@ PtrVec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
     return argv_vec;
 }
 
-Ast *parseInlineFunctionCall(Cctrl *cc, Ast *fn, PtrVec *argv) {
+Ast *parseInlineFunctionCall(Cctrl *cc, Ast *fn, Vec *argv) {
     List *stmts = listNew();
     List *fn_body = listCopy(fn->body->stms);
     if (fn->params->size == argv->size) {
@@ -560,14 +557,14 @@ Ast *parseInlineFunctionCall(Cctrl *cc, Ast *fn, PtrVec *argv) {
 Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
     AstType *rettype = NULL;
     Ast *maybe_fn = findFunctionDecl(cc,fname,len);
-    PtrVec *argv = parseArgv(cc,maybe_fn,terminator,fname,len);
+    Vec *argv = parseArgv(cc,maybe_fn,terminator,fname,len);
 
     if (maybe_fn) {
         rettype = maybe_fn->type->rettype;
         if (maybe_fn->flags & AST_FLAG_INLINE && !(cc->flags & CCTRL_TRANSPILING)) {
             if (maybe_fn->kind == AST_ASM_FUNC_BIND || maybe_fn->kind == AST_ASM_FUNCDEF) {
                 Ast *call = astAsmFunctionCall(maybe_fn->type->rettype,
-                        aoStrDup(maybe_fn->asmfname),ptrVecNew());
+                        aoStrDup(maybe_fn->asmfname),astVecNew());
                 call->flags |= maybe_fn->flags;
                 return call;
             }
@@ -654,18 +651,18 @@ static Ast *parseIdentifierOrFunction(Cctrl *cc,
                 if (ast->flags & AST_FLAG_INLINE && !(cc->flags & CCTRL_TRANSPILING)) {
                     if (ast->kind == AST_ASM_FUNC_BIND || ast->kind == AST_ASM_FUNCDEF) {
                         Ast *call = astAsmFunctionCall(ast->type->rettype,
-                                aoStrDup(ast->asmfname),ptrVecNew());
+                                aoStrDup(ast->asmfname),astVecNew());
                         call->flags |= ast->flags;
                         return call;
                     }
-                    return parseInlineFunctionCall(cc,ast,ptrVecNew());
+                    return parseInlineFunctionCall(cc,ast,astVecNew());
                 }
                 if (ast->kind == AST_ASM_FUNC_BIND || ast->kind == AST_ASM_FUNCDEF) {
                     return astAsmFunctionCall(ast->type->rettype,
-                            aoStrDup(ast->asmfname),ptrVecNew());
+                            aoStrDup(ast->asmfname),astVecNew());
                 } else {
                     return astFunctionCall(ast->type->rettype,
-                            ast->fname->data,ast->fname->len,ptrVecNew());
+                            ast->fname->data,ast->fname->len,astVecNew());
                 }
             }
         }
@@ -729,7 +726,7 @@ static Ast *parsePrimary(Cctrl *cc) {
         return ast;
     case TK_STR: {
         long real_len = 0;
-        aoStr *str = aoStrNew();
+        AoStr *str = aoStrNew();
         cctrlTokenRewind(cc);
         /* Concatinate adjacent strings together */
         while ((tok = cctrlTokenGet(cc)) != NULL && tok->tk_type == TK_STR) {
@@ -865,13 +862,13 @@ Ast *parseGetClassField(Cctrl *cc, Ast *cls) {
     if (type->fields == NULL && cls->kind == AST_DEREF) {
         type = cls->cls->type;
     }
-    AstType *field = strMapGetLen(type->fields, tok->start, tok->len);
+    AstType *field = mapGetLen(type->fields, tok->start, tok->len);
     if (!field) {
         cctrlRewindUntilStrMatch(cc, tok->start, tok->len, NULL);
         cctrlRaiseException(cc,"Property: %.*s does not exist on class", 
                 tok->len, tok->start);
     }
-    aoStr *field_name = aoStrDupRaw(tok->start, tok->len);
+    AoStr *field_name = aoStrDupRaw(tok->start, tok->len);
     return astClassRef(field, cls, aoStrMove(field_name));
 }
 
@@ -1120,7 +1117,7 @@ Ast *parsePostFixExpr(Cctrl *cc) {
                 continue;
             } else if (ast->kind == AST_CLASS_REF) { 
                 int len = strlen(ast->field);
-                PtrVec *argv = parseArgv(cc,ast,')',ast->field,len);
+                Vec *argv = parseArgv(cc,ast,')',ast->field,len);
                 ast = astFunctionPtrCall(
                         ast->type->rettype,
                         ast->field,

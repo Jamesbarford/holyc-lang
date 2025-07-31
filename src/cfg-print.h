@@ -2,9 +2,9 @@
 #define __CFG_PRINT_H
 
 #include "cfg.h"
-#include "map.h"
+#include "containers.h"
 
 void cfgToFile(CFG *cfg, char *filename);
-void cfgsToFile(PtrVec *cfgs, char *filename);
+void cfgsToFile(Vec *cfgs, char *filename);
 
 #endif

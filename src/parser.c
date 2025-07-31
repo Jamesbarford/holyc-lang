@@ -8,7 +8,6 @@
 #include "cctrl.h"
 #include "lexer.h"
 #include "list.h"
-#include "map.h"
 #include "parser.h"
 #include "prslib.h"
 #include "prsasm.h"
@@ -28,7 +27,7 @@ Ast *parseCompoundStatement(Cctrl *cc);
 AstType *parseClassDef(Cctrl *cc, int is_intrinsic);
 AstType *parseUnionDef(Cctrl *cc);
 
-static aoStr *getRangeLoopIdx(void) {
+static AoStr *getRangeLoopIdx(void) {
     static int id = 0;
     return aoStrPrintf("___tmp%d___", ++id);
 }
@@ -37,7 +36,7 @@ static aoStr *getRangeLoopIdx(void) {
 Ast *parseFloatingCharConst(Cctrl *cc, Lexeme *tok) {
     unsigned long ch = (unsigned long)tok->i64;
     char str[9];
-    PtrVec *argv = ptrVecNew();
+    Vec *argv = astVecNew();
     int len = 0;
 
     while (ch) {
@@ -46,7 +45,7 @@ Ast *parseFloatingCharConst(Cctrl *cc, Lexeme *tok) {
     }
 
     Ast *ast = cctrlGetOrSetString(cc,str,len,len);
-    ptrVecPush(argv,ast);
+    vecPush(argv,ast);
     cctrlTokenExpect(cc,';');
     return astFunctionCall(ast_void_type,"printf",6,argv);
 }
@@ -76,8 +75,8 @@ Ast *parseDeclArrayInitInt(Cctrl *cc, AstType *type) {
     }
 
     initlist = listNew();
-    ssize_t i = 0;
-    StrMap *cls_fields = NULL;
+    unsigned long i = 0;
+    Map *cls_fields = NULL;
     if (type->kind == AST_TYPE_CLASS) {
         cls_fields = type->fields;
     }
@@ -114,8 +113,8 @@ Ast *parseDeclArrayInitInt(Cctrl *cc, AstType *type) {
                             astTypeToString(type));
                 }
 
-                ssize_t cls_field_idx = cls_fields->indexes->entries[i];
-                StrMapNode *entry = cls_fields->entries[cls_field_idx];
+                unsigned long cls_field_idx = (unsigned long)cls_fields->indexes->entries[i];
+                MapNode *entry = &cls_fields->entries[cls_field_idx];
                 AstType *cls_field_type = entry->value;
                 parseTypeCheckClassFieldInitaliser(cc,cls_field_type,init);
                 i++;
@@ -131,12 +130,15 @@ Ast *parseDeclArrayInitInt(Cctrl *cc, AstType *type) {
     return astArrayInit(initlist);
 }
 
-void parseFlattenAnnonymous(AstType *anon, StrMap *fields_dict,
-        int offset, int make_copy)
+void parseFlattenAnnonymous(AstType *anon,
+                            Map *fields_dict,
+                            int offset,
+                            int make_copy)
 {
-    StrMapIterator *it = strMapIteratorNew(anon->fields);
-    StrMapNode *n = NULL;
-    while ((n = strMapNext(it)) != NULL) {
+    MapIter it;
+    mapIterInit(anon->fields, &it);
+    while (mapIterNext(&it)) {
+        MapNode *n = it.node;
         AstType *base = (AstType *)n->value;
         AstType *type = NULL;
         if (make_copy) {
@@ -146,24 +148,23 @@ void parseFlattenAnnonymous(AstType *anon, StrMap *fields_dict,
         }
         type->offset += offset;
 
-        strMapAdd(fields_dict,n->key,type);
+        mapAdd(fields_dict,n->key,type);
     }
-    strMapIteratorRelease(it);
 }
 
 typedef struct ClsField {
     AstType *type;
-    aoStr *field_name;
+    AoStr *field_name;
 } ClsField;
 
-ClsField *clsFieldNew(AstType *type, aoStr *field_name) {
+ClsField *clsFieldNew(AstType *type, AoStr *field_name) {
     ClsField *f = (ClsField *)malloc(sizeof(ClsField));
     f->type = type;
     f->field_name = field_name;
     return f;
 }
 
-List *parseClassOrUnionFields(Cctrl *cc, aoStr *name,
+List *parseClassOrUnionFields(Cctrl *cc, AoStr *name,
         unsigned int (*computeSize)(List *), unsigned int *_size)
 {
     unsigned int size;
@@ -171,7 +172,7 @@ List *parseClassOrUnionFields(Cctrl *cc, aoStr *name,
     int fnptr_name_len;
     Lexeme *tok, *tok_name;
     AstType *next_type = NULL, *base_type = NULL, *field_type = NULL;
-    aoStr  *field_name = NULL;
+    AoStr  *field_name = NULL;
     List *fields_list;
 
     tok = cctrlTokenGet(cc);
@@ -315,16 +316,16 @@ int CalcPadding(int offset, int size) {
     return offset % size == 0 ? 0 : size - offset % size;
 }
 
-StrMap *parseClassOffsets(Cctrl *cc,
-                          int *aligned_size, 
-                          List *fields, 
-                          AstType *base_class,
-                          aoStr *clsname,
-                          int is_intrinsic)
+Map *parseClassOffsets(Cctrl *cc,
+                       int *aligned_size, 
+                       List *fields, 
+                       AstType *base_class,
+                       AoStr *clsname,
+                       int is_intrinsic)
 {
     int offset,size,padding;
     AstType *field;
-    StrMap *fields_dict = strMapNew(32);
+    Map *fields_dict = astTypeMapNew();
 
     /* XXX: Assumes the class definition will be made later */
     if (listEmpty(fields)) {
@@ -334,7 +335,7 @@ StrMap *parseClassOffsets(Cctrl *cc,
     if (base_class) {
         offset = base_class->size;
         if (cc->flags & CCTRL_SAVE_ANONYMOUS) {
-            strMapAdd(fields_dict,astAnnonymousLabel(),base_class);
+            mapAdd(fields_dict,astAnnonymousLabel(),base_class);
         }
         parseFlattenAnnonymous(base_class,fields_dict,0,1);
     } else {
@@ -349,7 +350,7 @@ StrMap *parseClassOffsets(Cctrl *cc,
             field->offset = offset;
             offset+=field->size;
             if (cls_field->field_name) {
-                strMapAdd(fields_dict,cls_field->field_name->data,field);
+                mapAdd(fields_dict,cls_field->field_name->data,field);
             }
         }
 
@@ -359,11 +360,11 @@ StrMap *parseClassOffsets(Cctrl *cc,
     listForEach(fields) {
         ClsField *cls_field = (ClsField *)it->value;
         field = cls_field->type;
-        aoStr *field_name = cls_field->field_name;
+        AoStr *field_name = cls_field->field_name;
 
         if (field_name == NULL && parseIsClassOrUnion(field->kind)) {
             if (cc->flags & CCTRL_SAVE_ANONYMOUS) {
-                strMapAdd(fields_dict,astAnnonymousLabel(),field);
+                mapAdd(fields_dict,astAnnonymousLabel(),field);
             }
             parseFlattenAnnonymous(field,fields_dict,offset,0);
             offset += field->size;
@@ -393,7 +394,7 @@ StrMap *parseClassOffsets(Cctrl *cc,
         }
 
         if (field_name) {
-            strMapAdd(fields_dict,field_name->data,field);
+            mapAdd(fields_dict,field_name->data,field);
         }
         free(cls_field);
     }
@@ -402,22 +403,22 @@ StrMap *parseClassOffsets(Cctrl *cc,
     return fields_dict;
 }
 
-StrMap *parseUnionOffsets(Cctrl *cc, int *real_size, List *fields) {
+Map *parseUnionOffsets(Cctrl *cc, int *real_size, List *fields) {
     int max_size;
     AstType *field;
-    StrMap *fields_dict = strMapNew(32);
+    Map *fields_dict = astTypeMapNew();
 
     max_size = 0;
     listForEach(fields) {
         ClsField *cls_field = (ClsField *)it->value;
         field = cls_field->type;
-        aoStr *field_name = cls_field->field_name;
+        AoStr *field_name = cls_field->field_name;
         if (max_size < field->size) {
             max_size = field->size;
         }
         if (field->clsname == NULL && parseIsClassOrUnion(field->kind)) {
             if (cc->flags & CCTRL_SAVE_ANONYMOUS) {
-                strMapAdd(fields_dict,astAnnonymousLabel(),field);
+                mapAdd(fields_dict,astAnnonymousLabel(),field);
             }
             parseFlattenAnnonymous(field,fields_dict,0,0);
             continue;
@@ -425,26 +426,26 @@ StrMap *parseUnionOffsets(Cctrl *cc, int *real_size, List *fields) {
 
         field->offset = 0;
         if (field_name) {
-            strMapAdd(fields_dict,field_name->data,field);
+            mapAdd(fields_dict,field_name->data,field);
         }
     }
     *real_size = max_size;
     return fields_dict;
 }
 
-AstType *parseClassOrUnion(Cctrl *cc, StrMap *env,
+AstType *parseClassOrUnion(Cctrl *cc, Map *env,
         int is_class,
         unsigned int (*computeSize)(List *),
         int is_intrinsic)
 {
-    aoStr *tag = NULL;
+    AoStr *tag = NULL;
     int aligned_size = 0;
     unsigned int class_size;
     Lexeme *tok = cctrlTokenGet(cc);
     AstType *prev = NULL, *ref = NULL, *base_class = NULL;
     List *fields = NULL;
-    StrMap *fields_dict;
-    cc->localenv = strMapNewWithParent(32, cc->localenv);
+    Map *fields_dict;
+    cc->localenv = cctrlCreateAstMap(cc->localenv);
 
     if (tok->tk_type == TK_IDENT) {
         tag = aoStrDupRaw(tok->start,tok->len);
@@ -458,7 +459,7 @@ AstType *parseClassOrUnion(Cctrl *cc, StrMap *env,
             if (tok->tk_type != TK_IDENT) {
                 cctrlRaiseException(cc, "Expected Identifier for class inheritance");
             }
-            base_class = strMapGetLen(cc->clsdefs,tok->start,tok->len);
+            base_class = mapGetLen(cc->clsdefs,tok->start,tok->len);
             if (base_class == NULL) {
                 cctrlRaiseException(cc,"class %.*s has not been defined\n",
                         tok->len,tok->start);
@@ -473,7 +474,7 @@ AstType *parseClassOrUnion(Cctrl *cc, StrMap *env,
     }
 
     if (tag) {
-        prev = strMapGetLen(env, tag->data, tag->len);
+        prev = mapGetLen(env, tag->data, tag->len);
     }
 
     fields = parseClassOrUnionFields(cc,tag,computeSize,&class_size);
@@ -505,7 +506,7 @@ AstType *parseClassOrUnion(Cctrl *cc, StrMap *env,
     }
     if (!is_class) ref->kind = AST_TYPE_UNION;
     if (tag) {
-        strMapAdd(env,tag->data,ref);
+        mapAdd(env,tag->data,ref);
     }
     return ref;
 }
@@ -607,7 +608,7 @@ Ast *parseDecl(Cctrl *cc) {
         return NULL;
     }
     var = astLVar(type,varname->start,varname->len);
-    if (!strMapAddOrErr(cc->localenv,var->lname->data,var)) {
+    if (!mapAddOrErr(cc->localenv,var->lname->data,var)) {
         cctrlRaiseException(cc,"variable %s already declared",astLValueToString(var,0));
     }
     if (cc->tmp_locals) {
@@ -702,7 +703,7 @@ Ast *parseOptExpr(Cctrl *cc) {
 
 Ast *parseDesugarArrayLoop(Cctrl *cc, Ast *iteratee, Ast *static_array) {
     /* Create a temporay variable as the counter */
-    aoStr *range_tmp_var = getRangeLoopIdx();
+    AoStr *range_tmp_var = getRangeLoopIdx();
     Ast *counter_var = astLVar(ast_int_type,range_tmp_var->data,
                                range_tmp_var->len);
 
@@ -716,9 +717,9 @@ Ast *parseDesugarArrayLoop(Cctrl *cc, Ast *iteratee, Ast *static_array) {
         iteratee->type = deref_type;
     }
 
-    strMapAddLen(cc->localenv,range_tmp_var->data,
+    mapAddLen(cc->localenv,range_tmp_var->data,
                  range_tmp_var->len,counter_var);
-    strMapAdd(cc->localenv,iteratee->lname->data,iteratee);
+    mapAdd(cc->localenv,iteratee->lname->data,iteratee);
 
     if (cc->tmp_locals) {
         listAppend(cc->tmp_locals,counter_var);
@@ -769,14 +770,14 @@ void parseAssertContainerHasFields(Cctrl *cc, AstType *size_field,
 Ast *parseCreateForRange(Cctrl *cc, Ast *iteratee,
                          Ast *size_ref, Ast *entries_ref)
 {
-    aoStr *range_tmp_var = getRangeLoopIdx();
+    AoStr *range_tmp_var = getRangeLoopIdx();
     Ast *counter_var = astLVar(ast_int_type,range_tmp_var->data,
                                range_tmp_var->len);
     Ast *counter = astDecl(counter_var,astI64Type(0));
 
-    strMapAddLen(cc->localenv,range_tmp_var->data,
+    mapAddLen(cc->localenv,range_tmp_var->data,
                  range_tmp_var->len,counter_var);
-    strMapAdd(cc->localenv,iteratee->lname->data,iteratee);
+    mapAdd(cc->localenv,iteratee->lname->data,iteratee);
     if (cc->tmp_locals) {
         listAppend(cc->tmp_locals,counter_var);
         listAppend(cc->tmp_locals,iteratee);
@@ -806,8 +807,8 @@ Ast *parseRangeLoop(Cctrl *cc, Ast *iteratee) {
                         astLValueToString(container, 0));
             }
 
-            AstType *size_field = strMapGet(container->type->ptr->fields, "size");
-            AstType *entries_field = strMapGet(container->type->ptr->fields, "entries");
+            AstType *size_field = mapGetLen(container->type->ptr->fields, str_lit("size"));
+            AstType *entries_field = mapGetLen(container->type->ptr->fields, str_lit("entries"));
 
             parseAssertContainerHasFields(cc,size_field,entries_field);
 
@@ -827,7 +828,7 @@ Ast *parseRangeLoop(Cctrl *cc, Ast *iteratee) {
             cctrlRaiseException(cc,"can only range over arrays and pointers");
         }
     } else if (container->kind == AST_CLASS_REF) {
-        StrMap *fields = NULL;
+        Map *fields = NULL;
         if (container->type->kind == AST_TYPE_POINTER) {
             fields = container->type->ptr->fields;
         } else if (container->type->kind == AST_TYPE_ARRAY) {
@@ -836,8 +837,8 @@ Ast *parseRangeLoop(Cctrl *cc, Ast *iteratee) {
             fields = container->type->fields;
         }
 
-        AstType *size_field = strMapGet(fields, "size");
-        AstType *entries_field = strMapGet(fields, "entries");
+        AstType *size_field = mapGetLen(fields, str_lit("size"));
+        AstType *entries_field = mapGetLen(fields, str_lit("entries"));
 
         parseAssertContainerHasFields(cc,size_field,entries_field);
 
@@ -882,7 +883,7 @@ Ast *parseForLoopInitialiser(Cctrl *cc) {
 
         /* can be : for an auto loop or ';' for a normal loop */
         tok = cctrlTokenPeek(cc); 
-        if (!strMapAddOrErr(cc->localenv,init_var->lname->data,init_var)) {
+        if (!mapAddOrErr(cc->localenv,init_var->lname->data,init_var)) {
             cctrlRaiseException(cc,"variable `%s` already declared!",
                     astLValueToString(init_var,0));
         }
@@ -908,7 +909,7 @@ Ast *parseForLoopInitialiser(Cctrl *cc) {
 
 Ast *parseForStatement(Cctrl *cc) {
     Ast *forinit, *forcond, *forstep, *forbody;
-    aoStr *for_begin, *for_end, *for_middle,
+    AoStr *for_begin, *for_end, *for_middle,
           *prev_begin, *prev_end;
     cctrlTokenExpect(cc,'(');
 
@@ -922,7 +923,7 @@ Ast *parseForStatement(Cctrl *cc) {
     cc->tmp_loop_begin = for_middle;
     cc->tmp_loop_end = for_end;
 
-    cc->localenv = strMapNewWithParent(32, cc->localenv);
+    cc->localenv = cctrlCreateAstMap(cc->localenv);
     forinit = parseForLoopInitialiser(cc);
     //parseOptDeclOrStmt(cc);
 
@@ -959,7 +960,7 @@ Ast *parseForStatement(Cctrl *cc) {
 
 Ast *parseWhileStatement(Cctrl *cc) {
     Ast *whilecond, *whilebody;
-    aoStr *while_begin, *while_end,
+    AoStr *while_begin, *while_end,
           *prev_begin, *prev_end;
     cctrlTokenExpect(cc,'(');
 
@@ -971,7 +972,7 @@ Ast *parseWhileStatement(Cctrl *cc) {
     cc->tmp_loop_begin = while_begin;
     cc->tmp_loop_end = while_end;
 
-    cc->localenv = strMapNewWithParent(32, cc->localenv);
+    cc->localenv = cctrlCreateAstMap(cc->localenv);
     whilecond = parseExpr(cc,16);
     cctrlTokenExpect(cc,')');
 
@@ -991,7 +992,7 @@ Ast *parseWhileStatement(Cctrl *cc) {
 Ast *parseDoWhileStatement(Cctrl *cc) {
     Ast *whilecond, *whilebody;
     Lexeme *tok;
-    aoStr *while_begin, *while_end,
+    AoStr *while_begin, *while_end,
           *prev_begin, *prev_end;
     
 
@@ -1003,7 +1004,7 @@ Ast *parseDoWhileStatement(Cctrl *cc) {
     cc->tmp_loop_begin = while_begin;
     cc->tmp_loop_end = while_end;
 
-    cc->localenv = strMapNewWithParent(32, cc->localenv);
+    cc->localenv = cctrlCreateAstMap(cc->localenv);
 
     Lexeme *peek = cctrlTokenPeek(cc);
     if (!parseValidPostControlFlowToken(peek)) {
@@ -1072,7 +1073,7 @@ Ast *parseReturnStatement(Cctrl *cc) {
 
     AstType *ok = astTypeCheck(cc->tmp_rettype,retval,'\0');
     if (!ok) {
-        Ast *func = strMapGet(cc->global_env,cc->tmp_fname->data);
+        Ast *func = mapGet(cc->global_env, cc->tmp_fname->data);
         typeCheckReturnTypeWarn(cc,func,check,retval);
     }
     if (maybe_fn->flags & AST_FLAG_INLINE && !(cc->flags & CCTRL_TRANSPILING)) {
@@ -1095,7 +1096,7 @@ Ast *parseCaseLabel(Cctrl *cc, Lexeme *tok) {
     }
     Ast *case_, *prev, *case_expr = NULL;
     Lexeme *peek;
-    aoStr *label;
+    AoStr *label;
     int begining,end;
     int ok = 1;
 
@@ -1153,7 +1154,7 @@ Ast *parseCaseLabel(Cctrl *cc, Lexeme *tok) {
         assertUniqueSwitchCaseLabels(cc->tmp_case_list,case_);
     }
 
-    ptrVecPush(cc->tmp_case_list,case_);
+    vecPush(cc->tmp_case_list,case_);
 
     do {
         Ast *stmt = parseStatement(cc);
@@ -1182,7 +1183,7 @@ Ast *parseDefaultStatement(Cctrl *cc) {
     }
     Lexeme *peek;
     List *stmts = listNew();
-    aoStr *default_label = astMakeLabel();
+    AoStr *default_label = astMakeLabel();
     /* set here so this is non-null for the next call to parseStatement */
     cc->tmp_default_case = astDefault(default_label,stmts);
 
@@ -1203,8 +1204,8 @@ Ast *parseDefaultStatement(Cctrl *cc) {
 Ast *parseSwitchStatement(Cctrl *cc) {
     Ast *cond, *tmp, *original_default_label;
     Lexeme *peek;
-    PtrVec *original_cases;
-    aoStr *end_label,*tmp_name,*original_break;
+    Vec *original_cases;
+    AoStr *end_label,*tmp_name,*original_break;
     int switch_bounds_checked = 1;
     char terminating_char = ')';
 
@@ -1232,7 +1233,7 @@ Ast *parseSwitchStatement(Cctrl *cc) {
     original_default_label = cc->tmp_default_case;
     original_cases = cc->tmp_case_list;
 
-    cc->tmp_case_list = ptrVecNew();
+    cc->tmp_case_list = astVecNew();
     cc->tmp_default_case = NULL;
 
     end_label = astMakeLabel();
@@ -1264,17 +1265,17 @@ Ast *parseSwitchStatement(Cctrl *cc) {
 
 /* Concatinate the label of the goto with the name of the function 
  * currently being parsed to be able to have uniqe goto labels  */
-aoStr *createFunctionLevelGotoLabel(Cctrl *cc, Lexeme *tok) {
-    aoStr *label = aoStrNew();
+AoStr *createFunctionLevelGotoLabel(Cctrl *cc, Lexeme *tok) {
+    AoStr *label = aoStrNew();
     aoStrCatFmt(label,".%S_%.*s",cc->tmp_fname,tok->len,tok->start);
     return label;
 }
 
 Ast *parseStatement(Cctrl *cc) {
     Lexeme *tok, *peek;
-    aoStr *label;
+    AoStr *label;
     Ast *ret, *ast;
-    StrMap *env;
+    Map *env;
     tok = cctrlTokenGet(cc);
 
     if (tok->tk_type == TK_KEYWORD) {
@@ -1311,7 +1312,7 @@ Ast *parseStatement(Cctrl *cc) {
                             PUNCT_TERM_SEMI|PUNCT_TERM_COMMA);
 
                     cc->localenv = env;
-                    strMapAdd(env,gvar_ast->gname->data,gvar_ast);
+                    mapAdd(env,gvar_ast->gname->data,gvar_ast);
                     listAppend(cc->ast_list,ast);
                     return ast;
                 }
@@ -1346,7 +1347,7 @@ Ast *parseStatement(Cctrl *cc) {
                     ast = astDecl(gvar_ast,NULL);
                 }
                 cc->localenv = env;
-                strMapAdd(env,gvar_ast->gname->data,gvar_ast);
+                mapAdd(env,gvar_ast->gname->data,gvar_ast);
                 listAppend(cc->ast_list,ast);
                 return ast;
             }
@@ -1435,7 +1436,7 @@ void parseCompoundStatementInternal(Cctrl *cc, Ast *body) {
     Ast *stmt, *var;
     AstType *base_type, *type, *next_type;
     Lexeme *tok, *varname, *peek;
-    cc->localenv = strMapNewWithParent(32, cc->localenv);
+    cc->localenv = cctrlCreateAstMap(cc->localenv);
     tok = NULL;
 
     tok = cctrlTokenPeek(cc);
@@ -1458,7 +1459,7 @@ void parseCompoundStatementInternal(Cctrl *cc, Ast *body) {
                     }
                     type = parseArrayDimensions(cc,next_type);
                     var = astLVar(type,varname->start,varname->len);
-                    if (!strMapAddOrErr(cc->localenv,var->lname->data,var)) {
+                    if (!mapAddOrErr(cc->localenv,var->lname->data,var)) {
                         cctrlRewindUntilStrMatch(cc,var->lname->data,var->lname->len,NULL);
                         cctrlRaiseException(cc,"variable `%s` already declared",
                                 astLValueToString(var,0));
@@ -1466,7 +1467,7 @@ void parseCompoundStatementInternal(Cctrl *cc, Ast *body) {
                 } else {
                     cctrlTokenGet(cc);
                     var = parseFunctionPointer(cc,next_type);
-                    strMapAdd(cc->localenv,var->fname->data,var);
+                    mapAdd(cc->localenv,var->fname->data,var);
                 }
 
                 if (cc->tmp_locals) {
@@ -1519,16 +1520,16 @@ Ast *parseCompoundStatement(Cctrl *cc) {
 }
 
 Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
-        char *fname, int len, PtrVec *params, int has_var_args, int is_inline) 
+        char *fname, int len, Vec *params, int has_var_args, int is_inline) 
 {
     Lexeme *next = cctrlTokenPeek(cc);
     if (next->tk_type == TK_KEYWORD && next->i64 == KW_ASM) {
         cctrlTokenGet(cc);
         Lexeme *peek = cctrlTokenPeek(cc);
         if (tokenPunctIs(peek,'{')) {
-            aoStr *fname_duped = aoStrDupRaw(fname,len);
-            aoStr *asm_fname = astNormaliseFunctionName(fname_duped->data);
-            aoStr *prev_asm_name = cc->tmp_asm_fname;
+            AoStr *fname_duped = aoStrDupRaw(fname,len);
+            AoStr *asm_fname = astNormaliseFunctionName(fname_duped->data);
+            AoStr *prev_asm_name = cc->tmp_asm_fname;
             cc->tmp_asm_fname = asm_fname;
             Ast *asm_block = prsAsm(cc,1);
 
@@ -1541,11 +1542,11 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
                     astMakeFunctionType(rettype, params),
                     asm_fname,asm_fname,params);
 
-            if (!strMapAddOrErr(cc->asm_functions, asm_fname->data, asm_func)) {
+            if (!mapAddOrErr(cc->asm_functions, asm_fname->data, asm_func)) {
                 cctrlIce(cc, "Already defined assembly function: %s", asm_fname->data);
             }
 
-            if (!strMapAddOrErr(cc->global_env, fname_duped->data, asm_func)) {
+            if (!mapAddOrErr(cc->global_env, fname_duped->data, asm_func)) {
                 cctrlIce(cc, "Already defined assembly function: %s as a non Assembly function", asm_fname->data);
             }
 
@@ -1567,18 +1568,18 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
     Ast *func_body = astCompountStatement(body);
     AstType *fn_type = NULL;
 
-    cc->localenv = strMapNewWithParent(32, cc->localenv);
+    cc->localenv = cctrlCreateAstMap(cc->localenv);
     cc->tmp_locals = locals;
 
     /* Upgrade a prototype to an actual function */
-    func = strMapGetLen(cc->global_env,fname,len);
+    func = mapGetLen(cc->global_env, fname, len);
     if (!func) {
         cc->tmp_params = params;
         cc->tmp_rettype = rettype;
         fn_type = astMakeFunctionType(cc->tmp_rettype, params);
         func = astFunction(fn_type,fname,len,params,NULL,locals,
                 has_var_args);
-        strMapAdd(cc->global_env,func->fname->data,func);
+        mapAdd(cc->global_env, func->fname->data, func);
     } else {
         switch (func->kind) {
             case AST_EXTERN_FUNC:
@@ -1637,12 +1638,11 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
 Ast *parseExternFunctionProto(Cctrl *cc, AstType *rettype, char *fname, int len) {
     Ast *func;
     int has_var_args = 0;
-    PtrVec *params;
     Lexeme *tok;
-    cc->localenv = strMapNewWithParent(32, cc->localenv);
+    cc->localenv = cctrlCreateAstMap(cc->localenv);
     cc->tmp_locals = NULL;
 
-    params = parseParams(cc,')', &has_var_args,1);
+    Vec *params = parseParams(cc,')', &has_var_args,1);
     tok = cctrlTokenGet(cc);
     if (!tokenPunctIs(tok, ';')) {
         cctrlRaiseException(cc,"extern %.*s() cannot have a function body "
@@ -1652,17 +1652,17 @@ Ast *parseExternFunctionProto(Cctrl *cc, AstType *rettype, char *fname, int len)
     AstType *type = astMakeFunctionType(rettype, params);
     func = astFunction(type,fname,len,params,NULL,NULL,0);
     func->kind = AST_EXTERN_FUNC;
-    strMapAdd(cc->global_env,func->fname->data,func);
+    mapAdd(cc->global_env,func->fname->data,func);
     return func;
 }
 
 Ast *parseFunctionOrDef(Cctrl *cc, AstType *rettype, char *fname, int len, int is_inline) {
     int has_var_args = 0;
     cctrlTokenExpect(cc,'(');
-    cc->localenv = strMapNewWithParent(32, cc->localenv);
+    cc->localenv = cctrlCreateAstMap(cc->localenv);
     cc->tmp_locals = listNew();
 
-    PtrVec *params = parseParams(cc,')',&has_var_args,1);
+    Vec *params = parseParams(cc,')',&has_var_args,1);
     Lexeme *tok = cctrlTokenGet(cc);
     if (tokenPunctIs(tok, '{')) {
         return parseFunctionDef(cc,rettype,fname,len,params,has_var_args,is_inline);
@@ -1674,14 +1674,14 @@ Ast *parseFunctionOrDef(Cctrl *cc, AstType *rettype, char *fname, int len, int i
         AstType *type = astMakeFunctionType(rettype, params);
         Ast *fn = astFunction(type,fname,len,params,NULL,NULL,has_var_args);
         fn->kind = AST_FUN_PROTO;
-        strMapAdd(cc->global_env,fn->fname->data,fn);
+        mapAdd(cc->global_env,fn->fname->data,fn);
         return fn;
     }
 }
 
 Ast *parseAsmFunctionBinding(Cctrl *cc) {
     Lexeme *tok;
-    aoStr *asm_fname, *c_fname;
+    AoStr *asm_fname, *c_fname;
     AstType *rettype;
     Ast *asm_func;
     int has_var_args = 0, is_inline = 0;
@@ -1693,7 +1693,7 @@ Ast *parseAsmFunctionBinding(Cctrl *cc) {
     }
 
     asm_fname = aoStrDupRaw(tok->start,tok->len);
-    Ast *asm_blk = strMapGetLen(cc->asm_functions, asm_fname->data, asm_fname->len);
+    Ast *asm_blk = mapGetLen(cc->asm_functions, asm_fname->data, asm_fname->len);
 
     rettype = parseDeclSpec(cc);
 
@@ -1707,10 +1707,10 @@ Ast *parseAsmFunctionBinding(Cctrl *cc) {
         cctrlRaiseException(cc,"line %d: ASM function requires c function name");
     }
     c_fname = aoStrDupRaw(tok->start,tok->len);
-    cc->localenv = strMapNewWithParent(32, cc->localenv);
+    cc->localenv = cctrlCreateAstMap(cc->localenv);
     cctrlTokenExpect(cc,'(');
 
-    PtrVec *params = parseParams(cc,')',&has_var_args,0);
+    Vec *params = parseParams(cc,')',&has_var_args,0);
 
     asm_func = astAsmFunctionBind(
             astMakeFunctionType(rettype, params),
@@ -1723,7 +1723,7 @@ Ast *parseAsmFunctionBinding(Cctrl *cc) {
 
     cc->localenv = NULL;
     /* Map a c function to an ASM function */
-    strMapAdd(cc->asm_funcs,c_fname->data,asm_func);
+    mapAdd(cc->asm_funcs,c_fname->data,asm_func);
     cctrlTokenExpect(cc,';');
     if (is_inline) {
         asm_func->flags |= AST_FLAG_INLINE;
@@ -1862,7 +1862,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
                 cctrlTokenExpect(cc,';');
                 *is_global = 1;
                 return ast;
-            } else if ((variable = strMapGetLen(cc->global_env,tok->start, tok->len))) {
+            } else if ((variable = mapGetLen(cc->global_env,tok->start, tok->len))) {
                 cctrlTokenRewind(cc);
                 ast = parseExpr(cc,16);
                 cctrlTokenExpect(cc,';');
@@ -1923,7 +1923,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
             Ast *ast_decl = astDecl(variable,NULL);
 
             listAppend(cc->ast_list,ast_decl);
-            strMapAdd(cc->global_env,variable->gname->data,variable);
+            mapAdd(cc->global_env,variable->gname->data,variable);
             cctrlTokenRewind(cc);
 
             Ast *ast_expr = parseExpr(cc,16); // parseVariableInitialiser(cc,variable,PUNCT_TERM_COMMA|PUNCT_TERM_SEMI);
@@ -1939,7 +1939,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
             return ast_expr;
         } else if (type->kind == AST_TYPE_ARRAY) {
             variable = astGVar(type,name->start,name->len,0);
-            strMapAdd(cc->global_env,variable->gname->data,variable);
+            mapAdd(cc->global_env,variable->gname->data,variable);
             ast = parseVariableInitialiser(cc,variable,PUNCT_TERM_COMMA|PUNCT_TERM_SEMI);
             if (type->kind == AST_TYPE_AUTO) {
                 parseAssignAuto(cc,ast);
@@ -1954,7 +1954,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
         if (tokenPunctIs(tok,';') || tokenPunctIs(tok, ',')) {
             cctrlTokenGet(cc);
             variable = astGVar(type,name->start,name->len,0);
-            strMapAdd(cc->global_env,variable->gname->data,variable);
+            mapAdd(cc->global_env,variable->gname->data,variable);
             return astDecl(variable,NULL);
         }
         cctrlRaiseException(cc,"Cannot handle '%s'",lexemeToString(tok));

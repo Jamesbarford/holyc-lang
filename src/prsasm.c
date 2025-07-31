@@ -6,21 +6,20 @@
 #include "cctrl.h"
 #include "lexer.h"
 #include "list.h"
-#include "map.h"
 #include "prsasm.h"
 #include "prslib.h"
 #include "util.h"
 
 typedef struct AsmUnit {
-    aoStr *op1;
-    aoStr *op2;
-    aoStr *op3;
+    AoStr *op1;
+    AoStr *op2;
+    AoStr *op3;
     int op_count;
 } AsmUnit;
 
 /* format the assembly based on how many characters there are for the 
  * mneumonic */
-static inline char *getTabs(aoStr *str) {
+static inline char *getTabs(AoStr *str) {
     switch (str->len) {
         case 2: return "\t\t";
         case 3: return "\t\t";
@@ -29,7 +28,7 @@ static inline char *getTabs(aoStr *str) {
     }
 }
 
-void prsAsmMem(Cctrl *cc, aoStr *buf) {
+void prsAsmMem(Cctrl *cc, AoStr *buf) {
     Lexeme *tok;
     tok = cctrlAsmTokenGet(cc);
     if (tok->tk_type != TK_IDENT) {
@@ -40,7 +39,7 @@ void prsAsmMem(Cctrl *cc, aoStr *buf) {
     aoStrToLowerCase(buf);
 }
 
-void prsAsmOffset(Cctrl *cc, aoStr *buf, Lexeme *tok) {
+void prsAsmOffset(Cctrl *cc, AoStr *buf, Lexeme *tok) {
     if (tok->tk_type != TK_I64) {
         cctrlRaiseException(cc,"Expected TK_I64 type got: %s",lexemeToString(tok));
     }
@@ -55,7 +54,7 @@ void prsAsmOffset(Cctrl *cc, aoStr *buf, Lexeme *tok) {
     aoStrCatFmt(buf, "(%.*s)",tok->len,tok->start);
 }
 
-void prsAsmImm(Cctrl *cc, aoStr *buf, Lexeme *tok) {
+void prsAsmImm(Cctrl *cc, AoStr *buf, Lexeme *tok) {
     Lexeme *next;
     switch (tok->tk_type) {
         case TK_PUNCT:
@@ -107,7 +106,7 @@ void prsAsmImm(Cctrl *cc, aoStr *buf, Lexeme *tok) {
     }
 }
 
-void prsAsmLabel(Cctrl *cc, aoStr *buf) {
+void prsAsmLabel(Cctrl *cc, AoStr *buf) {
     Lexeme *tok = cctrlAsmTokenGet(cc);
     if (!tokenPunctIs(tok,'@')) {
         cctrlRaiseException(cc,": Labels must be: '@@<int>'");
@@ -120,7 +119,7 @@ void prsAsmLabel(Cctrl *cc, aoStr *buf) {
     
     long label_num = tok->i64;
     Lexeme *next = cctrlTokenPeek(cc);
-    aoStr *label = aoStrDup(cc->tmp_asm_fname);
+    AoStr *label = aoStrDup(cc->tmp_asm_fname);
     aoStrToLowerCase(label);
     if (tokenPunctIs(next,':')) {
         aoStrCatFmt(buf, ".%S_%U:",label,label_num);
@@ -131,7 +130,7 @@ void prsAsmLabel(Cctrl *cc, aoStr *buf) {
     aoStrRelease(label);
 }
 
-void prsAsmPunct(Cctrl *cc, Lexeme *tok, aoStr *buf) {
+void prsAsmPunct(Cctrl *cc, Lexeme *tok, AoStr *buf) {
     switch (tok->i64) {
         case '[':
             prsAsmMem(cc,buf);
@@ -157,7 +156,7 @@ void prsAsmPunct(Cctrl *cc, Lexeme *tok, aoStr *buf) {
 
 /* Custom assembly to AT&T */
 Ast *prsAsmToATT(Cctrl *cc, int parse_one) {
-    aoStr *op1 = NULL, *op2 = NULL, *op3 = NULL, *asm_code = NULL, *curblock = NULL, *stdfunc = NULL, *curfunc = NULL;
+    AoStr *op1 = NULL, *op2 = NULL, *op3 = NULL, *asm_code = NULL, *curblock = NULL, *stdfunc = NULL, *curfunc = NULL;
     List *asm_functions;
     Ast *asm_function, *asm_block;
     Lexeme *tok, *next;
@@ -228,7 +227,7 @@ Ast *prsAsmToATT(Cctrl *cc, int parse_one) {
                         /* Create an ast */
                         asm_function = astAsmFunctionDef(curfunc,curblock);
                         listAppend(asm_functions,asm_function);
-                        if (!strMapAddOrErr(cc->asm_functions, curfunc->data, asm_function)) {
+                        if (!mapAddOrErr(cc->asm_functions, curfunc->data, asm_function)) {
                             cctrlIce(cc, "Already defined assembly function: %s", curfunc->data);
                         }
                         curblock = aoStrNew();
@@ -281,8 +280,7 @@ Ast *prsAsmToATT(Cctrl *cc, int parse_one) {
                                 /* Only a few functions get called as one 
                                  * operation */
                                 aoStrToLowerCase(op1);
-                                if (strMapGetLen(cc->libc_functions,
-                                            op1->data,op1->len) != NULL) {
+                                if (setHasLen(cc->libc_functions, op1->data,op1->len)) {
                                     stdfunc = astNormaliseFunctionName(op1->data);
                                     aoStrCatFmt(curblock,"%S\n",stdfunc);
                                     aoStrRelease(stdfunc);
@@ -298,8 +296,8 @@ Ast *prsAsmToATT(Cctrl *cc, int parse_one) {
                                 int is_call = op1->len == 4 && !strncasecmp(op1->data,str_lit("call"));
 
                                 if (is_call) {
-                                    if (strMapGetAoStr(cc->global_env, op2) != NULL || 
-                                        strMapGetAoStr(cc->libc_functions, op2) != NULL) {
+                                    if (mapGetLen(cc->global_env, op2->data, op2->len) != NULL || 
+                                        setHasLen(cc->libc_functions, op2->data, op2->len)) {
                                         stdfunc = astNormaliseFunctionName(op2->data);
                                         aoStrCatFmt(curblock,"%S\n",stdfunc);
                                         aoStrRelease(stdfunc);
@@ -376,7 +374,7 @@ Ast *prsAsmToATT(Cctrl *cc, int parse_one) {
         aoStrCatLen(asm_code,curblock->data,curblock->len);
         asm_function = astAsmFunctionDef(curfunc,curblock);
         listAppend(asm_functions,asm_function);
-        if (!strMapAddOrErr(cc->asm_functions, curfunc->data, asm_function)) {
+        if (!mapAddOrErr(cc->asm_functions, curfunc->data, asm_function)) {
             cctrlIce(cc, "Already defined assembly function: %s", curfunc->data);
         }
     }

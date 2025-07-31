@@ -6,7 +6,7 @@
 #include "aostr.h"
 #include "ast.h"
 #include "config.h"
-#include "map.h"
+#include "containers.h"
 #include "lexer.h"
 
 #define CCTRL_TOKEN_BUFFER_SIZE 16
@@ -44,41 +44,41 @@ typedef struct Cctrl {
     unsigned long flags;
     /* The global environment for user defined types, functions and global
      * variables */
-    StrMap *global_env;
+    Map *global_env;
 
     /* key words defined in the language */
-    StrMap *symbol_table;
+    Map *symbol_table;
 
     /* Class definitions */
-    StrMap *clsdefs;
+    Map *clsdefs;
 
     /* Union definitions */
-    StrMap *uniondefs;
+    Map *uniondefs;
 
     /* Local environment for a function */
-    StrMap *localenv;
+    Map *localenv;
 
     /* assembly functions that have been bound to HC, this is the HC 
      * name, not the assembly name */
-    StrMap *asm_funcs;
+    Map *asm_funcs;
 
     /* Macro definitions */
-    StrMap *macro_defs;
+    Map *macro_defs;
 
     /* Registers */
-    StrMap *x86_registers;
+    Set *x86_registers;
 
     /* libc function names */
-    StrMap *libc_functions;
+    Set *libc_functions;
 
     /* Assembly function name to assembly block mapping */
-    StrMap *asm_functions;
+    Map *asm_functions;
 
     /* asm blocks */
     List *asm_blocks;
 
     /* Strings */
-    StrMap *strs;
+    Map *strs;
 
     /* The Ast Tree */
     List *ast_list;
@@ -88,13 +88,13 @@ typedef struct Cctrl {
 
     /* Temporary function parameters, for trying to keep track of function 
      * pointers */
-    PtrVec *tmp_params;
+    Vec *tmp_params;
 
     /* Local variables */
     List *tmp_locals;
 
     /* For parsing a switch statement */
-    PtrVec *tmp_case_list;
+    Vec *tmp_case_list;
 
     /* function parameters */
     List *func_params;
@@ -111,14 +111,14 @@ typedef struct Cctrl {
 
     /* When parsing & converting to assembly these keep a reference to the
      * current loop's labels */
-    aoStr *tmp_loop_begin;
-    aoStr *tmp_loop_end;
+    AoStr *tmp_loop_begin;
+    AoStr *tmp_loop_end;
 
     /* Temporary asm function name */
-    aoStr *tmp_asm_fname;
+    AoStr *tmp_asm_fname;
 
     /* Temporary name of the function being parsed */
-    aoStr *tmp_fname;
+    AoStr *tmp_fname;
 
     /* current line number */
     ssize_t lineno;
@@ -135,7 +135,7 @@ typedef struct Cctrl {
 /* Instantiate a new compiler control struct */
 Cctrl *cctrlNew(void);
 /* Slimmed down Cctrl, for expanding macros */
-Cctrl *ccMacroProcessor(StrMap *macro_defs);
+Cctrl *ccMacroProcessor(Map *macro_defs);
 Lexeme *cctrlTokenGet(Cctrl *cc);
 Lexeme *cctrlAsmTokenGet(Cctrl *cc);
 Lexeme *cctrlTokenPeek(Cctrl *cc);
@@ -160,6 +160,9 @@ __noreturn void cctrlIce(Cctrl *cc, char *fmt, ...);
 Ast *cctrlGetOrSetString(Cctrl *cc, char *str, int len, long real_len);
 void cctrlRewindUntilPunctMatch(Cctrl *cc, long ch, int *_count);
 void cctrlRewindUntilStrMatch(Cctrl *cc, char *str, int len, int *_count);
-aoStr *cctrlMessagePrintF(Cctrl *cc, int severity, char *fmt,...);
+AoStr *cctrlMessagePrintF(Cctrl *cc, int severity, char *fmt,...);
+
+Map *cctrlCreateAstMap(Map *parent);
+Map *cctrlCreateLexemeMap(void);
 
 #endif // !CCTRL_H

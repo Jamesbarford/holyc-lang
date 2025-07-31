@@ -47,11 +47,11 @@ set(SOURCES
     cfg-print.c
     cfg.c
     cli.c
+    containers.c
     compile.c
     lexer.c
     list.c
     main.c
-    map.c
     memory.c
     mempool.c
     parser.c
@@ -72,9 +72,9 @@ set(HEADERS
     cli.h
     compile.h
     config.h
+    containers.h
     lexer.h
     list.h
-    map.h
     memory.h
     mempool.h
     parser.h

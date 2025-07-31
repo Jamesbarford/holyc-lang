@@ -4,7 +4,7 @@
 #include <sys/types.h>
 
 #include "aostr.h"
-#include "map.h"
+#include "containers.h"
 #include "list.h"
 
 #define LEX_MAX_IDENT_LEN  128
@@ -149,10 +149,10 @@ typedef struct Lexeme {
 } Lexeme;
 
 typedef struct LexFile {
-    aoStr *filename; /* name of the file */
+    AoStr *filename; /* name of the file */
     char *ptr; /* Where we are in the file */
     int lineno; /* line number in the file */
-    aoStr *src; /* source */
+    AoStr *src; /* source */
 } LexFile;
 
 typedef struct Lexer {
@@ -172,8 +172,8 @@ typedef struct Lexer {
     char *builtin_root;
     List *files;
     List *all_source;/* This saves all of the files we see so we can free them later */
-    StrMap *seen_files;
-    StrMap *symbol_table;
+    Set *seen_files;
+    Map *symbol_table;
     LexFile *cur_file;
 } Lexer;
 
@@ -186,15 +186,16 @@ Lexeme *lexemeNew(char *start, int len);
 Lexeme *lexemeSentinal(void);
 void lexSetBuiltinRoot(Lexer *l, char *root);
 void lexInit(Lexer *l, char *source, int flag);
-void lexPushFile(Lexer *l, aoStr *filename);
+void lexPushFile(Lexer *l, AoStr *filename);
 int lex(Lexer *l, Lexeme *le);
-Lexeme *lexToken(StrMap *macro_defs, Lexer *l);
+Lexeme *lexToken(Map *macro_defs, Lexer *l);
 void lexemePrint(Lexeme *le);
 char *lexemeTypeToString(int tk_type);
 char *lexemePunctToString(long op);
 char *lexemePunctToStringWithFlags(long op, unsigned long flags);
 char *lexemePunctToEncodedString(long op);
 char *lexemeToString(Lexeme *tok);
+AoStr *lexemeToAoStr(Lexeme *tok);
 void lexReleaseAllFiles(Lexer *l);
 int tokenPunctIs(Lexeme *tok, long ch);
 int tokenIdentIs(Lexeme *tok, char *ident, int len);

@@ -11,8 +11,8 @@
 #include "ast.h"
 #include "cfg.h"
 #include "cfg-print.h"
+#include "containers.h"
 #include "lexer.h"
-#include "memory.h"
 #include "util.h"
 
 #define CFG_GRAPHVIZ_ERROR_INVALID_TYPE (0)
@@ -43,7 +43,7 @@ static const char *cfgPrintGetLoopColor(int depth) {
 }
 
 typedef struct CfgGraphVizBuilder {
-    aoStr *viz;
+    AoStr *viz;
     CFG *cfg;
     /* Need a counter to graphviz does not merge loops */
     int loop_cnt;
@@ -63,7 +63,8 @@ typedef struct CfgGraphVizBuilder {
 } CfgGraphVizBuilder;
 
 static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
-        BasicBlock *bb, IntSet *seen);
+                                 BasicBlock *bb,
+                                 Set *seen);
 
 static void cfgGraphVizBuilderInit(CfgGraphVizBuilder *builder) {
     builder->viz = aoStrAlloc(1<<10);
@@ -74,9 +75,9 @@ static void cfgGraphVizBuilderInit(CfgGraphVizBuilder *builder) {
     builder->return_idx = 0;
 }
 
-static aoStr *bbAstArrayToString(PtrVec *ast_array, int ast_count) {
+static AoStr *bbAstArrayToString(Vec *ast_array, int ast_count) {
     if (ast_count == 0) return NULL;
-    aoStr *ast_str = aoStrAlloc(256);
+    AoStr *ast_str = aoStrAlloc(256);
     char *lvalue_str;
     for (int i = 0; i < ast_count; ++i) {
         Ast *ast = vecGet(Ast *,ast_array,i);
@@ -91,7 +92,7 @@ static aoStr *bbAstArrayToString(PtrVec *ast_array, int ast_count) {
 
 static void cfgBranchPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     char *fillcolor;
-    aoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size-1);
+    AoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size-1);
     Ast *cond = (Ast *)bb->ast_array->entries[bb->ast_array->size-1];
 
     assert(cond != NULL);
@@ -117,7 +118,7 @@ static void cfgBranchPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
 
 static void cfgDoWhileCondPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     char *fillcolor = "lightpink";
-    aoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size-1);
+    AoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size-1);
     Ast *cond = (Ast *)bb->ast_array->entries[bb->ast_array->size-1];
 
     if (bb->prev->flags & BB_FLAG_LOOP_HEAD) {
@@ -140,7 +141,7 @@ static void cfgDoWhileCondPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
 }
 
 static void cfgLoopPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
-    aoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size);
+    AoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size);
 
     aoStrCatPrintf(builder->viz,
             "    bb%d [shape=record,style=filled,fillcolor=lightgreen,label=\"{\\<bb %d\\>|\n",
@@ -156,7 +157,7 @@ static void cfgLoopPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
 }
 
 static void cfgBreakPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
-    aoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size);
+    AoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size);
 
     aoStrCatPrintf(builder->viz,
             "    bb%d [shape=record,style=filled,fillcolor=violet,label=\"{\\<bb %d\\>\n",
@@ -170,7 +171,7 @@ static void cfgBreakPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
 }
 
 static void cfgDefaultPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
-    aoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size);
+    AoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size);
     aoStrCatPrintf(builder->viz,
             "    bb%d [shape=record,style=filled,fillcolor=lightgrey,label=\"{\\<bb %d\\>",
             bb->block_no,
@@ -201,7 +202,7 @@ static void cfgHeadPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
 }
 
 static void cfgReturnPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
-    aoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size);
+    AoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size);
 
     aoStrCatPrintf(builder->viz,
             "    bb%d [shape=record,style=filled,fillcolor=lightgrey,label=\"{\\<bb %d\\>",
@@ -220,8 +221,8 @@ static void cfgReturnPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
 
 static void cfgCasePrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
     int ast_count = bb->ast_array->size;
-    PtrVec *ast_array = bb->ast_array;
-    aoStr *ast_str = aoStrAlloc(256);
+    Vec *ast_array = bb->ast_array;
+    AoStr *ast_str = aoStrAlloc(256);
     char *lvalue_str;
     Ast *_case = vecGet(Ast *,ast_array,0);
 
@@ -255,10 +256,10 @@ static void cfgCasePrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
 }
 
 static void cfgSwitchPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
-    aoStr *ast_str = aoStrAlloc(256);
+    AoStr *ast_str = aoStrAlloc(256);
     char *lvalue_str;
     
-    aoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size-1);
+    AoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size-1);
     
     Ast *ast = vecGet(Ast *,bb->ast_array,bb->ast_array->size - 1);
     lvalue_str = astLValueToString(ast,(LEXEME_ENCODE_PUNCT|LEXEME_GRAPH_VIZ_ENCODE_PUNCT));
@@ -283,7 +284,7 @@ static void cfgSwitchPrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
 }
 
 static void cfgContinuePrintf(CfgGraphVizBuilder *builder, BasicBlock *bb) {
-    aoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size);
+    AoStr *internal = bbAstArrayToString(bb->ast_array,bb->ast_array->size);
     aoStrCatPrintf(builder->viz,
             "    bb%d [shape=record,style=filled,fillcolor=violet,label=\"{\\<bb %d\\>\n",
             bb->block_no,
@@ -348,22 +349,21 @@ static void cfgPrintBreaks(CfgGraphVizBuilder *builder, BasicBlock *bb) {
  * nodes outside of the loop prematurely. 
  *
  * Adding it to the seen set means it will never get explored. */
-static BasicBlock *cfgGetHandleDoWhileHead(IntSet *seen, BasicBlock *bb) {
+static BasicBlock *cfgGetHandleDoWhileHead(Set *seen, BasicBlock *bb) {
     BasicBlock *while_cond = NULL;
     if (bb->flags & BB_FLAG_LOOP_HEAD) {
-        IntMapIterator *it = intMapIteratorNew(bb->prev_blocks);
-        IntMapNode *entry;
-        while ((entry = intMapNext(it)) != NULL) {
-            BasicBlock *prev = (BasicBlock *)entry->value;
+        MapIter it;
+        mapIterInit(bb->prev_blocks, &it);
+        while (mapIterNext(&it)) {
+            BasicBlock *prev = (BasicBlock *)it.node->value;
             if (prev->type == BB_DO_WHILE_COND && prev->prev == bb) {
                 while_cond = prev;
                 break;
             }
         }
-        intMapIteratorRelease(it);
 
         if (while_cond) {
-            intSetAdd(seen,while_cond->block_no);
+            setAdd(seen,(void *)(long)while_cond->block_no);
         }
     }
     return while_cond;
@@ -384,12 +384,13 @@ char *cfgGraphVizError(CfgGraphVizBuilder *builder, BasicBlock *bb, int error_co
 
 static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
                                  BasicBlock *bb,
-                                 IntSet *seen)
+                                 Set *seen)
 {
     BasicBlock *while_cond = cfgGetHandleDoWhileHead(seen,bb);
 
-    if (intSetHas(seen,bb->block_no)) return;
-    else intSetAdd(seen,bb->block_no);
+    void *block_no_key = (void *)(long)bb->block_no;
+    if (setHas(seen,block_no_key)) return;
+    else setAdd(seen,block_no_key);
 
     if (bb->flags & BB_FLAG_LOOP_HEAD) {
         builder->loop_nesting++;
@@ -448,16 +449,15 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
             cfgCreatePictureUtil(builder,bb->_if,seen);
 
             /* @Bug - should know how many loops a block ends */
-            IntMapIterator *it = intMapIteratorNew(bb->_else->prev_blocks);
-            IntMapNode *entry;
+            MapIter it;
             int loop_ends = 0;
-            while ((entry = intMapNext(it)) != NULL) {
-                BasicBlock *prev = (BasicBlock *)entry->value;
+            mapIterInit(bb->_else->prev_blocks, &it);
+            while (mapIterNext(&it)) {
+                BasicBlock *prev = (BasicBlock *)it.node->value;
                 if (prev->flags & BB_FLAG_LOOP_HEAD) {
                     loop_ends++;
                 }
             }
-            intMapIteratorRelease(it);
 
             if ((bb->_else->flags & BB_FLAG_LOOP_END) && bb->_else->visited != loop_ends) {
                 builder->loop_nesting--;
@@ -475,7 +475,7 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
 
         case BB_SWITCH: {
             bbPrintf(builder,bb);
-            for (int i = 0; i < bb->next_blocks->size; ++i) {
+            for (unsigned long i = 0; i < bb->next_blocks->size; ++i) {
                 BasicBlock *it = vecGet(BasicBlock *,bb->next_blocks,i);
                 cfgCreatePictureUtil(builder,it,seen);
             }
@@ -542,7 +542,7 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
 }
 
 static void cfgCreatePicture(CfgGraphVizBuilder *builder, CFG *cfg) {
-    IntSet *seen = intSetNew(32);
+    Set *seen = setNew(32, &set_int_type);
     builder->return_idx = 0;
     builder->break_idx = 0;
     builder->loop_idx = 0;
@@ -553,17 +553,16 @@ static void cfgCreatePicture(CfgGraphVizBuilder *builder, CFG *cfg) {
     for (int i = 0; i < builder->return_idx; ++i) {
         cfgReturnPrintf(builder,builder->return_statements[i]);
     }
-    intSetRelease(seen);
+    setRelease(seen);
 }
 
 static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
     loggerDebug("Creating mappings for: %s, size: %lu\n",
             cfg->ref_fname->data,cfg->no_to_block->size);
-    IntMapIterator *it = intMapIteratorNew(cfg->no_to_block);
-    IntMapNode *entry;
-
-    while ((entry = intMapNext(it)) != NULL) {
-        BasicBlock *cur = (BasicBlock *)entry->value;
+    MapIter it;
+    mapIterInit(cfg->no_to_block, &it);
+    while (mapIterNext(&it)) {
+        BasicBlock *cur = (BasicBlock *)it.node->value;
 
         switch (cur->type) {
             case BB_CONTINUE: {
@@ -637,7 +636,7 @@ static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
             }
 
             case BB_SWITCH: {
-                for (int i = 0; i < cur->next_blocks->size; ++i) {
+                for (unsigned long i = 0; i < cur->next_blocks->size; ++i) {
                     BasicBlock *bb = vecGet(BasicBlock *,cur->next_blocks,i);
                     aoStrCatPrintf(builder->viz,
                             BB_FMT_BLACK_SOLID,
@@ -664,11 +663,10 @@ static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
 
             default:
                 loggerWarning("Unhandled! loopidx=%ld: bb%d %s\n",
-                    it->idx,cur->block_no,bbToString(cur));
+                    it.idx,cur->block_no,bbToString(cur));
         }
     }
     loggerDebug("Created mapping for: %s\n", cfg->ref_fname->data);
-    intMapIteratorRelease(it);
 }
 
 
@@ -691,7 +689,7 @@ static void cfgCreateGraphViz(CfgGraphVizBuilder *builder, CFG *cfg) {
 }
 
 void cfgBuilderWriteToFile(CfgGraphVizBuilder *builder, char *filename) {
-    aoStr *cfg_string = builder->viz;
+    AoStr *cfg_string = builder->viz;
     int fd = open(filename,O_CREAT|O_TRUNC|O_RDWR,0644);
     if (fd == -1) {
         loggerPanic("Failed to open file '%s': %s\n",
@@ -714,13 +712,13 @@ void cfgToFile(CFG *cfg, char *filename) {
     cfgBuilderWriteToFile(&builder,filename);
 }
 
-void cfgsToFile(PtrVec *cfgs, char *filename) {
+void cfgsToFile(Vec *cfgs, char *filename) {
     CfgGraphVizBuilder builder;
 
     cfgGraphVizBuilderInit(&builder);
 
     aoStrCat(builder.viz,"digraph user_program {\n ");
-    for (int i = 0; i < cfgs->size; ++i) {
+    for (unsigned long i = 0; i < cfgs->size; ++i) {
         cfgCreateGraphViz(&builder,(CFG *)cfgs->entries[i]);
     }
     aoStrCatPrintf(builder.viz, "} // ending graph\n");

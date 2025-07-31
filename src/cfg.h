@@ -3,7 +3,7 @@
 
 #include "aostr.h"
 #include "cctrl.h"
-#include "map.h"
+#include "containers.h"
 #include "mempool.h"
 
 enum bbType {
@@ -67,10 +67,10 @@ typedef struct BasicBlock {
      * loop head the next pointer is the BB_LOOP_BLOCK, so we can keep track of 
      * it more easily */
     struct BasicBlock *next;
-    IntMap *prev_blocks;
+    Map *prev_blocks;
     /* this is to be able to handle a switch */
-    PtrVec *next_blocks;
-    PtrVec *ast_array;
+    Vec *next_blocks;
+    Vec *ast_array;
 } BasicBlock;
 
 #define bbPrevCnt(bb) \
@@ -79,7 +79,7 @@ typedef struct BasicBlock {
 /* Head of a CFG is a function */
 typedef struct CFG {
     /* CFG Does not own the function name, the AST does */
-    aoStr *ref_fname;
+    AoStr *ref_fname;
     /* This head block and start of the CFG */
     BasicBlock *head;
     /* How many basic blocks are in the graph */
@@ -87,11 +87,11 @@ typedef struct CFG {
     /* A more compact representation of the graph, a block number to its 
      * connected blocks (not including previous nodes)
      * [block_no] => {block, block...}*/
-    IntMap *graph;
+    Map *graph;
     /* Block number to it's block struct
      * [block_no] => block 
      * hashtable */
-    IntMap *no_to_block;
+    Map *no_to_block;
     /* This a pointer to the memory pool which holds all of the basic blocks */
     MemPool *_memory;
 } CFG;
@@ -106,12 +106,12 @@ typedef struct CFGBuilder {
 
     BasicBlock *bb;
     BasicBlock *bb_cur_loop;
-    IntMap *leaf_cache;
+    Map *leaf_cache;
 
     List *ast_list;
     List *ast_iter;
     List *unresolved_gotos;
-    StrMap *resolved_labels;
+    Map *resolved_labels;
 } CFGBuilder;
 
 BasicBlock *bbNew(int type);
@@ -121,7 +121,7 @@ char *bbFlagsToString(unsigned int flags);
 char *bbPreviousBlockNumbersToString(BasicBlock *bb);
 int bbPrevHas(BasicBlock *bb, int block_no);
 BasicBlock *cfgGet(CFG *cfg, int block_no);
-PtrVec *cfgConstruct(Cctrl *cc);
+Vec *cfgConstruct(Cctrl *cc);
 void bbPrint(BasicBlock *bb);
 void bbPrintNoAst(BasicBlock *bb);
 char *bbToString(BasicBlock *bb);

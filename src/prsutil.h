@@ -4,7 +4,6 @@
 #include "ast.h"
 #include "cctrl.h"
 #include "lexer.h"
-#include "map.h"
 
 #define PUNCT_TERM_COMMA  (1<<0) // ';'
 #define PUNCT_TERM_SEMI   (1<<1) // ','
@@ -40,7 +39,7 @@ int astIsArithmetic(long op, int is_float);
 void assertTokenIsTerminator(Cctrl *cc, Lexeme *tok, long terminator_flags);
 void assertTokenIsTerminatorWithMsg(Cctrl *cc, Lexeme *tok,
         long terminator_flags, const char *fmt, ...);
-void assertUniqueSwitchCaseLabels(PtrVec *case_vector, Ast *case_);
+void assertUniqueSwitchCaseLabels(Vec *case_vector, Ast *case_);
 void assertIsFloatOrInt(Ast *ast, long lineno);
 void assertIsInt(Ast *ast, long lineno);
 void assertIsFloat(Ast *ast, long lineno);
