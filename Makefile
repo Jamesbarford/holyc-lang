@@ -1,5 +1,5 @@
 C_COMPILER     ?= gcc
-BUILD_TYPE     ?= Release #Debug 
+BUILD_TYPE     ?= Release
 INSTALL_PREFIX ?= /usr/local
 CFLAGS         ?= '-Wextra -Wall -Wpedantic -Wno-implicit-fallthrough'
 
