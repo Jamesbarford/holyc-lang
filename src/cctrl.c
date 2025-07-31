@@ -14,35 +14,8 @@
 #include "config.h"
 #include "lexer.h"
 #include "list.h"
-#include "map.h"
 #include "util.h"
 #include "version.h"
-
-/* `Map<char *, Ast *>` Map does not own either the key nor the Ast */
-MapType map_cstring_ast_type = {
-    .match           = mapCStringEq,
-    .hash            = mapCStringHash,
-    .get_key_len     = mapCStringLen,
-    .key_to_string   = mapCStringToString,
-    .key_release     = NULL,
-    .value_to_string = (mapValueToString *)astToAoStr, 
-    .value_release   = NULL,
-    .key_type        = "char *",
-    .value_type      = "Ast *",
-};
-
-/* `Map<char *, AstType *>` Map does not own either the key nor the AstType */
-MapType map_cstring_asttype_type = {
-    .match           = mapCStringEq,
-    .hash            = mapCStringHash,
-    .get_key_len     = mapCStringLen,
-    .key_to_string   = mapCStringToString,
-    .key_release     = NULL,
-    .value_to_string = (mapValueToString *)astTypeToColorAoStr,
-    .value_release   = NULL,
-    .key_type        = "char *",
-    .value_type      = "AstType *",
-};
 
 /* `Map<char *, Lexeme *>` Map does not own either the key nor the Lexeme */
 MapType map_cstring_lexeme_type = {
@@ -57,24 +30,12 @@ MapType map_cstring_lexeme_type = {
     .value_type      = "Lexeme *",
 };
 
-MapType map_cstring_cstring_type = {
-    .match           = mapCStringEq,
-    .hash            = mapCStringHash,
-    .get_key_len     = mapCStringLen,
-    .key_to_string   = mapCStringToString,
-    .key_release     = NULL,
-    .value_to_string = mapCStringToString,
-    .value_release   = NULL,
-    .key_type        = "char *",
-    .value_type      = "char *",
-};
-
 Map *cctrlCreateLexemeMap(void) {
     return mapNew(32, &map_cstring_lexeme_type);
 }
 
 Map *cctrlCreateAstMap(Map *parent) {
-    return mapNewWithParent(parent, 32, &map_cstring_ast_type);
+    return mapNewWithParent(parent, 32, &map_ast_type);
 }
 
 static char *x86_registers = "rax,rbx,rcx,rdx,rsi,rdi,rbp,rsp,r8,r9,r10,r11,r12,"
@@ -192,7 +153,7 @@ static void cctrlAddBuiltinMacros(Cctrl *cc) {
 Cctrl *ccMacroProcessor(Map *macro_defs) {
     Cctrl *cc = (Cctrl *)malloc(sizeof(Cctrl));
     cc->macro_defs = macro_defs;
-    cc->strs = mapNew(32, &map_cstring_ast_type);
+    cc->strs = mapNew(32, &map_ast_type);
     cc->ast_list = NULL;
     return cc;
 }
@@ -202,17 +163,17 @@ Cctrl *cctrlNew(void) {
     Cctrl *cc = (Cctrl *)malloc(sizeof(Cctrl));
 
     cc->flags = 0;
-    cc->global_env = mapNew(32, &map_cstring_ast_type);
-    cc->clsdefs = mapNew(32, &map_cstring_asttype_type);
-    cc->uniondefs = mapNew(32, &map_cstring_asttype_type);
-    cc->symbol_table = mapNew(32, &map_cstring_asttype_type);
-    cc->asm_funcs = mapNew(32, &map_cstring_ast_type);
+    cc->global_env = mapNew(32, &map_ast_type);
+    cc->clsdefs = mapNew(32, &map_asttype_type);
+    cc->uniondefs = mapNew(32, &map_asttype_type);
+    cc->symbol_table = mapNew(32, &map_asttype_type);
+    cc->asm_funcs = mapNew(32, &map_ast_type);
     cc->macro_defs = cctrlCreateLexemeMap();
     cc->x86_registers = setNew(32, &set_cstring_type);
     cc->libc_functions = setNew(32, &set_cstring_type);
-    cc->strs = mapNew(32, &map_cstring_ast_type);
+    cc->strs = mapNew(32, &map_ast_type);
     cc->asm_blocks = listNew();
-    cc->asm_functions = mapNew(32, &map_cstring_ast_type);
+    cc->asm_functions = mapNew(32, &map_ast_type);
     cc->ast_list = listNew();
     cc->initalisers = listNew();
     cc->initaliser_locals = listNew();
@@ -232,10 +193,12 @@ Cctrl *cctrlNew(void) {
     for (int i = 0; i < len; ++i) {
         AoStr *upper_reg = aoStrDup(str_array[i]);
         aoStrToUpperCase(upper_reg);
-        char *reg = aoStrMove(str_array[i]);
-        setAdd(cc->x86_registers,reg);
-        reg = aoStrMove(upper_reg);
-        setAdd(cc->x86_registers,reg);
+        // Add both lower and upper case
+        setAdd(cc->x86_registers,str_array[i]->data);
+        setAdd(cc->x86_registers,upper_reg->data);
+
+        //free(upper_reg);
+        //free(str_array[i]);
     }
     free(str_array);
 
@@ -256,7 +219,6 @@ Cctrl *cctrlNew(void) {
         mapAdd(cc->symbol_table, built_in->name, type);
     }
 
-    mapPrint(cc->symbol_table);
     cctrlAddBuiltinMacros(cc);
 
     Ast *cmd_args = astGlobalCmdArgs();
@@ -303,11 +265,9 @@ void tokenBufferPrint(TokenRingBuffer *ring_buffer) {
     printf("\n");
 }
 
-
 int tokenRingBufferEmpty(TokenRingBuffer *ring_buffer) {
     return ring_buffer->size == 0;
 }
-
 
 /* Add a token to the ring buffer and remove the oldest element */
 void tokenRingBufferPush(TokenRingBuffer *ring_buffer, Lexeme *token) {

@@ -658,8 +658,14 @@ static unsigned long murmur(const char *key, unsigned long len, unsigned long se
 /* Seed for the murmur hash function, this is a meme number but works
  * surprisingly well */
 #define MURMUR_HASH_SEED (0xBABECAFE69)
-unsigned long cstringMurmur(char *data, long len) {
-    return murmur(data, len, MURMUR_HASH_SEED);
+unsigned long cstringMurmur(char *key, long len) {
+//    unsigned long hash = 0;
+//    for (long i = 0; i < len; ++i) {
+//        hash = ((hash << 5) - hash) + key[i];
+//    }
+//    return hash;
+//
+    return murmur(key, len, MURMUR_HASH_SEED);
 }
 
 unsigned long aoStrHashFunction(AoStr *str) {

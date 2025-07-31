@@ -51,11 +51,9 @@ AoStr *compileToAsm(Cctrl *cc) {
 
 void compileToTokens(Cctrl *cc, CliArgs *args, int lexer_flags) {
     Lexer *l = (Lexer *)globalArenaAllocate(sizeof(Lexer));
-    StrMap *seen_files = strMapNew(32);
     char *root_dir = mprintf("%s/include/", args->install_dir);
 
     lexInit(l,NULL,CCF_PRE_PROC|lexer_flags);
-    l->seen_files = seen_files;
     l->lineno = 1;
     lexSetBuiltinRoot(l,root_dir);
 
@@ -66,7 +64,7 @@ void compileToTokens(Cctrl *cc, CliArgs *args, int lexer_flags) {
         lexemePrint(token);
     }
 
-    strMapRelease(seen_files);
+    setRelease(l->seen_files);
 }
 
 int compileToAst(Cctrl *cc, CliArgs *args, int lexer_flags) {

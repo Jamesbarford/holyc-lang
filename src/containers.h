@@ -34,6 +34,12 @@ struct Vec {
     VecType *type;
 };
 
+#define vecInBounds(vec, idx) ((idx >= 0) && idx < (vec)->size)
+#define vecGetInBounds(vec, idx) (vecInBounds(vec,idx) ? (vec)->entries[idx] : NULL)
+#define vecEmpty(vec) ((vec)->size == 0)
+#define vecGet(type,vec,idx) ((type)((vec)->entries[idx]))
+#define vecTail(type,vec) ((type)((vec)->entries[(vec)->size-1]))
+
 Vec *vecNew(VecType *type);
 Vec *vecNewFrom(VecType *type, ...);
 void vecReserve(Vec *vec, unsigned long capacity);
@@ -158,6 +164,11 @@ int mapCStringEq(void *s1, void *s2);
 long mapCStringLen(void *s);
 AoStr *mapCStringToString(void *s);
 
+extern MapType map_cstring_cstring_type;
+/* `Map<char *, void *>` for when we don't care about the value, this should
+ * be used sparingly */
+extern MapType map_cstring_opaque_type;
+
 /*================== Generic SET =============================================*/
 typedef struct Set Set;
 typedef struct SetIter SetIter;
@@ -167,7 +178,7 @@ typedef struct SetNode SetNode;
 typedef int (setValueMatch)(void *v1, void *v2);
 typedef unsigned long (setValueHash)(void *value);
 typedef AoStr *(setValueToString)(void *value);
-typedef AoStr *(setValueRelease)(void *value);
+typedef void (setValueRelease)(void *value);
 typedef long (setKeyLen)(void *key);
 
 struct SetType {
@@ -180,7 +191,7 @@ struct SetType {
 };
 
 struct SetNode {
-    int free;
+    int occupied;
     void *key;
     long key_len;
 };
@@ -225,7 +236,7 @@ void *setGetAt(Set *set, long index);
 void setClear(Set *set);
 void setRelease(Set *set);
 SetIter *setIterNew(Set *set);
-void setIterInit(SetIter *it, Set *set);
+void setIterInit(Set *set, SetIter *it);
 void *setNext(SetIter *it);
 int setIterNext(SetIter *it);
 void setIterRelease(SetIter *it);
@@ -241,6 +252,10 @@ Set *setCopy(Set *set);
 void setPrint(Set *set);
 void setPrintStats(Set *set);
 
+/* `Set<char *>` set does not own the `char *`*/
 extern SetType set_cstring_type;
+/* `Set<char *>` the set owns the `char *`*/
+extern SetType set_cstring_owned_type;
 
+unsigned long roundUpToNextPowerOf2(unsigned long v);
 #endif

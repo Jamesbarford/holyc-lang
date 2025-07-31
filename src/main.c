@@ -324,7 +324,7 @@ int main(int argc, char **argv) {
     }
 
     if (args.cfg_create || args.cfg_create_png || args.cfg_create_svg) {
-        PtrVec *cfgs = cfgConstruct(cc);
+        Vec *cfgs = cfgConstruct(cc);
         char *dot_outfile = mprintf("./%s.dot",args.infile_no_ext);
         cfgsToFile(cfgs,dot_outfile);
         if (args.cfg_create_png || args.cfg_create_svg) {

@@ -7,14 +7,83 @@
 #include "ast.h"
 #include "cctrl.h"
 #include "cfg.h"
+#include "containers.h"
 #include "lexer.h"
 #include "list.h"
-#include "map.h"
 #include "util.h"
 
 static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast);
-static void cfgLinkLeaves(IntMap *map, BasicBlock *bb, BasicBlock *dest);
+static void cfgLinkLeaves(Map *map, BasicBlock *bb, BasicBlock *dest);
 
+
+VecType vec_cfg_type = {
+    .stringify = NULL,
+    .match     = NULL,
+    .release   = NULL,
+    .type_str  = "CFG *",
+};
+
+void vecBbToString(AoStr *buf, void *bb) {
+    char *bb_str = bbToString((BasicBlock *)bb);
+    aoStrCatPrintf(buf, "%s\n", bb_str);
+}
+
+int vecBbMatch(void *bb1, void *bb2) {
+    return ((BasicBlock *)bb1)->block_no ==
+           ((BasicBlock *)bb2)->block_no;
+}
+
+VecType vec_basic_block_type = {
+    .stringify = vecBbToString,
+    .match     = vecBbMatch,
+    .release   = NULL,
+    .type_str  = "BasicBlock *",
+};
+
+Vec *bbVecNew(void) {
+    return vecNew(&vec_basic_block_type);
+}
+
+AoStr *mapBasicBlockToString(void *bb) {
+    char *bb_str = bbToString((BasicBlock *)bb);
+    return aoStrDupRaw(bb_str, strlen(bb_str));
+}
+
+MapType map_int_to_basic_block_type = {
+    .match           = mapIntKeyMatch,
+    .hash            = mapIntKeyHash,
+    .get_key_len     = mapIntKeyLen,
+    .key_to_string   = mapIntToString,
+    .key_release     = NULL,
+    .value_to_string = mapBasicBlockToString,
+    .value_release   = NULL,
+    .key_type        = "int",
+    .value_type      = "BasicBlock *",
+};
+
+MapType map_cstring_to_basic_block_type = {
+    .match           = mapCStringEq,
+    .hash            = mapCStringHash,
+    .get_key_len     = mapCStringLen,
+    .key_to_string   = mapCStringToString,
+    .key_release     = NULL,
+    .value_to_string = mapBasicBlockToString,
+    .value_release   = NULL,
+    .key_type        = "char *",
+    .value_type      = "BasicBlock *",
+};
+
+MapType map_int_to_int_set_type = {
+    .match           = mapIntKeyMatch,
+    .hash            = mapIntKeyHash,
+    .get_key_len     = mapIntKeyLen,
+    .key_to_string   = mapIntToString,
+    .key_release     = NULL,
+    .value_to_string = (mapValueToString *)setToString,
+    .value_release   = (mapValueRelease *)setRelease,
+    .key_type        = "char *",
+    .value_type      = "Set<int>",
+};
 
 void cfgBuilderRelease(CFGBuilder *builder, int free_builder) {
     if (builder) {
@@ -30,7 +99,7 @@ void bbInit(void *_bb) {
     bb->block_no = -1;
 }
 
-static void cfgBuilderInit(CFGBuilder *builder, Cctrl *cc, IntMap *leaf_cache, int block_no) {
+static void cfgBuilderInit(CFGBuilder *builder, Cctrl *cc, Map *leaf_cache, int block_no) {
     MemPool *block_pool = memPoolNew(2048);
 
     builder->cc = cc;
@@ -42,26 +111,23 @@ static void cfgBuilderInit(CFGBuilder *builder, Cctrl *cc, IntMap *leaf_cache, i
     builder->block_pool = block_pool;
 
     builder->unresolved_gotos = listNew();
-    builder->resolved_labels = strMapNew(16);
-
-    strMapSetFreeKey(builder->resolved_labels,NULL);
-    strMapSetFreeValue(builder->resolved_labels,NULL);
+    builder->resolved_labels = mapNew(16, &map_cstring_to_basic_block_type);
 }
 
 static void cfgBuilderClearLeafCache(CFGBuilder *builder) {
-    intMapClear(builder->leaf_cache);
+    mapClear(builder->leaf_cache);
 }
 
 static void bbAddPrev(BasicBlock *bb, BasicBlock *prev) {
-    intMapAdd(bb->prev_blocks,prev->block_no,prev);
+    mapAdd(bb->prev_blocks,(void *)(long)prev->block_no,prev);
 }
 
 static void bbRemovePrev(BasicBlock *bb, int prev_block_no) {
-    intMapDelete(bb->prev_blocks,prev_block_no);
+    mapRemove(bb->prev_blocks,(void *)(long)prev_block_no);
 }
 
 int bbPrevHas(BasicBlock *bb, int block_no) {
-    return intMapHas(bb->prev_blocks,block_no);
+    return mapHas(bb->prev_blocks,(void *)(long)block_no);
 }
 
 int bbIsType(BasicBlock *bb, enum bbType type) {
@@ -80,7 +146,7 @@ int bbAstCount(BasicBlock *bb) {
 }
 
 void bbAstAdd(BasicBlock *bb, Ast *ast) {
-    ptrVecPush(bb->ast_array,ast);
+    vecPush(bb->ast_array,ast);
 }
 
 void bbSetPrevPtr(BasicBlock *bb, BasicBlock *prev) {
@@ -146,8 +212,8 @@ void cfgPrintAstArray(BasicBlock *bb) {
     if (bb->ast_array->size == 0) {
         printf("(null)\n");
     } else {
-        for (int i = 0; i < bb->ast_array->size; ++i) {
-            printf("%d: \n", i);
+        for (unsigned long i = 0; i < bb->ast_array->size; ++i) {
+            printf("%lu: \n", i);
             astPrint(bb->ast_array->entries[i]);
         }
     }
@@ -240,7 +306,7 @@ char *bbToString(BasicBlock *bb) {
 }
 
 char *bbPreviousBlockNumbersToString(BasicBlock *bb) {
-    return intMapKeysToString(bb->prev_blocks);
+    return aoStrMove(mapKeysToString(bb->prev_blocks));
 }
 
 char *bbToJSON(BasicBlock *bb) {
@@ -281,7 +347,7 @@ void bbPrint(BasicBlock *bb) {
     char *bb_str = bbToString(bb);
     AoStr *str = aoStrDupRaw((char*)bb_str, strlen(bb_str)); 
     aoStrPutChar(str,'\n');
-    for (int i = 0; i < bb->ast_array->size; ++i) {
+    for (unsigned long i = 0; i < bb->ast_array->size; ++i) {
         char *ast_str = astLValueToString(bb->ast_array->entries[i],0);
         aoStrCat(str,ast_str);
         aoStrPutChar(str,'\n');
@@ -300,11 +366,11 @@ static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder,
     bb->flags = 0;
     bb->block_no = builder->bb_block_no++;
     builder->bb_count++;
-    bb->prev_blocks = intMapNew(32);
+    bb->prev_blocks = mapNew(32, &map_int_to_basic_block_type);
     bb->flags = flags;
     /* @Leak
      * This should probably be a memory pool as well */
-    bb->ast_array = ptrVecNew();
+    bb->ast_array = astVecNew();
     bb->visited = 0;
     bb->next = bb->prev = bb->_else = bb->_if = NULL;
     return bb;
@@ -314,8 +380,8 @@ static CFG *cfgNew(AoStr *fname, BasicBlock *head_block) {
     CFG *cfg = (CFG *)malloc(sizeof(CFG));
     cfg->head = head_block;
     cfg->ref_fname = fname;
-    cfg->no_to_block = intMapNew(32);
-    cfg->graph = intMapNew(32);
+    cfg->no_to_block = mapNew(32, &map_int_to_basic_block_type);
+    cfg->graph = mapNew(32, &map_int_to_int_set_type);
     return cfg;
 }
 
@@ -619,7 +685,7 @@ static void cfgHandleWhileLoop(CFGBuilder *builder, Ast *ast) {
     if (builder->bb != bb_body || !builder->bb->next) {
         bbSetType(builder->bb,BB_LOOP_BLOCK);
         if (bbAstCount(builder->bb) == 0) {
-            ptrVecPush(builder->bb->ast_array,astMakeLoopSentinal());
+            vecPush(builder->bb->ast_array,astMakeLoopSentinal());
         }
         /* So we can access the loop block from the head of the condition */
         bbSetNext(bb_cond,builder->bb);
@@ -708,8 +774,9 @@ static void cfgHandleGoto(CFGBuilder *builder, Ast *ast) {
 
     /* Try straight out the gate to resolve the goto otherwise save it for 
      * later */
-    if ((dest = strMapGetLen(builder->resolved_labels,label->data,
-            label->len)) != NULL)
+    if ((dest = mapGetLen(builder->resolved_labels,
+                          label->data,
+                          label->len)) != NULL)
     {
         /* This forms a loop but over a potentially large number of graph nodes 
          * making it difficult to classify as a _conventional_ loop. 
@@ -722,7 +789,7 @@ static void cfgHandleGoto(CFGBuilder *builder, Ast *ast) {
     }
 
     /* This should just push the ast to to ast_array */
-    ptrVecPush(builder->bb->ast_array,ast);
+    vecPush(builder->bb->ast_array,ast);
 
     /* If this is an unconditional jump */
     if (!(builder->flags & CFG_BUILDER_FLAG_IN_CONDITIONAL)) {
@@ -735,7 +802,7 @@ static void cfgHandleReturn(CFGBuilder *builder, Ast *ast) {
     BasicBlock *bb_after = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK,0);
     bbSetNext(bb_return,NULL);
 
-    ptrVecPush(bb_return->ast_array,ast);
+    vecPush(bb_return->ast_array,ast);
     cfgBuilderSetBlock(builder,bb_after);
 }
 
@@ -745,9 +812,9 @@ static void cfgHandleLabel(CFGBuilder *builder, Ast *ast) {
     BasicBlock *bb_label = cfgSelectOrCreateBlock(builder,
             BB_CONTROL_BLOCK,BB_FLAG_LABEL);
     /* We want the label in the newly allocated block */
-    ptrVecPush(bb_label->ast_array,ast);
+    vecPush(bb_label->ast_array,ast);
     AoStr *label = astHackedGetLabel(ast);
-    strMapAdd(builder->resolved_labels,label->data,bb_label);
+    mapAdd(builder->resolved_labels,label->data,bb_label);
     cfgBuilderSetBlock(builder,bb_label);
 }
 
@@ -785,12 +852,12 @@ static void cfgHandleContinue(CFGBuilder *builder) {
 static void cfgHandleCase(CFGBuilder *builder, BasicBlock *bb_end, Ast *ast) {
     BasicBlock *bb_switch = builder->bb;
     BasicBlock *bb_case = cfgBuilderAllocBasicBlock(builder,BB_CASE,0);
-    ptrVecPush(bb_switch->next_blocks,bb_case);
+    vecPush(bb_switch->next_blocks,bb_case);
 
     /* so we can access begining and end while in the basic block and always 
      * know it is the first node in the ast array  */
     cfgBuilderSetBlock(builder,bb_case);
-    ptrVecPush(bb_case->ast_array,ast);
+    vecPush(bb_case->ast_array,ast);
     bbSetPrevPtr(bb_case,bb_switch);
 
     if (!listEmpty(ast->case_asts)) {
@@ -822,7 +889,7 @@ static void cfgHandleSwitch(CFGBuilder *builder, Ast *ast) {
 
     cfgBuilderSetBlock(builder,bb_switch);
     cfgHandleAstNode(builder,ast->switch_cond);
-    bb_switch->next_blocks = ptrVecNew();
+    bb_switch->next_blocks = bbVecNew();
 
     if (!ast->switch_bounds_checked) {
         bb_switch->flags |= BB_FLAG_UNCONDITIONAL_JUMP;
@@ -830,7 +897,7 @@ static void cfgHandleSwitch(CFGBuilder *builder, Ast *ast) {
     builder->flags |= CFG_BUILDER_FLAG_IN_SWITCH;
 
     /* ??? - This has the potential to be a crazy loop */
-    for (int i = 0; i < ast->cases->size; ++i) {
+    for (unsigned long i = 0; i < ast->cases->size; ++i) {
         cfgBuilderSetBlock(builder,bb_switch);
         Ast *_case = (Ast *)ast->cases->entries[i];
         cfgHandleCase(builder,bb_end,_case);
@@ -865,12 +932,12 @@ static void cfgHandleSwitch(CFGBuilder *builder, Ast *ast) {
 }
 
 /* Top down through the tree finding blocks which are not pointing to anything */
-static void cfgLinkLeaves(IntMap *map, BasicBlock *bb, BasicBlock *dest) {
-    if (!intMapHas(map,bb->block_no)) {
-        intMapAdd(map,bb->block_no,NULL);
+static void cfgLinkLeaves(Map *map, BasicBlock *bb, BasicBlock *dest) {
+    if (!mapHas(map,(void *)(long)bb->block_no)) {
+        mapAdd(map,(void *)(long)bb->block_no,NULL);
         switch (bb->type) {
             case BB_SWITCH:
-                for (int i = 0; i < bb->next_blocks->size; ++i) {
+                for (unsigned long i = 0; i < bb->next_blocks->size; ++i) {
                     cfgLinkLeaves(map,bb->next_blocks->entries[i],dest);
                 }
                 /* Fallthrough to set switches next pointer */ 
@@ -894,7 +961,7 @@ static void cfgLinkLeaves(IntMap *map, BasicBlock *bb, BasicBlock *dest) {
 static BasicBlock *cfgMergeBranches(CFGBuilder *builder, BasicBlock *pre,
         BasicBlock *post)
 { 
-    IntMap *leaf_cache = builder->leaf_cache;
+    Map *leaf_cache = builder->leaf_cache;
     BasicBlock *join = post;
     if (bbAstCount(post) > 0 && !bbIsLoopControl(post)) {
         join = cfgBuilderAllocBasicBlock(builder,BB_CONTROL_BLOCK,0);
@@ -1011,13 +1078,13 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
         case AST_FUNCALL:
         case AST_FUNPTR_CALL:
         case AST_LVAR:
-            ptrVecPush(bb->ast_array,ast);
+            vecPush(bb->ast_array,ast);
             break;
         /* Start of a variable being alive (possibly?) */
         case AST_DECL:
         default:
             /* Need to look at this for binary operators */
-            ptrVecPush(bb->ast_array,ast);
+            vecPush(bb->ast_array,ast);
             break;
     }
 }
@@ -1067,7 +1134,7 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
             else                         bb_goto->flags |= BB_FLAG_ELSE_BRANCH;
         }
 
-        PtrVec *dest_ast_array = bb_dest->ast_array;
+        Vec *dest_ast_array = bb_dest->ast_array;
         BasicBlock *loop_cond = bb_dest->prev;
         BasicBlock *loop_back = cfgBuilderAllocBasicBlock(builder,BB_LOOP_BLOCK,0);
 
@@ -1076,7 +1143,7 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
 
         /* We need to get the statements that happened before the 
          * label */
-        for (int i = 0; i < dest_ast_array->size; ++i) {
+        for (unsigned long i = 0; i < dest_ast_array->size; ++i) {
             Ast *needle = dest_ast_array->entries[i];
             if (needle->kind == AST_LABEL && aoStrCmp(goto_label,
                         astHackedGetLabel(needle))) {
@@ -1088,14 +1155,14 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
 
         /* Add asts from the loop_cond */
         for (int i = 0; i < ast_move_cnt; ++i) {
-            ptrVecPush(loop_back->ast_array,asts_to_move[i]);
+            vecPush(loop_back->ast_array,asts_to_move[i]);
         }
 
         /* resize the array */
         dest_ast_array->size -= ast_move_cnt;
 
         /* Remove asts that no longer exist in the block */
-        for (int i = 0; i < dest_ast_array->size; ++i) {
+        for (unsigned long i = 0; i < dest_ast_array->size; ++i) {
             dest_ast_array->entries[i] = dest_ast_array->entries[ast_move_cnt+i];
         }
 
@@ -1150,8 +1217,8 @@ static void cfgAdjacencyPrintBlock(BasicBlock *bb, int is_parent) {
     else           printf("child %s\n",bb_string);
 }
 
-BasicBlock *cfgVecFindBlock(PtrVec *vec, int block_no, int *_idx) {
-    for (int i = 0; i < vec->size; ++i) {
+BasicBlock *cfgVecFindBlock(Vec *vec, int block_no, int *_idx) {
+    for (unsigned long i = 0; i < vec->size; ++i) {
         BasicBlock *bb = vecGet(BasicBlock *,vec,i);
         if (bb->block_no == block_no) {
             *_idx = i;
@@ -1163,84 +1230,83 @@ BasicBlock *cfgVecFindBlock(PtrVec *vec, int block_no, int *_idx) {
 }
 
 void cfgAdjacencyListPrint(CFG *cfg) {
-    IntMapIterator *it = intMapIteratorNew(cfg->no_to_block);
-    IntMapNode *entry;
-    IntSetIterator *set_iter;
-    long block_no;
-
-    while ((entry = intMapNext(it)) != NULL) {
-        BasicBlock *parent = (BasicBlock *)entry->value;
-        IntSet *iset = (IntSet *)intMapGet(cfg->graph,entry->key);
+    MapIter it;
+    mapIterInit(cfg->no_to_block, &it);
+    
+    while (mapIterNext(&it)) {
+        MapNode *entry = it.node;
+        BasicBlock *parent = entry->value;
+        Set *iset = (Set *)mapGet(cfg->graph,entry->key);
 
         cfgAdjacencyPrintBlock(parent,1);
 
-        set_iter = intSetIteratorNew(iset);
-        while ((block_no = intSetNext(set_iter)) != HT_DELETED) {
-            BasicBlock *bb = (BasicBlock *)intMapGet(cfg->no_to_block,block_no);
+        SetIter set_it;
+        setIterInit(iset, &set_it);
+
+        while (setIterNext(&set_it)) {
+            BasicBlock *bb = (BasicBlock *)mapGet(cfg->no_to_block,set_it.value);
             cfgAdjacencyPrintBlock(bb,0);
         }
         printf("====\n");
-        intSetIteratorRelease(set_iter);
     }
-    intMapIteratorRelease(it);
 }
 
 /* Print the Adjacency list graph representation */
 void cfgAdjacencyListPrintShallow(CFG *cfg) {
-    IntMapIterator *it = intMapIteratorNew(cfg->no_to_block);
-    IntMapNode *entry;
+    MapIter it;
+    mapIterInit(cfg->no_to_block, &it);
 
-    while ((entry = intMapNext(it)) != NULL) {
-        BasicBlock *bb = (BasicBlock *)entry->value;
+    while (mapIterNext(&it)) {
+        BasicBlock *bb = (BasicBlock *)it.node->value;
         char *bb_string = bbToJSON(bb);
         printf("%s\n====\n",bb_string);
     }
-    intMapIteratorRelease(it);
 }
 
 AoStr *cdfAdjacencyListToJSON(CFG *cfg) {
     AoStr *json = aoStrNew();
-    IntMapIterator *it = intMapIteratorNew(cfg->no_to_block);
-    IntMapNode *entry;
+    MapIter it;
+    mapIterInit(cfg->no_to_block, &it);
 
-    aoStrCatPrintf(json, "{\n");
-    while ((entry = intMapNext(it)) != NULL) {
+    while (mapIterNext(&it)) {
+        MapNode *entry = it.node;
         BasicBlock *parent = (BasicBlock *)entry->value;
-        IntSet *iset = (IntSet *)intMapGet(cfg->graph,entry->key);
+        Set *iset = (Set *)mapGet(cfg->graph,entry->key);
 
         aoStrCatPrintf(json, "    %d: [", parent->block_no);
-        IntSetIterator *set_iter = intSetIteratorNew(iset);
-        long block_no;
-        while ((block_no = intSetNext(set_iter)) != HT_DELETED) {
-            BasicBlock *bb = (BasicBlock *)intMapGet(cfg->no_to_block,block_no);
+
+        SetIter set_iter;
+        setIterInit(iset, &set_iter);
+
+        while (setIterNext(&set_iter)) {
+            BasicBlock *bb = (BasicBlock *)mapGet(cfg->no_to_block,set_iter.value);
             aoStrCatPrintf(json,"%d",bb->block_no);
-            if (set_iter->idx + 1 != iset->size) {
+            if (set_iter.idx + 1 != iset->size) {
                 aoStrCat(json,", ");
             }
         }
-        intSetIteratorRelease(set_iter);
         aoStrCat(json,"]");
 
-        if (it->idx + 1 != it->map->size) {
+        if (it.idx + 1 != it.map->size) {
             aoStrCat(json,",");
         }
         aoStrPutChar(json,'\n');
     }
     aoStrPutChar(json,'}');
-
-    intMapIteratorRelease(it);
     return json;
 }
 
-int cfgRelinkVector(IntMap *map, BasicBlock *parent, BasicBlock *child,
-        BasicBlock *bb)
+int cfgRelinkVector(Map *map,
+                    BasicBlock *parent,
+                    BasicBlock *child,
+                    BasicBlock *bb)
 {
-    IntSet *iset = intMapGet(map,parent->block_no);
+    Set *iset = mapGet(map,(void *)(long)parent->block_no);
     loggerWarning("Vector relinking. Parent bb%d, child bb%d, block: bb%d\n",
             parent->block_no, child->block_no, bb->block_no);
     if (iset) {
-        intSetRemove(iset,bb->block_no);
-        intSetAdd(iset,child->block_no);
+        setRemove(iset,(void *)(long)bb->block_no);
+        setAdd(iset,(void *)(long)child->block_no);
         /* @Bug - this is close but not quite working when creating strings.HC
          * CFG */
         child->flags |= bb->flags;
@@ -1255,10 +1321,10 @@ int cfgRelinkVector(IntMap *map, BasicBlock *parent, BasicBlock *child,
 }
 
 /* Returns the parent */
-BasicBlock *bbRelinkControl(IntMap *map, BasicBlock *bb) {
+BasicBlock *bbRelinkControl(Map *map, BasicBlock *bb) {
      /* @Bug
       * What if the map has had deletions? */
-    BasicBlock *parent = intMapGetAt(bb->prev_blocks,0);
+    BasicBlock *parent = mapGetAt(bb->prev_blocks,0);
     BasicBlock *child = bb->next;
 
     if (bbIsType(child,BB_CONTROL_BLOCK) && bbIsType(bb,BB_CONTROL_BLOCK)) {
@@ -1308,21 +1374,26 @@ BasicBlock *bbRelinkControl(IntMap *map, BasicBlock *bb) {
  * - All sets with the node as a previous
  */
 void cfgDeleteBasicBlock(CFG *cfg, BasicBlock *bb_del) {
-    IntMapIterator *it = intMapIteratorNew(cfg->graph);
-    IntMapNode *entry;
+    MapIter it;
+    mapIterInit(cfg->graph, &it);
     bbSetType(bb_del,BB_GARBAGE);
-    while ((entry = intMapNext(it)) != NULL) {
-        if (entry->key == bb_del->block_no) continue;
-        IntSet *bb_connections = (IntSet *)entry->value;
-        BasicBlock *bb = (BasicBlock *)intMapGet(cfg->no_to_block,entry->key);
+
+    while (mapIterNext(&it)) {
+        MapNode *entry = it.node;
+        if ((long)entry->key == (long)bb_del->block_no) continue;
+        Set *bb_connections = (Set *)entry->value;
+        BasicBlock *bb = (BasicBlock *)mapGet(cfg->no_to_block,entry->key);
         /* Remove node as a previous link */
-        intMapDelete(bb->prev_blocks,bb->block_no);
+        void *casted_key = (void *)(long)bb->block_no;
+        mapRemove(bb->prev_blocks,casted_key);
         /* Remove this node as a connection */
-        intSetRemove(bb_connections,bb_del->block_no);
+        setRemove(bb_connections,casted_key);
     }
+
     /* Remove node from both lookup tables */
-    intMapDelete(cfg->graph,bb_del->block_no);
-    intMapDelete(cfg->no_to_block,bb_del->block_no);
+    void *casted_key = (void *)(long)bb_del->block_no;
+    mapRemove(cfg->graph,casted_key);
+    mapRemove(cfg->no_to_block,casted_key);
 }
 
 /* For when the next pointer of a switch is a dead end, the most likely 
@@ -1340,15 +1411,15 @@ static void cfgRelinkSwitch(CFG *cfg, BasicBlock *bb_switch) {
         } else {
             dest = cond->next;
         }
-        IntMap *cache = intMapNew(32);
-        PtrVec *blocks = bb_switch->next_blocks;
+        Map *cache = mapNew(32, &map_int_to_basic_block_type);
+        Vec *blocks = bb_switch->next_blocks;
         /* Recurse through the graph linking all leaf nodes to the destination 
          * node, this is fairly expensive. */
-        for (int i = 0; i < blocks->size; ++i) {
+        for (unsigned long i = 0; i < blocks->size; ++i) {
             BasicBlock *bb_case = vecGet(BasicBlock *,blocks,i);
             cfgLinkLeaves(cache,bb_case,dest);
         }
-        intMapRelease(cache);
+        mapRelease(cache);
         bbSetNext(bb_switch,dest);
         cfgDeleteBasicBlock(cfg,bb_end);
     } else {
@@ -1357,25 +1428,25 @@ static void cfgRelinkSwitch(CFG *cfg, BasicBlock *bb_switch) {
     }
 }
 
-static IntSet *cfgCreateSwitchAdjacencyList(CFG *cfg, BasicBlock *bb) {
-    IntSet *iset = intSetNew(16);
-    for (int i = 0; i < bb->next_blocks->size; ++i) {
+static Set *cfgCreateSwitchAdjacencyList(CFG *cfg, BasicBlock *bb) {
+    Set *iset = setNew(16, &set_int_type);
+    for (unsigned long i = 0; i < bb->next_blocks->size; ++i) {
         BasicBlock *bb_case = (BasicBlock *)bb->next_blocks->entries[i];
-        intSetAdd(iset,bb_case->block_no);
+        setAdd(iset,(void *)(long)bb_case->block_no);
         bbAddPrev(bb_case,bb);
     }
 
     if (bbIsType(bb->next,BB_CONTROL_BLOCK) && bbAstCount(bb->next) == 0) {
         cfgRelinkSwitch(cfg,bb);
     } else {
-        intSetAdd(iset,bb->next->block_no);
+        setAdd(iset,(void *)(long)bb->next->block_no);
         bbAddPrev(bb->next,bb);
     }
     return iset;
 }
 
 /* This is a check for an orphaned node */
-static IntSet *cfgCreateControlAdjacencyList(CFG *cfg, BasicBlock *bb) {
+static Set *cfgCreateControlAdjacencyList(CFG *cfg, BasicBlock *bb) {
     /* @Bug
      * This is where a return block is the next, potentially there 
      * is not next either */
@@ -1407,7 +1478,7 @@ static IntSet *cfgCreateControlAdjacencyList(CFG *cfg, BasicBlock *bb) {
             } else {
                 if (bb->prev && bbIsType(bb->prev, BB_SWITCH)) {
                     bbSetType(bb,BB_END_BLOCK);
-                    IntSet *iset = intSetNew(8);
+                    Set *iset = setNew(8, &set_int_type);
                     return iset;
                 } else {
                     bbSetType(bb,BB_GARBAGE);
@@ -1416,54 +1487,54 @@ static IntSet *cfgCreateControlAdjacencyList(CFG *cfg, BasicBlock *bb) {
             }
         }
     } else if (bb->next == bb) {
-        IntSet *iset = intSetNew(8);
-        intSetAdd(iset,bb->next->block_no);
+        Set *iset = setNew(8, &set_int_type);
+        setAdd(iset,(void *)(long)bb->next->block_no);
         bbSetType(bb,BB_END_BLOCK);
         bbSetNext(bb,NULL);
         return iset;
     }
     if (!bbIsType(bb, BB_END_BLOCK)) {
-        IntSet *iset = intSetNew(8);
-        intSetAdd(iset,bb->next->block_no);
+        Set *iset = setNew(8, &set_int_type);
+        setAdd(iset,(void *)(long)bb->next->block_no);
         bbAddPrev(bb->next,bb);
         return iset;
     } else {
-        IntSet *iset = intSetNew(8);
+        Set *iset = setNew(8, &set_int_type);
         return iset;
     }
 }
 
-static IntSet *cfgCreateGotoAdjacencyList(CFG *cfg, BasicBlock *bb) {
+static Set *cfgCreateGotoAdjacencyList(CFG *cfg, BasicBlock *bb) {
     (void)cfg;
-    IntSet *iset = intSetNew(8);
+    Set *iset = setNew(8, &set_int_type);
     if (bb->flags & BB_FLAG_GOTO_LOOP) {
-        intSetAdd(iset,bb->prev->block_no);
+        setAdd(iset,(void *)(long)bb->prev->block_no);
         bbAddPrev(bb->prev,bb);
     } else {
-        intSetAdd(iset,bb->next->block_no);
+        setAdd(iset,(void *)(long)bb->next->block_no);
         bbAddPrev(bb->next,bb);
     }
     return iset;
 }
 
-static IntSet *cfgCreateBranchAdjacencyList(CFG *cfg, BasicBlock *bb) {
+static Set *cfgCreateBranchAdjacencyList(CFG *cfg, BasicBlock *bb) {
     (void)cfg;
-    IntSet *iset = intSetNew(8);
-    intSetAdd(iset,bb->_if->block_no);
-    intSetAdd(iset,bb->_else->block_no);
+    Set *iset = setNew(8, &set_int_type);
+    setAdd(iset,(void *)(long)bb->_if->block_no);
+    setAdd(iset,(void *)(long)bb->_else->block_no);
     bbAddPrev(bb->_if,bb);
     bbAddPrev(bb->_else,bb);
     return iset;
 }
 
-static IntSet *cfgCreateContinueAdjacencyList(CFG *cfg, BasicBlock *bb) {
+static Set *cfgCreateContinueAdjacencyList(CFG *cfg, BasicBlock *bb) {
     (void)cfg;
-    IntSet *iset = intSetNew(8);
+    Set *iset = setNew(8, &set_int_type);
     BasicBlock *loop_head = bb->prev;
 
     assert(bb->prev != NULL);
 
-    intSetAdd(iset,bb->prev->block_no);
+    setAdd(iset,(void *)(long)bb->prev->block_no);
     bbAddPrev(loop_head,bb);
 
     if (bb->next) {
@@ -1474,29 +1545,29 @@ static IntSet *cfgCreateContinueAdjacencyList(CFG *cfg, BasicBlock *bb) {
     if (loop_head->flags & (BB_FLAG_FOR_LOOP|BB_FLAG_FOR_LOOP_HAS_STEP)) {
         BasicBlock *loop_block = loop_head->next;
         /* this push to the bb->ast_array is ok*/
-        ptrVecPush(bb->ast_array,vecTail(Ast *,loop_block->ast_array));
+        vecPush(bb->ast_array,vecTail(Ast *,loop_block->ast_array));
     }
     return iset;
 }
 
-static IntSet *cfgCreateLoopAdjacencyList(CFG *cfg, BasicBlock *bb) {
+static Set *cfgCreateLoopAdjacencyList(CFG *cfg, BasicBlock *bb) {
     (void)cfg;
-    IntSet *iset = intSetNew(8);
+    Set *iset = setNew(8, &set_int_type);
     BasicBlock *loop_head = bb->prev;
-    intSetAdd(iset,loop_head->block_no);
+    setAdd(iset,(void *)(long)loop_head->block_no);
     bbAddPrev(loop_head,bb);
     return iset;
 }
 
-static IntSet *cfgCreateDoWhileAdjacencyList(CFG *cfg, BasicBlock *bb) {
+static Set *cfgCreateDoWhileAdjacencyList(CFG *cfg, BasicBlock *bb) {
     (void)cfg;
-    IntSet *iset = intSetNew(16);
+    Set *iset = setNew(16, &set_int_type);
     BasicBlock *loop_head = bb->prev;
     bbAddPrev(loop_head,bb);
     if (bb->next) {
         bbAddPrev(bb->next,bb);
     }
-    intSetAdd(iset,loop_head->block_no);
+    setAdd(iset,(void *)(long)loop_head->block_no);
     return iset;
 }
 
@@ -1509,7 +1580,7 @@ static IntSet *cfgCreateDoWhileAdjacencyList(CFG *cfg, BasicBlock *bb) {
  * handing off to the next step.
  * */
 void cfgBuildAdjacencyList(CFG *cfg) {
-    IntSet *iset;
+    Set *iset;
     MemPoolIterator *it = memPoolIteratorNew(cfg->_memory);
     BasicBlock *bb;
     while ((bb = memPoolNext(it)) != NULL) {
@@ -1522,13 +1593,13 @@ void cfgBuildAdjacencyList(CFG *cfg) {
             case BB_BREAK_BLOCK:
             case BB_HEAD_BLOCK:
             case BB_CASE:
-                iset = intSetNew(16);
-                intSetAdd(iset,bb->next->block_no);
+                iset = setNew(8, &set_int_type);
+                setAdd(iset,(void *)(long)bb->next->block_no);
                 bbAddPrev(bb->next,bb);
                 break;
             case BB_RETURN_BLOCK:
             case BB_END_BLOCK:
-                iset = intSetNew(8);
+                iset = setNew(8, &set_int_type);
                 break;
             case BB_CONTROL_BLOCK:
                 iset = cfgCreateControlAdjacencyList(cfg,bb);
@@ -1556,8 +1627,8 @@ void cfgBuildAdjacencyList(CFG *cfg) {
             default:
                 loggerPanic("Unhandled type: %s\n", bbTypeToString(bb->type));
         }
-        intMapAdd(cfg->no_to_block,bb->block_no,bb);
-        intMapAdd(cfg->graph,bb->block_no,iset);
+        mapAdd(cfg->no_to_block,(void *)(long)bb->block_no,bb);
+        mapAdd(cfg->graph,(void *)(long)bb->block_no,iset);
     }
     memPoolIteratorRelease(it);
 }
@@ -1624,13 +1695,13 @@ void cfgRemoveNodeFromChild(BasicBlock *parent) {
 /* BFS flagging nodes as deleted and removing from their childrens previous 
  * array */
 void cfgRemoveUnreachableNodes(CFG *cfg) {
-    IntMapIterator *it = intMapIteratorNew(cfg->no_to_block);
-    IntMapNode *entry;
+    MapIter it;
     int ids[64];
     int id_cnt = 0;
+    mapIterInit(cfg->no_to_block, &it);
 
-    while ((entry = intMapNext(it)) != NULL) {
-        BasicBlock *bb = (BasicBlock *)entry->value;
+    while (mapIterNext(&it)) {
+        BasicBlock *bb = (BasicBlock *)it.node->value;
         if (!bbIsType(bb, BB_HEAD_BLOCK) && bbPrevCnt(bb) == 0) {
             /* Node can be deleted and we need to nuke all paths from it, 
              * deleting nodes if their previous contained only this node */
@@ -1640,12 +1711,11 @@ void cfgRemoveUnreachableNodes(CFG *cfg) {
             bbSetType(bb,BB_GARBAGE);
         }
     }
-    intMapIteratorRelease(it);
 
     for (int i = 0; i < id_cnt; ++i) {
-        int block_no = ids[i];
-        intMapDelete(cfg->graph,block_no);
-        intMapDelete(cfg->no_to_block,block_no);
+        long block_no = (long)ids[i];
+        mapRemove(cfg->graph,(void *)block_no);
+        mapRemove(cfg->no_to_block,(void *)block_no);
     }
 }
 
@@ -1666,7 +1736,7 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
         BasicBlock *bb_dest = NULL;
         Ast *ast = NULL; 
 
-        for (int i = 0; i < bb_goto->ast_array->size; ++i) {
+        for (unsigned long i = 0; i < bb_goto->ast_array->size; ++i) {
             ast = (Ast *)bb_goto->ast_array->entries[i];
             if (ast->kind == AST_GOTO || ast->kind == AST_JUMP) {
                 break;
@@ -1678,8 +1748,9 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
 
         assert(ast->kind == AST_GOTO || ast->kind == AST_JUMP);
 
-        bb_dest = strMapGetLen(builder->resolved_labels,dest_label->data,
-                dest_label->len);
+        bb_dest = mapGetLen(builder->resolved_labels,
+                            dest_label->data,
+                            dest_label->len);
 
         assert(bb_dest != NULL);
         cfgRelocateGoto(builder,bb_goto,bb_dest,goto_label);
@@ -1687,7 +1758,7 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
 }
 
 
-static CFG *cfgCreateForFunction(Cctrl *cc, Ast *ast_fn, IntMap *leaf_cache, int *_block_no) {
+static CFG *cfgCreateForFunction(Cctrl *cc, Ast *ast_fn, Map *leaf_cache, int *_block_no) {
     CFGBuilder builder;
     *_block_no += 1;
 
@@ -1711,7 +1782,7 @@ static CFG *cfgCreateForFunction(Cctrl *cc, Ast *ast_fn, IntMap *leaf_cache, int
         bbSetNext(bb->next,bb_return);
         bbSetPrevPtr(bb_return,bb->next);
         bbSetNext(bb_return,NULL);
-        intMapAdd(cfg->no_to_block,bb_return->block_no,bb_return);
+        mapAdd(cfg->no_to_block,(void *)(long)bb_return->block_no,bb_return);
     }
 
     cfg->bb_count = builder.bb_count;
@@ -1720,28 +1791,30 @@ static CFG *cfgCreateForFunction(Cctrl *cc, Ast *ast_fn, IntMap *leaf_cache, int
     cfgBuildAdjacencyList(cfg);
     cfgRemoveUnreachableNodes(cfg);
 
-    strMapRelease(builder.resolved_labels);
+    mapRelease(builder.resolved_labels);
     listRelease(builder.unresolved_gotos,NULL);
     return cfg;
 }
 
-static void _bbFindAllLoopNodes(BasicBlock *loop_head, BasicBlock *bb,
-        IntMap *nodes, int loop_cnt)
+static void _bbFindAllLoopNodes(BasicBlock *loop_head,
+                                BasicBlock *bb,
+                                Map *nodes,
+                                int loop_cnt)
 {
     int is_start_of_new_loop = bb != loop_head && bb->flags & BB_FLAG_LOOP_HEAD;
     int types[] = {BB_END_BLOCK,BB_RETURN_BLOCK,BB_HEAD_BLOCK};
 
     if (bbIsLoopEnd(bb)) {
         if (bb->prev == loop_head) {
-            intMapAdd(nodes,bb->block_no,bb);
+            mapAdd(nodes,(void *)(long)bb->block_no,bb);
             loop_cnt--;
             return;
         }
         if (loop_cnt > 1) {
-            intMapAdd(nodes,bb->block_no,bb);
+            mapAdd(nodes,(void *)(long)bb->block_no,bb);
         }
     } else if (!bbOneOfType(bb,sizeof(types)/sizeof(types[0]),types)) {
-        intMapAdd(nodes,bb->block_no,bb);
+        mapAdd(nodes,(void *)(long)bb->block_no,bb);
     }
 
     if (is_start_of_new_loop) {
@@ -1750,7 +1823,7 @@ static void _bbFindAllLoopNodes(BasicBlock *loop_head, BasicBlock *bb,
 
     if (bbIsType(bb, BB_BREAK_BLOCK)) {
         /* Add it and it is up to the caller to handle what a break means */
-        intMapAdd(nodes,bb->block_no,bb);
+        mapAdd(nodes,(void *)(long)bb->block_no,bb);
         return;
     }
 
@@ -1775,7 +1848,7 @@ static void _bbFindAllLoopNodes(BasicBlock *loop_head, BasicBlock *bb,
             break;
 
         case BB_SWITCH: {
-            for (int i = 0; i < bb->next_blocks->size; ++i) {
+            for (unsigned long i = 0; i < bb->next_blocks->size; ++i) {
                 BasicBlock *it = vecGet(BasicBlock *,bb->next_blocks,i);
                 _bbFindAllLoopNodes(loop_head,it,nodes,loop_cnt);
             }
@@ -1800,66 +1873,64 @@ static void _bbFindAllLoopNodes(BasicBlock *loop_head, BasicBlock *bb,
     }
 }
 
-IntMap *bbFindAllLoopNodes(BasicBlock *loop_head) {
+Map *bbFindAllLoopNodes(BasicBlock *loop_head) {
     int loop_cnt = 0;
-    IntMap *map = intMapNew(32);
-    intMapAdd(map,loop_head->block_no,loop_head);
+    Map *map = mapNew(32, &map_int_to_basic_block_type);
+    mapAdd(map,(void *)(long)loop_head->block_no,loop_head);
     _bbFindAllLoopNodes(loop_head,loop_head,map,loop_cnt);
 
-    IntMapIterator *it = intMapIteratorNew(loop_head->prev_blocks);
-    IntMapNode *entry;
-    while ((entry = intMapNext(it)) != NULL) {
-        BasicBlock *prev = (BasicBlock *)entry->value;
+    MapIter it;
+    mapIterInit(loop_head->prev_blocks, &it);
+    while (mapIterNext(&it)) {
+        BasicBlock *prev = (BasicBlock *)it.node->value;
         if (bbIsType(prev, BB_LOOP_BLOCK) && prev->prev == loop_head) {
             break;
         }
     }
-    intMapIteratorRelease(it);
     return map;
 }
 
 /* DFS our way through the graph, as it is created in the correct order above 
  * we get the nodes in the correct order here. */
-void cfgExplore(CFG *cfg, IntSet *seen, int block_no) {
-    if (intSetHas(seen,block_no)) return;
-    intSetAdd(seen,block_no);
-    IntSet *iset = (IntSet *)intMapGet(cfg->graph,block_no);
+void cfgExplore(CFG *cfg, Set *seen, int block_no) {
+    if (setHas(seen,(void *)(long)block_no)) return;
+    setAdd(seen,(void *)(long)block_no);
+    Set *iset = (Set *)mapGet(cfg->graph,(void *)(long)block_no);
     printf("bb%d\n",block_no);
 
-    IntSetIterator *it = intSetIteratorNew(iset);
-    long next_block_no;
-    while ((next_block_no = intSetNext(it)) != HT_DELETED) {
-        BasicBlock *bb = (BasicBlock *)intMapGet(cfg->no_to_block,(int)next_block_no);
+    SetIter it;
+    setIterInit(iset, &it);
+    while (setIterNext(&it)) {
+        long next_block_no = (long)it.value;
+        BasicBlock *bb = mapGet(cfg->no_to_block,(void *)(long)next_block_no);
         cfgExplore(cfg,seen,bb->block_no);
     }
-    intSetIteratorRelease(it);
 }
 
 void cfgIter(CFG *cfg) {
-    IntSet *seen = intSetNew(32);
-    IntMapIterator *it = intMapIteratorNew(cfg->no_to_block);
-    IntMapNode *entry;
-    while ((entry = intMapNext(it)) != NULL) {
-        BasicBlock *bb = (BasicBlock *)entry->value;
+    Set *seen = setNew(32, &set_int_type);
+    MapIter it;
+    mapIterInit(cfg->no_to_block, &it);
+    while (mapIterNext(&it)) {
+        BasicBlock *bb = (BasicBlock *)it.node->value;
         cfgExplore(cfg,seen,bb->block_no);
     }
-    intMapIteratorRelease(it);
-    intSetRelease(seen);
+    setRelease(seen);
 }
 
 /* This returns a vector of CFG's */
-PtrVec *cfgConstruct(Cctrl *cc) {
-    PtrVec *cfgs = ptrVecNew();
+Vec *cfgConstruct(Cctrl *cc) {
+    Vec *cfgs = vecNew(&vec_cfg_type);
     int block_no = 0;
-    IntMap *leaf_cache = intMapNew(32);
+    Map *leaf_cache = mapNew(32, &map_int_to_basic_block_type);
     listForEach(cc->ast_list) {
         Ast *ast = (Ast *)it->value;
         /* XXX: What do we want to do with global variables? */
         if (ast->kind == AST_FUNC) {
             CFG *cfg = cfgCreateForFunction(cc,ast,leaf_cache,&block_no);
-            ptrVecPush(cfgs,cfg);
+            vecPush(cfgs,cfg);
         }
     }
-    intMapRelease(leaf_cache);
+    mapRelease(leaf_cache);
     return cfgs;
 }

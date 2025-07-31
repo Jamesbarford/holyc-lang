@@ -2,7 +2,7 @@
 #define AST_H
 
 #include "aostr.h"
-#include "map.h"
+#include "containers.h"
 #include "list.h"
 
 /* Relates to the 'kind' property on the AstType struct */
@@ -90,13 +90,13 @@ typedef struct AstType {
 
     /* Class */
     AoStr *clsname;
-    StrMap *fields;
+    Map *fields;
     int offset;
     int is_intrinsic;
 
     /* Function */
     AstType *rettype;
-    PtrVec *params;
+    Vec *params;
 } AstType;
 
 
@@ -174,8 +174,8 @@ typedef struct Ast {
             /* asm function binding */
             AoStr *asmfname;
             AoStr *fname;
-            PtrVec *args;
-            PtrVec *params;
+            Vec *args;
+            Vec *params;
 
             /* Declaration */
             List *locals;
@@ -270,7 +270,7 @@ typedef struct Ast {
             Ast *switch_cond;
             Ast *case_default;
             Ast **jump_table_order;
-            PtrVec *cases;
+            Vec *cases;
             AoStr *case_end_label;
         };
 
@@ -294,12 +294,19 @@ extern Ast *placeholder_arg;
 extern Ast *ast_loop_sentinal;
 extern Ast *ast_forever_sentinal;
 
+extern VecType vec_ast_type;
+Vec *astVecNew(void);
+
+extern MapType map_asttype_type;
+extern MapType map_ast_type;
+Map *astTypeMapNew(void);
+Map *astMapNew(void);
+
 void astMemoryInit(void);
 void astMemoryRelease(void);
 void astMemoryStats(void);
 
 AstType *astTypeCopy(AstType *type);
-void astVectorRelease(PtrVec *vec);
 
 /* Literals */
 Ast *astI64Type(long long val);
@@ -334,27 +341,27 @@ Ast *astContinue(AoStr *continue_label);
 Ast *astBreak(AoStr *break_label);
 Ast *astCase(AoStr *case_label, long case_begin, long case_end, List *case_asts);
 /* Do it with lists, then do it with a vector */
-Ast *astSwitch(Ast *cond, PtrVec *cases, Ast *case_default,
+Ast *astSwitch(Ast *cond, Vec *cases, Ast *case_default,
         AoStr *case_end_label, int switch_bounds_checked);
 Ast *astDefault(AoStr *case_label,List *case_asts);
 
 /* Functions */
-Ast *astFunctionCall(AstType *type, char *fname, int len, PtrVec *argv);
-Ast *astFunction(AstType *rettype, char *fname, int len, PtrVec *params,
+Ast *astFunctionCall(AstType *type, char *fname, int len, Vec *argv);
+Ast *astFunction(AstType *rettype, char *fname, int len, Vec *params,
                  Ast *body, List *locals, int has_var_args);
 Ast *astReturn(Ast *retval, AstType *rettype);
 Ast *astFunctionPtr(AstType *type, char *fname, int len, 
-                    PtrVec *params);
+                    Vec *params);
 
 Ast *astFunctionPtrCall(AstType *type, char *fname, int len,
-                         PtrVec *argv, Ast *ref);
+                        Vec *argv, Ast *ref);
 Ast *astFunctionDefaultParam(Ast *var, Ast *init);
 Ast *astVarArgs(void);
 
 Ast *astAsmBlock(AoStr *asm_stmt, List *funcs);
 Ast *astAsmFunctionBind(AstType *rettype, AoStr *asm_fname, 
-        AoStr *fname, PtrVec *params);
-Ast *astAsmFunctionCall(AstType *rettype, AoStr *asm_fname, PtrVec *argv);
+        AoStr *fname, Vec *params);
+Ast *astAsmFunctionCall(AstType *rettype, AoStr *asm_fname, Vec *argv);
 Ast *astAsmFunctionDef(AoStr *asm_fname, AoStr *asm_stmt);
 
 /* Only used when transpiling */
@@ -370,10 +377,10 @@ Ast *astJump(char *jumpname, int len);
 AstType *astMakePointerType(AstType *type);
 AstType *astMakeArrayType(AstType *type, int len);
 AstType *astMakeClassField(AstType *type, int offset);
-AstType *astMakeFunctionType(AstType *rettype, PtrVec *param_types);
+AstType *astMakeFunctionType(AstType *rettype, Vec *param_types);
 AstType *astConvertArray(AstType *ast_type);
 Ast *astClassRef(AstType *type, Ast *cls, char *field_name);
-AstType *astClassType(StrMap *fields, AoStr *clsname, int size, int is_intrinsic);
+AstType *astClassType(Map *fields, AoStr *clsname, int size, int is_intrinsic);
 Ast *astCast(Ast *var, AstType *to);
 
 AstType *astGetResultType(long op, AstType *a, AstType *b);
@@ -415,4 +422,3 @@ const char *astTypeKindToHumanReadable(AstType *type);
 const char *astKindToHumanReadable(Ast *ast);
 
 #endif
-

@@ -11,12 +11,55 @@
 #include "ast.h"
 #include "arena.h"
 #include "cctrl.h"
-#include "map.h"
+#include "containers.h"
 #include "lexer.h"
 #include "list.h"
 #include "prslib.h"
 #include "prsutil.h"
 #include "util.h"
+
+typedef struct {
+    char *name;
+    int kind;
+} LexerType;
+
+void vecLexemeToString(AoStr *buf, void *tok) {
+    char *lexeme_str = lexemeToString(tok);
+    aoStrCatPrintf(buf, "%s\n", lexeme_str);
+}
+
+int vecLexemeRelease(void *_tok) {
+    (void)_tok;
+    return 1;
+}
+
+VecType vec_lexeme_type = {
+    .stringify = vecLexemeToString,
+    .match     = NULL,
+    .release   = vecLexemeRelease,
+    .type_str  = "Lexeme *",
+};
+
+Vec *lexemeVecNew(void) {
+    return vecNew(&vec_lexeme_type);
+}
+
+AoStr *mapLexerTypeToString(void *ltype) {
+    LexerType *t = (LexerType *)ltype;
+    return aoStrPrintf("\"%s\" %d", t->name, t->kind);
+}
+
+MapType map_cstring_builtin_lexer_type = {
+    .match           = mapCStringEq,
+    .hash            = mapCStringHash,
+    .get_key_len     = mapCStringLen,
+    .key_to_string   = mapCStringToString,
+    .key_release     = NULL,
+    .value_to_string = mapLexerTypeToString,
+    .value_release   = NULL,
+    .key_type        = "char *",
+    .value_type      = "LexerType *",
+};
 
 /* prototypes */
 int lexPreProcIf(Map *macro_defs, Lexer *l);
@@ -58,79 +101,74 @@ char *lexerReAllocBuffer(char *ptr, unsigned int old_size, unsigned int new_size
     return buffer;
 }
 
-typedef struct {
-    char *name;
-    int kind;
-} LexerTypes;
-
 /* Name, kind, size, issigned */
-static LexerTypes lexer_types[] = {
+static LexerType lexer_types[] = {
     /* Holyc Types, this language is semi interoperable */
-    {"U0", KW_U0},
+    {"U0",   KW_U0},
     {"Bool", KW_BOOL},
-    {"I8", KW_I8},
-    {"U8", KW_U8},
-    {"I16", KW_I16},
-    {"U16", KW_U16},
-    {"I32", KW_I32},
-    {"U32", KW_U32},
-    {"I64", KW_I64},
-    {"U64", KW_U64},
-    {"F64", KW_F64},
+    {"I8",   KW_I8},
+    {"U8",   KW_U8},
+    {"I16",  KW_I16},
+    {"U16",  KW_U16},
+    {"I32",  KW_I32},
+    {"U32",  KW_U32},
+    {"I64",  KW_I64},
+    {"U64",  KW_U64},
+    {"F64",  KW_F64},
 
     {"auto", KW_AUTO},
 
     {"_extern", KW_ASM_EXTERN},
-    {"extern", KW_EXTERN},
-    {"asm", KW_ASM},
+    {"extern",  KW_EXTERN},
+    {"asm",     KW_ASM},
 
-    {"switch", KW_SWITCH},
-    {"case", KW_CASE},
-    {"break", KW_BREAK},
+    {"switch",   KW_SWITCH},
+    {"case",     KW_CASE},
+    {"break",    KW_BREAK},
     {"continue", KW_CONTINUE},
-    {"while", KW_WHILE},
-    {"do", KW_DO},
-    {"for", KW_FOR},
-    {"goto", KW_GOTO},
-    {"default", KW_DEFAULT},
-    {"return", KW_RETURN},
+    {"while",    KW_WHILE},
+    {"do",       KW_DO},
+    {"for",      KW_FOR},
+    {"goto",     KW_GOTO},
+    {"default",  KW_DEFAULT},
+    {"return",   KW_RETURN},
 
-    {"if", KW_IF},
-    {"else", KW_ELSE},
-    {"define", KW_DEFINE},
-    {"ifndef", KW_IF_NDEF},
-    {"ifdef", KW_IF_DEF},
+    {"if",      KW_IF},
+    {"else",    KW_ELSE},
+    {"define",  KW_DEFINE},
+    {"ifndef",  KW_IF_NDEF},
+    {"ifdef",   KW_IF_DEF},
     {"elifdef", KW_ELIF_DEF},
-    {"endif", KW_ENDIF},
-    {"elif", KW_ELIF},
+    {"endif",   KW_ENDIF},
+    {"elif",    KW_ELIF},
     {"defined", KW_DEFINED},
-    {"undef", KW_UNDEF},
+    {"undef",   KW_UNDEF},
 
-    {"#if", KW_PP_IF},
-    {"#else", KW_PP_ELSE},
-    {"#define", KW_PP_DEFINE},
-    {"#ifndef", KW_PP_IF_NDEF},
-    {"#ifdef", KW_PP_IF_DEF},
+    {"#if",      KW_PP_IF},
+    {"#else",    KW_PP_ELSE},
+    {"#define",  KW_PP_DEFINE},
+    {"#ifndef",  KW_PP_IF_NDEF},
+    {"#ifdef",   KW_PP_IF_DEF},
     {"#elifdef", KW_PP_ELIF_DEF},
-    {"#endif", KW_PP_ENDIF},
-    {"#elif", KW_PP_ELIF},
+    {"#endif",   KW_PP_ENDIF},
+    {"#elif",    KW_PP_ELIF},
     {"#defined", KW_PP_DEFINED},
-    {"#undef", KW_PP_UNDEF},
-    {"#error", KW_PP_ERROR},
+    {"#undef",   KW_PP_UNDEF},
+    {"#error",   KW_PP_ERROR},
     {"#include", KW_PP_INCLUDE},
 
-    {"cast", KW_CAST},
-    {"sizeof", KW_SIZEOF},
-    {"inline", KW_INLINE},
-    {"atomic", KW_ATOMIC},
+    {"cast",     KW_CAST},
+    {"sizeof",   KW_SIZEOF},
+    {"inline",   KW_INLINE},
+    {"atomic",   KW_ATOMIC},
     {"volatile", KW_VOLATILE},
 
-    {"public", KW_PUBLIC},
+    {"public",  KW_PUBLIC},
     {"private", KW_PRIVATE},
-    {"class", KW_CLASS},
-    {"union", KW_UNION},
+    {"class",   KW_CLASS},
+    {"union",   KW_UNION},
 
-    {"static", KW_STATIC},
+    {"static",  KW_STATIC},
 };
 
 
@@ -203,9 +241,8 @@ void lexInit(Lexer *l, char *source, int flags) {
     l->flags = flags;
     l->files = listNew();
     l->all_source = listNew();
-    l->symbol_table = strMapNew(32);
-    l->symbol_table->_free_key = NULL;
-    l->seen_files = strMapNew(32);
+    l->symbol_table = mapNew(32, &map_cstring_builtin_lexer_type);
+    l->seen_files = setNew(32, &set_cstring_type);
     l->collecting = 1;
     l->skip_else = 1;
     if (macro_proccessor == NULL) {
@@ -219,8 +256,8 @@ void lexInit(Lexer *l, char *source, int flags) {
     /* XXX: create one symbol table for the whole application ;
      * hoist to 'compile.c'*/
     for (int i = 0; i < (int)static_size(lexer_types); ++i) {
-        LexerTypes *bilt = &lexer_types[i]; 
-        strMapAdd(l->symbol_table, bilt->name, bilt);
+        LexerType *bilt = &lexer_types[i]; 
+        mapAddLen(l->symbol_table, bilt->name, strlen(bilt->name), bilt);
     }
 }
 
@@ -580,7 +617,7 @@ void lexPushFile(Lexer *l, AoStr *filename) {
     f->src = src_code;
     f->lineno = 1;
     f->filename = filename;
-    strMapAdd(l->seen_files,filename->data,filename);
+    setAdd(l->seen_files,filename->data);
     if (l->cur_file) {
         listAppend(l->files,l->cur_file);
     }
@@ -894,12 +931,12 @@ int lexNumeric(Lexer *l, int _isfloat) {
     }
 }
 
-LexerTypes *lexPreProcDirective(Lexer *l) {
+LexerType *lexPreProcDirective(Lexer *l) {
     Lexeme le;
     if (!lex(l,&le)) return 0;
     char buffer[32];
     ssize_t len = snprintf(buffer,sizeof(buffer),"#%.*s",le.len,le.start);
-    LexerTypes *type = strMapGetLen(l->symbol_table,buffer,len);
+    LexerType *type = mapGetLen(l->symbol_table,buffer,len);
     if (!type) {
         loggerPanic("line %d: invalid preprocessor directive '%s'\n", le.line, buffer);
     }
@@ -909,7 +946,7 @@ LexerTypes *lexPreProcDirective(Lexer *l) {
 int lex(Lexer *l, Lexeme *le) {
     char ch, *start;
     int tk_type;
-    LexerTypes *type;
+    LexerType *type;
 
     while (1) {
         ch = lexNextChar(l);
@@ -1224,7 +1261,7 @@ int lex(Lexer *l, Lexeme *le) {
                     le->tk_type = tk_type;
                     le->line = l->lineno;
 
-                    if ((type = strMapGetLen(l->symbol_table,le->start,le->len)) != NULL) {
+                    if ((type = mapGetLen(l->symbol_table,le->start,le->len)) != NULL) {
                         le->tk_type = TK_KEYWORD;
                         le->i64 = type->kind;
                         type = NULL;
@@ -1240,10 +1277,6 @@ error:
     return 0;
 }
 
-int lexHasFile(Lexer *l, AoStr *file) {
-    return strMapGet(l->seen_files,file->data) != NULL;
-}
-
 void lexInclude(Lexer *l) {
     AoStr *ident, *include_path;
     Lexeme next;
@@ -1253,8 +1286,7 @@ void lexInclude(Lexer *l) {
         lex(l, &next);
         ident = aoStrNew();
         do {
-            aoStrCatPrintf(ident, "%.*s", next.len,
-                    next.start);
+            aoStrCatPrintf(ident, "%.*s", next.len, next.start);
             lex(l, &next);
         } while (next.i64 != '>');
         include_path = aoStrNew();
@@ -1269,7 +1301,7 @@ void lexInclude(Lexer *l) {
                 next.line,lexemeToString(&next));
     }
 
-    if (!lexHasFile(l,include_path)) {
+    if (!setHas(l->seen_files,include_path->data)) {
         lexPushFile(l,include_path);
     } else {
         aoStrRelease(include_path);
@@ -1280,14 +1312,16 @@ Lexeme *lexDefine(Map *macro_defs, Lexer *l) {
     int tk_type,iters;
     Lexeme next,*start,*end,*expanded,*macro;
     AoStr *ident;
-    PtrVec *tokens = ptrVecNew();
-
+    Vec *tokens = lexemeVecNew();
 
     tk_type = -1;
     /* <ident> <value> */
     lex(l, &next);
     if (next.tk_type != TK_IDENT) {
-        loggerPanic("line %d: Syntax is: #define <TK_IDENT> <value>\n",next.line);
+        loggerPanic("%s: line %d: Syntax is: #define <TK_IDENT> <value> got %s\n",
+                l->cur_file->filename->data,
+                next.line,
+                lexemeToString(&next));
     }
 
     ident = aoStrDupRaw(next.start, next.len);
@@ -1296,11 +1330,11 @@ Lexeme *lexDefine(Map *macro_defs, Lexer *l) {
     iters = 0;
     do {
         iters++;
-        if (!lex(l,&next)) break;
+        if (!lex(l, &next)) break;
 
         if (next.tk_type == TK_IDENT) {
             if ((macro = mapGetLen(macro_defs,next.start,next.len)) != NULL) {
-                ptrVecPush(tokens, lexemeCopy(macro));
+                vecPush(tokens, lexemeCopy(macro));
                 tk_type = macro->tk_type;
                 continue;
             }
@@ -1317,7 +1351,7 @@ Lexeme *lexDefine(Map *macro_defs, Lexer *l) {
             }
         }
         if (!tokenPunctIs(&next,'\n') && !tokenPunctIs(&next,'\0')) {
-            ptrVecPush(tokens, lexemeCopy(&next));
+            vecPush(tokens, lexemeCopy(&next));
         }
     } while (!tokenPunctIs(&next,'\n') && !tokenPunctIs(&next,'\0'));
     /* Turn off the flag */
@@ -1328,7 +1362,7 @@ Lexeme *lexDefine(Map *macro_defs, Lexer *l) {
 
     if (start == end && iters == 1) {
         mapAdd(macro_defs,ident->data,lexemeSentinal());
-        ptrVecRelease(tokens);
+        vecRelease(tokens);
         return NULL;
     }
 
@@ -1342,7 +1376,7 @@ Lexeme *lexDefine(Map *macro_defs, Lexer *l) {
         mapAdd(macro_defs,ident->data,expanded);
     } else {
         /* XXX: this is a hack as sometimes the number of tokens in a macro 
-         * will exceed what is allowed in our ring buffer. Conveniently PtrVec 
+         * will exceed what is allowed in our ring buffer. Conveniently Vec 
          * has some fields we can use. */
         cctrlInitMacroProcessor(macro_proccessor);
         macro_proccessor->token_buffer->entries = (Lexeme **)tokens->entries;
@@ -1381,10 +1415,7 @@ Lexeme *lexDefine(Map *macro_defs, Lexer *l) {
         }
         mapAdd(macro_defs,ident->data,expanded);
     }
-    for (ssize_t i = 0; i < tokens->size; ++i) {
-        lexemeFree(tokens->entries[i]);
-    }
-    ptrVecRelease(tokens);
+    vecRelease(tokens);
     return expanded;
 }
 
@@ -1405,12 +1436,12 @@ void lexUndef(Map *macro_defs, Lexer *l) {
 
 int lexPreProcIf(Map *macro_defs, Lexer *l) {
     int tk_type,iters,should_collect;
-    PtrVec *macro_tokens;
+    Vec *macro_tokens;
     Lexeme next,*start,*end,*expanded,*macro;
 
     tk_type = -1;
     should_collect = 0;
-    macro_tokens = ptrVecNew();
+    macro_tokens = lexemeVecNew();
 
     /* An if must be on one line a \n determines the end of a define */
     l->flags |= CCF_ACCEPT_NEWLINES;
@@ -1434,7 +1465,7 @@ int lexPreProcIf(Map *macro_defs, Lexer *l) {
 
         if (next.tk_type == TK_IDENT) {
             if ((macro = mapGetLen(macro_defs,next.start,next.len)) != NULL) {
-                ptrVecPush(macro_tokens,lexemeCopy(macro));
+                vecPush(macro_tokens,lexemeCopy(macro));
                 tk_type = macro->tk_type;
             }
             if (!lex(l,&next)) break;
@@ -1450,7 +1481,7 @@ int lexPreProcIf(Map *macro_defs, Lexer *l) {
             }
         }
         if (!tokenPunctIs(&next,'\n') && !tokenPunctIs(&next,'\0')) {
-            ptrVecPush(macro_tokens,lexemeCopy(&next));
+            vecPush(macro_tokens,lexemeCopy(&next));
         }
         if (!lex(l,&next)) break;
     }
@@ -1488,10 +1519,7 @@ int lexPreProcIf(Map *macro_defs, Lexer *l) {
         }
         expanded->line = start->line;
     }
-    for (ssize_t i = 0; i < macro_tokens->size; ++i) {
-        lexemeFree(macro_tokens->entries[i]);
-    }
-    ptrVecRelease(macro_tokens);
+    vecRelease(macro_tokens);
 
     return should_collect;
 }

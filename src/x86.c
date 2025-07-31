@@ -12,7 +12,6 @@
 #include "containers.h"
 #include "lexer.h"
 #include "list.h"
-#include "map.h"
 #include "prsutil.h"
 #include "util.h"
 #include "version.h"
@@ -1231,7 +1230,7 @@ void asmPrepFuncCallArgs(Cctrl *cc, AoStr *buf, Ast *funcall) {
     var_arg_start = -1;
     argc = 0;
     if (flags & (FUN_EXISTS|FUN_VARARG) && !(flags & FUN_EXTERN)) {
-        for (ssize_t i = 0; i < fun->params->size; ++i) {
+        for (unsigned long i = 0; i < fun->params->size; ++i) {
             var_arg_start++;
             arg = fun->params->entries[i];
             if (arg->kind == AST_VAR_ARGS) {
@@ -1253,9 +1252,9 @@ void asmPrepFuncCallArgs(Cctrl *cc, AoStr *buf, Ast *funcall) {
         /* Handling the case for either more arguments than parameters or
          * more parameters than arguments */
         if (fun && fun->params) {
-            funparam = vecGetInBounds(fun->params,i);
+            funparam = vecGetAt(fun->params,i);
         }
-        funarg = vecGetInBounds(funcall->args,i);
+        funarg = vecGetAt(funcall->args,i);
         i++;
 
         if (funarg != NULL) {
@@ -1417,9 +1416,9 @@ void asmArrayInit(Cctrl *cc, AoStr *buf, Ast *ast, AstType *type, int offset) {
 
 void asmHandleSwitch(Cctrl *cc, AoStr *buf, Ast *ast) {
     /* create jump table */
-    PtrVec *cases = ast->cases;
+    Vec *cases = ast->cases;
     Ast **jump_table = ast->jump_table_order;
-    int jump_table_size = cases->size;
+    unsigned long jump_table_size = cases->size;
     Ast *case_ast_min = jump_table[0];
     Ast *case_ast_max = jump_table[jump_table_size - 1];
 
@@ -1490,7 +1489,7 @@ void asmHandleSwitch(Cctrl *cc, AoStr *buf, Ast *ast) {
             jump_table_start->data);
 
 
-    for (int i = 0; i < cases->size; ++i) {
+    for (unsigned long i = 0; i < cases->size; ++i) {
         Ast *_case = cases->entries[i];
         asmExpression(cc,buf,_case);
     }
@@ -2086,13 +2085,13 @@ void asmInitialiseEmptyGlobal(AoStr *buf, Ast *global, int zerofill) {
 #endif
 }
 
-void asmGlobalVar(StrMap *seen_globals, AoStr *buf, Ast* ast) {
+void asmGlobalVar(Set *seen_globals, AoStr *buf, Ast* ast) {
     Ast *declvar = ast->declvar;
     Ast *declinit = ast->declinit;
     AoStr *varname = declvar->gname;
     AoStr *label = asmGetGlabel(declvar);
 
-    if (strMapGetLen(seen_globals,varname->data,varname->len)) {
+    if (setHasLen(seen_globals,varname->data,varname->len)) {
         return;
     }
 
@@ -2100,7 +2099,7 @@ void asmGlobalVar(StrMap *seen_globals, AoStr *buf, Ast* ast) {
         buf->len--;
     }
 
-    strMapAdd(seen_globals,varname->data,ast);
+    setAdd(seen_globals,varname->data);
 
     if (declinit &&
         (declinit->kind == AST_ARRAY_INIT || 
@@ -2242,7 +2241,7 @@ int asmFunctionInit(Cctrl *cc, AoStr *buf, Ast *func) {
         }
     }
 
-    for (ssize_t i = 0; i < func->params->size; ++i) {
+    for (unsigned long i = 0; i < func->params->size; ++i) {
         ast_tmp = vecGet(Ast *, func->params, i);
         switch (ast_tmp->kind) {
         case AST_DEFAULT_PARAM:
@@ -2268,7 +2267,7 @@ int asmFunctionInit(Cctrl *cc, AoStr *buf, Ast *func) {
 
     /* We can use register arguments */
     offset = stack_space;
-    for (ssize_t i = 0; i < func->params->size; ++i) {
+    for (unsigned long i = 0; i < func->params->size; ++i) {
         ast_tmp = vecGet(Ast *, func->params, i);
 
         if (ast_tmp->kind != AST_VAR_ARGS && astIsFloatType(ast_tmp->type)) {
@@ -2417,7 +2416,7 @@ void asmInitaliser(Cctrl *cc, AoStr *buf) {
 /* Create assembly */
 AoStr *asmGenerate(Cctrl *cc) {
     Ast *ast;
-    StrMap *seen_globals = strMapNew(32);
+    Set *seen_globals = setNew(32, &set_cstring_type);
     AoStr *asmbuf = aoStrAlloc(1<<10);
  
     if (!listEmpty(cc->initalisers)) {

@@ -5,7 +5,6 @@
 
 #include "aostr.h"
 #include "containers.h"
-#include "map.h"
 #include "list.h"
 
 #define LEX_MAX_IDENT_LEN  128
@@ -173,8 +172,8 @@ typedef struct Lexer {
     char *builtin_root;
     List *files;
     List *all_source;/* This saves all of the files we see so we can free them later */
-    StrMap *seen_files;
-    StrMap *symbol_table;
+    Set *seen_files;
+    Map *symbol_table;
     LexFile *cur_file;
 } Lexer;
 

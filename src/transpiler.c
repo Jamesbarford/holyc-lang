@@ -9,7 +9,6 @@
 #include "cctrl.h"
 #include "lexer.h"
 #include "list.h"
-#include "map.h"
 #include "memory.h"
 #include "parser.h"
 #include "transpiler.h"
@@ -27,23 +26,23 @@ typedef struct TranspilationMapping {
 
 typedef struct TranspileCtx {
     unsigned long flags;
-    StrMap *used_types;
-    StrMap *used_defines;
-    StrMap *skip_defines;
-    StrMap *skip_types;
+    Set *used_types;
+    Set *used_defines;
+    Set *skip_defines;
+    Set *skip_types;
     Cctrl *cc;
     AoStr *buf;
 } TranspileCtx;
 
 static void transpileFields(TranspileCtx *ctx,
-                            StrMap *fields,
-                            StrMap *seen,
+                            Map *fields,
+                            Map *seen,
                             char *clsname, 
                             AoStr *buf,
                             ssize_t *ident);
 AoStr *transpileVarDecl(TranspileCtx *ctx, AstType *type, char *name);
 void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent);
-AoStr *transpileArgvList(PtrVec *argv, TranspileCtx *ctx);
+AoStr *transpileArgvList(Vec *argv, TranspileCtx *ctx);
 AoStr *transpileAst(Ast *ast, TranspileCtx *ctx);
 AoStr *transpileFunctionProto(TranspileCtx *ctx, AstType *type, char *name);
 
@@ -213,7 +212,8 @@ static char *transpile_skip_classes[] = {
     "pthread_t",
     "tm",
     "timeval",
-    "msghdr"
+    "msghdr",
+    "__atomic_wide_counter",
 };
 
 static TranspilationMapping transpile_function_substitutions_table[] = {
@@ -237,45 +237,45 @@ static TranspilationMapping transpile_function_substitutions_table[] = {
 };
 
 /* singleton maps, we don't need unique instances and do not mutate these */
-static StrMap *transpile_function_substitutions = NULL;
-static StrMap *transpile_skip_defines_map = NULL;
-static StrMap *transpile_skip_classes_map = NULL;
+static Map *transpile_function_substitutions = NULL;
+static Set *transpile_skip_defines_set = NULL;
+static Set *transpile_skip_classes_set = NULL;
 static int is_init = 0;
 
 void transpileInitMaps(void) {
     if (!is_init) {
-        transpile_function_substitutions = strMapNew(32);
-        transpile_skip_defines_map = strMapNew(32);
-        transpile_skip_classes_map = strMapNew(32);
+        transpile_function_substitutions = mapNew(32,&map_cstring_cstring_type);
+        transpile_skip_defines_set = setNew(32, &set_cstring_type);
+        transpile_skip_classes_set = setNew(32, &set_cstring_type);
 
         ssize_t len = static_size(transpile_skip_defines);
         for (ssize_t i = 0; i < len; ++i) {
             char *define = transpile_skip_defines[i];
-            strMapAdd(transpile_skip_defines_map, define, define);
+            setAdd(transpile_skip_defines_set, define);
         }
 
         len = static_size(transpile_skip_classes);
         for (ssize_t i = 0; i < len; ++i) {
             char *cls = transpile_skip_classes[i];
-            strMapAdd(transpile_skip_classes_map, cls, cls);
+            setAdd(transpile_skip_classes_set, cls);
         }
     
         len = static_size(transpile_function_substitutions_table);
         for (ssize_t i = 0; i < len; ++i) {
             TranspilationMapping *sub = &transpile_function_substitutions_table[i]; 
-            strMapAdd(transpile_function_substitutions,sub->name,sub->sub);
+            mapAdd(transpile_function_substitutions,sub->name,sub->sub);
         }
     }
 }
 
 TranspileCtx *transpileCtxNew(Cctrl *cc) {
     TranspileCtx *ctx = (TranspileCtx *)malloc(sizeof(TranspileCtx));
-    ctx->used_types = strMapNew(32);
-    ctx->used_defines = strMapNew(32);
+    ctx->used_types = setNew(32, &set_cstring_type);
+    ctx->used_defines = setNew(32, &set_cstring_type);
 
     transpileInitMaps();
-    ctx->skip_types = transpile_skip_classes_map;
-    ctx->skip_defines = transpile_skip_defines_map;
+    ctx->skip_types = transpile_skip_classes_set;
+    ctx->skip_defines = transpile_skip_defines_set;
     ctx->buf = NULL;
     ctx->cc = cc;
     ctx->flags = 0;
@@ -287,11 +287,11 @@ TranspileCtx *transpileCtxNew(Cctrl *cc) {
 }
 
 void transpileCtxAddType(TranspileCtx *ctx, char *type_name) {
-    strMapAdd(ctx->used_types,type_name,type_name);
+    setAdd(ctx->used_types,type_name);
 }
 
 void transpileCtxAddDefine(TranspileCtx *ctx, char *def_name) {
-    strMapAdd(ctx->used_defines,def_name,def_name);
+    setAdd(ctx->used_defines,def_name);
 }
 
 void transpileCtxSetBuffer(TranspileCtx *ctx, AoStr *buf) {
@@ -299,17 +299,17 @@ void transpileCtxSetBuffer(TranspileCtx *ctx, AoStr *buf) {
 }
 
 int transpileCtxShouldEmitType(TranspileCtx *ctx, char *name, int len) {
-    if (strMapGetLen(ctx->skip_types, name, len) != NULL) {
+    if (setHasLen(ctx->skip_types, name, len)) {
         return 0;
     }
     return 1;
 }
 
 int transpileCtxShouldEmitDefine(TranspileCtx *ctx, char *name, int len) {
-    if (strMapGetLen(ctx->skip_defines, name, len) != NULL) {
+    if (setHasLen(ctx->skip_defines, name, len)) {
         return 0;
     }
-    return strMapGetLen(ctx->used_defines, name, len) != NULL;
+    return setHasLen(ctx->used_defines, name, len);
 }
 
 /* make lower camelcase */
@@ -421,7 +421,7 @@ char *transpileHighlightFloat(TranspileCtx *ctx, double floatingpoint) {
 }
 
 char *transpileGetFunctionSub(char *name, int len) {
-    return strMapGetLen(transpile_function_substitutions, name, len);
+    return mapGetLen(transpile_function_substitutions, name, len);
 }
 
 static void transpileEndStmt(AoStr *str) {
@@ -575,7 +575,7 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
 
     /* we are not defining anything ... */
     case AST_LVAR: {
-        strMapAdd(ctx->used_defines,ast->lname->data,ast->lname->data);
+        setAdd(ctx->used_defines,ast->lname->data);
         aoStrCatAoStr(buf,ast->lname);
         break;
     }    
@@ -586,7 +586,7 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
             name = ast->declvar->fname->data;
         } else if (ast->declvar->kind == AST_LVAR) {
             name = ast->declvar->lname->data;
-            strMapAdd(ctx->used_defines,name,name);
+            setAdd(ctx->used_defines,name);
         } else if (ast->declvar->kind == AST_GVAR) {
             name = ast->declvar->gname->data;
         } else {
@@ -917,7 +917,7 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
             ctx->flags |= TRANSPILE_FLAG_SWITCH_CHAR;
         }
         *indent += 4;
-        for (int i = 0; i < ast->cases->size; ++i) {
+        for (unsigned long i = 0; i < ast->cases->size; ++i) {
             Ast *_case = ast->cases->entries[i];
             aoStrRepeatChar(buf, ' ', *indent);
             transpileAstInternal(_case,ctx,indent);
@@ -1066,10 +1066,10 @@ AoStr *transpileAst(Ast *ast, TranspileCtx *ctx) {
     return body_buf;
 }
 
-AoStr *transpileParamsList(PtrVec *params, TranspileCtx *ctx) {
+AoStr *transpileParamsList(Vec *params, TranspileCtx *ctx) {
     AoStr *buf = aoStrNew();
     AoStr *decl = NULL;
-    for (int i = 0; i < params->size; ++i) {
+    for (unsigned long i = 0; i < params->size; ++i) {
         Ast *param = params->entries[i];
         if (param->kind == AST_DEFAULT_PARAM) {
             decl = transpileVarDecl(ctx, param->declvar->type,
@@ -1089,10 +1089,10 @@ AoStr *transpileParamsList(PtrVec *params, TranspileCtx *ctx) {
     return buf;
 }
 
-AoStr *transpileArgvList(PtrVec *argv, TranspileCtx *ctx) {
+AoStr *transpileArgvList(Vec *argv, TranspileCtx *ctx) {
     if (!argv) return NULL;
     AoStr *buf = aoStrNew();
-    for (int i = 0; i < argv->size; ++i) {
+    for (unsigned long i = 0; i < argv->size; ++i) {
         Ast *arg = argv->entries[i];
         AoStr *var = transpileLValue(arg, ctx);
         aoStrCatFmt(buf, "%S", var);
@@ -1212,7 +1212,7 @@ AoStr *transpileVarDeclInfo(TranspileCtx *ctx, TypeInfo *info, char *name) {
     } else {
         aoStrCatFmt(str, "%S",info->base_name);
     }
-    strMapAdd(ctx->used_types,info->base_name->data,info->base_name);
+    setAdd(ctx->used_types,info->base_name->data);
 
     if (name || info->stars > 0) {
         aoStrPutChar(str,' ');
@@ -1301,21 +1301,22 @@ AoStr *transpileFunctionProto(TranspileCtx *ctx, AstType *type, char *name) {
 }
 
 static void transpileFields(TranspileCtx *ctx,
-                            StrMap *fields,
-                            StrMap *seen,
+                            Map *fields,
+                            Map *seen,
                             char *clsname,
                             AoStr *buf,
                             ssize_t *indent)
 {
-    StrMapIterator *it = strMapIteratorNew(fields);
-    StrMapNode *n = NULL;
-    while ((n = strMapNext(it)) != NULL) {
+    MapIter it;
+    mapIterInit(fields, &it);
+    while (mapIterNext(&it)) {
+        MapNode *n = it.node;
         AstType *field = n->value;
         /* When transpiling we save the nested flattened class properties on the 
          * class AND in a separate struct, however when parsing we save the struct 
          * first so this check ensures we do not double up. It's not _really_ 
          * needed but makes the code symantically similar */
-        if (strMapGetLen(seen,n->key,n->key_len) != NULL) continue;
+        if (mapGetLen(seen,n->key,n->key_len) != NULL) continue;
 
         aoStrCatRepeat(buf, " ", *indent);
         if (!strncmp(n->key, str_lit("cls_label "))) {
@@ -1341,15 +1342,14 @@ static void transpileFields(TranspileCtx *ctx,
                 aoStrCatFmt(buf,"%S;\n", decl);
             }
         }
-        strMapAdd(seen, n->key, n->value);
+        mapAdd(seen, n->key, n->value);
     }
-    strMapIteratorRelease(it);
 }
 
 void transpileClassDefinitions(Cctrl *cc, TranspileCtx *ctx, Map *built_in_types) {
     AoStr *buf = ctx->buf;
     ssize_t indent = 4;
-    StrMap *seen = strMapNew(32);
+    Map *seen = astTypeMapNew();
     MapIter it;
     mapIterInit(cc->clsdefs, &it);
 
@@ -1359,8 +1359,8 @@ void transpileClassDefinitions(Cctrl *cc, TranspileCtx *ctx, Map *built_in_types
             continue;
         }
         
-        if (mapGetLen(built_in_types,n->key,n->key_len)) {
-            if (!strMapGetLen(ctx->used_types, n->key,n->key_len)) {
+        if (mapGetLen(built_in_types, n->key, n->key_len)) {
+            if (!setHasLen(ctx->used_types, n->key,n->key_len)) {
                 continue;
             }
         }
@@ -1375,15 +1375,15 @@ void transpileClassDefinitions(Cctrl *cc, TranspileCtx *ctx, Map *built_in_types
         transpileFields(ctx,cls->fields,seen,n->key,buf,&indent);
         aoStrCatFmt(buf, "} %s;\n\n", n->key);
     }
-    strMapRelease(seen);
+    mapRelease(seen);
 }
 
 void transpileUnionDefinitions(Cctrl *cc, TranspileCtx *ctx) {
     ssize_t indent = 4;
     AoStr *buf = ctx->buf;
-    StrMap *seen = strMapNew(32);
+    Map *seen = astTypeMapNew();
     MapIter it;
-    mapIterInit(cc->clsdefs, &it);
+    mapIterInit(cc->uniondefs, &it);
 
     while (mapIterNext(&it)) {
         MapNode *n = it.node;
@@ -1394,14 +1394,15 @@ void transpileUnionDefinitions(Cctrl *cc, TranspileCtx *ctx) {
         AstType *cls = n->value;
         /* Line numbers on an AST would be great... */
         if (cls->kind != AST_TYPE_UNION) {
-            loggerPanic("Should not be here\n"); 
+            mapPrint(cc->clsdefs);
+            loggerPanic("Should not be here: %s\n", astTypeToColorString(cls)); 
         }
 
         aoStrCatFmt(buf, "typedef union %s {\n", n->key);
         transpileFields(ctx,cls->fields,seen,n->key,buf,&indent);
         aoStrCatFmt(buf, "} %s;\n\n", n->key);
     }
-    strMapRelease(seen);
+    mapRelease(seen);
 }
 
 void transpileDefines(Cctrl *cc, TranspileCtx *ctx) {
@@ -1614,23 +1615,23 @@ AoStr *transpileAsmFunction(Cctrl *cc, Ast *asmfn, Ast *asm_stmt, TranspileCtx *
 }
 
 void transpileAstList(Cctrl *cc, TranspileCtx *ctx) {
-    StrMap *seen = strMapNew(32);
+    Map *seen = astMapNew();
     listForEach(cc->ast_list) {
         Ast *ast = (Ast *)it->value;
         if (ast->kind == AST_FUNC) {
-            if (strMapGet(seen, ast->fname->data) != NULL) continue;
+            if (mapGet(seen, ast->fname->data) != NULL) continue;
             AoStr *c_function = transpileFunction(ast, ctx);
             aoStrCatAoStr(ctx->buf,c_function);
             aoStrRepeatChar(ctx->buf, '\n', 2);
-            strMapAdd(seen, ast->fname->data, ast);
+            mapAdd(seen, ast->fname->data, ast);
         } else if (ast->kind == AST_ASM_FUNC_BIND) {
             Ast *asm_stmt = mapGet(cc->asm_functions, ast->asmfname->data);
             if (asm_stmt) {
-                if (strMapGet(seen, ast->asmfname->data) != NULL) continue;
+                if (mapGet(seen, ast->asmfname->data) != NULL) continue;
                 AoStr *asm_func = transpileAsmFunction(cc, ast, asm_stmt, ctx);
                 aoStrCatAoStr(ctx->buf,asm_func);
                 aoStrRepeatChar(ctx->buf, '\n', 2);
-                strMapAdd(seen, ast->asmfname->data, ast);
+                mapAdd(seen, ast->asmfname->data, ast);
             }
         } else if (ast->kind == AST_COMMENT) {
             ssize_t indent = 0;
@@ -1658,7 +1659,7 @@ AoStr *transpileToC(Cctrl *cc, CliArgs *args) {
     transpileInitMaps();
     
     cc->flags |= (CCTRL_SAVE_ANONYMOUS|CCTRL_PASTE_DEFINES|CCTRL_PRESERVE_SIZEOF|CCTRL_TRANSPILING);
-    Map *built_in_types = mapNew(32, &map_cstring_asttype_type);
+    Map *built_in_types = mapNew(32, &map_asttype_type);
     Map *clsdefs = cc->clsdefs;
 
     AoStr *builtin_path = aoStrPrintf("%s/include/tos.HH", args->install_dir);

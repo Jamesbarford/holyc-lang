@@ -6,7 +6,6 @@
 #include "cctrl.h"
 #include "lexer.h"
 #include "list.h"
-#include "map.h"
 #include "prsasm.h"
 #include "prslib.h"
 #include "util.h"

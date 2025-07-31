@@ -7,7 +7,6 @@
 #include "ast.h"
 #include "config.h"
 #include "containers.h"
-#include "map.h"
 #include "lexer.h"
 
 #define CCTRL_TOKEN_BUFFER_SIZE 16
@@ -89,13 +88,13 @@ typedef struct Cctrl {
 
     /* Temporary function parameters, for trying to keep track of function 
      * pointers */
-    PtrVec *tmp_params;
+    Vec *tmp_params;
 
     /* Local variables */
     List *tmp_locals;
 
     /* For parsing a switch statement */
-    PtrVec *tmp_case_list;
+    Vec *tmp_case_list;
 
     /* function parameters */
     List *func_params;
@@ -132,11 +131,6 @@ typedef struct Cctrl {
     TokenRingBuffer *token_buffer;
     Lexer *lexer_;
 } Cctrl;
-
-/* `Map<char *, Ast *>` Map does not own either the key nor the Ast */
-extern MapType map_cstring_ast_type;
-/* `Map<char *, Ast *>` Map does not own either the key nor the Ast */
-extern MapType map_cstring_asttype_type;
 
 /* Instantiate a new compiler control struct */
 Cctrl *cctrlNew(void);

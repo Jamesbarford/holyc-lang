@@ -52,7 +52,6 @@ set(SOURCES
     lexer.c
     list.c
     main.c
-    map.c
     memory.c
     mempool.c
     parser.c
@@ -76,7 +75,6 @@ set(HEADERS
     containers.h
     lexer.h
     list.h
-    map.h
     memory.h
     mempool.h
     parser.h
