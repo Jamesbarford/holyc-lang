@@ -940,7 +940,7 @@ static void cfgLinkLeaves(Map *map, BasicBlock *bb, BasicBlock *dest) {
                 for (unsigned long i = 0; i < bb->next_blocks->size; ++i) {
                     cfgLinkLeaves(map,bb->next_blocks->entries[i],dest);
                 }
-                /* Fallthrough to set switches next pointer */ 
+                /* FALLTHROUGH */
             case BB_DO_WHILE_COND:
             case BB_CASE:
             case BB_CONTROL_BLOCK:

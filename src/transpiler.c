@@ -675,6 +675,7 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
                 aoStrCat(buf, ".");
             }
         }
+        /* FALLTHROUGH */
     case AST_FUNPTR:
     case AST_FUNCALL: {
         AoStr *formatted = transpileFormatFunction(ast->fname);
