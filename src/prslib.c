@@ -100,7 +100,7 @@ Ast *parseFunctionPointer(Cctrl *cc, AstType *rettype) {
             rettype);
 
     Vec *params = fnptr_type->params;
-    fnptr_type = astMakePointerType(fnptr_type);
+    //fnptr_type = astMakeFunctionType(fnptr_type, params);
 
     ast = astFunctionPtr(
             fnptr_type,
@@ -544,8 +544,9 @@ Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
         rettype = maybe_fn->type->rettype;
         if (maybe_fn->flags & AST_FLAG_INLINE && !(cc->flags & CCTRL_TRANSPILING)) {
             if (maybe_fn->kind == AST_ASM_FUNC_BIND || maybe_fn->kind == AST_ASM_FUNCDEF) {
-                Ast *call = astAsmFunctionCall(maybe_fn->type->rettype,
-                        aoStrDup(maybe_fn->asmfname),astVecNew());
+                Ast *call = astAsmFunctionCall(rettype,
+                                               aoStrDup(maybe_fn->asmfname),
+                                               astVecNew());
                 call->flags |= maybe_fn->flags;
                 return call;
             }
@@ -564,7 +565,6 @@ Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
             cctrlTokenRewind(cc);
             peek = cctrlTokenPeek(cc);
         }
-        
         cctrlRaiseException(cc,"Function: %.*s() not defined",len,fname);
     }
 
@@ -906,7 +906,6 @@ Ast *parseExpr(Cctrl *cc, int prec) {
     int prec2, next_prec, compound_assign;
 
     if ((LHS = parseUnaryExpr(cc)) == NULL) {
-        printf("RET NULL\n");
         return NULL;
     }
 
@@ -1029,6 +1028,10 @@ Ast *parseExpr(Cctrl *cc, int prec) {
             if (!astBinOpFromToken(tok->i64,&binop)) {
                 cctrlRaiseException(cc,"Invalid binary operator %c => %d", (char)tok->i64, tok->i64);
             }
+            if (!LHS) {
+                lexemePrint(tok);
+            }
+
             LHS = parseCreateBinaryOp(cc,binop,LHS,RHS);
         }
     }
@@ -1232,24 +1235,27 @@ Ast *parseUnaryExpr(Cctrl *cc) {
             }
         }
 
-        //if (unary_op == AST_UN_OP_ADDR_OF && parseIsFunction(operand)) {
-        //    return operand;
-        //    return astUnaryOperator(type, unary_op, operand);
-        //}
-
         switch (unary_op) {
-            case AST_UN_OP_ADDR_OF: type = astMakePointerType(operand->type); break;
+            case AST_UN_OP_ADDR_OF: {
+                if (parseIsFunction(operand)) {
+                    /* TODO;
+                     * Making this a pointer type effects the return type of 
+                     * the function. It's hard in this parser to say we want
+                     * a pointer to a function not mutate the return value to 
+                     * a pointer. This does work however and the "hack" does not
+                     * leak. So perhaps we can delete this comment at a later
+                     * date */
+                    type = operand->type;
+                } else {
+                    type = astMakePointerType(operand->type);
+                }
+                break;
+            }
             case AST_UN_OP_DEREF:   type = operand->type->ptr; break;
             case AST_UN_OP_BIT_NOT: type = ast_int_type; break;
             default:                type = operand->type; break;
         }
 
-        if (type == NULL) {
-            printf("ye - %s \n", astUnOpKindToString(unary_op));
-            astPrint(operand);
-            lexemePrint(tok);
-            printf("%s\n", astTypeToString(type));
-        }
         return astUnaryOperator(type, unary_op, operand);
     }
     

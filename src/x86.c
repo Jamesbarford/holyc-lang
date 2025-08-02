@@ -788,7 +788,7 @@ void asmAddr(Cctrl *cc, AoStr *buf, Ast *ast) {
     /* This is gross */
     switch (ast->operand->kind) {
         case AST_LVAR: {
-            if (ast->operand->type->kind == AST_TYPE_POINTER) {
+            if (astTypeIsPtr(ast->operand->type)) {
                 /* XXX: this feels extremely hacky */
                 aoStrCatPrintf(buf, "# ADDR of %s\n\t",
                         astTypeKindToString(ast->operand->type->ptr->kind));
@@ -835,13 +835,15 @@ void asmAddr(Cctrl *cc, AoStr *buf, Ast *ast) {
             break;
         }
 
+        case AST_ASM_FUNC_BIND: {
+            aoStrCatPrintf(buf,"leaq    %s(%%rip), %%rax\n\t",
+                    ast->operand->asmfname->data);
+            break;
+        }
+
         case AST_FUNC: {
             char *normalised = asmNormaliseFunctionName(ast->operand->fname->data);
-            aoStrCatPrintf(buf,
-                    "leaq   %s(%%rip), %%rax\n\t"
-                    "movq    %%rax, %d(%%rbp)\n\t",
-                    normalised,
-                    ast->operand->loff);
+            aoStrCatPrintf(buf, "leaq   %s(%%rip), %%rax\n\t", normalised);
             break;
         }
 
@@ -866,18 +868,28 @@ void asmBinaryOpIntArithmetic(Cctrl *cc, AoStr *buf, Ast *ast, int reverse) {
        is_unsinged = 1; 
     }
 
-    int ok = 0;//1;
-    //ssize_t result = evalIntArithmeticOrErr(ast,&ok);
-    //if (!ok) {
-    //    ok = 1;
-    //    result = evalOneIntExprOrErr(LHS,RHS,ast->binop,&ok);
-    //}
+    /* TODO;
+     * Fix the compile time evaluation. It currently goes _crazy_ with
+     * recursion. And everything else is so unoptimised this isn't the end of
+     * the world that it's commented out. With the new backend (if I ever
+     * complete it) this kind of optimisation should be trivial.
+     * Having CORRECT behaviour is the primary concern currently.
+     */
 
-    //if (ok) {
-    //    aoStrCatPrintf(buf, "movq   $%lld, %%rax\n\t",result);
-    //    aoStrCatPrintf(buf, "# INt arithmetic END, folded value \n\t");
-    //    return;
-    //}
+    /* @BROKEN; SEE COMMENT ABOVE ^^^
+    int ok = 1;
+    ssize_t result = evalIntArithmeticOrErr(ast,&ok);
+    if (!ok) {
+        ok = 1;
+        result = evalOneIntExprOrErr(LHS,RHS,ast->binop,&ok);
+    }
+
+    if (ok) {
+        aoStrCatPrintf(buf, "movq   $%lld, %%rax\n\t",result);
+        aoStrCatPrintf(buf, "# INt arithmetic END, folded value \n\t");
+        return;
+    }
+    */
 
     switch (ast->binop) {
         case AST_BIN_OP_MUL: op = "imulq"; break;
@@ -1499,32 +1511,22 @@ void asmBinaryOp(Cctrl *cc, AoStr *buf, Ast *ast) {
         }
 
         case AST_BIN_OP_ASSIGN: {
-            if (ast->type->kind == AST_TYPE_FUNC) {
-                char *fname;
-                if (ast->kind == AST_ASM_FUNC_BIND) {
-                    fname = strndup(ast->asmfname->data,ast->asmfname->len);
-                } else {
-                    fname = asmNormaliseFunctionName(ast->fname->data);
+            /* If it is compound and the value is being assigned to the return of 
+             * a function we need to perform the integer arithmetic in reversed 
+             * order */
+            if (asmShouldReverseMaths(ast->right)) {
+                if (ast->type->kind == AST_TYPE_INT) { 
+                    asmBinaryOpIntArithmetic(cc,buf,ast->right,
+                            ASM_REVERSE_ARITHMETIC);
+                } else if (ast->type->kind == AST_TYPE_FLOAT) {
+                    asmBinaryOpFloatArithmetic(cc,buf,ast->right,
+                            ASM_REVERSE_ARITHMETIC);
                 }
-                aoStrCatPrintf(buf,"leaq    %s(%%rip), %%rax\n\t",fname);
             } else {
-                /* If it is compound and the value is being assigned to the return of 
-                 * a function we need to perform the integer arithmetic in reversed 
-                 * order */
-                if (asmShouldReverseMaths(ast->right)) {
-                    if (ast->type->kind == AST_TYPE_INT) { 
-                        asmBinaryOpIntArithmetic(cc,buf,ast->right,
-                                ASM_REVERSE_ARITHMETIC);
-                    } else if (ast->type->kind == AST_TYPE_FLOAT) {
-                        asmBinaryOpFloatArithmetic(cc,buf,ast->right,
-                                ASM_REVERSE_ARITHMETIC);
-                    }
-                } else {
-                    asmExpression(cc,buf,ast->right);
-                }
-                asmLoadConvert(buf,ast->type,ast->right->type);
-                asmAssign(cc, buf, ast->left);
+                asmExpression(cc,buf,ast->right);
             }
+            asmLoadConvert(buf,ast->type,ast->right->type);
+            asmAssign(cc, buf, ast->left);
             return;
         }     
         case AST_BIN_OP_ADD_ASSIGN:

@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -341,8 +342,11 @@ Ast *astFunctionDefaultParam(Ast *var, Ast *init) {
     return ast;
 }
 
-Ast *astFunctionPtrCall(AstType *type, char *fname, int len,
-                        Vec *argv, Ast *ref)
+Ast *astFunctionPtrCall(AstType *type,
+                        char *fname,
+                        int len,
+                        Vec *argv,
+                        Ast *ref)
 {
     Ast *ast = astNew();
     ast->type = type;
@@ -747,7 +751,7 @@ AoStr *astNormaliseFunctionName(char *fname) {
         aoStrPutChar(newfn, '_');
     }
 #endif
-    aoStrCatPrintf(newfn,fname);
+    aoStrCatPrintf(newfn, fname);
     /* XXX: Dynamically create main function */
     return newfn;
 }

@@ -1671,9 +1671,6 @@ Ast *parseFunctionOrDef(Cctrl *cc, AstType *rettype, char *fname, int len, int i
     Vec *params = parseParams(cc,')',&has_var_args,1);
     Lexeme *tok = cctrlTokenGet(cc);
     if (tokenPunctIs(tok, '{')) {
-#ifdef DEBUG
-        fprintf(stderr, "Parsing function: %.*s\n",len,fname);
-#endif
         return parseFunctionDef(cc,rettype,fname,len,params,has_var_args,is_inline);
     } else {
         if (rettype->kind == AST_TYPE_AUTO) {

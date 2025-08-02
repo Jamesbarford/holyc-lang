@@ -432,11 +432,17 @@ Ast *astFunctionCall(AstType *type, char *fname, int len, Vec *argv);
 Ast *astFunction(AstType *rettype, char *fname, int len, Vec *params,
                  Ast *body, List *locals, int has_var_args);
 Ast *astReturn(Ast *retval, AstType *rettype);
-Ast *astFunctionPtr(AstType *type, char *fname, int len, 
+Ast *astFunctionPtr(AstType *type,
+                    char *fname,
+                    int fname_len, 
                     Vec *params);
 
-Ast *astFunctionPtrCall(AstType *type, char *fname, int len,
-                        Vec *argv, Ast *ref);
+Ast *astFunctionPtrCall(AstType *type,
+                        char *fname,
+                        int fname_len,
+                        Vec *argv,
+                        Ast *ref);
+
 Ast *astFunctionDefaultParam(Ast *var, Ast *init);
 Ast *astVarArgs(void);
 
