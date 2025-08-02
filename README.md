@@ -8,7 +8,7 @@
     src="/assets/holyc-logo.png?raw=true"
     alt="alt text"
     title="holyc logo"
-    width="400"/>
+    width="300"/>
 </p>
 
 A compiler for [Terry A. Davis](https://en.wikipedia.org/wiki/Terry_A._Davis)'s HolyC programming language, implemented in C.
