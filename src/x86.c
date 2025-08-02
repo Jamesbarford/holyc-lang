@@ -428,10 +428,10 @@ void asmAssignDerefInternal(AoStr *buf, AstType *type, int offset) {
     aoStrCatPrintf(buf, "# ASSIGN DREF INTERNAL end\n\t");
 }
 
-void asmAssignDeref(Cctrl *cc,AoStr *buf, Ast *ast) {
+void asmAssignDeref(Cctrl *cc, AoStr *buf, Ast *ast) {
     asmPush(buf, REG_RAX);
     asmExpression(cc,buf,ast->operand);
-    asmAssignDerefInternal(buf,ast->operand->type->ptr, 0);
+    asmAssignDerefInternal(buf, ast->operand->type->ptr, 0);
 }
 
 void asmLoadDeref(AoStr *buf, AstType *result, AstType *op_type, int off) {
@@ -659,13 +659,10 @@ void asmAssign(Cctrl *cc, AoStr *buf, Ast *variable) {
             break;
 
         case AST_UNOP: {
-            switch (variable->unop) {
-                case AST_UN_OP_DEREF: {
-                    asmAssignDeref(cc,buf, variable);
-                    break;
-                }
-                default:
-                    loggerPanic("Cannot assign to: %s\n", astToString(variable));
+            if (astIsDeref(variable)) {
+                asmAssignDeref(cc, buf, variable);
+            } else {
+                loggerPanic("Cannot assign to: %s\n", astToString(variable));
             }
             break;
         }
@@ -819,34 +816,38 @@ void asmAddr(Cctrl *cc, AoStr *buf, Ast *ast) {
                     ast->operand->glabel->data);
             break;
         case AST_CLASS_REF: {
-            if (ast->operand->operand->kind == AST_LVAR ||
-                astIsDeref(ast->operand->operand))
-            {
-                aoStrCatPrintf(buf, "movq   %d(%%rbp), %%rax\n\t",
-                        ast->cls->cls->operand->loff);
-                aoStrCatPrintf(buf,"addq   $%d, %%rax\n\t",ast->cls->type->offset);
+            if (astIsDeref(ast->operand->cls) &&
+                    ast->operand->cls->operand->kind) {
+                Ast *lvar = ast->operand->cls->operand;
+                aoStrCatPrintf(buf, "movq   %d(%%rbp), %%rax\n\t", lvar->loff);
+                aoStrCatPrintf(buf,"addq   $%d, %%rax\n\t",ast->operand->type->offset);
             } else {
-                loggerPanic("Cannot produce ASM for: %s %s %s %s\n",
-                    astKindToString(ast->operand->operand->kind),
+                loggerPanic("Cannot produce ASM for: %s %s %s\n",
+                    astKindToString(ast->operand->cls->kind),
                     astTypeToString(ast->type),
-                    astTypeToString(ast->operand->type),
-                    astTypeToString(ast->cls->type));
+                    astTypeToString(ast->operand->type));
             }
             break;
         }
         
         case AST_UNOP: {
-            if (astIsDeref(ast) || astIsAddr(ast)) {
-                asmExpression(cc,buf,ast->operand);
-            } else {
-                loggerPanic("Unhandled unary: %s\n", astToString(ast));
-            }
+            asmExpression(cc,buf,ast->operand);
+            break;
+        }
+
+        case AST_FUNC: {
+            char *normalised = asmNormaliseFunctionName(ast->operand->fname->data);
+            aoStrCatPrintf(buf,
+                    "leaq   %s(%%rip), %%rax\n\t"
+                    "movq    %%rax, %d(%%rbp)\n\t",
+                    normalised,
+                    ast->operand->loff);
             break;
         }
 
         default:
             loggerPanic("Cannot turn Kind AST:%s %s into assembly\n",
-                    astKindToString(ast->kind),
+                    astKindToString(ast->operand->kind),
                     astToString(ast));
     }
     aoStrCatPrintf(buf, "# ADDR %s END %s \n\t", 
@@ -865,18 +866,18 @@ void asmBinaryOpIntArithmetic(Cctrl *cc, AoStr *buf, Ast *ast, int reverse) {
        is_unsinged = 1; 
     }
 
-    int ok = 1;
-    ssize_t result = evalIntArithmeticOrErr(ast,&ok);
-    if (!ok) {
-        ok = 1;
-        result = evalOneIntExprOrErr(LHS,RHS,ast->binop,&ok);
-    }
+    int ok = 0;//1;
+    //ssize_t result = evalIntArithmeticOrErr(ast,&ok);
+    //if (!ok) {
+    //    ok = 1;
+    //    result = evalOneIntExprOrErr(LHS,RHS,ast->binop,&ok);
+    //}
 
-    if (ok) {
-        aoStrCatPrintf(buf, "movq   $%lld, %%rax\n\t",result);
-        aoStrCatPrintf(buf, "# INt arithmetic END, folded value \n\t");
-        return;
-    }
+    //if (ok) {
+    //    aoStrCatPrintf(buf, "movq   $%lld, %%rax\n\t",result);
+    //    aoStrCatPrintf(buf, "# INt arithmetic END, folded value \n\t");
+    //    return;
+    //}
 
     switch (ast->binop) {
         case AST_BIN_OP_MUL: op = "imulq"; break;
@@ -1001,9 +1002,10 @@ static char *asmGetCompartor(AstBinOp op) {
 void asmPreIncrDecr(Cctrl *cc, AoStr *buf, Ast *ast, char *op) {
     asmExpression(cc,buf,ast->operand);
     int size = 1;
-    if (ast->operand->type->ptr) {
+    if (astTypeIsPtr(ast->operand->type)) {
         size = ast->operand->type->ptr->size;
     }
+
     if (astIsDeref(ast->operand)) {
         /* This is essentially pointer juggling like:
          * '*++ptr' or '*--ptr' */
@@ -1025,21 +1027,26 @@ void asmIncrDecr(Cctrl *cc, AoStr *buf, Ast *ast, char *op) {
     asmExpression(cc,buf,ast->operand);
     asmPush(buf, REG_RAX);
     int size = 1;
-    if (ast->operand->type->ptr) {
+    int is_ptr_type = astTypeIsPtr(ast->operand->type);
+
+    if (is_ptr_type) {
         size = ast->operand->type->ptr->size;
     }
 
-    if (astIsDeref(ast)) {
+    if (astIsDeref(ast->operand)) {
         /* This is essentially pointer juggling like:
          * '*ptr++' or '*ptr--' */
         aoStrCatPrintf(buf, "%s   $%d, %%rax\n\t", op, size);
         asmAssign(cc,buf,ast->operand);
     } else {
-        aoStrCatPrintf(buf, "%s   $1, %%rax\n\t", op);
+        aoStrCatPrintf(buf, "%s   $%d, %%rax\n\t", op, size);
         asmAssign(cc,buf,ast->operand);
     }
 
     asmPop(buf,REG_RAX);
+    if (is_ptr_type) {
+        aoStrCatPrintf(buf, "movq   %%rax, %%rcx\n\t");
+    }
 }
 
 /* For syntax like:
@@ -1212,6 +1219,7 @@ void asmUnaryOp(Cctrl *cc, AoStr *buf, Ast *ast) {
             }
             break;
         }
+
         case AST_UN_OP_POST_DEC:
             if (ast->type->kind == AST_TYPE_FLOAT) {
                 asmExpression(cc,buf,ast->operand);
@@ -1225,6 +1233,7 @@ void asmUnaryOp(Cctrl *cc, AoStr *buf, Ast *ast) {
                 asmIncrDecr(cc,buf,ast,"subq");
             }
             break;
+
         case AST_UN_OP_PRE_INC: {
             if (astIsFloatType(ast->type)) {
                 asmExpression(cc,buf,ast->operand);
@@ -1249,8 +1258,10 @@ void asmUnaryOp(Cctrl *cc, AoStr *buf, Ast *ast) {
             }
             break;
         }
+
         case AST_UN_OP_PLUS:
             break;
+
         case AST_UN_OP_MINUS: {
             asmExpression(cc,buf, ast->operand);
             if (astIsFloatType(ast->operand->type)) {
@@ -1286,7 +1297,6 @@ void asmUnaryOp(Cctrl *cc, AoStr *buf, Ast *ast) {
 
         case AST_UN_OP_DEREF: {
             if (!astTypeIsPtr(ast->operand->type) && !astTypeIsArray(ast->operand->type)) {
-                astTypePrint(ast->operand->type);
                 loggerPanic("Expected a pointer type got: `%s`\n%s\n",
                         astTypeKindToString(ast->operand->type->kind),
                         astToString(ast->operand));
@@ -1297,7 +1307,7 @@ void asmUnaryOp(Cctrl *cc, AoStr *buf, Ast *ast) {
             AstType *result = ast->type;
             char *reg;
         
-            if (astTypeIsPtr(op_type) && op_type->ptr->kind == AST_TYPE_ARRAY) {
+            if (astTypeIsPtr(op_type) && astTypeIsArray(op_type->ptr)) {
                 return;
             }
 
@@ -1321,7 +1331,6 @@ void asmUnaryOp(Cctrl *cc, AoStr *buf, Ast *ast) {
                     if (astIsFloatType(result)) {
                         aoStrCatPrintf(buf, "movq   (%%rax), %%xmm0\n\t");
                     } else {
-                        // reg = asmGetIntReg(result,'c');
                         char *mov = asmGetPtrMove(result);
                         aoStrCatPrintf(buf, "movq   %%rax, %%rcx\n\t"
                                             "%s   (%%%s), %%rax\n\t",mov, reg);
@@ -2164,7 +2173,9 @@ void asmExpression(Cctrl *cc, AoStr *buf, Ast *ast) {
     }
 
     default:
-        loggerPanic("Unhandled AST expression; %s\n", astToString(ast));
+        loggerPanic("Unhandled AST expression; %s %s\n",
+                astKindToString(ast->kind),
+                astToString(ast));
     }
 }
 

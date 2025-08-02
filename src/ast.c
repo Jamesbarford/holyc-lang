@@ -943,7 +943,7 @@ error:
     return NULL;
 }
 
-AstType *astTypeCheck(AstType *expected, Ast *ast, long op) {
+AstType *astTypeCheck(AstType *expected, Ast *ast, AstBinOp op) {
     if (expected != NULL && ast == NULL) return NULL;
 
     AstType *original_actual = ast->type;
@@ -974,7 +974,7 @@ check_type:
             ret = e;
             goto out;
         } else {
-            if (op != '=') {
+            if (op != AST_BIN_OP_ASSIGN) {
                 ret = e;
             } else if (ast->right != NULL) {
                 if (ast->right->kind == AST_LITERAL && ast->right->i64 == 0) {
@@ -1919,8 +1919,8 @@ const char *astUnOpKindToString(AstUnOp op) {
     switch (op) {
         case AST_UN_OP_POST_INC: return "++";
         case AST_UN_OP_POST_DEC: return "--";
-        case AST_UN_OP_PRE_INC: return "++";
-        case AST_UN_OP_PRE_DEC: return "--";
+        case AST_UN_OP_PRE_INC: return "pre ++";
+        case AST_UN_OP_PRE_DEC: return "pre --";
         case AST_UN_OP_PLUS: return "+";
         case AST_UN_OP_MINUS: return "-";
         case AST_UN_OP_LOG_NOT: return "!";

@@ -68,7 +68,9 @@ AstType *parsePointerType(Cctrl *cc, AstType *type) {
 }
 
 AstType *parseFunctionPointerType(Cctrl *cc,
-        char **fnptr_name, int *fnptr_name_len, AstType *rettype)
+                                  char **fnptr_name,
+                                  int *fnptr_name_len,
+                                  AstType *rettype)
 {
     int has_var_args;
     Lexeme *fname;
@@ -97,6 +99,10 @@ Ast *parseFunctionPointer(Cctrl *cc, AstType *rettype) {
             &fnptr_name_len,
             rettype);
 
+    //Ast *func_def = mapGetLen(cc->global_env, fnptr_name, fnptr_name_len);
+    //if (func_def) {
+        // fnptr_type = astMakePointerType(fnptr_type);
+    //}
     ast = astFunctionPtr(
             fnptr_type,
             fnptr_name,
@@ -166,7 +172,7 @@ Vec *parseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
                 if (type->kind == AST_TYPE_ARRAY) {
                     type = astMakePointerType(type->ptr);
                 }
-                var = parseFunctionPointer(cc,type);
+                var = parseFunctionPointer(cc, type);
                 if (!mapAddOrErr(cc->localenv,var->fname->data,var)) {
                     cctrlRaiseException(cc,"variable %s already declared",
                             astLValueToString(var,0));
@@ -460,7 +466,7 @@ Vec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
         } else {
             /* Does a distinctly adequate job of type checking function parameters */
             if (param && param->kind != AST_DEFAULT_PARAM) {
-                if ((check = astTypeCheck(param->type,ast,'=')) == NULL) {
+                if ((check = astTypeCheck(param->type,ast,AST_BIN_OP_ASSIGN)) == NULL) {
                     char *expected = astTypeToColorString(param->type);
                     char *got = astTypeToColorString(ast->type);
                     cctrlWarning(cc,"Incompatible function argument, expected '%s' got '%s'in function '%.*s'",
@@ -901,6 +907,7 @@ Ast *parseExpr(Cctrl *cc, int prec) {
     int prec2, next_prec, compound_assign;
 
     if ((LHS = parseUnaryExpr(cc)) == NULL) {
+        printf("RET NULL\n");
         return NULL;
     }
 
@@ -1006,9 +1013,9 @@ Ast *parseExpr(Cctrl *cc, int prec) {
 
         /* This de-sugars the compound assign which I think is okay */
         if (compound_assign) {
-            AstType *ok = astTypeCheck(LHS->type,RHS,deconstructed_compound_op);
+            AstType *ok = astTypeCheck(LHS->type,RHS,compound_assign);
             if (!ok) {
-                typeCheckWarn(cc,deconstructed_compound_op,LHS,RHS);
+                typeCheckWarn(cc,'=',LHS,RHS);
             }
             LHS = parseCreateBinaryOp(cc,AST_BIN_OP_ASSIGN, LHS,
                     parseCreateBinaryOp(cc, deconstructed_compound_op, LHS, RHS));
@@ -1016,7 +1023,7 @@ Ast *parseExpr(Cctrl *cc, int prec) {
             if (tok->i64 == '=') {
                 AstType *ok = astTypeCheck(LHS->type,RHS,AST_BIN_OP_ASSIGN);
                 if (!ok) {
-                    typeCheckWarn(cc,AST_BIN_OP_ASSIGN,LHS,RHS);
+                    typeCheckWarn(cc,'=',LHS,RHS);
                 }
             }
             AstBinOp binop;
@@ -1201,6 +1208,12 @@ Ast *parseUnaryExpr(Cctrl *cc) {
             return parsePostFixExpr(cc);
         }
 
+        if (unary_op == AST_UN_OP_POST_INC) {
+            unary_op = AST_UN_OP_PRE_INC;
+        } else if (unary_op == AST_UN_OP_POST_DEC) {
+            unary_op = AST_UN_OP_PRE_DEC;
+        }
+
         Lexeme *peek = cctrlTokenPeekBy(cc,1);
         Ast *operand = NULL;
         AstType *type = NULL;
@@ -1220,9 +1233,10 @@ Ast *parseUnaryExpr(Cctrl *cc) {
             }
         }
 
-        if (unary_op == AST_UN_OP_ADDR_OF && parseIsFunction(operand)) {
-            return operand;
-        }
+        //if (unary_op == AST_UN_OP_ADDR_OF && parseIsFunction(operand)) {
+        //    return operand;
+        //    return astUnaryOperator(type, unary_op, operand);
+        //}
 
         switch (unary_op) {
             case AST_UN_OP_ADDR_OF: type = astMakePointerType(operand->type); break;

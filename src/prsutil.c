@@ -210,9 +210,10 @@ int astCanEval(Ast *ast, int *_ok, int is_float) {
         return 1;
     } else if (ast->kind == AST_LITERAL && (astIsIntType(ast->type) || astIsFloatType(ast->type))) {
         return 1;
+    } else {
+        *_ok = 0;
+        return 0;
     }
-    *_ok = 0;
-    return 0;
 }
 
 double evalFloatExprOrErr(Ast *ast, int *_ok) {

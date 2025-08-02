@@ -466,7 +466,7 @@ AstType *astClassType(Map *fields, AoStr *clsname, int size, int is_intrinsic);
 Ast *astCast(Ast *var, AstType *to);
 
 AstType *astGetResultType(AstBinOp op, AstType *a, AstType *b);
-AstType *astTypeCheck(AstType *expected, Ast *ast, long op);
+AstType *astTypeCheck(AstType *expected, Ast *ast, AstBinOp op);
 
 /* Queries */
 int astIsIntType(AstType *type);

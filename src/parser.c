@@ -52,7 +52,7 @@ Ast *parseFloatingCharConst(Cctrl *cc, Lexeme *tok) {
 }
 
 void parseTypeCheckClassFieldInitaliser(Cctrl *cc, AstType *cls_field_type, Ast *init) {
-    if (!astTypeCheck(cls_field_type, init, '=')) {
+    if (!astTypeCheck(cls_field_type, init, AST_BIN_OP_ASSIGN)) {
         char *cls_field_str = astTypeToColorString(cls_field_type);
         char *init_field = astTypeToColorString(init->type);
         char *var_string = astLValueToString(init,0);
@@ -566,7 +566,7 @@ Ast *parseVariableAssignment(Cctrl *cc, Ast *var, long terminator_flags) {
     }
 
     /* Check what we are trying to assign is valid */
-    AstType *ok = astTypeCheck(var->type,init,'=');
+    AstType *ok = astTypeCheck(var->type,init,AST_BIN_OP_ASSIGN);
     if (!ok) {
         typeCheckWarn(cc,'=',var,init);
     }
@@ -1671,6 +1671,9 @@ Ast *parseFunctionOrDef(Cctrl *cc, AstType *rettype, char *fname, int len, int i
     Vec *params = parseParams(cc,')',&has_var_args,1);
     Lexeme *tok = cctrlTokenGet(cc);
     if (tokenPunctIs(tok, '{')) {
+#ifdef DEBUG
+        fprintf(stderr, "Parsing function: %.*s\n",len,fname);
+#endif
         return parseFunctionDef(cc,rettype,fname,len,params,has_var_args,is_inline);
     } else {
         if (rettype->kind == AST_TYPE_AUTO) {
