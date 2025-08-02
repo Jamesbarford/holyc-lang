@@ -1,15 +1,17 @@
-# HolyC Programming Language Implementation - BETA
+# HolyC Programming Language
+
+> [!WARNING]
+> The Compiler is in a working state and most features are implemented. Errors are a bit hit and miss! This is more for fun than for serious software development.
 
 <p align="center">
   <img 
     src="/assets/holyc-logo.png?raw=true"
     alt="alt text"
     title="holyc logo"
-    width="200"
-    height="230"/>
+    width="300"/>
 </p>
 
-_An implementation of Terry A. Davis's HolyC_
+A compiler for [Terry A. Davis](https://en.wikipedia.org/wiki/Terry_A._Davis)'s HolyC programming language, implemented in C.
 
 ```hc
 U0 Main()
