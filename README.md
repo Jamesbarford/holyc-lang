@@ -1,7 +1,7 @@
 # HolyC Programming Language
 
 > [!WARNING]
-> The Compiler is working however errors are a bit hit and miss, this is more for fun than for serious software development. The `main` branch is unstable and may not be in a working state. Please download the source from a release and compile from there, it _should_ be more stable. Enjoy!
+> The Compiler is in a working state and most features are implemented. Errors are a bit hit and miss! This is more for fun than for serious software development.
 
 <p align="center">
   <img 
