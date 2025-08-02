@@ -528,7 +528,7 @@ char *lexemeToString(Lexeme *tok) {
 void lexemePrint(Lexeme *le) {
     if (le) {
         char *str = lexemeToString(le);
-        printf("%ld: %s\n", le->line, str);
+        printf("%d: %s\n", le->line, str);
       //  free(str);
     }
 }

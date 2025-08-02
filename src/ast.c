@@ -184,7 +184,7 @@ int astBinOpFromToken(long op, AstBinOp *_result) {
         case '<': *_result = AST_BIN_OP_LT;     break;
         case '>': *_result = AST_BIN_OP_GT;     break;
         case TK_GREATER_EQU: *_result = AST_BIN_OP_GE;  break;
-        case TK_LESS_EQU: *_result = AST_BIN_OP_GE;  break;
+        case TK_LESS_EQU: *_result = AST_BIN_OP_LE;  break;
 
         case TK_EQU_EQU: *_result = AST_BIN_OP_EQ; break;
         case TK_NOT_EQU: *_result = AST_BIN_OP_NE; break;
@@ -1358,7 +1358,7 @@ void _astToString(AoStr *str, Ast *ast, int depth) {
                 if (!isatty(STDOUT_FILENO)) {
                     aoStrCatPrintf(str, "<const_char> '%s'", buf);
                 } else {
-                    aoStrCatPrintf(str, "\033[0;35m%s\033[0m", buf);
+                    aoStrCatPrintf(str, "<const_char> \033[0;35m'%s'\033[0m", buf);
                 }
                 break;
             }

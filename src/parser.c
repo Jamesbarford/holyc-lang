@@ -36,17 +36,31 @@ static AoStr *getRangeLoopIdx(void) {
 /* Kinda cheating converting it to a string and calling printf */
 Ast *parseFloatingCharConst(Cctrl *cc, Lexeme *tok) {
     unsigned long ch = (unsigned long)tok->i64;
-    char str[9];
+    char str[16];
     Vec *argv = astVecNew();
     int len = 0;
+    int real_len = 0;
 
     while (ch) {
-        str[len++] = ch & 0xFF;
+        switch (ch & 0xFF) {
+            case '\'': str[len++] = '\\'; str[len++] = '\''; break;
+            case '\\': str[len++] = '\\'; str[len++] = '\\'; break;
+            case '\"': str[len++] = '\''; str[len++] = '\"'; break;
+            case '\b': str[len++] = '\\';  str[len++] = 'b'; break;
+            case '\n': str[len++] = '\\';  str[len++] = 'n'; break;
+            case '\t': str[len++] = '\\';  str[len++] = 't'; break;
+            case '\v': str[len++] = '\\';  str[len++] = 'v'; break;
+            case '\f': str[len++] = '\\';  str[len++] = 'f'; break;
+            case '\r': str[len++] = '\\';  str[len++] = 'r'; break;
+
+            default: str[len++] = ch & 0xFF; break;
+        }
+        real_len++;
         ch = ch >> 8;
     }
 
-    Ast *ast = cctrlGetOrSetString(cc,str,len,len);
-    vecPush(argv,ast);
+    Ast *ast = cctrlGetOrSetString(cc,str,len,real_len);
+    vecPush(argv, ast);
     cctrlTokenExpect(cc,';');
     return astFunctionCall(ast_void_type,"printf",6,argv);
 }

@@ -380,7 +380,7 @@ static Bool JsonSetExpectedType(JsonParser *p)
     case 'f': p->type = JSON_PARSER_BOOL; break;
     case '"': p->type = JSON_PARSER_STRING; break;
     default: {
-      if ( ('0'<=peek<='9') || peek == '-' || peek == '+' || peek == '.') {
+      if (('0'<=peek<='9') || peek == '-' || peek == '+' || peek == '.') {
         p->type = JSON_PARSER_NUMERIC;
         break;
       } else {
@@ -908,7 +908,7 @@ U0 JsonPrintError(Json *json)
 {
   U8 *str_error = JsonGetStrerror(json);
   if (str_error) {
-    "%s\n";
+    "%s\n", str_error;
     Free(str_error);
   } else {
     "No errors\n";
