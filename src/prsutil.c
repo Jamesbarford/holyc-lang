@@ -272,12 +272,16 @@ long evalIntArithmeticOrErr(Ast *ast, int *_ok) {
     }
 
     switch (ast->kind) {
-        case AST_LITERAL:
+        case AST_LITERAL: {
             if (astIsIntType(ast->type)) {
                 return ast->i64;
             } else if (astIsFloatType(ast->type)) {
                 return (long)ast->f64;
+            } else {
+                *_ok = 0;
+                return 0;
             }
+        }
 
         case AST_BINOP:
             switch (ast->binop) {
@@ -296,6 +300,7 @@ long evalIntArithmeticOrErr(Ast *ast, int *_ok) {
                     return 0;
                 }
             }
+            break;
         default: {
             *_ok = 0;
             return 0;
@@ -359,6 +364,7 @@ long evalIntConstExprOrErr(Ast *ast, int *_ok) {
                     return 0;
                 }
             }
+            break;
         }
 
         case AST_BINOP:
@@ -428,6 +434,8 @@ long evalIntConstExprOrErr(Ast *ast, int *_ok) {
             return 0;
         }
     }
+    *_ok = 0;
+    return 0;
 }
 
 long evalIntConstExpr(Ast *ast) {

@@ -916,6 +916,7 @@ start_routine:
                 default:
                     break;
             }
+            break;
         case AST_TYPE_FLOAT:
             if (ptr2->kind == AST_TYPE_FLOAT) {
                 return ast_float_type;

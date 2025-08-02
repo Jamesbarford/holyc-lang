@@ -613,17 +613,18 @@ static unsigned long murmur(const char *key, unsigned long len, unsigned long se
     unsigned long k1 = 0;
 
     switch (len & 7) {
-    case 7: k1 ^= ((unsigned long)tail[6]) << 48;
-    case 6: k1 ^= ((unsigned long)tail[5]) << 40;
-    case 5: k1 ^= ((unsigned long)tail[4]) << 32;
-    case 4: k1 ^= ((unsigned long)tail[3]) << 24;
-    case 3: k1 ^= ((unsigned long)tail[2]) << 16;
-    case 2: k1 ^= ((unsigned long)tail[1]) << 8;
-    case 1: k1 ^= ((unsigned long)tail[0]);
+    case 7: k1 ^= ((unsigned long)tail[6]) << 48; /* FALLTHROUGH */
+    case 6: k1 ^= ((unsigned long)tail[5]) << 40; /* FALLTHROUGH */
+    case 5: k1 ^= ((unsigned long)tail[4]) << 32; /* FALLTHROUGH */
+    case 4: k1 ^= ((unsigned long)tail[3]) << 24; /* FALLTHROUGH */
+    case 3: k1 ^= ((unsigned long)tail[2]) << 16; /* FALLTHROUGH */
+    case 2: k1 ^= ((unsigned long)tail[1]) << 8; /* FALLTHROUGH */
+    case 1: k1 ^= ((unsigned long)tail[0]); /* FALLTHROUGH */
             k1 *= c1; 
             k1 = ROT(k1,31,33);
             k1 *= c2; 
             h1 ^= k1;
+            /* FALLTHROUGH */
     case 0:
             break;
     }
