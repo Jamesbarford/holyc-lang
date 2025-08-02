@@ -90,7 +90,7 @@ static void cctrlAddBuiltinMacros(Cctrl *cc) {
     if (IS_LINUX) mapAdd(cc->macro_defs,"IS_LINUX",le);
 
 #ifdef IS_MACOS
-    strMapAdd(cc->macro_defs,"IS_MACOS",le);
+    mapAdd(cc->macro_defs,"IS_MACOS",le);
 #endif
     
     if (IS_X86_64)      {

@@ -22,6 +22,12 @@
 
 int is_terminal;
 
+#if defined(__aarch64__) || defined(__arm64ec__)
+    #define _CC "clang --target=x86_64-apple-darwin"
+#else
+    #define _CC "gcc"
+#endif
+
 #define ASM_TMP_FILE "/tmp/holyc-asm.s"
 #define LIB_BUFSIZ 256
 
@@ -92,7 +98,7 @@ int hccLibInit(hccLib *lib, CliArgs *args, char *name) {
     snprintf(lib->dylib_name,LIB_BUFSIZ,"%s.so",name);
     snprintf(lib->dylib_version_name,LIB_BUFSIZ,"%s.so.0.0.1",name);
     aoStrCatPrintf(dylib_cmd,
-            "gcc -fPIC -shared -Wl,-soname,"INSTALL_PREFIX"/lib/%s -o %s "CLIBS,
+            _CC" -fPIC -shared -Wl,-soname,"INSTALL_PREFIX"/lib/%s -o %s "CLIBS,
             name,
             lib->dylib_name,
             lib->dylib_name);
@@ -148,7 +154,7 @@ void emitFile(AoStr *asmbuf, CliArgs *args) {
     hccLib lib;
     if (args->emit_object) {
         writeAsmToTmp(asmbuf);
-        aoStrCatPrintf(cmd, "gcc -c %s "CLIBS" %s -o ./%s",
+        aoStrCatPrintf(cmd, _CC" -c %s "CLIBS" %s -o ./%s",
                 ASM_TMP_FILE,args->clibs,args->obj_outfile);
         safeSystem(cmd->data);
     } else if (args->asm_outfile && args->assemble_only) {
@@ -175,7 +181,7 @@ void emitFile(AoStr *asmbuf, CliArgs *args) {
     } else if (args->emit_dylib) {
         writeAsmToTmp(asmbuf);
         hccLibInit(&lib,args,args->lib_name);
-        aoStrCatPrintf(cmd, "gcc -fPIC -c %s -o ./%s",
+        aoStrCatPrintf(cmd, _CC" -fPIC -c %s -o ./%s",
                 ASM_TMP_FILE,args->obj_outfile);
         fprintf(stderr,"%s\n",cmd->data);
         safeSystem(cmd->data);
@@ -193,11 +199,11 @@ void emitFile(AoStr *asmbuf, CliArgs *args) {
         if (args->run) {
             AoStr *run_cmd = aoStrNew();
             writeAsmToTmp(asmbuf);
-            aoStrCatPrintf(run_cmd,"gcc -L"INSTALL_PREFIX"/lib %s "CLIBS" && ./a.out && rm ./a.out",
+            aoStrCatPrintf(run_cmd,_CC" -L"INSTALL_PREFIX"/lib %s "CLIBS" && ./a.out && rm ./a.out",
                     ASM_TMP_FILE);
             /* Don't use 'safeSystem' else anything other than a '0' exit 
              * code will cause a panic which is incorrect... This is a bit of a
-             * hack as run, in an ideal world, would not be calling out to gcc */
+             * hack as run, in an ideal world, would not be calling out to `_CC` */
             int ret = system(run_cmd->data);
             (void)ret;
             aoStrRelease(run_cmd);
@@ -211,10 +217,10 @@ void emitFile(AoStr *asmbuf, CliArgs *args) {
         }
 
         if (args->clibs) {
-            aoStrCatPrintf(cmd, "gcc -L"INSTALL_PREFIX"/lib %s %s "CLIBS" -o %s", 
+            aoStrCatPrintf(cmd, _CC" -L"INSTALL_PREFIX"/lib %s %s "CLIBS" -o %s", 
                     ASM_TMP_FILE,args->clibs,args->output_filename);
         } else {
-            aoStrCatPrintf(cmd, "gcc -L"INSTALL_PREFIX"/lib %s "CLIBS" -o %s", 
+            aoStrCatPrintf(cmd, _CC" -L"INSTALL_PREFIX"/lib %s "CLIBS" -o %s", 
                     ASM_TMP_FILE, args->output_filename);
         }
         safeSystem(cmd->data);
@@ -239,13 +245,13 @@ void assemble(CliArgs *args) {
             .capacity = len,
         };
         writeAsmToTmp(&asm_buf);
-        aoStrCatPrintf(run_cmd,"gcc -L"INSTALL_PREFIX"/lib %s "CLIBS" && ./a.out && rm ./a.out",
+        aoStrCatPrintf(run_cmd,_CC" -L"INSTALL_PREFIX"/lib %s "CLIBS" && ./a.out && rm ./a.out",
                 ASM_TMP_FILE);
         free(buffer);
         int ret = system(run_cmd->data);
         (void)ret;
     } else {
-        aoStrCatPrintf(run_cmd, "gcc %s -L"INSTALL_PREFIX"/lib "CLIBS, args->infile);
+        aoStrCatPrintf(run_cmd, _CC" %s -L"INSTALL_PREFIX"/lib "CLIBS, args->infile);
         safeSystem(run_cmd->data);
     }
     aoStrRelease(run_cmd);
