@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
 
 #include "aostr.h"
 #include "ast.h"
@@ -101,7 +102,7 @@ Ast *parseDeclArrayInitInt(Cctrl *cc, AstType *type) {
             if (init == NULL) {
                 cctrlRaiseExceptionFromTo(cc,NULL,'{','}',"Array initaliser encountered an unexpected token");
             } else if (type->ptr) {
-              if ((astGetResultType('=', init->type, type->ptr)) == NULL) {
+              if ((astGetResultType(AST_BIN_OP_ASSIGN, init->type, type->ptr)) == NULL) {
                   cctrlRaiseException(cc,"Incompatiable types: %s %s",
                           astTypeToString(init->type),
                           astTypeToString(type->ptr));
@@ -525,6 +526,7 @@ Ast *parseVariableAssignment(Cctrl *cc, Ast *var, long terminator_flags) {
     Ast *init;
     int len;
     Lexeme *peek = cctrlTokenPeek(cc);
+    assert(var);
 
     if (var->type->kind == AST_TYPE_ARRAY) {
         init = parseDeclArrayInitInt(cc,var->type);
@@ -726,15 +728,15 @@ Ast *parseDesugarArrayLoop(Cctrl *cc, Ast *iteratee, Ast *static_array) {
         listAppend(cc->tmp_locals,iteratee);
     }
 
-    Ast *cond = parseCreateBinaryOp(cc,'<', counter_var, array_len);
+    Ast *cond = parseCreateBinaryOp(cc,AST_BIN_OP_LT, counter_var, array_len);
 
 
     Ast *iterator = astDecl(iteratee,
             astUnaryOperator(static_array->type->ptr,
-                AST_DEREF,
-                parseCreateBinaryOp(cc,'+', static_array, counter_var))
+                AST_UN_OP_DEREF,
+                parseCreateBinaryOp(cc,AST_BIN_OP_ADD, static_array, counter_var))
             );
-    Ast *step = astUnaryOperator(ast_int_type,TK_PLUS_PLUS,counter_var);
+    Ast *step = astUnaryOperator(ast_int_type,AST_UN_OP_PRE_INC,counter_var);
 
     cctrlTokenExpect(cc,')');
     Ast *forbody = parseStatement(cc);
@@ -759,7 +761,8 @@ void parseAssertContainerHasFields(Cctrl *cc, AstType *size_field,
     }
 
     if (entries_field->kind != AST_TYPE_POINTER && entries_field->kind != AST_TYPE_ARRAY) {
-        cctrlRaiseException(cc,"'entries' field must be a pointer or array got '%s'", astKindToString(entries_field->kind));
+        cctrlRaiseException(cc,"'entries' field must be a pointer or array got '%s'",
+                astTypeKindToString(entries_field->kind));
     }
 
     if (entries_field->ptr->kind == AST_TYPE_VOID) {
@@ -783,13 +786,13 @@ Ast *parseCreateForRange(Cctrl *cc, Ast *iteratee,
         listAppend(cc->tmp_locals,iteratee);
     }
 
-    Ast *cond = parseCreateBinaryOp(cc,'<', counter_var, size_ref);
+    Ast *cond = parseCreateBinaryOp(cc,AST_BIN_OP_LT, counter_var, size_ref);
     Ast *iterator = astDecl(iteratee,
             astUnaryOperator(entries_ref->type->ptr,
-                AST_DEREF,
-                parseCreateBinaryOp(cc,'+', entries_ref, counter_var))
+                AST_UN_OP_DEREF,
+                parseCreateBinaryOp(cc,AST_BIN_OP_ADD, entries_ref, counter_var))
             );
-    Ast *step = astUnaryOperator(ast_int_type,TK_PLUS_PLUS,counter_var);
+    Ast *step = astUnaryOperator(ast_int_type,AST_UN_OP_PRE_INC,counter_var);
     cctrlTokenExpect(cc,')');
     Ast *forbody = parseStatement(cc);
     listPrepend(forbody->stms,iterator);
@@ -812,7 +815,9 @@ Ast *parseRangeLoop(Cctrl *cc, Ast *iteratee) {
 
             parseAssertContainerHasFields(cc,size_field,entries_field);
 
-            Ast *deref = astUnaryOperator(container->type->ptr,AST_DEREF,container);
+            Ast *deref = astUnaryOperator(container->type->ptr,
+                                          AST_UN_OP_DEREF,
+                                          container);
             Ast *size_ref = astClassRef(size_field,deref,"size");
             Ast *entries_ref = astClassRef(entries_field,deref,"entries");
 
@@ -842,7 +847,7 @@ Ast *parseRangeLoop(Cctrl *cc, Ast *iteratee) {
 
         parseAssertContainerHasFields(cc,size_field,entries_field);
 
-        Ast *deref = astUnaryOperator(container->type->ptr,AST_DEREF,container);
+        Ast *deref = astUnaryOperator(container->type->ptr,AST_UN_OP_DEREF,container);
         Ast *size_ref = astClassRef(size_field,deref,"size");
         Ast *entries_ref = astClassRef(entries_field,deref,"entries");
 
@@ -1433,7 +1438,8 @@ Ast *parseDeclOrStatement(Cctrl *cc) {
 }
 
 void parseCompoundStatementInternal(Cctrl *cc, Ast *body) {
-    Ast *stmt, *var;
+    Ast *stmt = NULL;
+    Ast *var = NULL;
     AstType *base_type, *type, *next_type;
     Lexeme *tok, *varname, *peek;
     cc->localenv = cctrlCreateAstMap(cc->localenv);

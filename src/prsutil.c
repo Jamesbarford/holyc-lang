@@ -41,9 +41,9 @@ inline int parseIsFunction(Ast *ast) {
 }
 
 int parseIsFunctionCall(Ast *ast) {
-    return ast && (ast->type->kind == AST_FUNCALL || 
-           ast->type->kind == AST_FUNPTR_CALL || 
-           ast->type->kind == AST_ASM_FUNCALL);
+    return ast && (ast->kind == AST_FUNCALL || 
+           ast->kind == AST_FUNPTR_CALL || 
+           ast->kind == AST_ASM_FUNCALL);
 }
 
 void assertIsFloat(Ast *ast, long lineno) {
@@ -180,30 +180,33 @@ int evalClassRef(Ast *ast, int offset) {
     return evalIntConstExpr(ast) + offset;
 }
 
-int astIsArithmetic(long op, int is_float) {
-    switch (op) {
-        case '+':
-        case '-':
-        case '*':
-        case '/':
-            return 1;
-        case '%':
-        case TK_SHL:
-        case TK_SHR:
-        case '&':
-        case '|':
-        case '^':
-            return !is_float;
-        default:
-            return 0;
-    }
+int astIsArithmetic(Ast *ast, int is_float) {
+    if (astIsBinOp(ast)) {
+        switch (ast->binop) {
+            case AST_BIN_OP_MUL:
+            case AST_BIN_OP_DIV:
+            case AST_BIN_OP_ADD:
+            case AST_BIN_OP_SUB:
+                return 1;
+            case AST_BIN_OP_MOD:
+            case AST_BIN_OP_SHL:
+            case AST_BIN_OP_SHR:
+            case AST_BIN_OP_BIT_AND:
+            case AST_BIN_OP_BIT_XOR:
+            case AST_BIN_OP_BIT_OR:
+                return !is_float;
+            default:
+                return 0;
+        }
+    } 
+    return 0;
 }
 
 int astCanEval(Ast *ast, int *_ok, int is_float) {
     if (ast->left && ast->right) {
         return astCanEval(ast->left, _ok,is_float) && 
                astCanEval(ast->right, _ok,is_float);
-    } else if (astIsArithmetic(ast->kind, is_float)) {
+    } else if (astIsArithmetic(ast, is_float)) {
         return 1;
     } else if (ast->kind == AST_LITERAL && (astIsIntType(ast->type) || astIsFloatType(ast->type))) {
         return 1;
@@ -213,33 +216,42 @@ int astCanEval(Ast *ast, int *_ok, int is_float) {
 }
 
 double evalFloatExprOrErr(Ast *ast, int *_ok) {
+#define eval evalFloatExprOrErr
     switch (ast->kind) {
-    case AST_LITERAL:
-        if (astIsFloatType(ast->type)) {
-            return ast->f64;
-        } else if (astIsIntType(ast->type)) {
-            return (double)ast->i64;
+        case AST_LITERAL: {
+            if (astIsFloatType(ast->type)) {
+                return ast->f64;
+            } else if (astIsIntType(ast->type)) {
+                return (double)ast->i64;
+            } else {
+                *_ok = 0;
+                return 0;
+            }
         }
-    case '+': return evalFloatExprOrErr(ast->left, _ok) + evalFloatExprOrErr(ast->right, _ok);
-    case '-': {
-        if (ast->right == NULL && ast->operand != NULL) {
-            return -ast->operand->f64;
+        case AST_BINOP: {
+            switch (ast->binop) {
+                case AST_BIN_OP_MUL: return eval(ast->left, _ok) * eval(ast->right, _ok);
+                case AST_BIN_OP_DIV: return eval(ast->left, _ok) / eval(ast->right, _ok);
+                case AST_BIN_OP_ADD: return eval(ast->left, _ok) + eval(ast->right, _ok);
+                case AST_BIN_OP_SUB: return eval(ast->left, _ok) - eval(ast->right, _ok);
+                case AST_BIN_OP_LT: return eval(ast->left, _ok) < eval(ast->right, _ok);
+                case AST_BIN_OP_LE: return eval(ast->left, _ok) <= eval(ast->right, _ok);
+                case AST_BIN_OP_GT: return eval(ast->left, _ok) > eval(ast->right, _ok);
+                case AST_BIN_OP_GE: return eval(ast->left, _ok) >= eval(ast->right, _ok);
+                case AST_BIN_OP_EQ: return eval(ast->left, _ok) == eval(ast->right, _ok);
+                case AST_BIN_OP_NE: return eval(ast->left, _ok) != eval(ast->right, _ok);
+                default: {
+                    *_ok = 0;
+                    return 0;
+                }
+            }
         }
-        return evalFloatExprOrErr(ast->left, _ok) - evalFloatExprOrErr(ast->right, _ok);
+        default: {
+            *_ok = 0;
+            return 0;
+        }
     }
-    case '/': return evalFloatExprOrErr(ast->left, _ok) / evalFloatExprOrErr(ast->right, _ok);
-    case '*': return evalFloatExprOrErr(ast->left, _ok) * evalFloatExprOrErr(ast->right, _ok);
-    case TK_EQU_EQU: return evalFloatExprOrErr(ast->left, _ok) == evalFloatExprOrErr(ast->right, _ok);
-    case TK_GREATER_EQU: return evalFloatExprOrErr(ast->left, _ok) >= evalFloatExprOrErr(ast->right, _ok);
-    case TK_LESS_EQU: return evalFloatExprOrErr(ast->left, _ok) <= evalFloatExprOrErr(ast->right, _ok);
-    case TK_NOT_EQU: return evalFloatExprOrErr(ast->left, _ok) != evalFloatExprOrErr(ast->right, _ok);
-    case TK_OR_OR: return evalFloatExprOrErr(ast->left, _ok) || evalFloatExprOrErr(ast->right, _ok);
-    case TK_AND_AND: return evalFloatExprOrErr(ast->left, _ok) && evalFloatExprOrErr(ast->right, _ok);
-    default: {
-        *_ok = 0;
-        return 0;
-    }
-    }
+#undef eval
 }
 
 double evalFloatExpr(Ast *ast) {
@@ -251,106 +263,65 @@ double evalFloatExpr(Ast *ast) {
     return result;
 }
 
-double evalFloatArithmeticOrErr(Ast *ast, int *_ok) {
-    if (!astCanEval(ast,_ok,1)) {
-        *_ok = 0;
-        return 0.0;
-    }
-    switch (ast->kind) {
-    case AST_LITERAL:
-        if (astIsFloatType(ast->type)) {
-            return ast->f64;
-        } else if (astIsIntType(ast->type)) {
-            return (double)ast->i64;
-        }
-    case '+': return evalFloatExprOrErr(ast->left, _ok) + evalFloatExprOrErr(ast->right, _ok);
-    case '-': {
-        if (ast->right == NULL && ast->operand != NULL) {
-            return -ast->operand->f64;
-        }
-        return evalFloatExprOrErr(ast->left, _ok) - evalFloatExprOrErr(ast->right, _ok);
-    }
-    case '/': return evalFloatExprOrErr(ast->left, _ok) / evalFloatExprOrErr(ast->right, _ok);
-    case '*': return evalFloatExprOrErr(ast->left, _ok) * evalFloatExprOrErr(ast->right, _ok);
-    default: {
-        *_ok = 0;
-        return 0;
-    }
-    }
-}
-
-double evalOneFloatExprOrErr(Ast *LHS, Ast *RHS, long op, int *_ok) {
-    if (LHS->kind == AST_LITERAL && RHS->kind == AST_LITERAL) {
-        ssize_t result = 0;
-        ssize_t left = astIsIntType(LHS->type) ? (double)LHS->i64 : LHS->f64;
-        ssize_t right = astIsIntType(RHS->type) ? (double)RHS->i64 : LHS->f64;
-        switch(op) {
-            case '+':    result = left + right; break;
-            case '-':    result = left - right; break;
-            case '*':    result = left * right; break;
-            case '/':    result = left / right; break;
-            default:
-                loggerPanic("Invalid operator: '%s'\n",
-                        astKindToString(op));
-        }
-        *_ok = 1;
-        return result;
-    }
-    *_ok = 0;
-    return 0;
-}
-
 long evalIntArithmeticOrErr(Ast *ast, int *_ok) {
+#define eval evalIntArithmeticOrErr
     if (!astCanEval(ast,_ok,0)) {
         *_ok = 0;
         return 0.0;
     }
 
     switch (ast->kind) {
-    case AST_LITERAL:
-        if (astIsIntType(ast->type)) {
-            return ast->i64;
-        } else if (astIsFloatType(ast->type)) {
-            return (long)ast->f64;
+        case AST_LITERAL:
+            if (astIsIntType(ast->type)) {
+                return ast->i64;
+            } else if (astIsFloatType(ast->type)) {
+                return (long)ast->f64;
+            }
+
+        case AST_BINOP:
+            switch (ast->binop) {
+                case AST_BIN_OP_MUL: return eval(ast->left, _ok) * eval(ast->right, _ok);
+                case AST_BIN_OP_DIV: return eval(ast->left, _ok) / eval(ast->right, _ok);
+                case AST_BIN_OP_MOD: return eval(ast->left, _ok) % eval(ast->right, _ok);
+                case AST_BIN_OP_ADD: return eval(ast->left, _ok) + eval(ast->right, _ok);
+                case AST_BIN_OP_SUB: return eval(ast->left, _ok) - eval(ast->right, _ok);
+                case AST_BIN_OP_SHL: return eval(ast->left, _ok) << eval(ast->right, _ok);
+                case AST_BIN_OP_SHR: return eval(ast->left, _ok) >> eval(ast->right, _ok);
+                case AST_BIN_OP_BIT_AND: return eval(ast->left, _ok) & eval(ast->right, _ok);
+                case AST_BIN_OP_BIT_XOR: return eval(ast->left, _ok) ^ eval(ast->right, _ok);
+                case AST_BIN_OP_BIT_OR: return eval(ast->left, _ok) | eval(ast->right, _ok);
+                default: {
+                    *_ok = 0;
+                    return 0;
+                }
+            }
+        default: {
+            *_ok = 0;
+            return 0;
         }
-    case '+': return evalIntArithmeticOrErr(ast->left, _ok) + evalIntArithmeticOrErr(ast->right, _ok);
-    case '-': {
-        return evalIntArithmeticOrErr(ast->left, _ok) - evalIntArithmeticOrErr(ast->right, _ok);
     }
-    case TK_SHL: return evalIntArithmeticOrErr(ast->left, _ok) << evalIntArithmeticOrErr(ast->right, _ok);
-    case TK_SHR: return evalIntArithmeticOrErr(ast->left, _ok) >> evalIntArithmeticOrErr(ast->right, _ok);
-    case '&': return evalIntArithmeticOrErr(ast->left, _ok) & evalIntArithmeticOrErr(ast->right, _ok);
-    case '|': return evalIntArithmeticOrErr(ast->left, _ok) | evalIntArithmeticOrErr(ast->right, _ok);
-    case '^': return evalIntArithmeticOrErr(ast->left, _ok) ^ evalIntArithmeticOrErr(ast->right, _ok);
-    case '*': return evalIntArithmeticOrErr(ast->left, _ok) * evalIntArithmeticOrErr(ast->right, _ok);
-    case '/': return evalIntArithmeticOrErr(ast->left, _ok) / evalIntArithmeticOrErr(ast->right, _ok);
-    case '%': return evalIntArithmeticOrErr(ast->left, _ok) % evalIntArithmeticOrErr(ast->right, _ok);
-    default: {
-        *_ok = 0;
-        return 0;
-    }
-    }
+#undef eval
 }
 
-long evalOneIntExprOrErr(Ast *LHS, Ast *RHS, long op, int *_ok) {
+long evalOneIntExprOrErr(Ast *LHS, Ast *RHS, AstBinOp op, int *_ok) {
     if (LHS->kind == AST_LITERAL && RHS->kind == AST_LITERAL) {
         ssize_t left =  astIsIntType(LHS->type) ? LHS->i64 : (ssize_t)LHS->f64;
         ssize_t right = astIsIntType(RHS->type) ? RHS->i64 : (ssize_t)LHS->f64;
         ssize_t result = 0;
-        switch(op) {
-            case '+':    result = left + right; break;
-            case '-':    result = left - right; break;
-            case '*':    result = left * right; break;
-            case '^':    result = left ^ right; break;
-            case '&':    result = left & right; break;
-            case '|':    result = left | right; break;
-            case TK_SHL: result = left << right; break;
-            case TK_SHR: result = left >> right; break;
-            case '/':    result = left / right; break;
-            case '%':    result = left % right; break;
+        switch (op) {
+            case AST_BIN_OP_ADD:  result = left + right; break;
+            case AST_BIN_OP_SUB:  result = left - right; break;
+            case AST_BIN_OP_MUL:  result = left * right; break;
+            case AST_BIN_OP_DIV:  result = left / right; break;
+            case AST_BIN_OP_MOD:  result = left % right; break;
+            case AST_BIN_OP_BIT_XOR:  result = left ^ right; break;
+            case AST_BIN_OP_BIT_AND:  result = left & right; break;
+            case AST_BIN_OP_BIT_OR:   result = left | right; break;
+            case AST_BIN_OP_SHL:  result = left << right; break;
+            case AST_BIN_OP_SHR: result = left >> right; break;
             default:
                 loggerPanic("Invalid operator: '%s'\n",
-                        astKindToString(op));
+                        astBinOpKindToString(op));
         }
         *_ok = 1;
         return result;
@@ -361,51 +332,100 @@ long evalOneIntExprOrErr(Ast *LHS, Ast *RHS, long op, int *_ok) {
 
 long evalIntConstExprOrErr(Ast *ast, int *_ok) {
     switch (ast->kind) {
-    case AST_LITERAL:
-        if (astIsIntType(ast->type)) {
-            return ast->i64;
-        } else if (astIsFloatType(ast->type)) {
-            return (long)ast->f64;
+        case AST_LITERAL: {
+            if (astIsIntType(ast->type)) {
+                return ast->i64;
+            } else if (astIsFloatType(ast->type)) {
+                return (long)ast->f64;
+            } else {
+                *_ok = 0;
+                return 0;
+            }
         }
-    case AST_ADDR:
-        if (ast->operand->kind == AST_CLASS_REF) {
-            return evalClassRef(ast->operand, 0);
+        case AST_UNOP: {
+            switch (ast->unop) {
+                case AST_UN_OP_PLUS: return +(evalIntConstExprOrErr(ast->operand, _ok));
+                case AST_UN_OP_MINUS: return -(evalIntConstExprOrErr(ast->operand, _ok));
+                case AST_UN_OP_LOG_NOT: return !(evalIntConstExprOrErr(ast->operand, _ok));
+                case AST_UN_OP_BIT_NOT: return ~(evalIntConstExprOrErr(ast->operand, _ok));
+                case AST_UN_OP_ADDR_OF:
+                    if (ast->operand->kind == AST_CLASS_REF) {
+                        return evalClassRef(ast->operand, 0);
+                    }
+                    break;
+                default: {
+                    *_ok = 0;
+                    return 0;
+                }
+            }
         }
-    case AST_DEREF:
-        if (ast->operand->type->kind == AST_TYPE_POINTER) {
-            return evalIntConstExprOrErr(ast->operand, _ok);
+
+        case AST_BINOP:
+            switch (ast->binop) {
+                case AST_BIN_OP_MUL:
+                    return evalIntConstExprOrErr(ast->left, _ok) *
+                        evalIntConstExprOrErr(ast->right, _ok);
+                case AST_BIN_OP_DIV:
+                    return evalIntConstExprOrErr(ast->left, _ok) /
+                        evalIntConstExprOrErr(ast->right, _ok);
+                case AST_BIN_OP_MOD:
+                    return evalIntConstExprOrErr(ast->left, _ok) %
+                        evalIntConstExprOrErr(ast->right, _ok);
+                case AST_BIN_OP_ADD:
+                    return evalIntConstExprOrErr(ast->left, _ok) +
+                        evalIntConstExprOrErr(ast->right, _ok);
+                case AST_BIN_OP_SUB:
+                    return evalIntConstExprOrErr(ast->left, _ok) -
+                        evalIntConstExprOrErr(ast->right, _ok);
+                case AST_BIN_OP_SHL:
+                    return evalIntConstExprOrErr(ast->left, _ok) <<
+                        evalIntConstExprOrErr(ast->right, _ok);
+                case AST_BIN_OP_SHR:
+                    return evalIntConstExprOrErr(ast->left, _ok) >>
+                        evalIntConstExprOrErr(ast->right, _ok);
+                case AST_BIN_OP_LT:
+                    return evalIntConstExprOrErr(ast->left, _ok) <
+                        evalIntConstExprOrErr(ast->right, _ok);
+                case AST_BIN_OP_LE:
+                    return evalIntConstExprOrErr(ast->left, _ok) <=
+                        evalIntConstExprOrErr(ast->right, _ok);
+                case AST_BIN_OP_GT:
+                    return evalIntConstExprOrErr(ast->left, _ok) >
+                        evalIntConstExprOrErr(ast->right, _ok);
+                case AST_BIN_OP_GE:
+                    return evalIntConstExprOrErr(ast->left, _ok) >=
+                        evalIntConstExprOrErr(ast->right, _ok);
+                case AST_BIN_OP_EQ:
+                    return evalIntConstExprOrErr(ast->left, _ok) ==
+                        evalIntConstExprOrErr(ast->right, _ok);
+                case AST_BIN_OP_NE:
+                    return evalIntConstExprOrErr(ast->left, _ok) !=
+                        evalIntConstExprOrErr(ast->right, _ok);
+                case AST_BIN_OP_BIT_AND:
+                    return evalIntConstExprOrErr(ast->left, _ok) &
+                        evalIntConstExprOrErr(ast->right, _ok);
+                case AST_BIN_OP_BIT_XOR:
+                    return evalIntConstExprOrErr(ast->left, _ok) ^
+                        evalIntConstExprOrErr(ast->right, _ok);
+                case AST_BIN_OP_BIT_OR:
+                    return evalIntConstExprOrErr(ast->left, _ok) |
+                        evalIntConstExprOrErr(ast->right, _ok);
+                case AST_BIN_OP_LOG_AND:
+                    return evalIntConstExprOrErr(ast->left, _ok) &&
+                        evalIntConstExprOrErr(ast->right, _ok);
+                case AST_BIN_OP_LOG_OR:
+                    return evalIntConstExprOrErr(ast->left, _ok) ||
+                        evalIntConstExprOrErr(ast->right, _ok);
+                default: {
+                    *_ok = 0;
+                    return 0;
+                }
+            }
+            break;
+        default: {
+            *_ok = 0;
+            return 0;
         }
-    case '+': return evalIntConstExprOrErr(ast->left, _ok) + evalIntConstExprOrErr(ast->right, _ok);
-    case '-': {
-        if (ast->right == NULL && ast->operand != NULL) {
-            return -ast->operand->i64;
-        }
-        return evalIntConstExprOrErr(ast->left, _ok) - evalIntConstExprOrErr(ast->right, _ok);
-    }
-    case TK_SHL: return evalIntConstExprOrErr(ast->left, _ok) << evalIntConstExprOrErr(ast->right, _ok);
-    case TK_SHR: return evalIntConstExprOrErr(ast->left, _ok) >> evalIntConstExprOrErr(ast->right, _ok);
-    case '&': return evalIntConstExprOrErr(ast->left, _ok) & evalIntConstExprOrErr(ast->right, _ok);
-    case '|': return evalIntConstExprOrErr(ast->left, _ok) | evalIntConstExprOrErr(ast->right, _ok);
-    case '^': return evalIntConstExprOrErr(ast->left, _ok) ^ evalIntConstExprOrErr(ast->right, _ok);
-    case '*': return evalIntConstExprOrErr(ast->left, _ok) * evalIntConstExprOrErr(ast->right, _ok);
-    case '/': return evalIntConstExprOrErr(ast->left, _ok) / evalIntConstExprOrErr(ast->right, _ok);
-    case '%': return evalIntConstExprOrErr(ast->left, _ok) % evalIntConstExprOrErr(ast->right, _ok);
-    case '~': {
-        if (ast->operand != NULL) {
-            return ~ast->operand->i64;
-        }
-    }
-    case '!': return !evalIntConstExprOrErr(ast->operand, _ok);
-    case TK_EQU_EQU: return evalIntConstExprOrErr(ast->left, _ok) == evalIntConstExprOrErr(ast->right, _ok);
-    case TK_GREATER_EQU: return evalIntConstExprOrErr(ast->left, _ok) >= evalIntConstExprOrErr(ast->right, _ok);
-    case TK_LESS_EQU: return evalIntConstExprOrErr(ast->left, _ok) <= evalIntConstExprOrErr(ast->right, _ok);
-    case TK_NOT_EQU: return evalIntConstExprOrErr(ast->left, _ok) != evalIntConstExprOrErr(ast->right, _ok);
-    case TK_OR_OR: return evalIntConstExprOrErr(ast->left, _ok) || evalIntConstExprOrErr(ast->right, _ok);
-    case TK_AND_AND: return evalIntConstExprOrErr(ast->left, _ok) && evalIntConstExprOrErr(ast->right, _ok);
-    default: {
-        *_ok = 0;
-        return 0;
-    }
     }
 }
 
@@ -420,16 +440,17 @@ long evalIntConstExpr(Ast *ast) {
 
 int assertLValue(Ast *ast) {
     switch (ast->kind) {
-    case AST_LVAR:
-    case AST_GVAR:
-    case AST_DEREF:
-    case AST_CLASS_REF:
-    case AST_FUNPTR:
-    case AST_DEFAULT_PARAM:
-    case AST_CAST:
-        return 1;
-    default:
-        return 0;
+        case AST_LVAR:
+        case AST_GVAR:
+        case AST_CLASS_REF:
+        case AST_FUNPTR:
+        case AST_DEFAULT_PARAM:
+        case AST_CAST:
+        case AST_UNOP:
+            return 1;
+
+        default:
+            return 0;
     }
 }
 
@@ -454,7 +475,6 @@ void typeCheckWarn(Cctrl *cc, long op, Ast *expected, Ast *actual) {
     AoStr *expected_type = astTypeToColorAoStr(expected->type);
     AoStr *actual_type = astTypeToColorAoStr(actual->type);
     char *actual_str = astToString(actual);
-
 
     int count = 0;
     cctrlRewindUntilPunctMatch(cc,op,&count);

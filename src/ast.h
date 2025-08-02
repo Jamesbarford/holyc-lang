@@ -5,61 +5,141 @@
 #include "containers.h"
 #include "list.h"
 
+typedef enum AstUnOp {
+    /* postfix (evaluated after value is yielded) */
+    AST_UN_OP_POST_INC,   /* x++ */
+    AST_UN_OP_POST_DEC,   /* x-- */
+
+    /* prefix (evaluated before value is yielded) */
+    AST_UN_OP_PRE_INC,    /* ++x */
+    AST_UN_OP_PRE_DEC,    /* --x */
+
+    /* arithmetic sign */
+    AST_UN_OP_PLUS,       /* +x */
+    AST_UN_OP_MINUS,      /* -x */
+
+    /* logical & bitwise */
+    AST_UN_OP_LOG_NOT,    /* !x */
+    AST_UN_OP_BIT_NOT,    /* ~x */
+
+    /* pointer & address */
+    AST_UN_OP_ADDR_OF,    /* &x */
+    AST_UN_OP_DEREF,      /* *p */
+
+    AST_UN_OP_SIZEOF,
+    AST_UN_OP_ALIGNOF,
+    AST_UN_OP_CAST
+} AstUnOp;
+
+const char *astUnOpKindToString(AstUnOp op);
+
+typedef enum AstBinOp {
+    /* multiplicative */
+    AST_BIN_OP_MUL,          /* a * b */
+    AST_BIN_OP_DIV,          /* a / b */
+    AST_BIN_OP_MOD,          /* a % b */
+
+    /* additive */
+    AST_BIN_OP_ADD,          /* a + b */
+    AST_BIN_OP_SUB,          /* a - b */
+
+    /* bit-shift */
+    AST_BIN_OP_SHL,          /* a << b */
+    AST_BIN_OP_SHR,          /* a >> b */
+
+    /* relational */
+    AST_BIN_OP_LT,           /* a <  b */
+    AST_BIN_OP_LE,           /* a <= b */
+    AST_BIN_OP_GT,           /* a >  b */
+    AST_BIN_OP_GE,           /* a >= b */
+
+    /* equality */
+    AST_BIN_OP_EQ,           /* a == b */
+    AST_BIN_OP_NE,           /* a != b */
+
+    /* bitwise */
+    AST_BIN_OP_BIT_AND,      /* a &  b */
+    AST_BIN_OP_BIT_XOR,      /* a ^  b */
+    AST_BIN_OP_BIT_OR,       /* a |  b */
+
+    /* logical */
+    AST_BIN_OP_LOG_AND,      /* a && b */
+    AST_BIN_OP_LOG_OR,       /* a || b */
+
+    /* assignment (simple + compound) */
+    AST_BIN_OP_ASSIGN,       /* a  =  b */
+    AST_BIN_OP_ADD_ASSIGN,   /* a += b */
+    AST_BIN_OP_SUB_ASSIGN,   /* a -= b */
+    AST_BIN_OP_MUL_ASSIGN,   /* a *= b */
+    AST_BIN_OP_DIV_ASSIGN,   /* a /= b */
+    AST_BIN_OP_MOD_ASSIGN,   /* a %= b */
+    AST_BIN_OP_SHL_ASSIGN,   /* a <<= b */
+    AST_BIN_OP_SHR_ASSIGN,   /* a >>= b */
+    AST_BIN_OP_AND_ASSIGN,   /* a &= b */
+    AST_BIN_OP_XOR_ASSIGN,   /* a ^= b */
+    AST_BIN_OP_OR_ASSIGN     /* a |= b */
+} AstBinOp;
+
+const char *astBinOpKindToString(AstBinOp op);
+
 /* Relates to the 'kind' property on the AstType struct */
-#define AST_TYPE_VOID         0
-#define AST_TYPE_INT          1
-#define AST_TYPE_FLOAT        2
-#define AST_TYPE_CHAR         3
-#define AST_TYPE_ARRAY        4
-#define AST_TYPE_POINTER      5
-#define AST_TYPE_FUNC         6
-#define AST_TYPE_CLASS        7
-#define AST_TYPE_VIS_MODIFIER 8
-#define AST_TYPE_INLINE       9
-#define AST_TYPE_UNION        10
-#define AST_TYPE_AUTO         11
+typedef enum AstTypeKind {
+    AST_TYPE_VOID         = 0,
+    AST_TYPE_INT          = 1,
+    AST_TYPE_FLOAT        = 2,
+    AST_TYPE_CHAR         = 3,
+    AST_TYPE_ARRAY        = 4,
+    AST_TYPE_POINTER      = 5,
+    AST_TYPE_FUNC         = 6,
+    AST_TYPE_CLASS        = 7,
+    AST_TYPE_VIS_MODIFIER = 8,
+    AST_TYPE_INLINE       = 9,
+    AST_TYPE_UNION        = 10,
+    AST_TYPE_AUTO         = 11
+} AstTypeKind;
 
 /* Relates to the 'kind' property on the Ast struct */
-#define AST_GVAR           256
-#define AST_DEREF          257
-#define AST_GOTO           258
-#define AST_LABEL          259
-#define AST_ADDR           260
-#define AST_LVAR           261
-#define AST_FUNC           262
-#define AST_DECL           263
-#define AST_STRING         264
-#define AST_FUNCALL        265
-#define AST_LITERAL        266
-#define AST_ARRAY_INIT     267
-#define AST_IF             268
-#define AST_FOR            269
-#define AST_RETURN         270
-#define AST_WHILE          271
-#define AST_OP_ADD         272
-#define AST_CLASS_REF      273
-#define AST_COMPOUND_STMT  274
-#define AST_ASM_STMT       275
-#define AST_ASM_FUNC_BIND  276
-#define AST_ASM_FUNCALL    277
-#define AST_FUNPTR         278
-#define AST_FUNPTR_CALL    279
-#define AST_BREAK          280
-#define AST_CONTINUE       281
-#define AST_DEFAULT_PARAM  282
-#define AST_VAR_ARGS       283
-#define AST_ASM_FUNCDEF    284
-#define AST_CAST           285
-#define AST_FUN_PROTO      286
-#define AST_CASE           287
-#define AST_JUMP           288
-#define AST_EXTERN_FUNC    289
-#define AST_DO_WHILE       290
-#define AST_PLACEHOLDER    291
-#define AST_SWITCH         292
-#define AST_DEFAULT        293
-#define AST_SIZEOF         294
-#define AST_COMMENT        295
+typedef enum AstKind {
+    AST_GVAR          = 256,
+    AST_GOTO          = 258,
+    AST_LABEL         = 259,
+    AST_LVAR          = 261,
+    AST_FUNC          = 262,
+    AST_DECL          = 263,
+    AST_STRING        = 264,
+    AST_FUNCALL       = 265,
+    AST_LITERAL       = 266,
+    AST_ARRAY_INIT    = 267,
+    AST_IF            = 268,
+    AST_FOR           = 269,
+    AST_RETURN        = 270,
+    AST_WHILE         = 271,
+    AST_CLASS_REF     = 273,
+    AST_COMPOUND_STMT = 274,
+    AST_ASM_STMT      = 275,
+    AST_ASM_FUNC_BIND = 276,
+    AST_ASM_FUNCALL   = 277,
+    AST_FUNPTR        = 278,
+    AST_FUNPTR_CALL   = 279,
+    AST_BREAK         = 280,
+    AST_CONTINUE      = 281,
+    AST_DEFAULT_PARAM = 282,
+    AST_VAR_ARGS      = 283,
+    AST_ASM_FUNCDEF   = 284,
+    AST_CAST          = 285,
+    AST_FUN_PROTO     = 286,
+    AST_CASE          = 287,
+    AST_JUMP          = 288,
+    AST_EXTERN_FUNC   = 289,
+    AST_DO_WHILE      = 290,
+    AST_PLACEHOLDER   = 291,
+    AST_SWITCH        = 292,
+    AST_DEFAULT       = 293,
+    AST_SIZEOF        = 294,
+    AST_COMMENT       = 295,
+    AST_BINOP         = 296,
+    AST_UNOP          = 297,
+} AstKind;
 
 /* @Cleanup
  * Urgently get rid of this, we do not need `n` ways of setting a label on 
@@ -72,7 +152,7 @@
 typedef struct AstType AstType;
 /* Type of the variable or type of return type of a function */
 typedef struct AstType {
-    int kind;
+    AstTypeKind kind;
     int size;
     int has_var_args;
 
@@ -104,7 +184,7 @@ typedef struct AstType {
 
 typedef struct Ast Ast;
 typedef struct Ast {
-    long kind;
+    AstKind kind;
     unsigned long flags;
     AstType *type;
     int loff;
@@ -160,12 +240,14 @@ typedef struct Ast {
 
         /* Binary operator */
         struct {
+            AstBinOp binop;
             Ast *left;
             Ast *right;
         };
 
         /* Unary operator */
         struct {
+            AstUnOp unop;
             Ast *operand;
         };
 
@@ -318,8 +400,8 @@ Ast *astString(char *str, int len, long real_len);
 Ast *astDecl(Ast *var, Ast *init);
 
 /* Symbol operators i.e: +-*&^><*/
-Ast *astBinaryOp(long operation, Ast *left, Ast *right, int *_is_err);
-Ast *astUnaryOperator(AstType *type, long kind, Ast *operand);
+Ast *astBinaryOp(AstBinOp operation, Ast *left, Ast *right, int *_is_err);
+Ast *astUnaryOperator(AstType *type, AstUnOp operation, Ast *operand);
 
 /* Variable definitions */
 Ast *astLVar(AstType *type, char *name, int len);
@@ -383,32 +465,46 @@ Ast *astClassRef(AstType *type, Ast *cls, char *field_name);
 AstType *astClassType(Map *fields, AoStr *clsname, int size, int is_intrinsic);
 Ast *astCast(Ast *var, AstType *to);
 
-AstType *astGetResultType(long op, AstType *a, AstType *b);
+AstType *astGetResultType(AstBinOp op, AstType *a, AstType *b);
 AstType *astTypeCheck(AstType *expected, Ast *ast, long op);
+
+/* Queries */
+int astIsIntType(AstType *type);
+int astIsFloatType(AstType *type);
+int astTypeIsPtr(AstType *type);
+int astTypeIsArray(AstType *type);
+int astIsVarArg(Ast *ast);
+int astIsRangeOperator(AstBinOp op);
+int astIsBinCmp(long op);
+int astIsAssignment(long op);
+int astIsLabelMatch(Ast *ast, AoStr *goto_label);
+int astIsAddr(Ast *ast);
+int astIsDeref(Ast *ast);
+int astIsUnOp(Ast *ast);
+int astIsBinOp(Ast *ast);
+
 
 AoStr *astMakeLabel(void);
 AoStr *astMakeTmpName(void);
-int astIsIntType(AstType *type);
-int astIsFloatType(AstType *type);
-int astIsVarArg(Ast *ast);
-int astIsRangeOperator(long op);
 Ast *astGlobalCmdArgs(void);
 
 AoStr *astNormaliseFunctionName(char *fname);
-int astIsAssignment(long op);
-int astIsBinCmp(long op);
 Ast *astMakeForeverSentinal(void);
 Ast *astMakeLoopSentinal(void);
 char *astAnnonymousLabel(void);
 
-int astIsLabelMatch(Ast *ast, AoStr *goto_label);
+/* Returns `1` on successful conversion and `0` on failure */
+int astUnaryOpFromToken(long op, AstUnOp *_result);
+/* Returns `1` on successful conversion and `0` on failure */
+int astBinOpFromToken(long op, AstBinOp *_result);
 
 /* For debugging */
 AoStr *astTypeToAoStr(AstType *type);
 char *astTypeToString(AstType *type);
 char *astTypeToColorString(AstType *type);
 AoStr *astTypeToColorAoStr(AstType *type);
-char *astKindToString(int kind);
+char *astKindToString(AstKind kind);
+char *astTypeKindToString(AstTypeKind kind);
 char *astFunctionToString(Ast *func);
 char *astFunctionNameToString(AstType *rettype, char *fname, int len);
 char *astToString(Ast *ast);

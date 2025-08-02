@@ -10,7 +10,6 @@
 #include "cctrl.h"
 #include "config.h"
 #include "containers.h"
-#include "lexer.h"
 #include "list.h"
 #include "prsutil.h"
 #include "util.h"
@@ -317,16 +316,17 @@ void asmLLoad(AoStr *buf, AstType *type, int offset) {
 
     switch (type->kind) {
         case AST_TYPE_ARRAY:
-            aoStrCatPrintf(buf, "# LOAD LEAQ START: %s\n\t", astKindToString(type->kind));
+            aoStrCatPrintf(buf, "# LOAD LEAQ START: %s\n\t", astTypeKindToString(type->kind));
             aoStrCatPrintf(buf, "leaq   %d(%%rbp), %%rax\n\t", offset);
-            aoStrCatPrintf(buf, "# LOAD LEAQ END: %s\n\t", astKindToString(type->kind));
+            aoStrCatPrintf(buf, "# LOAD LEAQ END: %s\n\t", astTypeKindToString(type->kind));
             return;
         case AST_TYPE_FLOAT:
             aoStrCatPrintf(buf, "movsd  %d(%%rbp), %%xmm0\n\t", offset);
             return;
         default:
             reg =  asmGetLoadReg(type, 'a');
-            aoStrCatPrintf(buf, "# LOAD %s %s START\n\t",reg,astKindToString(type->kind));
+            aoStrCatPrintf(buf, "# LOAD %s %s START\n\t",reg,
+                    astTypeKindToString(type->kind));
 
             aoStrCatPrintf(buf, "%-4s  %d(%%rbp), %%%s\n\t",
                     asmGetLoadMov(type), offset, reg);
@@ -349,24 +349,28 @@ void asmLSave(AoStr *buf, AstType *type, int offset) {
 }
 
 void AstUpCastInt(AoStr *buf, AstType *type, int issigned) {
-    switch(type->kind) {
-    case AST_TYPE_CHAR:
-        if (issigned) aoStrCatPrintf(buf, "movsbq   %%al, %%rax\n\t");
-        else          aoStrCatPrintf(buf, "movzbq   %%al, %%rax\n\t");
-        break;
-    case AST_TYPE_INT:
-        if (issigned) aoStrCatPrintf(buf, "cltq\n\t");
-        else          aoStrCatPrintf(buf, "movslq   %%eax, %%rax #upcast :%d\n\t",type->size);
-        break;
+    switch (type->kind) {
+        case AST_TYPE_CHAR:
+            if (issigned) aoStrCatPrintf(buf, "movsbq   %%al, %%rax\n\t");
+            else          aoStrCatPrintf(buf, "movzbq   %%al, %%rax\n\t");
+            break;
+        case AST_TYPE_INT:
+            if (issigned) aoStrCatPrintf(buf, "cltq\n\t");
+            else          aoStrCatPrintf(buf, "movslq   %%eax, %%rax #upcast :%d\n\t",type->size);
+            break;
+        default:
+            return;
     }
 }
 
 void asmDownCastInt(AoStr *buf, AstType *type, int issigned) {
-    switch(type->kind) {
-    case AST_TYPE_INT:
-        if (issigned) aoStrCatPrintf(buf, "movsx  %%al, %%rax\n\t");
-        else          aoStrCatPrintf(buf, "movzx  %%al, %%rax\n\t");
-        break;
+    switch (type->kind) {
+        case AST_TYPE_INT:
+            if (issigned) aoStrCatPrintf(buf, "movsx  %%al, %%rax\n\t");
+            else          aoStrCatPrintf(buf, "movzx  %%al, %%rax\n\t");
+            break;
+        default:
+            return;
     }
 }
 
@@ -399,7 +403,7 @@ void asmTypeCast(Cctrl *cc, AoStr *buf, Ast *ast) {
 void asmAssignDerefInternal(AoStr *buf, AstType *type, int offset) {
     char *reg,*mov;
     aoStrCatPrintf(buf, "# ASSIGN DREF INTERNAL START: %s\n\t",
-            astKindToString(type->kind));
+            astTypeKindToString(type->kind));
 
     aoStrCatPrintf(buf, "movq   (%%rax), %%rcx #OK mov\n\t");
     asmPop(buf, "rcx");
@@ -437,8 +441,8 @@ void asmLoadDeref(AoStr *buf, AstType *result, AstType *op_type, int off) {
         return;
     }
     aoStrCatPrintf(buf, "# LOAD DEREF: %s %s\n\t",
-            astKindToString(result->kind),
-            astKindToString(op_type->kind));
+            astTypeKindToString(result->kind),
+            astTypeKindToString(op_type->kind));
 
     ptr_mov = asmGetPtrMove(op_type);
 
@@ -468,11 +472,11 @@ void asmLoadDeref(AoStr *buf, AstType *result, AstType *op_type, int off) {
         aoStrCatPrintf(buf,"movq   %%%s, %%rax\n\t", reg);
     }
     aoStrCatPrintf(buf, "# LOAD DEREF END: %s %s\n\t",
-            astKindToString(result->kind),
-            astKindToString(op_type->kind));
+            astTypeKindToString(result->kind),
+            astTypeKindToString(op_type->kind));
 }
 
-void asmPointerArithmetic(Cctrl *cc, AoStr *buf, long op, Ast *LHS, Ast *RHS) {
+void asmPointerArithmetic(Cctrl *cc, AoStr *buf, AstBinOp op, Ast *LHS, Ast *RHS) {
     //assert(LHS->type->kind == AST_TYPE_POINTER);
     int size;
     char *fn;
@@ -496,18 +500,19 @@ void asmPointerArithmetic(Cctrl *cc, AoStr *buf, long op, Ast *LHS, Ast *RHS) {
     }
 
     switch (op) {
-        case '+': fn = "addq"; break;
-        case '-': fn = "subq"; break;
-        case '>': fn = "setg"; break;
-        case '<': fn = "setl"; break;
-        case TK_GREATER_EQU: fn = "setge"; break;
-        case TK_LESS_EQU: fn =  "setle"; break;
-        case TK_EQU_EQU: fn = "sete"; break;
-        case TK_NOT_EQU: fn = "setne"; break;
-        default: loggerPanic("op: %c is not implemented for pointer arithmetic\n",(char)op);
+        case AST_BIN_OP_ADD: fn = "addq"; break;
+        case AST_BIN_OP_SUB: fn = "subq"; break;
+        case AST_BIN_OP_GT: fn = "setg"; break;
+        case AST_BIN_OP_LT: fn = "setl"; break;
+        case AST_BIN_OP_GE: fn = "setge"; break;
+        case AST_BIN_OP_LE: fn =  "setle"; break;
+        case AST_BIN_OP_EQ: fn = "sete"; break;
+        case AST_BIN_OP_NE: fn = "setne"; break;
+        default: loggerPanic("op: `%s` is not implemented for pointer arithmetic\n",
+                         astBinOpKindToString(op));
     }
 
-    if (op == '+' || op == '-') {
+    if (op == AST_BIN_OP_ADD || op == AST_BIN_OP_SUB) {
         if (size > 1) {
             aoStrCatPrintf(buf, "imul   $%d, %%rax\n\t", size);
         }
@@ -544,47 +549,56 @@ void asmAssignClassRef(Cctrl *cc, AoStr *buf, Ast *cls, AstType *field, int offs
             asmAssignClassRef(cc,buf,cls->cls, field, total_offset);
             break;
 
-        case AST_DEREF:
-            aoStrCatPrintf(buf, "\n# Problem >code START %s \n\t",
-                    astKindToString(field->kind));
-            total_offset = field->offset+offset;
+        case AST_UNOP: {
+            switch (cls->unop) {
+                case AST_UN_OP_DEREF: {
+                    aoStrCatPrintf(buf, "\n# Problem >code START %s \n\t",
+                            astTypeKindToString(field->kind));
+                    total_offset = field->offset+offset;
 
-            switch (field->kind) {
-                case AST_TYPE_FLOAT:{
-                    asmPushXMM(buf,0);
-                    asmExpression(cc,buf,cls->operand);
-                    asmPopXMM(buf,1);
-                    if (total_offset > 0) {
-                        aoStrCatPrintf(buf, "movsd   %%xmm1, %d(%%rax)\n\t",
-                                field->offset+offset);
-                    } else {
-                        aoStrCatPrintf(buf, "movsd   %%xmm1, (%%rax)\n\t");
-                    }
-                    /* Whatever we were assigning we put back, allows for chaining
-                     * assignments */
-                    aoStrCatPrintf(buf,"movsd    %%xmm1, %%xmm0\n\t");
-                    break;
-                }
-                default: {
-                    asmPush(buf, REG_RAX);
-                    asmExpression(cc,buf,cls->operand);
-                    asmPop(buf,REG_RCX);
-                    if (total_offset > 0) {
-                        aoStrCatPrintf(buf, "movq   %%rcx, %d(%%rax)\n\t",
-                                field->offset+offset);
-                    } else {
-                        aoStrCatPrintf(buf, "movq   %%rcx, (%%rax)\n\t");
+                    switch (field->kind) {
+                        case AST_TYPE_FLOAT: {
+                            asmPushXMM(buf,0);
+                            asmExpression(cc,buf,cls->operand);
+                            asmPopXMM(buf,1);
+                            if (total_offset > 0) {
+                                aoStrCatPrintf(buf, "movsd   %%xmm1, %d(%%rax)\n\t",
+                                        field->offset+offset);
+                            } else {
+                                aoStrCatPrintf(buf, "movsd   %%xmm1, (%%rax)\n\t");
+                            }
+                            /* Whatever we were assigning we put back, allows for chaining
+                             * assignments */
+                            aoStrCatPrintf(buf,"movsd    %%xmm1, %%xmm0\n\t");
+                            break;
+                        }
+                        default: {
+                            asmPush(buf, REG_RAX);
+                            asmExpression(cc,buf,cls->operand);
+                            asmPop(buf,REG_RCX);
+                            if (total_offset > 0) {
+                                aoStrCatPrintf(buf, "movq   %%rcx, %d(%%rax)\n\t",
+                                        field->offset+offset);
+                            } else {
+                                aoStrCatPrintf(buf, "movq   %%rcx, (%%rax)\n\t");
+                            }
+                            
+                            /* Whatever we were assigning we put back, allows for chaining
+                             * assignments */
+                            aoStrCatPrintf(buf,"movq    %%rcx, %%rax\n\t");
+                            break;
+                        }
                     }
                     
-                    /* Whatever we were assigning we put back, allows for chaining
-                     * assignments */
-                    aoStrCatPrintf(buf,"movq    %%rcx, %%rax\n\t");
-                    break;
+                    aoStrCatPrintf(buf, "\n# Problem >code END \n\t");
+                    break; 
                 }
+                default:
+                    loggerPanic("Cannot assign to class ref: %s\n",
+                            astToString(cls));
             }
-            
-            aoStrCatPrintf(buf, "\n# Problem >code END \n\t");
             break;
+        }
         default:
             loggerPanic("Failed to create ASM for: %s\n",
                     astToString(cls));
@@ -611,12 +625,21 @@ void asmLoadClassRef(Cctrl *cc, AoStr *buf, Ast *cls, AstType *field, int offset
             asmLoadClassRef(cc,buf,cls->cls, field,total_offset);
             break;
 
-        case AST_DEREF:
-            total_offset = field->offset+offset;
-            asmExpression(cc,buf,cls->operand);
-            asmLoadDeref(buf,cls->cls->type,field,total_offset);
+        case AST_UNOP: {
+            switch (cls->unop) {
+                case AST_UN_OP_DEREF: {
+                    total_offset = field->offset+offset;
+                    asmExpression(cc,buf,cls->operand);
+                    asmLoadDeref(buf,cls->operand->type,field,total_offset);
+                    break;
+                }
+                default:
+                    loggerPanic("Unhandled load of class ref: %s\n",
+                            astToString(cls));
+            }
             break;
-        
+        }
+
         default:
             loggerPanic("Failed to create ASM for: %s\n",
                     astToString(cls));
@@ -627,34 +650,43 @@ void asmAssign(Cctrl *cc, AoStr *buf, Ast *variable) {
     if (variable->kind == AST_DEFAULT_PARAM) {
         variable = variable->declvar;
     }
+
     switch (variable->kind) {
-    case AST_CAST:
-        asmCast(buf,variable->operand->type,variable->type);
-        variable->operand->type = astTypeCopy(variable->type);
-        asmAssign(cc,buf,variable->operand);
-        break;
+        case AST_CAST:
+            asmCast(buf,variable->operand->type,variable->type);
+            variable->operand->type = astTypeCopy(variable->type);
+            asmAssign(cc,buf,variable->operand);
+            break;
 
-    case AST_DEREF: 
-        asmAssignDeref(cc,buf, variable);
-        break;
+        case AST_UNOP: {
+            switch (variable->unop) {
+                case AST_UN_OP_DEREF: {
+                    asmAssignDeref(cc,buf, variable);
+                    break;
+                }
+                default:
+                    loggerPanic("Cannot assign to: %s\n", astToString(variable));
+            }
+            break;
+        }
 
-    case AST_CLASS_REF:
-        asmAssignClassRef(cc,buf,variable->cls,variable->type,0);
-        break;
+        case AST_CLASS_REF:
+            asmAssignClassRef(cc,buf,variable->cls,variable->type,0);
+            break;
 
-    case AST_FUNPTR:
-    case AST_LVAR: 
-        asmLSave(buf,variable->type,variable->loff);
-        break;
+        case AST_FUNPTR:
+        case AST_LVAR: 
+            asmLSave(buf,variable->type,variable->loff);
+            break;
 
-    case AST_GVAR: {
-        AoStr *label = asmGetGlabel(variable);
-        asmGSave(buf,label->data,variable->type,0);
-        break;
-    }
-    default:
-        loggerPanic("Cannot assign: %s\n",
-                astToString(variable));
+        case AST_GVAR: {
+            AoStr *label = asmGetGlabel(variable);
+            asmGSave(buf,label->data,variable->type,0);
+            break;
+        }
+        default:
+            loggerPanic("Cannot assign: %s\n",
+                    astToString(variable));
     }
 }
 
@@ -663,8 +695,7 @@ void asmCompare(Cctrl *cc, AoStr *buf, char *instruction, Ast *ast) {
     LHS = ast->left;
     RHS = ast->right;
     
-    if ((LHS->type->kind == AST_TYPE_FLOAT &&
-                RHS->type->kind == AST_TYPE_FLOAT)) {
+    if (astIsFloatType(LHS->type) && astIsFloatType(RHS->type)) {
         asmExpression(cc,buf,LHS);
         asmToFloat(buf,LHS->type);
         asmPushXMM(buf,0);
@@ -672,8 +703,8 @@ void asmCompare(Cctrl *cc, AoStr *buf, char *instruction, Ast *ast) {
         asmToFloat(buf,LHS->type);
         asmPopXMM(buf,1);
 
-        switch (ast->kind) {
-            case '<': {
+        switch (ast->binop) {
+            case AST_BIN_OP_LT: {
                 aoStrCatPrintf(buf,
                         "ucomisd  %%xmm1, %%xmm0\n\t"
                         "seta     %%al\n\t"
@@ -681,7 +712,7 @@ void asmCompare(Cctrl *cc, AoStr *buf, char *instruction, Ast *ast) {
                         "movzbl   %%al, %%eax\n\t");
                 break;
             }
-            case TK_LESS_EQU: {
+            case AST_BIN_OP_LE: {
                 aoStrCatPrintf(buf,
                         "ucomisd  %%xmm0, %%xmm1\n\t"
                         "setae    %%al\n\t"
@@ -689,7 +720,7 @@ void asmCompare(Cctrl *cc, AoStr *buf, char *instruction, Ast *ast) {
                         "movzbl   %%al, %%eax\n\t");
                 break;
             }
-            case '>': {
+            case AST_BIN_OP_GT: {
                 aoStrCatPrintf(buf,
                         "ucomisd  %%xmm0, %%xmm1\n\t"
                         "seta     %%al\n\t"
@@ -697,7 +728,7 @@ void asmCompare(Cctrl *cc, AoStr *buf, char *instruction, Ast *ast) {
                         "movzbl   %%al, %%eax\n\t");
                 break;
             }
-            case TK_GREATER_EQU: {
+            case AST_BIN_OP_GE: {
                 aoStrCatPrintf(buf,
                         "ucomisd  %%xmm0, %%xmm1\n\t"
                         "setae    %%al\n\t"
@@ -705,7 +736,7 @@ void asmCompare(Cctrl *cc, AoStr *buf, char *instruction, Ast *ast) {
                         "movzbl   %%al, %%eax\n\t");
                 break;
             }
-            case TK_EQU_EQU: {
+            case AST_BIN_OP_EQ: {
                 aoStrCatPrintf(buf,
                         "ucomisd  %%xmm0, %%xmm1\n\t"
                         "sete     %%al\n\t"
@@ -715,7 +746,7 @@ void asmCompare(Cctrl *cc, AoStr *buf, char *instruction, Ast *ast) {
                         "movzbl   %%al, %%eax\n\t");
                 break;
             }
-            case TK_NOT_EQU: {
+            case AST_BIN_OP_NE: {
                 aoStrCatPrintf(buf,
                         "ucomisd  %%xmm0, %%xmm1\n\t"
                         "setne    %%al\n\t"
@@ -725,6 +756,9 @@ void asmCompare(Cctrl *cc, AoStr *buf, char *instruction, Ast *ast) {
                         "movzbl   %%al, %%eax\n\t");
                 break;
             }
+            default:
+                loggerPanic("Unhandled float comparison: %s\n",
+                        astBinOpKindToString(ast->binop));
         }
     } else {
         asmExpression(cc,buf,LHS);
@@ -748,7 +782,79 @@ void asmCompare(Cctrl *cc, AoStr *buf, char *instruction, Ast *ast) {
     }
 }
 
-void asmBinaryOpIntArithmetic(Cctrl *cc,AoStr *buf, Ast *ast, int reverse) {
+/* This function is seriouly bjorked */
+void asmAddr(Cctrl *cc, AoStr *buf, Ast *ast) {
+    aoStrCatPrintf(buf, "# ADDR %s START %s \n\t",
+        astKindToString(ast->operand->kind), 
+        astTypeKindToString(ast->operand->type->kind));
+
+    /* This is gross */
+    switch (ast->operand->kind) {
+        case AST_LVAR: {
+            if (ast->operand->type->kind == AST_TYPE_POINTER) {
+                /* XXX: this feels extremely hacky */
+                aoStrCatPrintf(buf, "# ADDR of %s\n\t",
+                        astTypeKindToString(ast->operand->type->ptr->kind));
+                switch (ast->operand->type->ptr->kind) {
+                    case AST_TYPE_ARRAY:
+                    case AST_TYPE_CHAR:
+                    case AST_TYPE_CLASS:
+                        aoStrCatPrintf(buf, "leaq   %d(%%rbp), %%rax\n\t",
+                                ast->operand->loff);
+                        break;
+                    default:
+                        aoStrCatPrintf(buf, "movq   %d(%%rbp), %%rax\n\t",
+                                ast->operand->loff);
+                        break;
+                }
+            } else {
+                aoStrCatPrintf(buf, "leaq   %d(%%rbp), %%rax\n\t",
+                        ast->operand->loff);
+            } 
+            break;
+        }
+        /* XXX: This does not work */
+        case AST_GVAR:
+            aoStrCatPrintf(buf, "leaq   %s(%%rip), %%rax\n\t",
+                    ast->operand->glabel->data);
+            break;
+        case AST_CLASS_REF: {
+            if (ast->operand->operand->kind == AST_LVAR ||
+                astIsDeref(ast->operand->operand))
+            {
+                aoStrCatPrintf(buf, "movq   %d(%%rbp), %%rax\n\t",
+                        ast->cls->cls->operand->loff);
+                aoStrCatPrintf(buf,"addq   $%d, %%rax\n\t",ast->cls->type->offset);
+            } else {
+                loggerPanic("Cannot produce ASM for: %s %s %s %s\n",
+                    astKindToString(ast->operand->operand->kind),
+                    astTypeToString(ast->type),
+                    astTypeToString(ast->operand->type),
+                    astTypeToString(ast->cls->type));
+            }
+            break;
+        }
+        
+        case AST_UNOP: {
+            if (astIsDeref(ast) || astIsAddr(ast)) {
+                asmExpression(cc,buf,ast->operand);
+            } else {
+                loggerPanic("Unhandled unary: %s\n", astToString(ast));
+            }
+            break;
+        }
+
+        default:
+            loggerPanic("Cannot turn Kind AST:%s %s into assembly\n",
+                    astKindToString(ast->kind),
+                    astToString(ast));
+    }
+    aoStrCatPrintf(buf, "# ADDR %s END %s \n\t", 
+        astKindToString(ast->operand->kind),
+        astTypeKindToString(ast->operand->type->kind));
+}
+
+void asmBinaryOpIntArithmetic(Cctrl *cc, AoStr *buf, Ast *ast, int reverse) {
     aoStrCatPrintf(buf, "# INt arithmetic START \n\t");
     char *op = NULL;
     Ast *LHS,*RHS;
@@ -763,7 +869,7 @@ void asmBinaryOpIntArithmetic(Cctrl *cc,AoStr *buf, Ast *ast, int reverse) {
     ssize_t result = evalIntArithmeticOrErr(ast,&ok);
     if (!ok) {
         ok = 1;
-        result = evalOneIntExprOrErr(LHS,RHS,ast->kind,&ok);
+        result = evalOneIntExprOrErr(LHS,RHS,ast->binop,&ok);
     }
 
     if (ok) {
@@ -772,19 +878,20 @@ void asmBinaryOpIntArithmetic(Cctrl *cc,AoStr *buf, Ast *ast, int reverse) {
         return;
     }
 
-    switch(ast->kind) {
-    case '+':    op = "addq"; break;
-    case '-':    op = "subq"; break;
-    case '*':    op = "imulq"; break;
-    case '^':    op = "xorq"; break;
-    case '&':    op = "and"; break;
-    case '|':    op = "or"; break;
-    case TK_SHL: op = "salq"; break;
-    case TK_SHR: op = "sarq"; break;
-    case '/': case '%': break;
-    default:
-        loggerPanic("Invalid operator: '%s'\n",
-                astKindToString(ast->kind));
+    switch (ast->binop) {
+        case AST_BIN_OP_MUL: op = "imulq"; break;
+        case AST_BIN_OP_ADD: op = "addq"; break;
+        case AST_BIN_OP_SUB: op = "subq"; break;
+        case AST_BIN_OP_SHL: op = "salq"; break;
+        case AST_BIN_OP_SHR: op = "sarq"; break;
+        case AST_BIN_OP_BIT_AND: op = "and"; break;
+        case AST_BIN_OP_BIT_XOR: op = "xorq"; break;
+        case AST_BIN_OP_BIT_OR: op = "or"; break;
+        case AST_BIN_OP_DIV: break;
+        case AST_BIN_OP_MOD: break;
+        default:
+            loggerPanic("Biu op: `%s` not handled\n", astBinOpKindToString(ast->binop));
+            break;
     }
 
     if (reverse == ASM_REVERSE_ARITHMETIC) {
@@ -806,14 +913,14 @@ void asmBinaryOpIntArithmetic(Cctrl *cc,AoStr *buf, Ast *ast, int reverse) {
     }
     asmPop(buf,REG_RAX);
 
-    if (ast->kind == '/' || ast->kind == '%') {
+    if (ast->binop == AST_BIN_OP_DIV || ast->binop == AST_BIN_OP_MOD) {
         aoStrCatPrintf(buf, "movq   $0, %%rdx\n\t");
         if (is_unsinged) { aoStrCatPrintf(buf, "divq  %%rcx\n\t"); }
         else             { aoStrCatPrintf(buf, "cqto\n\t"); aoStrCatPrintf(buf, "idivq  %%rcx\n\t"); }
-        if (ast->kind == '%') {
+        if (ast->binop == AST_BIN_OP_MOD) {
             aoStrCatPrintf(buf, "movq   %%rdx, %%rax\n\t");
         }
-    } else if (ast->kind == TK_SHL || ast->kind == TK_SHR) {
+    } else if (ast->binop == AST_BIN_OP_SHL || ast->binop == AST_BIN_OP_SHR) {
         aoStrCatPrintf(buf, "%s   %%cl, %%rax\n\t", op);
     } else {
         aoStrCatPrintf(buf, "%s   %%rcx, %%rax\n\t", op);
@@ -828,13 +935,14 @@ void asmBinaryOpFloatArithmetic(Cctrl *cc, AoStr *buf, Ast *ast, int reverse) {
     LHS = ast->left;
     RHS = ast->right;
 
-    switch(ast->kind) {
-    case '+': op = "addsd"; break;
-    case '-': op = "subsd"; break;
-    case '*': op = "mulsd"; break;
-    case '/': op = "divsd"; break;
-    default:
-        loggerPanic("Invalid operator: '%c'\n", (char)ast->kind);
+    switch(ast->binop) {
+        case AST_BIN_OP_ADD: op = "addsd"; break;
+        case AST_BIN_OP_SUB: op = "subsd"; break;
+        case AST_BIN_OP_MUL: op = "mulsd"; break;
+        case AST_BIN_OP_DIV: op = "divsd"; break;
+        default:
+            loggerPanic("Invalid float arithmetic operator: '%s'\n",
+                    astBinOpKindToString(ast->binop));
     }
 
     if (reverse == ASM_REVERSE_ARITHMETIC) {
@@ -878,16 +986,60 @@ void asmSaveConvert(AoStr *buf, AstType *to, AstType *from) {
     }
 }
 
-static char *asmGetCompartor(long op) {
+static char *asmGetCompartor(AstBinOp op) {
     switch (op) {
-    case '<': return "setl";
-    case '>': return "setg";
-    case TK_GREATER_EQU: return "setge";
-    case TK_LESS_EQU: return "setle";
-    default:
-        loggerPanic("Operation: %ld -> %s is not supported for ranges\n",
-                op, astKindToString(op));
+        case AST_BIN_OP_LT: return "setl";
+        case AST_BIN_OP_LE: return "setle";
+        case AST_BIN_OP_GT: return "setg";
+        case AST_BIN_OP_GE: return "setge";
+        default:
+            loggerPanic("Operation: %ld -> %s is not supported for ranges\n",
+                    (long)op, astBinOpKindToString(op));
     }
+}
+
+void asmPreIncrDecr(Cctrl *cc, AoStr *buf, Ast *ast, char *op) {
+    asmExpression(cc,buf,ast->operand);
+    int size = 1;
+    if (ast->operand->type->ptr) {
+        size = ast->operand->type->ptr->size;
+    }
+    if (astIsDeref(ast->operand)) {
+        /* This is essentially pointer juggling like:
+         * '*++ptr' or '*--ptr' */
+        aoStrCatPrintf(buf, "%s   $%d, %%rax\n\t", op, size);
+        asmAssign(cc,buf,ast->operand);
+        if (ast->operand->type->ptr) {
+            aoStrCatPrintf(buf, "movq   %%rax, %%rcx\n\t");
+        }
+    } else {
+        aoStrCatPrintf(buf, "%s   $%d, %%rax\n\t", op, size);
+        asmAssign(cc,buf,ast->operand);
+        if (ast->operand->type->ptr) {
+            aoStrCatPrintf(buf, "movq   %%rax, %%rcx\n\t");
+        }
+    }
+}
+
+void asmIncrDecr(Cctrl *cc, AoStr *buf, Ast *ast, char *op) {
+    asmExpression(cc,buf,ast->operand);
+    asmPush(buf, REG_RAX);
+    int size = 1;
+    if (ast->operand->type->ptr) {
+        size = ast->operand->type->ptr->size;
+    }
+
+    if (astIsDeref(ast)) {
+        /* This is essentially pointer juggling like:
+         * '*ptr++' or '*ptr--' */
+        aoStrCatPrintf(buf, "%s   $%d, %%rax\n\t", op, size);
+        asmAssign(cc,buf,ast->operand);
+    } else {
+        aoStrCatPrintf(buf, "%s   $1, %%rax\n\t", op);
+        asmAssign(cc,buf,ast->operand);
+    }
+
+    asmPop(buf,REG_RAX);
 }
 
 /* For syntax like:
@@ -899,8 +1051,8 @@ static char *asmGetCompartor(long op) {
  * Etc...
  * */
 void asmRangeOperation(Cctrl *cc, AoStr *buf, Ast *ast) {
-    char *op2 = asmGetCompartor(ast->kind);
-    char *op1 = asmGetCompartor(ast->left->kind);
+    char *op2 = asmGetCompartor(ast->binop);
+    char *op1 = asmGetCompartor(ast->left->binop);
     AoStr *label_end = astMakeLabel();
 
     aoStrCatPrintf(buf, "# RANGE Start\n\t");
@@ -932,17 +1084,22 @@ void asmRangeOperation(Cctrl *cc, AoStr *buf, Ast *ast) {
 }
 
 int asmOpIsCompoundAssign(Ast *ast) {
-    switch (ast->kind) {
-    case '-':
-    case '+':
-    case '*':
-    case '/':
-    case TK_SHR:
-    case TK_SHL:
-    case '|':
-    case '&':
-    case '%':
-        return 1;
+    if (ast->kind == AST_BINOP) {
+        switch (ast->binop) {
+            case AST_BIN_OP_MUL:
+            case AST_BIN_OP_DIV:
+            case AST_BIN_OP_MOD:
+            case AST_BIN_OP_ADD:
+            case AST_BIN_OP_SUB:
+            case AST_BIN_OP_SHL:
+            case AST_BIN_OP_SHR:
+            case AST_BIN_OP_BIT_AND:
+            case AST_BIN_OP_BIT_XOR:
+            case AST_BIN_OP_BIT_OR:
+                return 1;
+            default:
+                return 0;
+        }
     }
     return 0;
 }
@@ -990,175 +1147,393 @@ void asmBinOpFunctionAssign(Cctrl *cc, AoStr *buf, Ast *fnptr, Ast *fn) {
     }
 }
 
-void asmBinaryOp(Cctrl *cc, AoStr *buf, Ast *ast) {
-    if (ast->kind == '=') {
-        /* If it is compound and the value is being assigned to the return of 
-         * a function we need to perform the integer arithmetic in reversed 
-         * order */
-        if (asmShouldReverseMaths(ast->right)) {
-            if (ast->type->kind == AST_TYPE_INT) { 
-                asmBinaryOpIntArithmetic(cc,buf,ast->right,
-                        ASM_REVERSE_ARITHMETIC);
-            } else if (ast->type->kind == AST_TYPE_FLOAT) {
-                asmBinaryOpFloatArithmetic(cc,buf,ast->right,
-                        ASM_REVERSE_ARITHMETIC);
+
+void asmClassDeref(Cctrl *cc, AoStr *buf, Ast *ast, int *_total_offset) {
+    Ast *cls = ast->cls;
+    AstType *field = ast->type;
+    int offset = 0;
+    int total_offset = _total_offset ? *_total_offset : 0;
+
+    /* Class */
+    aoStrCatPrintf(buf, "\n# Problem >code START %s \n\t",
+            astTypeKindToString(field->kind));
+    total_offset = field->offset+offset;
+
+    switch (field->kind) {
+        case AST_TYPE_FLOAT: {
+            asmPushXMM(buf,0);
+            asmExpression(cc,buf,cls->operand);
+            asmPopXMM(buf,1);
+            if (total_offset > 0) {
+                aoStrCatPrintf(buf, "movsd   %%xmm1, %d(%%rax)\n\t",
+                        field->offset+offset);
+            } else {
+                aoStrCatPrintf(buf, "movsd   %%xmm1, (%%rax)\n\t");
             }
-        } else {
-            asmExpression(cc,buf,ast->right);
+            /* Whatever we were assigning we put back, allows for chaining
+             * assignments */
+            aoStrCatPrintf(buf,"movsd    %%xmm1, %%xmm0\n\t");
+            break;
         }
-        asmLoadConvert(buf,ast->type,ast->right->type);
-        asmAssign(cc,buf, ast->left);
-        return;
+        default: {
+            asmPush(buf, REG_RAX);
+            asmExpression(cc,buf,cls->operand);
+            asmPop(buf,REG_RCX);
+            if (total_offset > 0) {
+                aoStrCatPrintf(buf, "movq   %%rcx, %d(%%rax)\n\t",
+                        field->offset+offset);
+            } else {
+                aoStrCatPrintf(buf, "movq   %%rcx, (%%rax)\n\t");
+            }
+            
+            /* Whatever we were assigning we put back, allows for chaining
+             * assignments */
+            aoStrCatPrintf(buf,"movq    %%rcx, %%rax\n\t");
+            break;
+        }
     }
+    
+    aoStrCatPrintf(buf, "\n# Problem >code END \n\t");
+}
 
-    if (ast->type->kind == AST_TYPE_POINTER) {
-        asmPointerArithmetic(cc,buf,ast->kind,ast->left,ast->right);
-        return;
+void asmUnaryOp(Cctrl *cc, AoStr *buf, Ast *ast) {
+    switch (ast->unop) {
+        case AST_UN_OP_POST_INC: {
+            if (astIsFloatType(ast->type)) {
+                asmExpression(cc,buf,ast->operand);
+                asmPushXMM(buf,0);
+                aoStrCatPrintf(buf,
+                        "movsd   one_dbl(%%rip), %%xmm1\n\t"
+                        "addsd   %%xmm1, %%xmm0\n\t");
+                asmAssign(cc,buf,ast->operand);
+                asmPopXMM(buf,0);
+            } else {
+                asmIncrDecr(cc,buf,ast,"addq");
+            }
+            break;
+        }
+        case AST_UN_OP_POST_DEC:
+            if (ast->type->kind == AST_TYPE_FLOAT) {
+                asmExpression(cc,buf,ast->operand);
+                asmPushXMM(buf,0);
+                aoStrCatPrintf(buf,
+                        "movsd   one_dbl(%%rip), %%xmm1\n\t"
+                        "subsd   %%xmm1, %%xmm0\n\t");
+                asmAssign(cc,buf,ast->operand);
+                asmPopXMM(buf,0);
+            } else {
+                asmIncrDecr(cc,buf,ast,"subq");
+            }
+            break;
+        case AST_UN_OP_PRE_INC: {
+            if (astIsFloatType(ast->type)) {
+                asmExpression(cc,buf,ast->operand);
+                aoStrCatPrintf(buf,
+                        "movsd   one_dbl(%%rip), %%xmm1\n\t"
+                        "addsd   %%xmm1, %%xmm0\n\t");
+                asmAssign(cc,buf,ast->operand);
+            } else {
+                asmPreIncrDecr(cc,buf,ast,"addq");
+            }
+            break;
+        }
+        case AST_UN_OP_PRE_DEC: {
+            if (ast->type->kind == AST_TYPE_FLOAT) {
+                asmExpression(cc,buf,ast->operand);
+                aoStrCatPrintf(buf,
+                        "movsd   one_dbl(%%rip), %%xmm1\n\t"
+                        "subsd   %%xmm1, %%xmm0\n\t");
+                asmAssign(cc,buf,ast->operand);
+            } else {
+                asmPreIncrDecr(cc,buf,ast,"subq");
+            }
+            break;
+        }
+        case AST_UN_OP_PLUS:
+            break;
+        case AST_UN_OP_MINUS: {
+            asmExpression(cc,buf, ast->operand);
+            if (astIsFloatType(ast->operand->type)) {
+                aoStrCatPrintf(buf,
+                        "movsd   sign_bit(%%rip), %%xmm1\n\t"
+                        "xorpd   %%xmm1, %%xmm0\n\t");
+            } else {
+                aoStrCatPrintf(buf,
+                        "not    %%rax\n\t"
+                        "addq    $1, %%rax\n\t");
+            }
+            break;
+        }
+        case AST_UN_OP_LOG_NOT: {
+          asmExpression(cc,buf, ast->operand);
+          aoStrCatPrintf(buf,
+                  "cmp    $0, %%rax\n\t"
+                  "sete   %%al\n\t"
+                  "movzb  %%al, %%rax\n\t");
+          break;
+        }
+
+        case AST_UN_OP_BIT_NOT: {
+            asmExpression(cc,buf, ast->operand);
+            aoStrCatPrintf(buf, "not    %%rax\n\t");
+            break;
+        }
+
+        case AST_UN_OP_ADDR_OF: {
+            asmAddr(cc, buf, ast);
+            break;
+        }
+
+        case AST_UN_OP_DEREF: {
+            if (!astTypeIsPtr(ast->operand->type) && !astTypeIsArray(ast->operand->type)) {
+                astTypePrint(ast->operand->type);
+                loggerPanic("Expected a pointer type got: `%s`\n%s\n",
+                        astTypeKindToString(ast->operand->type->kind),
+                        astToString(ast->operand));
+            }
+            asmExpression(cc,buf,ast->operand);
+
+            AstType *op_type =  ast->operand->type;
+            AstType *result = ast->type;
+            char *reg;
+        
+            if (astTypeIsPtr(op_type) && op_type->ptr->kind == AST_TYPE_ARRAY) {
+                return;
+            }
+
+            reg = "rcx"; // asmGetIntReg(result,'c');
+
+            aoStrCatPrintf(buf, "##__DEREF_START: %s\n\t", astTypeKindToString(result->kind));
+            if (result->size < 4) {
+                aoStrCatPrintf(buf, "movq   %%rax, %%rcx\n\t"
+                                    "movzbl (%%%s), %%eax\n\t"
+                                    "movsbl  %%al, %%eax\n\t", reg); 
+            } else {
+                if (result->kind == AST_TYPE_CLASS) {
+                    aoStrCatPrintf(buf, "movq   %%rax, %%rcx\n\t"
+                            "leaq (%%%s), %%rax\n\t", reg);
+                } else if (!astTypeIsPtr(result)) {
+                    aoStrCatPrintf(buf,"# deref not ptr start: %s %s\n\t",
+                            astTypeKindToString(result->kind),
+                            astTypeKindToString(op_type->kind));
+                   // aoStrCatPrintf(buf,"movq   (%%%s), %%rax\n\t", reg);
+
+                    if (astIsFloatType(result)) {
+                        aoStrCatPrintf(buf, "movq   (%%rax), %%xmm0\n\t");
+                    } else {
+                        // reg = asmGetIntReg(result,'c');
+                        char *mov = asmGetPtrMove(result);
+                        aoStrCatPrintf(buf, "movq   %%rax, %%rcx\n\t"
+                                            "%s   (%%%s), %%rax\n\t",mov, reg);
+                    }
+                    aoStrCatPrintf(buf,"# deref not ptr start\n\t");
+                } else if (astTypeIsPtr(result)) {
+                    reg = asmGetIntReg(result,'a');
+                    char *mov = asmGetMov(result);
+                    aoStrCatPrintf(buf,"# deref `%s` start\n\t",
+                            astTypeToString(result->ptr));
+                    switch (result->ptr->kind) {
+                        case AST_TYPE_CHAR:
+                            aoStrCatPrintf(buf,"%s   (%%%s), %%rax\n\t",mov, reg);
+                            break;
+                        case AST_TYPE_INT:
+                            aoStrCatPrintf(buf,"leaq   (%%%s), %%rax\n\t", reg);
+                            break;
+                        case AST_TYPE_POINTER:
+                            aoStrCatPrintf(buf,"movq   %%%s, %%rax\n\t", reg);
+                            break;
+                        /* We want to derefernce a 'U0**' ptr */
+                        case AST_TYPE_VOID:
+                        case AST_TYPE_CLASS:
+                            aoStrCatPrintf(buf,"movq   (%%%s), %%rax\n\t", reg);
+                            break;
+                        default:
+                            /*XXX: Does dereferencing a class make sense? 
+                             * It seg faults usually */
+                            if (ast->cls->cls->kind == AST_CLASS_REF) {
+                                aoStrCatPrintf(buf,"# problematic class deref\n\t");
+                                aoStrCatPrintf(buf,"movq   (%%%s), %%rax\n\t", reg);
+                            }
+                            break;
+                    }
+                    aoStrCatPrintf(buf,"# deref `%s` end\n\t",
+                            astTypeToString(result->ptr));
+                }
+            }
+            aoStrCatPrintf(buf, "##__DEREF_END\n\t");
+            break;
+        }
+
+        case AST_UN_OP_CAST:
+            asmCast(buf,ast->operand->type,ast->type);
+            break;
+
+        case AST_UN_OP_SIZEOF:
+        case AST_UN_OP_ALIGNOF:
+            break;
     }
+}
 
+void asmBinaryOp(Cctrl *cc, AoStr *buf, Ast *ast) {
     /* This is pretty loose! */
-    if (astIsRangeOperator(ast->kind) && astIsRangeOperator(ast->left->kind)) {
+    if (astIsRangeOperator(ast->binop) &&
+            ast->left->kind == AST_BINOP &&
+            astIsRangeOperator(ast->left->binop)) {
         asmRangeOperation(cc,buf,ast);
         return;
     }
 
-    switch (ast->kind) {
-        case '<': asmCompare(cc,buf,"setl",ast); return;
-        case '>': asmCompare(cc,buf,"setg",ast); return;
-        case TK_EQU_EQU: asmCompare(cc,buf,"sete",ast); return;
-        case TK_GREATER_EQU: asmCompare(cc,buf,"setge",ast); return;
-        case TK_LESS_EQU: asmCompare(cc,buf,"setle",ast); return;
-        case TK_NOT_EQU: asmCompare(cc,buf,"setne",ast); return;
-    }
-
-    if (ast->type->kind == AST_TYPE_INT || ast->type->kind == AST_TYPE_CHAR) {
-        asmBinaryOpIntArithmetic(cc,buf,ast,ASM_INORDER_ARITHMETIC);
-    } else if (ast->type->kind == AST_TYPE_FLOAT) {
-        asmBinaryOpFloatArithmetic(cc,buf,ast,ASM_INORDER_ARITHMETIC);
-    } else if (ast->type->kind == AST_TYPE_FUNC) {
-        char *fname;
-        if (ast->kind == AST_ASM_FUNC_BIND) {
-            fname = strndup(ast->asmfname->data,ast->asmfname->len);
-        } else {
-            fname = asmNormaliseFunctionName(ast->fname->data);
-        }
-        aoStrCatPrintf(buf,"leaq    %s(%%rip), %%rax\n\t",fname);
-    } else {
-        loggerPanic("Cannot handle>: %s\n", astToString(ast));
-    }
-}
-
-void asmPreIncrDecr(Cctrl *cc, AoStr *buf, Ast *ast, char *op) {
-    asmExpression(cc,buf,ast->operand);
-    int size = 1;
-    if (ast->operand->type->ptr) {
-        size = ast->operand->type->ptr->size;
-    }
-    if (ast->operand->kind == AST_DEREF) {
-        /* This is essentially pointer juggling like:
-         * '*++ptr' or '*--ptr' */
-        aoStrCatPrintf(buf, "%s   $%d, %%rax\n\t", op, size);
-        asmAssign(cc,buf,ast->operand);
-        if (ast->operand->type->ptr) {
-            aoStrCatPrintf(buf, "movq   %%rax, %%rcx\n\t");
-        }
-    } else {
-        aoStrCatPrintf(buf, "%s   $%d, %%rax\n\t", op, size);
-        asmAssign(cc,buf,ast->operand);
-        if (ast->operand->type->ptr) {
-            aoStrCatPrintf(buf, "movq   %%rax, %%rcx\n\t");
-        }
-    }
-}
-
-void asmIncrDecr(Cctrl *cc, AoStr *buf, Ast *ast, char *op) {
-    asmExpression(cc,buf,ast->operand);
-    asmPush(buf, REG_RAX);
-    int size = 1;
-    if (ast->operand->type->ptr) {
-        size = ast->operand->type->ptr->size;
-    }
-
-    if (ast->operand->kind == AST_DEREF) {
-        /* This is essentially pointer juggling like:
-         * '*ptr++' or '*ptr--' */
-        aoStrCatPrintf(buf, "%s   $%d, %%rax\n\t", op, size);
-        asmAssign(cc,buf,ast->operand);
-    } else {
-        aoStrCatPrintf(buf, "%s   $1, %%rax\n\t", op);
-        asmAssign(cc,buf,ast->operand);
-    }
-
-    asmPop(buf,REG_RAX);
-}
-
-/* This function is seriouly bjorked */
-void asmAddr(Cctrl *cc, AoStr *buf, Ast *ast) {
-    aoStrCatPrintf(buf, "# ADDR %s START %s \n\t", 
-        astKindToString(ast->operand->kind), 
-        astKindToString(ast->operand->type->kind));
-
-    /* This is gross */
-    switch (ast->operand->kind) {
-        case AST_LVAR: {
-            if (ast->operand->type->kind == AST_TYPE_POINTER) {
-                /* XXX: this feels extremely hacky */
-                aoStrCatPrintf(buf, "# ADDR of %s\n\t",
-                        astKindToString(ast->operand->type->ptr->kind));
-                switch (ast->operand->type->ptr->kind) {
-                    case AST_TYPE_ARRAY:
-                    case AST_TYPE_CHAR:
-                    case AST_TYPE_CLASS:
-                        aoStrCatPrintf(buf, "leaq   %d(%%rbp), %%rax\n\t",
-                                ast->operand->loff);
-                        break;
-                    default:
-                        aoStrCatPrintf(buf, "movq   %d(%%rbp), %%rax\n\t",
-                                ast->operand->loff);
-                        break;
-                }
+    switch (ast->binop) {
+        case AST_BIN_OP_MUL:
+        case AST_BIN_OP_DIV:
+        case AST_BIN_OP_MOD:
+        case AST_BIN_OP_ADD:
+        case AST_BIN_OP_SUB:
+        case AST_BIN_OP_SHL:
+        case AST_BIN_OP_SHR:
+        case AST_BIN_OP_BIT_AND:
+        case AST_BIN_OP_BIT_XOR:
+        case AST_BIN_OP_BIT_OR: {
+            if (ast->type->kind == AST_TYPE_INT || ast->type->kind == AST_TYPE_CHAR) {
+                asmBinaryOpIntArithmetic(cc,buf,ast,ASM_INORDER_ARITHMETIC);
+                return;
+            } else if (astTypeIsPtr(ast->type) || astTypeIsArray(ast->type)) {
+                asmPointerArithmetic(cc,buf,ast->binop,ast->left,ast->right);
+                return;
+            } else if (astIsFloatType(ast->type)) {
+                asmBinaryOpFloatArithmetic(cc,buf,ast,ASM_INORDER_ARITHMETIC);
+                return;
             } else {
-                aoStrCatPrintf(buf, "leaq   %d(%%rbp), %%rax\n\t",
-                        ast->operand->loff);
-            } 
-            break;
-        }
-        /* XXX: This does not work */
-        case AST_GVAR:
-            aoStrCatPrintf(buf, "leaq   %s(%%rip), %%rax\n\t",
-                    ast->operand->glabel->data);
-            break;
-        case AST_CLASS_REF: {
-            if (ast->operand->operand->kind == AST_LVAR ||
-                ast->operand->operand->kind == AST_DEREF)
-            {
-                aoStrCatPrintf(buf, "movq   %d(%%rbp), %%rax\n\t",
-                        ast->cls->cls->operand->loff);
-                aoStrCatPrintf(buf,"addq   $%d, %%rax\n\t",ast->cls->type->offset);
-            } else {
-                loggerPanic("Cannot produce ASM for: %s %s %s %s\n",
-                    astKindToString(ast->operand->operand->kind),
-                    astTypeToString(ast->type),
-                    astTypeToString(ast->operand->type),
-                    astTypeToString(ast->cls->type));
+                loggerWarning("Falling through the cracks %s\n",
+                        astTypeKindToString(ast->type->kind));
             }
             break;
         }
-        case AST_DEREF: {
-            /* That is the class */
-            Ast *cls = ast->operand;
-            asmExpression(cc,buf,cls);
-            break;
+        case AST_BIN_OP_LT: asmCompare(cc,buf,"setl",ast); return;
+        case AST_BIN_OP_LE: asmCompare(cc,buf,"setle",ast); return;
+        case AST_BIN_OP_GT: asmCompare(cc,buf,"setg",ast); return;
+        case AST_BIN_OP_GE: asmCompare(cc,buf,"setge",ast); return;
+        case AST_BIN_OP_EQ: asmCompare(cc,buf,"sete",ast); return;
+        case AST_BIN_OP_NE: asmCompare(cc,buf,"setne",ast); return;
+        
+        case AST_BIN_OP_LOG_AND: {
+            aoStrCat(buf,"# AND AND Start\n\t");
+            AoStr *label_end = astMakeLabel();
+
+            if (ast->type->kind == AST_TYPE_FLOAT) {
+                asmExpression(cc,buf,ast->left);
+                aoStrCatPrintf(buf,
+                        "xorpd   %%xmm1, %%xmm1\n\t"
+                        "ucomisd %%xmm1, %%xmm0\n\t"
+                        "je    %s\n\t", label_end->data);
+                asmExpression(cc,buf,ast->right);
+                aoStrCatPrintf(buf,
+                        "xorpd   %%xmm1, %%xmm1\n\t"
+                        "ucomisd %%xmm1, %%xmm0\n\t"
+                        "movq    $0, %%rax\n\t"
+                        "je     %s\n\t"
+                        "movq    $1, %%rax\n\t"
+                        "%s:\n\t", label_end->data, label_end->data);
+            } else {
+                asmExpression(cc,buf,ast->left);
+                aoStrCatPrintf(buf,
+                        "test   %%rax, %%rax\n\t"
+                        "movq   $0, %%rax\n\t"
+                        "je    %s\n\t", label_end->data);
+                asmExpression(cc,buf,ast->right);
+                aoStrCatPrintf(buf,
+                        "test   %%rax, %%rax\n\t"
+                        "movq   $0, %%rax\n\t"
+                        "je     %s\n\t"
+                        "movq   $1, %%rax\n\t"
+                        "%s:\n\t", label_end->data, label_end->data);
+            }
+            aoStrCat(buf,"# AND AND End\n\t");
+            return;
         }
-        default:
-            loggerPanic("Cannot turn Kind AST:%s %s into assembly\n",
-                    astKindToString(ast->kind),
-                    astToString(ast));
+        
+        case AST_BIN_OP_LOG_OR: {
+            aoStrCat(buf,"# OR OR Start\n\t");
+            AoStr *label_end = astMakeLabel();
+            asmExpression(cc,buf,ast->left);
+
+            if (astIsFloatType(ast->type)) {
+                asmExpression(cc,buf,ast->left);
+                aoStrCatPrintf(buf,
+                        "xorpd   %%xmm1, %%xmm1\n\t"
+                        "ucomisd %%xmm1, %%xmm0\n\t"
+                        "movq    $1, %%rax\n\t"
+                        "jne     %s\n\t", label_end->data);
+                asmExpression(cc,buf,ast->right);
+                aoStrCatPrintf(buf,
+                        "xorpd   %%xmm1, %%xmm1\n\t"
+                        "ucomisd %%xmm1, %%xmm0\n\t"
+                        "movq    $1, %%rax\n\t"
+                        "jne     %s\n\t"
+                        "movq    $0, %%rax\n\t"
+                        "%s:\n\t", label_end->data, label_end->data);
+            } else {
+                aoStrCatPrintf(buf,
+                        "test   %%rax, %%rax\n\t"
+                        "movq   $1, %%rax\n\t"
+                        "jne    %s\n\t", label_end->data);
+                asmExpression(cc,buf,ast->right);
+                aoStrCatPrintf(buf,
+                        "test   %%rax, %%rax\n\t"
+                        "movq   $1, %%rax\n\t"
+                        "jne    %s\n\t"
+                        "movq   $0, %%rax\n\t"
+                        "%s:\n\t", label_end->data, label_end->data);
+            }
+            aoStrCat(buf,"# OR OR End\n\t");
+            return;
+        }
+
+        case AST_BIN_OP_ASSIGN: {
+            if (ast->type->kind == AST_TYPE_FUNC) {
+                char *fname;
+                if (ast->kind == AST_ASM_FUNC_BIND) {
+                    fname = strndup(ast->asmfname->data,ast->asmfname->len);
+                } else {
+                    fname = asmNormaliseFunctionName(ast->fname->data);
+                }
+                aoStrCatPrintf(buf,"leaq    %s(%%rip), %%rax\n\t",fname);
+            } else {
+                /* If it is compound and the value is being assigned to the return of 
+                 * a function we need to perform the integer arithmetic in reversed 
+                 * order */
+                if (asmShouldReverseMaths(ast->right)) {
+                    if (ast->type->kind == AST_TYPE_INT) { 
+                        asmBinaryOpIntArithmetic(cc,buf,ast->right,
+                                ASM_REVERSE_ARITHMETIC);
+                    } else if (ast->type->kind == AST_TYPE_FLOAT) {
+                        asmBinaryOpFloatArithmetic(cc,buf,ast->right,
+                                ASM_REVERSE_ARITHMETIC);
+                    }
+                } else {
+                    asmExpression(cc,buf,ast->right);
+                }
+                asmLoadConvert(buf,ast->type,ast->right->type);
+                asmAssign(cc, buf, ast->left);
+            }
+            return;
+        }     
+        case AST_BIN_OP_ADD_ASSIGN:
+        case AST_BIN_OP_SUB_ASSIGN:
+        case AST_BIN_OP_MUL_ASSIGN:
+        case AST_BIN_OP_DIV_ASSIGN:
+        case AST_BIN_OP_MOD_ASSIGN:
+        case AST_BIN_OP_SHL_ASSIGN:
+        case AST_BIN_OP_SHR_ASSIGN:
+        case AST_BIN_OP_AND_ASSIGN:
+        case AST_BIN_OP_XOR_ASSIGN:
+        case AST_BIN_OP_OR_ASSIGN:
+            loggerPanic("Compound assignments should have been deconstructed\n");
     }
-    aoStrCatPrintf(buf, "# ADDR %s END %s \n\t", 
-        astKindToString(ast->operand->kind),
-        astKindToString(ast->operand->type->kind));
+    loggerPanic("Cannot handle binary op: %s\n", astToString(ast));
 }
+
+
 
 int asmPlaceArgs(Cctrl *cc, AoStr *buf, List *argv, int reverse) {
     int r = 0;
@@ -1251,10 +1626,22 @@ void asmPrepFuncCallArgs(Cctrl *cc, AoStr *buf, Ast *funcall) {
     while (1) {
         /* Handling the case for either more arguments than parameters or
          * more parameters than arguments */
-        if (fun && fun->params) {
+        if (fun && fun->params && vecInBounds(fun->params, (unsigned long)i)) {
             funparam = vecGetAt(fun->params,i);
+        } else {
+            funparam = NULL;
         }
-        funarg = vecGetAt(funcall->args,i);
+
+        if (vecInBounds(funcall->args, (unsigned long)i)) {
+            funarg = vecGetAt(funcall->args, i);
+        } else {
+            funarg = NULL;
+        }
+
+        if (funarg == NULL && funparam == NULL) {
+            break;
+        }
+
         i++;
 
         if (funarg != NULL) {
@@ -1312,7 +1699,6 @@ void asmPrepFuncCallArgs(Cctrl *cc, AoStr *buf, Ast *funcall) {
                 stack_cnt++;
             }
         }
-        
     }
 
     stack_cnt *= 8;
@@ -1339,6 +1725,9 @@ void asmPrepFuncCallArgs(Cctrl *cc, AoStr *buf, Ast *funcall) {
             case AST_GVAR:
                 asmGLoad(buf,funcall->ref->type,funcall->ref->gname,0);
                 break;
+            default:
+                loggerPanic("Unhandled Call type: %s\n",
+                        astToString(funcall));
         }
         aoStrCatPrintf(buf,"movq    %%rax,%%r11\n\t");
     }
@@ -1554,19 +1943,12 @@ void asmExpression(Cctrl *cc, AoStr *buf, Ast *ast) {
         asmGLoad(buf,ast->type,ast->glabel,0);
         break;
 
-    case AST_ASM_FUNCALL: {
-        if (ast->flags & AST_FLAG_INLINE) {
-            asmFunCall(cc,buf,ast);
-            //Ast *asm_func_def = strMapGetLen(cc->asm_functions, ast->fname->data, ast->fname->len);
-            //if (!asm_func_def) {
-            //    loggerPanic("Cannot call inline assembly code\n");
-            //}
-            //astPrint(asm_func_def);
-            //printf("%s\n",asm_func_def->body->asm_stmt->data);
-            //aoStrCatFmt(buf, "%S", asm_func_def->body->asm_stmt);
-            break;
-        }
-    }
+    case AST_ASM_FUNCALL:
+   //     if (ast->flags & AST_FLAG_INLINE) {
+   //         asmFunCall(cc,buf,ast);
+   //         break;
+   //     }
+   // }
     case AST_FUNPTR_CALL:
     case AST_FUNCALL: {
         asmFunCall(cc,buf,ast);
@@ -1604,96 +1986,9 @@ void asmExpression(Cctrl *cc, AoStr *buf, Ast *ast) {
         aoStrCatPrintf(buf, "movq    %d(%%rbp), %%rax\n\t", ast->loff);
         break;
 
-    case AST_ADDR:
-        asmAddr(cc,buf,ast);
-        break;
-
     case AST_CAST:
         asmTypeCast(cc,buf,ast);
         break;
-
-    case AST_DEREF: {
-        assert(ast->operand->type->kind == AST_TYPE_POINTER);
-        asmExpression(cc,buf,ast->operand);
-
-        AstType *op_type =  ast->operand->type;
-        AstType *result = ast->type;
-        char *reg;
-    
-        if (op_type->kind == AST_TYPE_POINTER &&
-                op_type->ptr->kind == AST_TYPE_ARRAY) {
-            return;
-        }
-
-
-        reg = "rcx"; // asmGetIntReg(result,'c');
-
-        aoStrCatPrintf(buf, "##__DEREF_START: %s\n\t", astKindToString(result->kind));
-        if (result->size < 4) {
-            aoStrCatPrintf(buf, "movq   %%rax, %%rcx\n\t"
-                                "movzbl (%%%s), %%eax\n\t"
-                                "movsbl  %%al, %%eax\n\t", reg); 
-        } else {
-            if (result->kind == AST_ADDR) {
-                aoStrCatPrintf(buf,"movq   %%%s, %%rax\n\t", reg);
-            } else if (result->kind == AST_TYPE_CLASS) {
-                aoStrCatPrintf(buf, "movq   %%rax, %%rcx\n\t"
-                        "leaq (%%%s), %%rax\n\t", reg);
-            } else if (result->kind != AST_TYPE_POINTER) {
-                aoStrCatPrintf(buf,"# deref not ptr start: %s %s\n\t",
-                        astKindToString(result->kind), astKindToString(op_type->kind));
-               // aoStrCatPrintf(buf,"movq   (%%%s), %%rax\n\t", reg);
-               
-
-                if (result->kind == AST_TYPE_FLOAT) {
-                    aoStrCatPrintf(buf, "movq   (%%rax), %%xmm0\n\t");
-                } else {
-                    // reg = asmGetIntReg(result,'c');
-                    char *mov = asmGetPtrMove(result);
-                    aoStrCatPrintf(buf, "movq   %%rax, %%rcx\n\t"
-                                        "%s   (%%%s), %%rax\n\t",mov, reg);
-                }
-                aoStrCatPrintf(buf,"# deref not ptr start\n\t");
-            } else if (result->kind == AST_TYPE_POINTER) {
-                reg = asmGetIntReg(result,'a');
-                char *mov = asmGetMov(result);
-                switch (result->ptr->kind) {
-                    case AST_TYPE_CHAR:
-                        aoStrCatPrintf(buf,"# deref char start\n\t");
-                        aoStrCatPrintf(buf,"%s   (%%%s), %%rax\n\t",mov, reg);
-                        aoStrCatPrintf(buf,"# deref char end\n\t");
-                        break;
-                    case AST_TYPE_INT:
-                        aoStrCatPrintf(buf,"# deref int start\n\t");
-                        aoStrCatPrintf(buf,"leaq   (%%%s), %%rax\n\t", reg);
-                        aoStrCatPrintf(buf,"# deref int end\n\t");
-                        break;
-                    case AST_TYPE_POINTER:
-                        aoStrCatPrintf(buf,"# deref ptr start\n\t");
-                        aoStrCatPrintf(buf,"movq   %%%s, %%rax\n\t", reg);
-                        aoStrCatPrintf(buf,"# deref ptr end\n\t");
-                        break;
-                    /* We want to derefernce a 'U0**' ptr */
-                    case AST_TYPE_VOID:
-                    case AST_TYPE_CLASS:
-                        aoStrCatPrintf(buf,"# deref class start\n\t");
-                        aoStrCatPrintf(buf,"movq   (%%%s), %%rax\n\t", reg);
-                        aoStrCatPrintf(buf,"# deref class end\n\t");
-                        break;
-                    default:
-                        /*XXX: Does dereferencing a class make sense? 
-                         * It seg faults usually */
-                        if (ast->cls->cls->kind == AST_CLASS_REF) {
-                            aoStrCatPrintf(buf,"# problematic class deref\n\t");
-                            aoStrCatPrintf(buf,"movq   (%%%s), %%rax\n\t", reg);
-                        }
-                        break;
-                }
-            }
-        }
-        aoStrCatPrintf(buf, "##__DEREF_END\n\t");
-        break;
-    }
 
     case AST_IF: {
         asmExpression(cc,buf,ast->cond);
@@ -1858,169 +2153,18 @@ void asmExpression(Cctrl *cc, AoStr *buf, Ast *ast) {
         asmHandleSwitch(cc,buf,ast);
         break;
 
-    case TK_PRE_PLUS_PLUS: {
-        if (ast->type->kind == AST_TYPE_FLOAT) {
-            asmExpression(cc,buf,ast->operand);
-            aoStrCatPrintf(buf,
-                    "movsd   one_dbl(%%rip), %%xmm1\n\t"
-                    "addsd   %%xmm1, %%xmm0\n\t");
-            asmAssign(cc,buf,ast->operand);
-        } else {
-            asmPreIncrDecr(cc,buf,ast,"addq");
-        }
-        break;
-     }
-
-    case TK_PLUS_PLUS: {
-        if (ast->type->kind == AST_TYPE_FLOAT) {
-            asmExpression(cc,buf,ast->operand);
-            asmPushXMM(buf,0);
-            aoStrCatPrintf(buf,
-                    "movsd   one_dbl(%%rip), %%xmm1\n\t"
-                    "addsd   %%xmm1, %%xmm0\n\t");
-            asmAssign(cc,buf,ast->operand);
-            asmPopXMM(buf,0);
-        } else {
-            asmIncrDecr(cc,buf,ast,"addq");
-        }
+    case AST_UNOP: {
+        asmUnaryOp(cc, buf, ast);
         break;
     }
 
-    case TK_PRE_MINUS_MINUS:
-        if (ast->type->kind == AST_TYPE_FLOAT) {
-            asmExpression(cc,buf,ast->operand);
-            aoStrCatPrintf(buf,
-                    "movsd   one_dbl(%%rip), %%xmm1\n\t"
-                    "subsd   %%xmm1, %%xmm0\n\t");
-            asmAssign(cc,buf,ast->operand);
-        } else {
-            asmPreIncrDecr(cc,buf,ast,"subq");
-        }
+    case AST_BINOP: {
+        asmBinaryOp(cc,buf,ast);
         break;
-
-    case TK_MINUS_MINUS:
-        if (ast->type->kind == AST_TYPE_FLOAT) {
-            asmExpression(cc,buf,ast->operand);
-            asmPushXMM(buf,0);
-            aoStrCatPrintf(buf,
-                    "movsd   one_dbl(%%rip), %%xmm1\n\t"
-                    "subsd   %%xmm1, %%xmm0\n\t");
-            asmAssign(cc,buf,ast->operand);
-            asmPopXMM(buf,0);
-        } else {
-            asmIncrDecr(cc,buf,ast,"subq");
-        }
-        break;
-
-    case '!': {
-        asmExpression(cc,buf, ast->operand);
-        aoStrCatPrintf(buf,
-                "cmp    $0, %%rax\n\t"
-                "sete   %%al\n\t"
-                "movzb  %%al, %%rax\n\t");
-        break;
-    }
-
-    case '~': {
-        asmExpression(cc,buf, ast->operand);
-        aoStrCatPrintf(buf, "not    %%rax\n\t");
-        break;
-    }
-
-    case TK_OR_OR: {
-        aoStrCat(buf,"# OR OR Start\n\t");
-        label_end = astMakeLabel();
-        asmExpression(cc,buf,ast->left);
-
-        if (ast->type->kind == AST_TYPE_FLOAT) {
-            asmExpression(cc,buf,ast->left);
-            aoStrCatPrintf(buf,
-                    "xorpd   %%xmm1, %%xmm1\n\t"
-                    "ucomisd %%xmm1, %%xmm0\n\t"
-                    "movq    $1, %%rax\n\t"
-                    "jne     %s\n\t", label_end->data);
-            asmExpression(cc,buf,ast->right);
-            aoStrCatPrintf(buf,
-                    "xorpd   %%xmm1, %%xmm1\n\t"
-                    "ucomisd %%xmm1, %%xmm0\n\t"
-                    "movq    $1, %%rax\n\t"
-                    "jne     %s\n\t"
-                    "movq    $0, %%rax\n\t"
-                    "%s:\n\t", label_end->data, label_end->data);
-        } else {
-            aoStrCatPrintf(buf,
-                    "test   %%rax, %%rax\n\t"
-                    "movq   $1, %%rax\n\t"
-                    "jne    %s\n\t", label_end->data);
-            asmExpression(cc,buf,ast->right);
-            aoStrCatPrintf(buf,
-                    "test   %%rax, %%rax\n\t"
-                    "movq   $1, %%rax\n\t"
-                    "jne    %s\n\t"
-                    "movq   $0, %%rax\n\t"
-                    "%s:\n\t", label_end->data, label_end->data);
-        }
-        aoStrCat(buf,"# OR OR End\n\t");
-        break;
-    }
-
-    case TK_AND_AND: {
-        aoStrCat(buf,"# AND AND Start\n\t");
-        label_end = astMakeLabel();
-
-        if (ast->type->kind == AST_TYPE_FLOAT) {
-            asmExpression(cc,buf,ast->left);
-            aoStrCatPrintf(buf,
-                    "xorpd   %%xmm1, %%xmm1\n\t"
-                    "ucomisd %%xmm1, %%xmm0\n\t"
-                    "je    %s\n\t", label_end->data);
-            asmExpression(cc,buf,ast->right);
-            aoStrCatPrintf(buf,
-                    "xorpd   %%xmm1, %%xmm1\n\t"
-                    "ucomisd %%xmm1, %%xmm0\n\t"
-                    "movq    $0, %%rax\n\t"
-                    "je     %s\n\t"
-                    "movq    $1, %%rax\n\t"
-                    "%s:\n\t", label_end->data, label_end->data);
-        } else {
-            asmExpression(cc,buf,ast->left);
-            aoStrCatPrintf(buf,
-                    "test   %%rax, %%rax\n\t"
-                    "movq   $0, %%rax\n\t"
-                    "je    %s\n\t", label_end->data);
-            asmExpression(cc,buf,ast->right);
-            aoStrCatPrintf(buf,
-                    "test   %%rax, %%rax\n\t"
-                    "movq   $0, %%rax\n\t"
-                    "je     %s\n\t"
-                    "movq   $1, %%rax\n\t"
-                    "%s:\n\t", label_end->data, label_end->data);
-        }
-        aoStrCat(buf,"# AND AND End\n\t");
-        break;
-    }
-
-    case '-': {
-      if (ast->right == NULL) {
-          asmExpression(cc,buf, ast->left);
-          if (ast->left->type->kind == AST_TYPE_FLOAT) {
-              aoStrCatPrintf(buf,
-                      "movsd   sign_bit(%%rip), %%xmm1\n\t"
-                      "xorpd   %%xmm1, %%xmm0\n\t");
-          } else {
-              aoStrCatPrintf(buf,
-                      "not    %%rax\n\t"
-                      "addq    $1, %%rax\n\t");
-          }
-      } else {
-          asmBinaryOp(cc,buf,ast);
-      }
-      break;
     }
 
     default:
-        asmBinaryOp(cc,buf,ast);
-        break;
+        loggerPanic("Unhandled AST expression; %s\n", astToString(ast));
     }
 }
 

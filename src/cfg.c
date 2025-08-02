@@ -1053,19 +1053,16 @@ static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
         /* Should never hit this */
         case AST_FUNC: break;
 
-        case AST_ADDR:
         case AST_ASM_FUNCDEF:
         case AST_ASM_FUNC_BIND:
         case AST_ASM_STMT:
         case AST_CAST:
         case AST_CLASS_REF:
         case AST_DEFAULT_PARAM:
-        case AST_DEREF:
         case AST_EXTERN_FUNC:
         case AST_FUNPTR:
         case AST_FUN_PROTO:
         case AST_LITERAL:
-        case AST_OP_ADD:
         case AST_PLACEHOLDER:
         case AST_STRING:
         case AST_VAR_ARGS:

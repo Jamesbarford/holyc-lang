@@ -22,19 +22,17 @@ int parseIsFunctionCall(Ast *ast);
 AstType *parseGetType(Cctrl *cc, Lexeme *tok);
 int parseIsKeyword(Lexeme *tok, Cctrl *cc);
 double evalFloatExpr(Ast *ast);
-double evalFloatArithmeticOrErr(Ast *ast, int *_ok);
 double evalFloatExprOrErr(Ast *ast, int *_ok);
-double evalOneFloatExprOrErr(Ast *LHS, Ast *RHS, long op, int *_ok);
 long evalIntConstExpr(Ast *ast);
 long evalIntConstExprOrErr(Ast *ast, int *_ok);
-long evalOneIntExprOrErr(Ast *LHS, Ast *RHS, long op, int *_ok);
+long evalOneIntExprOrErr(Ast *LHS, Ast *RHS, AstBinOp op, int *_ok);
 long evalIntArithmeticOrErr(Ast *ast, int *_ok);
 int evalClassRef(Ast *ast, int offset);
 int assertLValue(Ast *ast);
 int parseIsFloatOrInt(Ast *ast);
 int parseIsClassOrUnion(int kind);
 int parseIsFunction(Ast *ast);
-int astIsArithmetic(long op, int is_float);
+int astIsArithmetic(Ast *ast, int is_float);
 
 void assertTokenIsTerminator(Cctrl *cc, Lexeme *tok, long terminator_flags);
 void assertTokenIsTerminatorWithMsg(Cctrl *cc, Lexeme *tok,
