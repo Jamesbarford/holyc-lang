@@ -431,12 +431,17 @@ static void transpileEndStmt(AoStr *str) {
 }
 
 
-void transpileBinaryOp(TranspileCtx *ctx, AoStr *buf, char *op, Ast *ast, ssize_t *indent) {
+void transpileBinaryOp(TranspileCtx *ctx,
+                       AoStr *buf,
+                       char *op,
+                       Ast *ast,
+                       ssize_t *indent)
+{
     ssize_t saved_indent = *indent;
     int needs_brackets = 0;
 
     *indent = 0;
-    if (ast->left && ast->left->kind == AST_DEREF) {
+    if (ast->left && astIsDeref(ast->left)) {
         int is_bang = !strncmp(op,"!",1);
         if (is_bang) {
             aoStrCatFmt(buf, "%s", op);
@@ -445,7 +450,7 @@ void transpileBinaryOp(TranspileCtx *ctx, AoStr *buf, char *op, Ast *ast, ssize_
         if (ast->left) {
             transpileAstInternal(ast->left,ctx, indent);
         } else {
-            transpileAstInternal(ast,ctx, indent);
+            transpileAstInternal(ast, ctx, indent);
         }
 
         if (!is_bang) {
@@ -500,6 +505,39 @@ AoStr *transpileLValue(Ast *ast, TranspileCtx *ctx) {
     transpileAstInternal(ast,ctx,&indent);
     transpileCtxSetBuffer(ctx, saved);
     return buf;
+}
+
+void transpileUnary(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
+    int operand_is_binop = astIsBinOp(ast->operand);
+    char *op = (char *)astUnOpKindToString(ast->unop);
+    ssize_t saved_indent = *indent;
+
+    *indent = 0;
+
+    aoStrCatFmt(ctx->buf, "%s", op);
+    if (operand_is_binop) aoStrPutChar(ctx->buf, '('); 
+   
+    if (astIsDeref(ast)) {
+        if (operand_is_binop && ast->operand->binop == AST_BIN_OP_ADD) {
+            Ast *left = ast->operand->left;
+            Ast *right = ast->operand->right;
+            transpileAstInternal(left,ctx,indent);
+            aoStrPutChar(ctx->buf, '[');
+            transpileAstInternal(right,ctx,indent);
+            aoStrPutChar(ctx->buf, ']');
+        } else {
+            /* As `->` is a dereference we need to be able to distinguish 
+             * between a class dereference and a general pointer dereference */
+            if (ast->deref_symbol != TK_ARROW) {
+                aoStrCatFmt(ctx->buf, "*");
+            }
+            transpileAstInternal(ast->operand,ctx,indent);
+        }
+    } else {
+        transpileAstInternal(ast->operand, ctx, indent);
+    }
+    if (operand_is_binop) aoStrPutChar(ctx->buf, ')'); 
+    *indent = saved_indent;
 }
 
 void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
@@ -1014,43 +1052,19 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
         break;
     }
 
-    case TK_PLUS_PLUS:
-    case TK_MINUS_MINUS: {
-        char *op = lexemePunctToString(ast->kind);
-        transpileAstInternal(ast->left,ctx, indent);
-        aoStrCatFmt(buf, "%s",op);
+    case AST_UNOP: {
+        transpileUnary(ast, ctx, indent);
         break;
     }
 
-    case AST_ADDR:
-        aoStrCatFmt(buf, "&");
-        saved_indent = *indent;
-        *indent = 0;
-        transpileAstInternal(ast->operand, ctx, indent);
-        *indent = saved_indent;
-        break;
-
-    case AST_DEREF: {
-        if (ast->operand->kind == '+') {
-            Ast *left = ast->operand->left;
-            Ast *right = ast->operand->right;
-            transpileAstInternal(left,ctx,indent);
-            aoStrPutChar(buf, '[');
-            transpileAstInternal(right,ctx,indent);
-            aoStrPutChar(buf, ']');
-        } else {
-            /* As `->` is a dereference we need to be able to distinguish 
-             * between a class dereference and a general pointer dereference */
-            if (ast->deref_symbol != TK_ARROW) {
-                aoStrCatFmt(buf, "*");
-            }
-            transpileAstInternal(ast->operand,ctx,indent);
-        }
+    case AST_BINOP: {
+        char *bin_op_str = (char *)astBinOpKindToString(ast->binop);
+        transpileBinaryOp(ctx,buf,bin_op_str,ast,indent);
         break;
     }
 
     default: {
-        transpileBinaryOp(ctx,buf,lexemePunctToString(ast->kind),ast,indent);
+        loggerPanic("Unhandled ast: %s\n", astToString(ast));
         break;
     }
     }

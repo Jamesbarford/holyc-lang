@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -158,24 +159,81 @@ AstType *astTypeCopy(AstType *type) {
     return copy;
 }
 
-Ast *astUnaryOperator(AstType *type, long kind, Ast *operand) {
+Ast *astUnaryOperator(AstType *type, AstUnOp operation, Ast *operand) {
     Ast *ast = astNew();
-    ast->kind = kind;
+    ast->kind = AST_UNOP;
     ast->type = type;
+    if (ast->type == NULL) {
+        loggerWarning("Unary type is being assigned as NULL\n");
+    }
+    ast->unop = operation;
     ast->operand = operand;
     return ast;
 }
 
-Ast *astBinaryOp(long operation, Ast *left, Ast *right, int *_is_err) {
+/* Returns `1` on successful conversion and `0` on failure */
+int astBinOpFromToken(long op, AstBinOp *_result) {
+    switch (op) {
+        case '+': *_result = AST_BIN_OP_ADD;     break;
+        case '-': *_result = AST_BIN_OP_SUB;     break;
+        case '*': *_result = AST_BIN_OP_MUL;     break;
+        case '/': *_result = AST_BIN_OP_DIV;     break;
+        case '%': *_result = AST_BIN_OP_MOD;     break;
+
+        case '=': *_result = AST_BIN_OP_ASSIGN; break;
+        case '<': *_result = AST_BIN_OP_LT;     break;
+        case '>': *_result = AST_BIN_OP_GT;     break;
+        case TK_GREATER_EQU: *_result = AST_BIN_OP_GE;  break;
+        case TK_LESS_EQU: *_result = AST_BIN_OP_LE;  break;
+
+        case TK_EQU_EQU: *_result = AST_BIN_OP_EQ; break;
+        case TK_NOT_EQU: *_result = AST_BIN_OP_NE; break;
+
+        case TK_AND_AND: *_result = AST_BIN_OP_LOG_AND; break;
+        case TK_OR_OR: *_result = AST_BIN_OP_LOG_OR; break;
+
+        case '^': *_result = AST_BIN_OP_BIT_XOR; break;
+        case '&': *_result = AST_BIN_OP_BIT_AND; break;
+        case '|': *_result = AST_BIN_OP_BIT_OR;  break;
+
+        case TK_SHL: *_result = AST_BIN_OP_SHL;  break;
+        case TK_SHR: *_result = AST_BIN_OP_SHR;  break;
+        default:
+            return 0;
+    }
+    return 1;
+}
+
+int astUnaryOpFromToken(long op, AstUnOp *_result) {
+    switch (op) {
+        case TK_PRE_PLUS_PLUS:   *_result = AST_UN_OP_PRE_INC; break;
+        case TK_PRE_MINUS_MINUS: *_result = AST_UN_OP_PRE_DEC; break;
+        case TK_PLUS_PLUS:       *_result = AST_UN_OP_POST_INC; break;
+        case TK_MINUS_MINUS:     *_result = AST_UN_OP_POST_DEC; break;
+        case '+':                *_result = AST_UN_OP_PLUS;    break;
+        case '-':                *_result = AST_UN_OP_MINUS;   break;
+        case '~':                *_result = AST_UN_OP_BIT_NOT; break;
+        case '!':                *_result = AST_UN_OP_LOG_NOT; break;
+        case '&':                *_result = AST_UN_OP_ADDR_OF; break;
+        case '*':                *_result = AST_UN_OP_DEREF;   break;
+        default:                 
+            return 0;
+    }
+    return 1;
+}
+
+Ast *astBinaryOp(AstBinOp operation, Ast *left, Ast *right, int *_is_err) {
     Ast *ast = astNew();
     ast->type = astGetResultType(operation,left->type,right->type);  
 
     if (ast->type == NULL) {
+        loggerWarning("Binary type is being assigned as NULL\n");
         *_is_err = 1;
     }
 
-    ast->kind = operation;
-    if (operation != '=' &&
+    ast->kind = AST_BINOP;
+    ast->binop = operation;
+    if (operation != AST_BIN_OP_ASSIGN &&
             astConvertArray(left->type)->kind != AST_TYPE_POINTER &&
             astConvertArray(right->type)->kind == AST_TYPE_POINTER) {
         ast->left = right;
@@ -284,8 +342,11 @@ Ast *astFunctionDefaultParam(Ast *var, Ast *init) {
     return ast;
 }
 
-Ast *astFunctionPtrCall(AstType *type, char *fname, int len,
-                        Vec *argv, Ast *ref)
+Ast *astFunctionPtrCall(AstType *type,
+                        char *fname,
+                        int len,
+                        Vec *argv,
+                        Ast *ref)
 {
     Ast *ast = astNew();
     ast->type = type;
@@ -690,7 +751,7 @@ AoStr *astNormaliseFunctionName(char *fname) {
         aoStrPutChar(newfn, '_');
     }
 #endif
-    aoStrCatPrintf(newfn,fname);
+    aoStrCatPrintf(newfn, fname);
     /* XXX: Dynamically create main function */
     return newfn;
 }
@@ -718,13 +779,26 @@ int astIsAssignment(long op) {
     }
 }
 
-int astIsValidPointerOp(long op) {
+int astTypeIsPtr(AstType *type) {
+    return type && type->kind == AST_TYPE_POINTER;
+}
+
+int astTypeIsArray(AstType *type) {
+    return type && type->kind == AST_TYPE_ARRAY;
+}
+
+int astIsValidPointerOp(AstBinOp op) {
     switch (op) {
-        case '-': case '+':
-        case '<': case TK_LESS_EQU:
-        case '>': case TK_GREATER_EQU:
-        case TK_EQU_EQU: case TK_NOT_EQU:
-        case TK_OR_OR: case TK_AND_AND:    
+        case AST_BIN_OP_SUB:
+        case AST_BIN_OP_ADD:
+        case AST_BIN_OP_LT:
+        case AST_BIN_OP_LE:
+        case AST_BIN_OP_GT:
+        case AST_BIN_OP_GE:
+        case AST_BIN_OP_EQ:
+        case AST_BIN_OP_NE:
+        case AST_BIN_OP_LOG_OR:
+        case AST_BIN_OP_LOG_AND:
             return 1;
         default:
             return 0;
@@ -740,7 +814,6 @@ int astIsBinCmp(long op) {
     case TK_LESS_EQU:
     case TK_GREATER_EQU:
     case '+':
-    case AST_OP_ADD:
     case '-':
     case '*':
     case '~':
@@ -759,8 +832,24 @@ int astIsBinCmp(long op) {
     }
 }
 
+int astIsUnOp(Ast *ast) {
+    return ast && ast->kind == AST_UNOP;
+}
+
+int astIsBinOp(Ast *ast) {
+    return ast && ast->kind == AST_BINOP;
+}
+
+int astIsAddr(Ast *ast) {
+    return astIsUnOp(ast) && ast->unop == AST_UN_OP_ADDR_OF;
+}
+
+int astIsDeref(Ast *ast) {
+    return astIsUnOp(ast) && ast->unop == AST_UN_OP_DEREF;
+}
+
 /* This is pretty gross to look at but, eliminated recursion */
-AstType *astGetResultType(long op, AstType *a, AstType *b) {
+AstType *astGetResultType(AstBinOp op, AstType *a, AstType *b) {
     AstType *tmp;
     AstType *ptr1, *ptr2;
     ptr1 = astConvertArray(a);
@@ -774,16 +863,19 @@ start_routine:
     }
 
     if (ptr2->kind == AST_TYPE_POINTER || ptr2->kind == AST_TYPE_FUNC) {
-        if (op == '=') {
+        if (op == AST_BIN_OP_ASSIGN) {
             return ptr1;
         }
 
         if (!astIsValidPointerOp(op)) {
             goto error;
         }
-        if (op != '+' && op != '-'
-                && op != TK_EQU_EQU &&
-                op != TK_NOT_EQU && op != TK_OR_OR && op != TK_AND_AND) {
+        if (op != AST_BIN_OP_ADD &&
+            op != AST_BIN_OP_SUB &&
+            op != AST_BIN_OP_EQ &&
+            op != AST_BIN_OP_NE &&
+            op != AST_BIN_OP_LOG_OR &&
+            op != AST_BIN_OP_LOG_AND) {
             goto error;
         }
 
@@ -796,61 +888,66 @@ start_routine:
         }
         /* These are the only arithmetic operators for pointers,
          * the rest are boolean */
-        if (op != '+' && op != '-') {
+        if (op != AST_BIN_OP_ADD && op != AST_BIN_OP_SUB) {
             return ast_uint_type;
         }
         return ptr2;
     }
     switch (ptr1->kind) {
-    case AST_TYPE_VOID:
-        goto error;
-    case AST_TYPE_INT:
-    case AST_TYPE_CHAR:
-        switch (ptr2->kind) {
+        case AST_TYPE_VOID:
+            goto error;
         case AST_TYPE_INT:
         case AST_TYPE_CHAR:
-            return ast_int_type;
+            switch (ptr2->kind) {
+                case AST_TYPE_INT:
+                case AST_TYPE_CHAR:
+                    return ast_int_type;
+                case AST_TYPE_CLASS:
+                    if (ptr2->is_intrinsic) {
+                        return ast_int_type;
+                    } else {
+                        goto error;
+                    }
+                case AST_TYPE_FLOAT:
+                    return ast_float_type;
+                case AST_TYPE_ARRAY:
+                case AST_TYPE_POINTER:
+                    return ptr2;
+                default:
+                    break;
+            }
+        case AST_TYPE_FLOAT:
+            if (ptr2->kind == AST_TYPE_FLOAT) {
+                return ast_float_type;
+            }
+            goto error;
+        case AST_TYPE_ARRAY:
+            if (ptr2->kind != AST_TYPE_ARRAY) {
+                goto error;
+            }
+            ptr1 = ptr1->ptr;
+            ptr2 = ptr2->ptr;
+            goto start_routine;
         case AST_TYPE_CLASS:
-            if (ptr2->is_intrinsic) {
+            if (ptr1->is_intrinsic && ptr2->is_intrinsic) {
+                return ast_int_type;
+            } else if (astIsIntType(ptr1) && ptr2->is_intrinsic) {
+                return ast_int_type;
+            } else if (ptr1->is_intrinsic && astIsIntType(ptr2)) {
                 return ast_int_type;
             } else {
                 goto error;
             }
-        case AST_TYPE_FLOAT:
-            return ast_float_type;
-        case AST_TYPE_ARRAY:
-        case AST_TYPE_POINTER:
-            return ptr2;
-        }
-    case AST_TYPE_FLOAT:
-        if (ptr2->kind == AST_TYPE_FLOAT) {
-            return ast_float_type;
-        }
-        goto error;
-    case AST_TYPE_ARRAY:
-        if (ptr2->kind != AST_TYPE_ARRAY) {
-            goto error;
-        }
-        ptr1 = ptr1->ptr;
-        ptr2 = ptr2->ptr;
-        goto start_routine;
-    case AST_TYPE_CLASS:
-        if (ptr1->is_intrinsic && ptr2->is_intrinsic) {
-            return ast_int_type;
-        } else if (astIsIntType(ptr1) && ptr2->is_intrinsic) {
-            return ast_int_type;
-        } else if (ptr1->is_intrinsic && astIsIntType(ptr2)) {
-            return ast_int_type;
-        } else {
-            goto error;
-        }
+        default:
+            break;
     }
 
 error:
+    loggerWarning("Binop has returned null type\n");
     return NULL;
 }
 
-AstType *astTypeCheck(AstType *expected, Ast *ast, long op) {
+AstType *astTypeCheck(AstType *expected, Ast *ast, AstBinOp op) {
     if (expected != NULL && ast == NULL) return NULL;
 
     AstType *original_actual = ast->type;
@@ -881,7 +978,7 @@ check_type:
             ret = e;
             goto out;
         } else {
-            if (op != '=') {
+            if (op != AST_BIN_OP_ASSIGN) {
                 ret = e;
             } else if (ast->right != NULL) {
                 if (ast->right->kind == AST_LITERAL && ast->right->i64 == 0) {
@@ -957,13 +1054,13 @@ void astStringEndStmt(AoStr *str) {
     }
 }
 
-void astUnaryOpToString(AoStr *str, char *op, Ast *ast,int depth) {
+void astUnaryOpToString(AoStr *str, const char *op, Ast *ast,int depth) {
     aoStrCatPrintf(str, "<unary_expr> %s\n", op);
     _astToString(str, ast->operand, depth+1);
     astStringEndStmt(str);
 }
 
-void astBinaryOpToString(AoStr *str, char *op, Ast *ast, int depth) {
+void astBinaryOpToString(AoStr *str, const char *op, Ast *ast, int depth) {
     aoStrCatPrintf(str, "<binary_expr> %s\n", op);
     _astToString(str, ast->left, depth+1);
     astStringEndStmt(str);
@@ -1205,6 +1302,9 @@ static char *astFunctionToStringInternal(Ast *func, AstType *type) {
         case AST_FUN_PROTO:
             strparams = astParamsToString(func->params);
             break;
+        default:
+            loggerPanic("Invalid function kind: %s\n",
+                    astKindToString(func->kind));
     }
 
     if (strparams) {
@@ -1230,7 +1330,7 @@ void _astToString(AoStr *str, Ast *ast, int depth) {
     List *node;
     char *tmp;
 
-    switch(ast->kind) {
+    switch (ast->kind) {
         case AST_LITERAL: {
             aoStrCatPrintf(str,"<ast_literal> ");
             switch (ast->type->kind) {
@@ -1258,7 +1358,7 @@ void _astToString(AoStr *str, Ast *ast, int depth) {
                 if (!isatty(STDOUT_FILENO)) {
                     aoStrCatPrintf(str, "<const_char> '%s'", buf);
                 } else {
-                    aoStrCatPrintf(str, "\033[0;35m%s\033[0m", buf);
+                    aoStrCatPrintf(str, "<const_char> \033[0;35m'%s'\033[0m", buf);
                 }
                 break;
             }
@@ -1359,7 +1459,7 @@ void _astToString(AoStr *str, Ast *ast, int depth) {
                 Ast *tmp = (Ast *)ast->args->entries[i];
                 aoStrCatRepeat(str, "  ", depth);
                 aoStrCatPrintf(str, "<function_ptr_arg>\n");
-                if (tmp->kind == AST_TYPE_FUNC) {
+                if (tmp->type->kind == AST_TYPE_FUNC) {
                     loggerWarning("%s\n",
                             astTypeToString(((AstType *)tmp)->rettype));
                 }
@@ -1378,7 +1478,7 @@ void _astToString(AoStr *str, Ast *ast, int depth) {
                 Ast *tmp = (Ast *)ast->args->entries[i];
                 aoStrCatRepeat(str, "  ", depth);
                 aoStrCatPrintf(str, "<function_arg>\n");
-                if (tmp->kind == AST_TYPE_FUNC) {
+                if (tmp->type->kind == AST_TYPE_FUNC) {
                     loggerDebug("%s\n",
                             astTypeToString(((AstType *)tmp)->rettype));
                 }
@@ -1573,7 +1673,7 @@ void _astToString(AoStr *str, Ast *ast, int depth) {
 
             /* We only really want to print at the data type we are looking 
              * at, not the whole class */
-            if (field_type && ast->cls->kind == AST_DEREF) {
+            if (field_type && astIsDeref(ast->cls)) {
                 aoStrCatRepeat(str, "  ", depth+1);
 
                 if (!astIsClassPointer(field_type)) {
@@ -1589,10 +1689,10 @@ void _astToString(AoStr *str, Ast *ast, int depth) {
 
                 /* Find the name of the variable that contains this reference */
                 ast_tmp = ast;
-                while (ast_tmp->kind == AST_DEREF ||
+                while (astIsDeref(ast_tmp) ||
                         ast_tmp->kind == AST_CLASS_REF) {
                     field_names[field_name_count++] = ast_tmp->field;
-                    if (ast_tmp->kind != AST_DEREF &&
+                    if (!astIsDeref(ast_tmp) &&
                             ast_tmp->kind != AST_CLASS_REF) {
                         break;
                     }
@@ -1633,18 +1733,6 @@ void _astToString(AoStr *str, Ast *ast, int depth) {
             } else {
                 aoStrCatPrintf(str, "<label> %s:\n", ast->sval->data);
             }
-            break;
-
-        case AST_ADDR:
-            aoStrCatPrintf(str, "<addr>\n");
-            _astToString(str,ast->operand,depth+1);
-            astStringEndStmt(str);
-            break;
-
-        case AST_DEREF:
-            aoStrCatPrintf(str, "<deref>\n");
-            _astToString(str,ast->operand,depth+1);
-            //astStringEndStmt(str);
             break;
 
         case AST_CAST:
@@ -1732,118 +1820,156 @@ void _astToString(AoStr *str, Ast *ast, int depth) {
             break;
         }
 
-        case TK_PRE_PLUS_PLUS:
-        case TK_PLUS_PLUS:   
-        case TK_PRE_MINUS_MINUS:
-        case TK_MINUS_MINUS:
-            astUnaryOpToString(str, astKindToString(ast->kind),ast,depth);
-            break;
-
-        default: {
-            astBinaryOpToString(str,astKindToString(ast->kind),ast,depth);
+        case AST_BINOP: {
+            const char *bin_op_str = astBinOpKindToString(ast->binop);
+            astBinaryOpToString(str,bin_op_str,ast,depth);
             astStringEndStmt(str);
             break;
         }
+
+        case AST_UNOP: {
+            const char *un_op_str = astUnOpKindToString(ast->unop);
+            astUnaryOpToString(str,un_op_str,ast,depth);
+            break;
+        }
+        
+        case AST_SIZEOF:
+        case AST_PLACEHOLDER:
+        case AST_ASM_FUNCDEF:
+            loggerWarning("Unhandled ast kind: %s\n",
+                    astKindToString(ast->kind));
+            break;
+    }
+}
+
+char *astTypeKindToString(AstTypeKind kind) {
+    switch (kind) {
+        case AST_TYPE_VOID: return "AST_TYPE_VOID";
+        case AST_TYPE_INT: return "AST_TYPE_INT";
+        case AST_TYPE_FLOAT: return "AST_TYPE_FLOAT";
+        case AST_TYPE_CHAR: return "AST_TYPE_CHAR";
+        case AST_TYPE_ARRAY: return "AST_TYPE_ARRAY";
+        case AST_TYPE_POINTER: return "AST_TYPE_POINTER";
+        case AST_TYPE_FUNC: return "AST_TYPE_FUNC";
+        case AST_TYPE_CLASS: return "AST_TYPE_CLASS";
+        case AST_TYPE_VIS_MODIFIER: return "AST_TYPE_VIS_MODIFIER";
+        case AST_TYPE_INLINE: return "AST_TYPE_INLINE";
+        case AST_TYPE_UNION: return "AST_TYPE_UNION";
+        case AST_TYPE_AUTO: return "AST_TYPE_AUTO";
+        default: loggerPanic("Unhandled ast type: %d\n", (AstTypeKind)kind);
     }
 }
 
 /* String representation of the kind of ast we are looking at */
-char *astKindToString(int kind) {
+char *astKindToString(AstKind kind) {
     switch (kind) {
-    /* KIND FOR AST TYPE */
-    case AST_TYPE_VOID:  return "AST_TYPE_VOID";
-    case AST_TYPE_INT:   return "AST_TYPE_INT";
-    case AST_TYPE_FLOAT: return "AST_TYPE_FLOAT";
-    case AST_TYPE_CHAR:  return "AST_TYPE_CHAR";
-    case AST_TYPE_ARRAY: return "AST_TYPE_ARRAY";
-    case AST_TYPE_POINTER: return "->AST_TYPE_POINTER";
-    case AST_TYPE_FUNC:  return "AST_TYPE_FUNC";
-    case AST_TYPE_CLASS: return "AST_TYPE_CLASS";
-    case AST_TYPE_UNION: return "AST_TYPE_UNION";
-    case AST_TYPE_AUTO:  return "AST_TYPE_AUTO";
+        case AST_GVAR:          return "AST_GVAR";
+        case AST_GOTO:          return "AST_GOTO";
+        case AST_LABEL:         return "AST_LABEL";
+        case AST_LVAR:          return "AST_LVAR";
+        case AST_FUNC:          return "AST_FUNC";
+        case AST_DECL:          return "AST_DECL";
+        case AST_STRING:        return "AST_STRING";
+        case AST_FUNCALL:       return "AST_FUNCALL";
+        case AST_LITERAL:       return "AST_LITERAL";
+        case AST_ARRAY_INIT:    return "AST_ARRAY_INIT";
+        case AST_IF:            return "AST_IF";
+        case AST_FOR:           return "AST_FOR";
+        case AST_RETURN:        return "AST_RETURN";
+        case AST_WHILE:         return "AST_WHILE";
+        case AST_CLASS_REF:     return "AST_CLASS_REF";
+        case AST_COMPOUND_STMT: return "AST_COMPOUND_STMT";
+        case AST_ASM_STMT:      return "AST_ASM_STMT";
+        case AST_ASM_FUNC_BIND: return "AST_ASM_FUNC_BIND";
+        case AST_ASM_FUNCALL:   return "AST_ASM_FUNCALL";
+        case AST_FUNPTR:        return "AST_FUNPTR";
+        case AST_FUNPTR_CALL:   return "AST_FUNPTR_CALL";
+        case AST_BREAK:         return "AST_BREAK";
+        case AST_CONTINUE:      return "AST_CONTINUE";
+        case AST_DEFAULT_PARAM: return "AST_DEFAULT_PARAM";
+        case AST_VAR_ARGS:      return "AST_VAR_ARGS";
+        case AST_ASM_FUNCDEF:   return "AST_ASM_FUNCDEF";
+        case AST_CAST:          return "AST_CAST";
+        case AST_FUN_PROTO:     return "AST_FUN_PROTO";
+        case AST_CASE:          return "AST_CASE";
+        case AST_JUMP:          return "AST_JUMP";
+        case AST_EXTERN_FUNC:   return "AST_EXTERN_FUNC";
+        case AST_DO_WHILE:      return "AST_DO_WHILE";
+        case AST_PLACEHOLDER:   return "AST_PLACEHOLDER";
+        case AST_SWITCH:        return "AST_SWITCH";
+        case AST_DEFAULT:       return "AST_DEFAULT";
+        case AST_SIZEOF:        return "AST_SIZEOF";
+        case AST_COMMENT:       return "AST_COMMENT";
+        case AST_BINOP:         return "AST_BINOP";
+        case AST_UNOP:          return "AST_UNOP";
+            break;
+    }
+    loggerPanic("Cannot find kind: %d\n", kind);
+}
 
-    case AST_GVAR:       return "AST_GVAR";
-    case AST_DEREF:      return "AST_DEREF";
-    case AST_ADDR:       return "AST_ADDR";
-    case AST_LVAR:       return "AST_LVAR";
-    case AST_FUNC:       return "AST_FUNC";
-    case AST_FUNPTR:     return "AST_FUNPTR";
-    case AST_EXTERN_FUNC: return "AST_EXTERN_FUNC";
-    case AST_DECL:       return "AST_DECL";
-    case AST_STRING:     return "AST_STRING";
-    case AST_FUNCALL:    return "AST_FUNCALL";
-    case AST_LITERAL:    return "AST_LITERAL";
-    case AST_ARRAY_INIT: return "AST_ARRAY_INIT";
-    case AST_IF:         return "AST_IF";
-    case AST_FOR:        return "AST_FOR";
-    case AST_GOTO:       return "AST_GOTO";
-    case AST_LABEL:      return "AST_LABEL";
-    case AST_RETURN:     return "AST_RETURN";
-    case AST_COMPOUND_STMT: return "AST_COMPOUND_STMT";
-    case AST_CLASS_REF:  return "AST_CLASS_REF";
-    case AST_DEFAULT_PARAM: return "AST_DEFAULT_PARAM";
-    case AST_VAR_ARGS:   return "AST_VAR_ARGS";
-    case AST_CAST:       return "AST_CAST";
-    case AST_JUMP:       return "AST_JUMP";
-    case AST_ASM_FUNC_BIND: return "AST_ASM_FUNC_BIND";
-
-    case AST_SWITCH:        return "AST_SWITCH";
-    case AST_CASE:          return "AST_CASE";
-    case AST_DEFAULT:       return "AST_DEFAULT";
-    case AST_COMMENT:       return "AST_COMMENT";
-    case AST_SIZEOF:        return "AST_SIZEOF";
-
-
-    case TK_AND_AND:         return "&&";
-    case TK_OR_OR:           return "||";
-    case TK_SHL:             return "<<";
-    case TK_SHR:             return ">>";
-    case TK_PLUS_PLUS:       return "++";
-    case TK_PRE_PLUS_PLUS:   return "<p>++";
-    case TK_PRE_MINUS_MINUS: return "<p>--";
-    case TK_MINUS_MINUS:     return "--";
-    case TK_EQU_EQU:         return "==";
-    case TK_NOT_EQU:         return "!=";
-    case TK_LESS_EQU:        return "<=";
-    case TK_GREATER_EQU:     return ">=";
-    case TK_DIV_EQU:         return "/=";
-    case TK_MUL_EQU:         return "*=";
-    case TK_MOD_EQU:         return "%=";
-    case TK_ADD_EQU:         return "+=";
-    case TK_SUB_EQU:         return "-=";
-    case TK_SHL_EQU:         return "<<=";
-    case TK_SHR_EQU:         return ">>=";
-    case TK_AND_EQU:         return "&=";
-    case TK_OR_EQU:          return "|=";
-    case TK_XOR_EQU:         return "^=";
-    case '+':
-    case AST_OP_ADD:     return "+";
-    case '-':            return "-";
-    case '*':            return "*";
-    case '~':            return "~";
-    case '<':            return "<";
-    case '>':            return ">";
-    case '/':            return "/";
-    case '&':            return "&";
-    case '|':            return "|";
-    case '=':            return "=";
-    case '!':            return "!";
-    case '%':            return "%";
-    case '^':            return "^";
-    default:
-        loggerPanic("Cannot find kind: %d\n", kind);
+int astIsRangeOperator(AstBinOp op) {
+    switch (op) {
+        case AST_BIN_OP_GE:
+        case AST_BIN_OP_GT:
+        case AST_BIN_OP_LE:
+        case AST_BIN_OP_LT:
+            return 1;
+        default:
+            return 0;
     }
 }
 
-int astIsRangeOperator(long op) {
+const char *astUnOpKindToString(AstUnOp op) {
     switch (op) {
-    case TK_GREATER_EQU:
-    case TK_LESS_EQU:
-    case '<':
-    case '>':
-        return 1;
-    default:
-        return 0;
+        case AST_UN_OP_POST_INC: return "++";
+        case AST_UN_OP_POST_DEC: return "--";
+        case AST_UN_OP_PRE_INC: return "pre ++";
+        case AST_UN_OP_PRE_DEC: return "pre --";
+        case AST_UN_OP_PLUS: return "+";
+        case AST_UN_OP_MINUS: return "-";
+        case AST_UN_OP_LOG_NOT: return "!";
+        case AST_UN_OP_BIT_NOT: return "~";
+        case AST_UN_OP_ADDR_OF: return "&";
+        case AST_UN_OP_DEREF: return "*";
+        case AST_UN_OP_SIZEOF: return "sizeof";
+        case AST_UN_OP_ALIGNOF: return "alignof";
+        case AST_UN_OP_CAST: return "cast";
+        default: loggerPanic("Unhandled unary op: %d\n", (AstUnOp)op);
+    }
+}
+
+const char *astBinOpKindToString(AstBinOp op) {
+    switch (op) {
+        case AST_BIN_OP_MUL: return "*";
+        case AST_BIN_OP_DIV: return "/";
+        case AST_BIN_OP_MOD: return "%";
+        case AST_BIN_OP_ADD: return "+";
+        case AST_BIN_OP_SUB: return "-";
+        case AST_BIN_OP_SHL: return "<<";
+        case AST_BIN_OP_SHR: return ">>";
+        case AST_BIN_OP_LT: return "<";
+        case AST_BIN_OP_LE: return "<=";
+        case AST_BIN_OP_GT: return ">";
+        case AST_BIN_OP_GE: return ">=";
+        case AST_BIN_OP_EQ: return "==";
+        case AST_BIN_OP_NE: return "!=";
+        case AST_BIN_OP_BIT_AND: return "&";
+        case AST_BIN_OP_BIT_XOR: return "^";
+        case AST_BIN_OP_BIT_OR: return "|";
+        case AST_BIN_OP_LOG_AND: return "&&";
+        case AST_BIN_OP_LOG_OR: return "||";
+        case AST_BIN_OP_ASSIGN: return "=";
+        case AST_BIN_OP_ADD_ASSIGN: return "+=";
+        case AST_BIN_OP_SUB_ASSIGN: return "-=";
+        case AST_BIN_OP_MUL_ASSIGN: return "*=";
+        case AST_BIN_OP_DIV_ASSIGN: return "/=";
+        case AST_BIN_OP_MOD_ASSIGN: return "%=";
+        case AST_BIN_OP_SHL_ASSIGN: return "<<=";
+        case AST_BIN_OP_SHR_ASSIGN: return ">>=";
+        case AST_BIN_OP_AND_ASSIGN: return "&=";
+        case AST_BIN_OP_XOR_ASSIGN: return "^=";
+        case AST_BIN_OP_OR_ASSIGN:  return "|=";
+        default: loggerPanic("Unhandled binary op: %d\n", (AstBinOp)op);
     }
 }
 
@@ -1880,7 +2006,6 @@ void astBinaryArgToString(AoStr *str, char *op, Ast *ast, unsigned long lexeme_f
 
 /* This can only be used for lvalues */
 static void _astLValueToString(AoStr *str, Ast *ast, unsigned long lexeme_flags) {
-    char *str_op = NULL;
     if (ast == NULL) {
         aoStrCatLen(str, "(null)", 6);
         return;
@@ -2004,30 +2129,6 @@ static void _astLValueToString(AoStr *str, Ast *ast, unsigned long lexeme_flags)
             break;
         }
 
-        case AST_ADDR:
-            aoStrCatPrintf(str, "&");
-            _astLValueToString(str,ast->operand,lexeme_flags);
-            break;
-
-        case AST_DEREF: {
-            if (ast->operand->kind == '+') {
-                Ast *left = ast->operand->left;
-                Ast *right = ast->operand->right;
-                _astLValueToString(str, left, lexeme_flags);
-                aoStrPutChar(str, '[');
-                _astLValueToString(str, right, lexeme_flags);
-                aoStrPutChar(str, ']');
-            } else {
-                /* As `->` is a dereference we need to be able to distinguish 
-                 * between a class dereference and a general pointer dereference */
-                if (ast->deref_symbol != TK_ARROW) {
-                    aoStrCatFmt(str, "*");
-                }
-                _astLValueToString(str, ast->operand, lexeme_flags);
-            }
-            break;
-        }
-
         case AST_CAST: {
             _astLValueToString(str,ast->operand,lexeme_flags);
             char *type = astTypeToString(ast->type);
@@ -2056,7 +2157,6 @@ static void _astLValueToString(AoStr *str, Ast *ast, unsigned long lexeme_flags)
             break;
         }
 
-
         case AST_SIZEOF: {
             char *type_str = astTypeToString(ast->type);
             aoStrCatPrintf(str, "sizeof(%s)",type_str);
@@ -2067,41 +2167,63 @@ static void _astLValueToString(AoStr *str, Ast *ast, unsigned long lexeme_flags)
             aoStrCatPrintf(str, "break;");
             break;
 
-        case TK_PRE_PLUS_PLUS:
-        case TK_PLUS_PLUS:   
-        case TK_PRE_MINUS_MINUS:
-        case TK_MINUS_MINUS:
-        case '~':
-        case '!': {
-            str_op = lexemePunctToStringWithFlags(ast->kind,lexeme_flags);
-            astUnaryArgToString(str,str_op,ast,lexeme_flags);
-            break;
-        }
-        case '-': {
-            str_op = lexemePunctToStringWithFlags(ast->kind,lexeme_flags);
-            if (ast->right == NULL) {
-                astUnaryArgToString(str,str_op,ast,lexeme_flags);
-            } else {
-                astBinaryArgToString(str,str_op,ast,lexeme_flags);
-            }
-            break;
-        }
-
         case AST_COMMENT: {
             aoStrCatPrintf(str, "%s\n", ast->sval->data);
             break;
         }
 
-
-        default: {
-            str_op = lexemePunctToStringWithFlags(ast->kind,lexeme_flags);
-            astBinaryArgToString(str,str_op,ast,lexeme_flags);
+        case AST_BINOP: {
+            const char *bin_op_str = astBinOpKindToString(ast->binop);
+            _astLValueToString(str, ast->left, lexeme_flags);
+            aoStrCatPrintf(str, " %s ", bin_op_str);
+            _astLValueToString(str, ast->right, lexeme_flags);
             if (ast->left == NULL) {
                 aoStrCatPrintf(str,"%s",
                         lexemePunctToStringWithFlags(';',lexeme_flags));
             }
             break;
         }
+
+        case AST_UNOP: {
+            if (astIsDeref(ast)) {
+                if (ast->operand->kind == AST_BINOP &&
+                        ast->operand->binop == AST_BIN_OP_ADD) {
+                    Ast *left = ast->operand->left;
+                    Ast *right = ast->operand->right;
+                    _astLValueToString(str, left, lexeme_flags);
+                    aoStrPutChar(str, '[');
+                    _astLValueToString(str, right, lexeme_flags);
+                    aoStrPutChar(str, ']');
+                } else {
+                    /* As `->` is a dereference we need to be able to distinguish 
+                     * between a class dereference and a general pointer dereference */
+                    if (ast->deref_symbol != TK_ARROW) {
+                        aoStrCatFmt(str, "*");
+                    }
+                    _astLValueToString(str, ast->operand, lexeme_flags);
+                }
+            } else {
+                const char *un_op_str = astUnOpKindToString(ast->unop);
+                aoStrCatPrintf(str, "%s", un_op_str);
+                _astLValueToString(str, ast->operand,lexeme_flags);
+            }
+            break;
+        }
+
+        case AST_ARRAY_INIT:
+        case AST_IF:
+        case AST_FOR:
+        case AST_WHILE:
+        case AST_COMPOUND_STMT:
+        case AST_ASM_STMT:
+        case AST_CONTINUE:
+        case AST_DEFAULT_PARAM:
+        case AST_ASM_FUNCDEF:
+        case AST_JUMP:
+        case AST_DO_WHILE:
+        case AST_PLACEHOLDER:
+        case AST_SWITCH:
+            break;
     }
 }
 
@@ -2119,7 +2241,7 @@ char *astLValueToString(Ast *ast, unsigned long lexeme_flags) {
 /* Just print out one */
 void astPrint(Ast *ast) {
     char *str = astToString(ast);
-    printf("%s\n", str);
+    fprintf(stderr, "%s\n", str);
 }
 
 void astTypePrint(AstType *type) {
@@ -2151,14 +2273,6 @@ const char *astTypeKindToHumanReadable(AstType *type) {
 
 const char *astKindToHumanReadable(Ast *ast) {
     switch (ast->kind) {
-        case '|': return "bitwise OR";
-        case '&': return "bitwise AND";
-        case '!': return "logical NOT";
-        case '~': return "bitwise NOT";
-        case AST_ADDR: return "address";
-        case AST_DEREF: return "dereference";
-        case TK_PLUS_PLUS: return "increment";
-        case TK_MINUS_MINUS: return "decrement";
         case AST_LITERAL: return "literal";
         case AST_GVAR: return "global variable";
         case AST_GOTO: return "goto statement";
@@ -2195,22 +2309,9 @@ const char *astKindToHumanReadable(Ast *ast) {
         case AST_DEFAULT: return "default statement";
         case AST_SIZEOF: return "size of";
         case AST_COMMENT: return "comment";
-        case TK_AND_AND: return "logical AND";
-        case TK_OR_OR: return "logical OR";
-        case TK_EQU_EQU: return "equality comparison";
-        case TK_NOT_EQU: return "inequality comparison";
-        case TK_LESS_EQU: return "less than or equal comparison";
-        case TK_GREATER_EQU: return "greater than or equal comparison";
-        case TK_SHL: return "left shift";
-        case TK_SHR: return "right shift";
-        case TK_ARROW: return "pointer dereference";
-        case '=': return "assignment";
-        case '>': return "greater than comparison";
-        case '<': return "less than comparison";
-        case '/': return "division";
-        case '+': return "addition";
-        case '*': return "multiplication";
-        case '-': return "subtraction";
+        case AST_PLACEHOLDER: return "placeholder";
+        case AST_BINOP: return "binary op";
+        case AST_UNOP: return "unary op";
         default: return "unknown AST kind";
     }
 }

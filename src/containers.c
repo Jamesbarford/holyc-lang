@@ -154,9 +154,11 @@ void vecInsertAt(Vec *vec, void *value, unsigned long idx) {
     if (vec->size + 1 >= vec->capacity) {
         vecReserve(vec, vec->capacity * 2);
     }
+#ifdef DEBUG
     if (idx >= vec->size) {
-        fprintf(stderr, "Vec - idx %lu is out of range", idx);
+        loggerWarning("Vec - idx %lu is out of range\n", idx);
     }
+#endif
     unsigned long elements_to_move = vec->size - idx;
     memmove(&vec->entries[idx + 1],
             &vec->entries[idx],
@@ -169,7 +171,7 @@ void *vecGetAt(Vec *vec, unsigned long idx) {
     /* Bounds check */
 #ifdef DEBUG
     if (idx >= vec->size) {
-        fprintf(stderr, "Vec - idx %lu is out of range for Vec of size %lu",
+        loggerWarning("Vec - idx %lu is out of range for Vec of size %lu\n",
                 idx, vec->size);
     }
 #endif

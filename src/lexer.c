@@ -528,7 +528,7 @@ char *lexemeToString(Lexeme *tok) {
 void lexemePrint(Lexeme *le) {
     if (le) {
         char *str = lexemeToString(le);
-        printf("%s\n", str);
+        printf("%d: %s\n", le->line, str);
       //  free(str);
     }
 }
@@ -1067,7 +1067,7 @@ int lex(Lexer *l, Lexeme *le) {
                     lexNextChar(l);
                     if (lexPeekMatch(l, '=')) {
                         lexNextChar(l);
-                        lexemeAssignOp(le,start,2,TK_SHL_EQU,l->lineno);
+                        lexemeAssignOp(le,start,3,TK_SHL_EQU,l->lineno);
                     } else {
                         lexemeAssignOp(le,start,2,TK_SHL,l->lineno);
                     }
@@ -1084,7 +1084,7 @@ int lex(Lexer *l, Lexeme *le) {
                     lexNextChar(l);
                     if (lexPeekMatch(l, '=')) {
                         lexNextChar(l);
-                        lexemeAssignOp(le,start,2,TK_SHR_EQU,l->lineno);
+                        lexemeAssignOp(le,start,3,TK_SHR_EQU,l->lineno);
                     } else {
                         lexemeAssignOp(le,start,2,TK_SHR,l->lineno);
                     }
@@ -1230,17 +1230,20 @@ int lex(Lexer *l, Lexeme *le) {
                 return 1;
             }
 
-            case '~':
-            case '(':
-            case ')':
-            case ',':
-            case ';':
-            case ':':
+            case ':': {
                 if (l->flags & CCF_MULTI_COLON && lexPeekMatch(l,':')) {
                     lexNextChar(l);
                     lexemeAssignOp(le,start,2,TK_DBL_COLON,l->lineno);
                     return 1;
                 }
+                lexemeAssignOp(le,start,1,ch,l->lineno);
+                return 1;
+            }
+            case '~':
+            case '(':
+            case ')':
+            case ',':
+            case ';':
             case '[':
             case ']':
             case '{':

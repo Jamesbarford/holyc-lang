@@ -12,6 +12,7 @@
 #include "list.h"
 #include "prsutil.h"
 #include "prslib.h"
+#include "util.h"
 
 static AstType *parseArrayDimensionsInternal(Cctrl *cc, AstType *base_type);
 Ast *parseSubscriptExpr(Cctrl *cc, Ast *ast);
@@ -42,35 +43,8 @@ AstType *parseReturnAuto(Cctrl *cc, Ast *retval) {
         case AST_FUNPTR_CALL:
         case AST_FUNCALL:
         case AST_FUNPTR:
-        case AST_TYPE_ARRAY:
-        case AST_TYPE_INT:
-        case AST_TYPE_CHAR:
-        case AST_TYPE_FLOAT:
-        case AST_TYPE_POINTER:
-        case AST_TYPE_VOID:
         case AST_LITERAL:
-        case '+':
-        case '-':
-        case '*':
-        case '/':
-        case '<':
-        case '>':
-        case '!':
-        case '&':
-        case '|':
-        case '%':
-        case '$':
-        case '~':
-        case TK_AND_AND:
-        case TK_OR_OR:
-        case TK_EQU_EQU:
-        case TK_NOT_EQU:
-        case TK_LESS_EQU:
-        case TK_GREATER_EQU:
-        case TK_PLUS_PLUS:
-        case TK_MINUS_MINUS:
-        case TK_SHL:
-        case TK_SHR: {
+        case AST_BINOP: {
             return astTypeCopy(retval->type);
         }
         default:
@@ -94,7 +68,9 @@ AstType *parsePointerType(Cctrl *cc, AstType *type) {
 }
 
 AstType *parseFunctionPointerType(Cctrl *cc,
-        char **fnptr_name, int *fnptr_name_len, AstType *rettype)
+                                  char **fnptr_name,
+                                  int *fnptr_name_len,
+                                  AstType *rettype)
 {
     int has_var_args;
     Lexeme *fname;
@@ -109,7 +85,7 @@ AstType *parseFunctionPointerType(Cctrl *cc,
     cctrlTokenExpect(cc,')');
     cctrlTokenExpect(cc,'(');
     Vec *params = parseParams(cc,')',&has_var_args,0);
-    return astMakeFunctionType(rettype,params);
+    return astMakeFunctionType(rettype, params);
 }
 
 Ast *parseFunctionPointer(Cctrl *cc, AstType *rettype) {
@@ -123,11 +99,14 @@ Ast *parseFunctionPointer(Cctrl *cc, AstType *rettype) {
             &fnptr_name_len,
             rettype);
 
+    Vec *params = fnptr_type->params;
+    //fnptr_type = astMakeFunctionType(fnptr_type, params);
+
     ast = astFunctionPtr(
             fnptr_type,
             fnptr_name,
             fnptr_name_len,
-            fnptr_type->params);
+            params);
     return ast;
 }
 
@@ -192,7 +171,7 @@ Vec *parseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
                 if (type->kind == AST_TYPE_ARRAY) {
                     type = astMakePointerType(type->ptr);
                 }
-                var = parseFunctionPointer(cc,type);
+                var = parseFunctionPointer(cc, type);
                 if (!mapAddOrErr(cc->localenv,var->fname->data,var)) {
                     cctrlRaiseException(cc,"variable %s already declared",
                             astLValueToString(var,0));
@@ -328,7 +307,7 @@ static AstType *parseArrayDimensionsInternal(Cctrl *cc, AstType *base_type) {
             if (size->kind == AST_LVAR) {
                 dimension = -3;
                 type->clsname = size->lname;
-            } else if (astIsArithmetic(size->kind,0)) {
+            } else if (astIsArithmetic(size,0)) {
                 /* Relent... otherwise this will get far too complicated for a
                  * feature that likely will never be used */
                 Ast *left = size->left;
@@ -447,7 +426,9 @@ Vec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
     tok = cctrlTokenPeek(cc);
 
     while (tok && !tokenPunctIs(tok, terminator)) {
-        if (params && vecGetAt(params, param_idx)) {
+        /* For a function with varadic arguments this will never be in bounds */
+        int is_in_bounds = params && vecInBounds(params, (unsigned long)param_idx);
+        if (is_in_bounds) {
             param = params->entries[param_idx++];
         }
 
@@ -484,10 +465,10 @@ Vec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
         } else {
             /* Does a distinctly adequate job of type checking function parameters */
             if (param && param->kind != AST_DEFAULT_PARAM) {
-                if ((check = astTypeCheck(param->type,ast,'=')) == NULL) {
+                if ((check = astTypeCheck(param->type,ast,AST_BIN_OP_ASSIGN)) == NULL) {
                     char *expected = astTypeToColorString(param->type);
                     char *got = astTypeToColorString(ast->type);
-                    cctrlWarning(cc,"Incompatible function argument, expected '%s' got '%s' function '%.*s'",
+                    cctrlWarning(cc,"Incompatible function argument, expected '%s' got '%s'in function '%.*s'",
                             expected,got,len,fname);
                 }
             }
@@ -563,8 +544,9 @@ Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
         rettype = maybe_fn->type->rettype;
         if (maybe_fn->flags & AST_FLAG_INLINE && !(cc->flags & CCTRL_TRANSPILING)) {
             if (maybe_fn->kind == AST_ASM_FUNC_BIND || maybe_fn->kind == AST_ASM_FUNCDEF) {
-                Ast *call = astAsmFunctionCall(maybe_fn->type->rettype,
-                        aoStrDup(maybe_fn->asmfname),astVecNew());
+                Ast *call = astAsmFunctionCall(rettype,
+                                               aoStrDup(maybe_fn->asmfname),
+                                               astVecNew());
                 call->flags |= maybe_fn->flags;
                 return call;
             }
@@ -583,7 +565,6 @@ Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
             cctrlTokenRewind(cc);
             peek = cctrlTokenPeek(cc);
         }
-        
         cctrlRaiseException(cc,"Function: %.*s() not defined",len,fname);
     }
 
@@ -828,8 +809,9 @@ Ast *parseSubscriptExpr(Cctrl *cc, Ast *ast) {
                 lexemeTypeToString(tok->tk_type),tok->len,tok->start);
     }
     cctrlTokenExpect(cc, ']');
-    Ast *binop = parseCreateBinaryOp(cc,'+', ast, subscript);
-    return astUnaryOperator(binop->type->ptr, AST_DEREF, binop);
+    Ast *binop = parseCreateBinaryOp(cc, AST_BIN_OP_ADD, ast, subscript);
+    //binop->type = ast->type;
+    return astUnaryOperator(binop->type->ptr, AST_UN_OP_DEREF, binop);
 }
 
 Ast *parseGetClassField(Cctrl *cc, Ast *cls) {
@@ -859,8 +841,8 @@ Ast *parseGetClassField(Cctrl *cc, Ast *cls) {
     }
 
     // XXX: This is hacky and only for recusive data types 
-    if (type->fields == NULL && cls->kind == AST_DEREF) {
-        type = cls->cls->type;
+    if (type->fields == NULL && astIsDeref(cls)) {
+        type = cls->operand->type;
     }
     AstType *field = mapGetLen(type->fields, tok->start, tok->len);
     if (!field) {
@@ -868,31 +850,35 @@ Ast *parseGetClassField(Cctrl *cc, Ast *cls) {
         cctrlRaiseException(cc,"Property: %.*s does not exist on class", 
                 tok->len, tok->start);
     }
+
     AoStr *field_name = aoStrDupRaw(tok->start, tok->len);
-    return astClassRef(field, cls, aoStrMove(field_name));
+    Ast *class_ref = astClassRef(field, cls, aoStrMove(field_name));
+    return class_ref;
 }
 
-static int parseCompoundAssign(Lexeme *tok) {
+static int parseCompoundAssign(Lexeme *tok, AstBinOp *_op) {
     if (tok->tk_type != TK_PUNCT) {
         return 0;
     }
 
     switch (tok->i64) {
-        case TK_ADD_EQU: return '+';
-        case TK_SUB_EQU: return '-';
-        case TK_MUL_EQU: return '*';
-        case TK_DIV_EQU: return '/';
-        case TK_MOD_EQU: return '%';
-        case TK_AND_EQU: return '&';
-        case TK_OR_EQU:  return '|';
-        case TK_XOR_EQU: return '^';
-        case TK_SHL_EQU: return TK_SHL;
-        case TK_SHR_EQU: return TK_SHR;
+        case TK_ADD_EQU: *_op = AST_BIN_OP_ADD; return 1;
+        case TK_SUB_EQU: *_op = AST_BIN_OP_SUB; return 1;
+        case TK_MUL_EQU: *_op = AST_BIN_OP_MUL; return 1;
+        case TK_DIV_EQU: *_op = AST_BIN_OP_DIV; return 1;
+        case TK_MOD_EQU: *_op = AST_BIN_OP_MOD; return 1;
+        case TK_AND_EQU: *_op = AST_BIN_OP_BIT_AND; return 1;
+        case TK_OR_EQU:  *_op = AST_BIN_OP_BIT_OR; return 1;
+        case TK_XOR_EQU: *_op = AST_BIN_OP_BIT_XOR; return 1;
+        case TK_SHL_EQU: *_op = AST_BIN_OP_SHL; return 1;
+        case TK_SHR_EQU: *_op = AST_BIN_OP_SHR; return 1;
         default: return 0;
     }
+
+    return 0;
 }
 
-Ast *parseCreateBinaryOp(Cctrl *cc, long operation, Ast *left, Ast *right) {
+Ast *parseCreateBinaryOp(Cctrl *cc, AstBinOp operation, Ast *left, Ast *right) {
     int is_err = 0;
     Ast *binop = astBinaryOp(operation,left,right,&is_err);
     if (!is_err) {
@@ -912,7 +898,6 @@ Ast *parseCreateBinaryOp(Cctrl *cc, long operation, Ast *left, Ast *right) {
         binop->type = ast_int_type;
     }
     return binop;
-    
 }
 
 Ast *parseExpr(Cctrl *cc, int prec) {
@@ -962,7 +947,12 @@ Ast *parseExpr(Cctrl *cc, int prec) {
                 cctrlRaiseException(cc,"Expected an L-Value however got a %s - `%s`",
                         astKindToHumanReadable(LHS), ast_str);
             }
-            LHS = astUnaryOperator(LHS->type, tok->i64, LHS);
+            AstUnOp op;
+            if (!astUnaryOpFromToken(tok->i64, &op)) {
+                /* This should be impossible to hit as we've already pre-validated */
+                loggerPanic("Invalid token for unary operator; %c\n", (char)tok->i64);
+            }
+            LHS = astUnaryOperator(LHS->type, op, LHS);
             continue;
         }
 
@@ -981,13 +971,14 @@ Ast *parseExpr(Cctrl *cc, int prec) {
                 cctrlRaiseException(cc,"Pointer type expected got `%s` `%s`",
                         astTypeToString(LHS->type), astLValueToString(LHS,0));
             }
-            LHS = astUnaryOperator(LHS->type->ptr, AST_DEREF, LHS);
+            LHS = astUnaryOperator(LHS->type->ptr, AST_UN_OP_DEREF, LHS);
             LHS->deref_symbol = TK_ARROW;
             LHS = parseGetClassField(cc, LHS);
             continue;
         }
 
-        compound_assign = parseCompoundAssign(tok);
+        AstBinOp deconstructed_compound_op;
+        compound_assign = parseCompoundAssign(tok, &deconstructed_compound_op);
         if (tokenPunctIs(tok, '=') || compound_assign) {
             if (!assertLValue(LHS)) {
                 char *ast_str = astLValueToString(LHS,0);
@@ -1018,21 +1009,30 @@ Ast *parseExpr(Cctrl *cc, int prec) {
                                  peek->start);
         }
 
+        /* This de-sugars the compound assign which I think is okay */
         if (compound_assign) {
             AstType *ok = astTypeCheck(LHS->type,RHS,compound_assign);
             if (!ok) {
-                typeCheckWarn(cc,compound_assign,LHS,RHS);
+                typeCheckWarn(cc,'=',LHS,RHS);
             }
-            LHS = parseCreateBinaryOp(cc,'=', LHS, 
-                    parseCreateBinaryOp(cc,compound_assign, LHS, RHS));
+            LHS = parseCreateBinaryOp(cc,AST_BIN_OP_ASSIGN, LHS,
+                    parseCreateBinaryOp(cc, deconstructed_compound_op, LHS, RHS));
         } else {
             if (tok->i64 == '=') {
-                AstType *ok = astTypeCheck(LHS->type,RHS,'=');
+                AstType *ok = astTypeCheck(LHS->type,RHS,AST_BIN_OP_ASSIGN);
                 if (!ok) {
                     typeCheckWarn(cc,'=',LHS,RHS);
                 }
             }
-            LHS = parseCreateBinaryOp(cc,tok->i64,LHS,RHS);
+            AstBinOp binop;
+            if (!astBinOpFromToken(tok->i64,&binop)) {
+                cctrlRaiseException(cc,"Invalid binary operator %c => %d", (char)tok->i64, tok->i64);
+            }
+            if (!LHS) {
+                lexemePrint(tok);
+            }
+
+            LHS = parseCreateBinaryOp(cc,binop,LHS,RHS);
         }
     }
 }
@@ -1137,7 +1137,7 @@ Ast *parsePostFixExpr(Cctrl *cc) {
                                         type_str, 
                                         var_str);
             }
-            ast = astUnaryOperator(ast->type->ptr,AST_DEREF,ast);
+            ast = astUnaryOperator(ast->type->ptr,AST_UN_OP_DEREF,ast);
             ast->deref_symbol = TK_ARROW;
             ast = parseGetClassField(cc,ast);
             continue;
@@ -1151,9 +1151,9 @@ Ast *parsePostFixExpr(Cctrl *cc) {
                         astKindToHumanReadable(ast), ast_str);
             }
             if (tok->i64 == TK_PLUS_PLUS) {
-                return astUnaryOperator(ast->type,TK_PLUS_PLUS,ast);
+                return astUnaryOperator(ast->type,AST_UN_OP_POST_INC,ast);
             } else {
-                return astUnaryOperator(ast->type,TK_MINUS_MINUS,ast);
+                return astUnaryOperator(ast->type,AST_UN_OP_POST_DEC,ast);
             }
         }
 
@@ -1204,19 +1204,16 @@ Ast *parseUnaryExpr(Cctrl *cc) {
     }
 
     if (tok->tk_type == TK_PUNCT) {
-        long unary_op = -1;
-        switch (tok->i64) {
-            case '&': { unary_op = AST_ADDR; break; }
-            case '*': { unary_op = AST_DEREF; break; }
-            case '~': { unary_op = '~'; break; }
-            case '!': { unary_op = '!'; break; }
-            case '-': { unary_op = '-'; break; }
-            case TK_PLUS_PLUS: { unary_op = TK_PRE_PLUS_PLUS; break; }
-            case TK_MINUS_MINUS: { unary_op = TK_PRE_MINUS_MINUS; break; }
-            default: {
-                cctrlTokenRewind(cc);
-                return parsePostFixExpr(cc);
-            }
+        AstUnOp unary_op;
+        if (!astUnaryOpFromToken(tok->i64, &unary_op)) {
+            cctrlTokenRewind(cc);
+            return parsePostFixExpr(cc);
+        }
+
+        if (unary_op == AST_UN_OP_POST_INC) {
+            unary_op = AST_UN_OP_PRE_INC;
+        } else if (unary_op == AST_UN_OP_POST_DEC) {
+            unary_op = AST_UN_OP_PRE_DEC;
         }
 
         Lexeme *peek = cctrlTokenPeekBy(cc,1);
@@ -1225,27 +1222,38 @@ Ast *parseUnaryExpr(Cctrl *cc) {
 
         /* XXX: This feels wrong but allows things like:
          * !arr[0][1][2] to work properly */
-        if (tokenPunctIs(peek, '[') && !(unary_op == AST_ADDR || unary_op == AST_DEREF)) {
+        if (tokenPunctIs(peek, '[') && !(unary_op == AST_UN_OP_ADDR_OF ||
+                                         unary_op == AST_UN_OP_DEREF)) {
             operand = parseExpr(cc,16);
         } else {
             operand = parseUnaryExpr(cc);
             peek = cctrlTokenPeek(cc);
-            if (tokenPunctIs(peek, '[') && (operand->kind == AST_CLASS_REF || operand->type->kind == AST_TYPE_ARRAY)) {
+            if (tokenPunctIs(peek, '[') && (operand->kind == AST_CLASS_REF ||
+                                            operand->type->kind == AST_TYPE_ARRAY)) {
                 cctrlTokenGet(cc);
                 operand = parseSubscriptExpr(cc, operand);
             }
         }
 
-
-        if (unary_op == AST_ADDR && parseIsFunction(operand)) {
-            return operand;
-        }
-
         switch (unary_op) {
-            case AST_ADDR:  type = astMakePointerType(operand->type); break;
-            case AST_DEREF: type = operand->type->ptr; break;
-            case '~':       type = ast_int_type; break;
-            default:        type = operand->type; break;
+            case AST_UN_OP_ADDR_OF: {
+                if (parseIsFunction(operand)) {
+                    /* TODO;
+                     * Making this a pointer type effects the return type of 
+                     * the function. It's hard in this parser to say we want
+                     * a pointer to a function not mutate the return value to 
+                     * a pointer. This does work however and the "hack" does not
+                     * leak. So perhaps we can delete this comment at a later
+                     * date */
+                    type = operand->type;
+                } else {
+                    type = astMakePointerType(operand->type);
+                }
+                break;
+            }
+            case AST_UN_OP_DEREF:   type = operand->type->ptr; break;
+            case AST_UN_OP_BIT_NOT: type = ast_int_type; break;
+            default:                type = operand->type; break;
         }
 
         return astUnaryOperator(type, unary_op, operand);
