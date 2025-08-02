@@ -85,7 +85,7 @@ AstType *parseFunctionPointerType(Cctrl *cc,
     cctrlTokenExpect(cc,')');
     cctrlTokenExpect(cc,'(');
     Vec *params = parseParams(cc,')',&has_var_args,0);
-    return astMakeFunctionType(rettype,params);
+    return astMakeFunctionType(rettype, params);
 }
 
 Ast *parseFunctionPointer(Cctrl *cc, AstType *rettype) {
@@ -99,15 +99,14 @@ Ast *parseFunctionPointer(Cctrl *cc, AstType *rettype) {
             &fnptr_name_len,
             rettype);
 
-    //Ast *func_def = mapGetLen(cc->global_env, fnptr_name, fnptr_name_len);
-    //if (func_def) {
-        // fnptr_type = astMakePointerType(fnptr_type);
-    //}
+    Vec *params = fnptr_type->params;
+    fnptr_type = astMakePointerType(fnptr_type);
+
     ast = astFunctionPtr(
             fnptr_type,
             fnptr_name,
             fnptr_name_len,
-            fnptr_type->params);
+            params);
     return ast;
 }
 
