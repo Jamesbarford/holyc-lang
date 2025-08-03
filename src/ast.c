@@ -115,7 +115,11 @@ AstType *ast_auto_type = &(AstType){.kind = AST_TYPE_VOID, .size = 0, .ptr = NUL
 
 Ast *ast_loop_sentinal = &(Ast){.kind = AST_GOTO, .type=NULL,
     .slabel = &(AoStr){.data="loop_sentinal", .len=13, .capacity = 0}};
-Ast *placeholder_arg = &(Ast){ .kind = AST_PLACEHOLDER};
+
+Ast *placeholder_arg = &(Ast) {
+    .kind = AST_PLACEHOLDER,
+    .lname =  &(AoStr){.data="sentinal", .len=8, .capacity = 0}
+};
 
 Ast *ast_forever_sentinal = &(Ast){ .kind = AST_LITERAL,
   .type = &(AstType){.kind = AST_TYPE_INT, .size = 8, .ptr = NULL,.issigned=1},
@@ -134,6 +138,15 @@ AstType *astTypeNew(void) {
     AstType *ast_type = astTypeAlloc();
     memset(ast_type,0,sizeof(AstType));
     return ast_type;
+}
+
+Ast *astMakePlaceHolder(void) {
+    Ast *ast = astAlloc();
+    AstType *type = astTypeAlloc();
+    memcpy(ast,placeholder_arg,sizeof(Ast));
+    ast->type = type;
+    memcpy(ast->type,ast_void_type,sizeof(AstType));
+    return ast;
 }
 
 Ast *astMakeForeverSentinal(void) {
@@ -291,11 +304,17 @@ char *astAnnonymousLabel(void) {
     return mprintf("cls_label %d",tmp_anonymous_label++);
 }
 
+/* For assigning a unique identifier to variables */
+static u32 lvar_unique_id = 1;
+void astResetLVarId(void) {
+    lvar_unique_id = 1;
+}
 Ast *astLVar(AstType *type, char *name, int len) {
     Ast *ast = astNew();
     ast->kind = AST_LVAR;
     ast->type = type;
     ast->lname = aoStrDupRaw(name, len);
+    ast->lvar_id = lvar_unique_id++;
     return ast;
 }
 
@@ -1268,6 +1287,7 @@ static char *astParamsToString(Vec *params) {
         for (u64 i = 0; i < params->size; ++i) {
             Ast *param = params->entries[i];
             int is_last = i+1 == params->size;
+            if (!param) break;
             if (param->kind == AST_VAR_ARGS) {
                 if (!is_last) aoStrCatPrintf(str,"..., ");
                 else          aoStrCatPrintf(str,"..."); 
@@ -1477,6 +1497,8 @@ void _astToString(AoStr *str, Ast *ast, int depth) {
 
             for (u64 i = 0; i < ast->args->size; ++i) {
                 Ast *tmp = (Ast *)ast->args->entries[i];
+                astKindPrint(tmp->kind);
+                if (!tmp) break;
                 aoStrCatRepeat(str, "  ", depth);
                 aoStrCatPrintf(str, "<function_arg>\n");
                 if (tmp->type->kind == AST_TYPE_FUNC) {
@@ -1833,9 +1855,13 @@ void _astToString(AoStr *str, Ast *ast, int depth) {
             astUnaryOpToString(str,un_op_str,ast,depth);
             break;
         }
+
+        case AST_PLACEHOLDER: {
+            aoStrCatPrintf(str, "<placeholder>\n");
+            break;
+        }
         
         case AST_SIZEOF:
-        case AST_PLACEHOLDER:
         case AST_ASM_FUNCDEF:
             loggerWarning("Unhandled ast kind: %s\n",
                     astKindToString(ast->kind));
