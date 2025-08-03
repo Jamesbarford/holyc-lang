@@ -1497,7 +1497,6 @@ void _astToString(AoStr *str, Ast *ast, int depth) {
 
             for (u64 i = 0; i < ast->args->size; ++i) {
                 Ast *tmp = (Ast *)ast->args->entries[i];
-                astKindPrint(tmp->kind);
                 if (!tmp) break;
                 aoStrCatRepeat(str, "  ", depth);
                 aoStrCatPrintf(str, "<function_arg>\n");

@@ -14,6 +14,7 @@
 #include "cli.h"
 #include "compile.h"
 #include "config.h"
+#include "ir.h"
 #include "lexer.h"
 #include "list.h"
 #include "memory.h"
@@ -327,6 +328,11 @@ int main(int argc, char **argv) {
 
     if (args.print_ast) {
         compilePrintAst(cc);
+        goto success;
+    }
+
+    if (args.dump_ir) {
+        irDump(cc);
         goto success;
     }
 
