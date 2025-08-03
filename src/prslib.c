@@ -433,13 +433,19 @@ Vec *parseArgv(Cctrl *cc, Ast *decl, s64 terminator, char *fname, int len) {
         }
 
         if (tokenPunctIs(tok, ',')) {
+            ast = NULL;
             if (param && param->kind == AST_DEFAULT_PARAM) {
                 ast = param->declinit;
-                vecPush(argv_vec, ast);
-            } else {
-                vecPush(argv_vec, NULL);
+            } else if (param && param->kind == AST_FUNPTR) {
+                if (param->default_fn != NULL) {
+                    ast = param->default_fn->declinit;
+                }
+            }
+            if (ast == NULL) {
+                ast = astMakePlaceHolder();
             }
 
+            vecPush(argv_vec, ast);
             cctrlTokenGet(cc);
             tok = cctrlTokenPeek(cc);
             continue;

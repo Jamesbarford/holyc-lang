@@ -216,6 +216,7 @@ typedef struct Ast {
 
         /* Local variable */
         struct {
+            u32 lvar_id;
             AoStr *lname;
         };
 
@@ -497,7 +498,9 @@ Ast *astGlobalCmdArgs(void);
 AoStr *astNormaliseFunctionName(char *fname);
 Ast *astMakeForeverSentinal(void);
 Ast *astMakeLoopSentinal(void);
+Ast *astMakePlaceHolder(void);
 char *astAnnonymousLabel(void);
+void astResetLVarId(void);
 
 /* Returns `1` on successful conversion and `0` on failure */
 int astUnaryOpFromToken(s64 op, AstUnOp *_result);

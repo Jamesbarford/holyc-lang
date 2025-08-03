@@ -1870,13 +1870,13 @@ void asmHandleSwitch(Cctrl *cc, AoStr *buf, Ast *ast) {
 
         /* pad out the table */
         for (; i < case_begin_normalised; ++i) {
-            aoStrCatPrintf(buf, ".s64 %s-%s\n\t",
+            aoStrCatPrintf(buf, ".long %s-%s\n\t",
                     end_label->data,
                     jump_table_start->data);
         }
 
         for (int j = case_begin_normalised; j <= case_normalised_range_end; ++j) {
-            aoStrCatPrintf(buf, ".s64 %s-%s\n\t",
+            aoStrCatPrintf(buf, ".long %s-%s\n\t",
                     _case->case_label->data,
                     jump_table_start->data);
         }
@@ -1884,7 +1884,7 @@ void asmHandleSwitch(Cctrl *cc, AoStr *buf, Ast *ast) {
         i += diff;
         cur_case++;
     }
-    aoStrCatPrintf(buf,".s64 %s-%s\n\t",
+    aoStrCatPrintf(buf,".long %s-%s\n\t",
             end_label->data,
             jump_table_start->data);
 
@@ -2212,7 +2212,7 @@ void asmDataInternal(AoStr *buf, Ast *data) {
 
     switch (data->type->size) {
         case 1: aoStrCatPrintf(buf, ".byte %d\n\t", data->i64); break;
-        case 4: aoStrCatPrintf(buf, ".s64 %d\n\t", data->i64); break;
+        case 4: aoStrCatPrintf(buf, ".long %d\n\t", data->i64); break;
         case 8: aoStrCatPrintf(buf, ".quad %d\n\t", data->i64); break;
         default:
             loggerPanic("Cannot create size information for: %s\n",

@@ -1682,6 +1682,9 @@ Ast *parseFunctionOrDef(Cctrl *cc, AstType *rettype, char *fname, int len, int i
     cc->localenv = cctrlCreateAstMap(cc->localenv);
     cc->tmp_locals = listNew();
 
+    /* Reset the unique id counter otherwise we get ridiculous numbers */
+    astResetLVarId();
+
     Vec *params = parseParams(cc,')',&has_var_args,1);
     Lexeme *tok = cctrlTokenGet(cc);
     if (tokenPunctIs(tok, '{')) {
