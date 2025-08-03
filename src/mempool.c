@@ -61,7 +61,7 @@ char *memPoolToString(MemPool *pool) {
                            pool->segment_capacity,
                            memPoolErrorToString(pool));
 
-    for (unsigned int i = 0; i < pool->segment_count; ++i) {
+    for (u32 i = 0; i < pool->segment_count; ++i) {
         MemSegment *segment = pool->segments[i];
         MemChunk *chunk = segment->list;
         aoStrCatPrintf(str,
@@ -101,13 +101,13 @@ char *memPoolToString(MemPool *pool) {
 }
 
 /* Align to 8 bytes */
-static unsigned int _memAlign(unsigned int size) {
+static u32 _memAlign(u32 size) {
     static const int alignment = 8;
     return (size + (alignment - 1)) & ~(alignment - 1);
 }
 
-static MemSegment *memSegmentAlloc(unsigned int capacity,
-                                   unsigned int segment_id)
+static MemSegment *memSegmentAlloc(u32 capacity,
+                                   u32 segment_id)
 {
     MemSegment *segment = (MemSegment *)malloc(sizeof(MemSegment));
     segment->allocated = 0;
@@ -122,8 +122,8 @@ static MemSegment *memSegmentAlloc(unsigned int capacity,
     return segment;
 }
 
-void memPoolInit(MemPool *pool, unsigned int bytes) {
-    const unsigned int segments_array_capacity = 4;
+void memPoolInit(MemPool *pool, u32 bytes) {
+    const u32 segments_array_capacity = 4;
 
     MemSegment **segments_array = (MemSegment **)malloc(sizeof(MemSegment *) * segments_array_capacity);
     if (!segments_array) {
@@ -153,7 +153,7 @@ void memPoolInit(MemPool *pool, unsigned int bytes) {
 /* How many bytes should initially be in the pool, note the pool will not 
  * be able to allocate anything larger than 'bytes' size. Thus allocating 
  * something like a dynamically resizable array from this pool makes no sense */
-MemPool *memPoolNew(unsigned int bytes) {
+MemPool *memPoolNew(u32 bytes) {
     MemPool *pool = (MemPool *)malloc(sizeof(MemPool));
     memPoolInit(pool,bytes);
     return pool;
@@ -170,16 +170,16 @@ void memPoolSetDeallocate(MemPool *pool, memPoolDeallocate *deallocate) {
  * only be called if we are sure that we have enough memory in the given 
  * `MemChunk`. This can fail if there is not enough space to allocate 
  * the `alloc_size + sizeof(MemChunk)` */
-static void memPoolSplitBlock(MemChunk *chunk, unsigned int alloc_size) {
-    unsigned int total_needed = alloc_size + sizeof(MemChunk);
+static void memPoolSplitBlock(MemChunk *chunk, u32 alloc_size) {
+    u32 total_needed = alloc_size + sizeof(MemChunk);
     if (chunk->size < total_needed + MIN_SPLIT_SIZE) {
         return;
     }
 
     /* The remaining size of the block */
-    unsigned int new_chunk_size = chunk->size - total_needed;
+    u32 new_chunk_size = chunk->size - total_needed;
 
-    MemChunk *new_chunk = (MemChunk*)((unsigned char *)chunk + total_needed);
+    MemChunk *new_chunk = (MemChunk*)((u8 *)chunk + total_needed);
     new_chunk->size = new_chunk_size;
     new_chunk->free = 1;
     new_chunk->next = chunk->next;
@@ -192,10 +192,10 @@ static void memPoolSplitBlock(MemChunk *chunk, unsigned int alloc_size) {
 /* Find a segment that has enough memory left in it to allocate from. This 
  * highlights why segments should be fairly big - it allows for less scanning 
  * to find a suitable segment. */
-static MemSegment *memPoolGetSegment(MemPool *pool, unsigned int alloc_size) {
-    unsigned int total_size = alloc_size + sizeof(MemChunk);
+static MemSegment *memPoolGetSegment(MemPool *pool, u32 alloc_size) {
+    u32 total_size = alloc_size + sizeof(MemChunk);
 
-    for (unsigned int i = 0; i < pool->segment_count; ++i) {
+    for (u32 i = 0; i < pool->segment_count; ++i) {
         /* If there is enough space use this segment and increment how many 
          * bytes have been allocated from the segment. */
         MemSegment *segment = pool->segments[i];
@@ -204,7 +204,7 @@ static MemSegment *memPoolGetSegment(MemPool *pool, unsigned int alloc_size) {
         }
     }
 
-    unsigned int new_segment_id = pool->segment_count;
+    u32 new_segment_id = pool->segment_count;
     MemSegment *segment = memSegmentAlloc(pool->segment_capacity,
                                           new_segment_id);
     if (segment == NULL) {
@@ -214,7 +214,7 @@ static MemSegment *memPoolGetSegment(MemPool *pool, unsigned int alloc_size) {
 
     if (pool->segment_count + 1 >= pool->segments_array_capacity) {
         /* Expand the array */
-        unsigned int new_capacity = pool->segments_array_capacity * 2;
+        u32 new_capacity = pool->segments_array_capacity * 2;
 
         MemSegment **new_segments = (MemSegment **)malloc(sizeof(MemSegment *)*(new_capacity));
         if (new_segments == NULL) {
@@ -225,7 +225,7 @@ static MemSegment *memPoolGetSegment(MemPool *pool, unsigned int alloc_size) {
         }
 
         /* Copy over the old segments */
-        for (unsigned int i = 0; i < new_segment_id; ++i) {
+        for (u32 i = 0; i < new_segment_id; ++i) {
             new_segments[i] = pool->segments[i];
         }
 
@@ -242,7 +242,7 @@ error:
 }
 
 /* Allocate some memory from the pool */
-void *memPoolAlloc(MemPool *pool, unsigned int size) {
+void *memPoolAlloc(MemPool *pool, u32 size) {
     /* Gotos make controlling the lock easier by only needing to keep track 
      * of them in one place */
     pthread_mutex_lock(&pool->mutex);
@@ -274,7 +274,7 @@ void *memPoolAlloc(MemPool *pool, unsigned int size) {
             cur->segment_id = segment->id;
             cur->free = 0;
             segment->allocated += cur->size;
-            ptr = (void *)((unsigned char *)cur + sizeof(MemChunk));
+            ptr = (void *)((u8 *)cur + sizeof(MemChunk));
             break;
         }
         cur = cur->next;
@@ -289,10 +289,10 @@ error:
 }
 
 /* Allocate a block or panic */
-void *memPoolTryAlloc(MemPool *pool, unsigned int size) {
+void *memPoolTryAlloc(MemPool *pool, u32 size) {
     void *ptr = memPoolAlloc(pool, size);
     if (ptr == NULL) {
-        unsigned int max_allocation_size = pool->segment_capacity - sizeof(MemChunk);
+        u32 max_allocation_size = pool->segment_capacity - sizeof(MemChunk);
         loggerPanic("Failed to allocate %u bytes, max allocation size = %u - %s\n",
                 size, max_allocation_size, memPoolErrorToString(pool));
     }
@@ -302,8 +302,8 @@ void *memPoolTryAlloc(MemPool *pool, unsigned int size) {
 static void memSegmentMerge(MemSegment *segment) {
     MemChunk *cur = segment->list;
     while (cur && cur->next) {
-        unsigned char *end = (unsigned char*)cur + sizeof(MemChunk) + cur->size;
-        if (cur->free && cur->next->free && (unsigned char *)cur->next == end) {
+        u8 *end = (u8 *)cur + sizeof(MemChunk) + cur->size;
+        if (cur->free && cur->next->free && (u8 *)cur->next == end) {
             cur->size += sizeof(MemChunk) + cur->next->size;
             cur->next = cur->next->next;
         } else {
@@ -321,7 +321,7 @@ void memPoolFree(MemPool *pool, void *ptr) {
             pool->deallocate((void *)pool, ptr);
         }
 
-        MemChunk *chunk = (MemChunk*)((unsigned char *)ptr - sizeof(MemChunk));
+        MemChunk *chunk = (MemChunk*)((u8 *)ptr - sizeof(MemChunk));
         MemSegment *segment = pool->segments[chunk->segment_id];
 
         chunk->free = 1;
@@ -347,7 +347,7 @@ void memPoolRelease(MemPool *pool, char free_pool) {
             }
         }
 
-        for (unsigned int i = 0; i < pool->segment_count; ++i) {
+        for (u32 i = 0; i < pool->segment_count; ++i) {
             MemSegment *segment = pool->segments[i];
             free(segment->buffer);
             free(segment);
@@ -387,7 +387,7 @@ void *memPoolNext(MemPoolIterator *it) {
         it->chunk = it->pool->segments[it->segment_id]->list;
     }
 
-    void *ptr = (void *)((unsigned char *)it->chunk + sizeof(MemChunk));
+    void *ptr = (void *)((u8 *)it->chunk + sizeof(MemChunk));
     it->chunk = it->chunk->next;
     return ptr;
 }

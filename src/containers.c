@@ -9,7 +9,7 @@
 #include "util.h"
 
 static void vecIntValueStringify(AoStr *buf, void *ptr) {
-    long value = (long)ptr;
+    s64 value = (long)ptr;
     aoStrCatFmt(buf, "%I", value);
 }
 
@@ -30,7 +30,7 @@ VecType vec_long_type = {
 };
 
 static void vecUnsignedIntValueStringify(AoStr *buf, void *ptr) {
-    unsigned long value = (unsigned long)ptr;
+    u64 value = (unsigned long)ptr;
     aoStrCatFmt(buf, "%U", value);
 }
 
@@ -57,7 +57,7 @@ Vec *vecNew(VecType *type) {
     return vec;
 }
 
-void vecReserve(Vec *vec, unsigned long capacity) {
+void vecReserve(Vec *vec, u64 capacity) {
     if (capacity > vec->capacity) {
         void **new_entries = malloc(sizeof(void *) * capacity);
         assert(new_entries != NULL);
@@ -91,7 +91,7 @@ void vecPush(Vec *vec, void *value) {
     vec->entries[vec->size++] = value;
 }
 
-void vecPushInt(Vec *vec, unsigned long value) {
+void vecPushInt(Vec *vec, u64 value) {
     if (vec->size + 1 >= vec->capacity) {
         vecReserve(vec, vec->capacity * 2);
     }
@@ -107,13 +107,13 @@ void *vecPop(Vec *vec, int *_ok) {
     return value;
 }
 
-int vecRemoveAt(Vec *vec, unsigned long idx) {
+int vecRemoveAt(Vec *vec, u64 idx) {
     if (idx >= vec->size) return 0;
 
     if (vec->type->release) {
         vec->type->release(vec->entries[idx]);
     }
-    unsigned long elements_to_move = vec->size - idx - 1;
+    u64 elements_to_move = vec->size - idx - 1;
     if (elements_to_move > 0) {
         memmove(&vec->entries[idx],
                 &vec->entries[idx + 1],
@@ -124,9 +124,9 @@ int vecRemoveAt(Vec *vec, unsigned long idx) {
 }
 
 int vecRemove(Vec *vec, void *value) {
-    unsigned long idx = 0;
+    u64 idx = 0;
     int found = 0;
-    for (unsigned long i = 0; i < vec->size; ++i) {
+    for (u64 i = 0; i < vec->size; ++i) {
         if (vec->type->match(vec->entries[i], value)) {
             idx = i;
             found = 1;
@@ -138,7 +138,7 @@ int vecRemove(Vec *vec, void *value) {
         if (vec->type->release) {
             vec->type->release(vec->entries[idx]);
         }
-        unsigned long elements_to_move = vec->size - idx - 1;
+        u64 elements_to_move = vec->size - idx - 1;
         if (elements_to_move > 0) {
             memmove(&vec->entries[idx],
                     &vec->entries[idx + 1],
@@ -150,7 +150,7 @@ int vecRemove(Vec *vec, void *value) {
     return found;
 }
 
-void vecInsertAt(Vec *vec, void *value, unsigned long idx) {
+void vecInsertAt(Vec *vec, void *value, u64 idx) {
     if (vec->size + 1 >= vec->capacity) {
         vecReserve(vec, vec->capacity * 2);
     }
@@ -159,7 +159,7 @@ void vecInsertAt(Vec *vec, void *value, unsigned long idx) {
         loggerWarning("Vec - idx %lu is out of range\n", idx);
     }
 #endif
-    unsigned long elements_to_move = vec->size - idx;
+    u64 elements_to_move = vec->size - idx;
     memmove(&vec->entries[idx + 1],
             &vec->entries[idx],
             elements_to_move * sizeof(void *));
@@ -167,7 +167,7 @@ void vecInsertAt(Vec *vec, void *value, unsigned long idx) {
     vec->size++;
 }
 
-void *vecGetAt(Vec *vec, unsigned long idx) {
+void *vecGetAt(Vec *vec, u64 idx) {
     /* Bounds check */
 #ifdef DEBUG
     if (idx >= vec->size) {
@@ -179,7 +179,7 @@ void *vecGetAt(Vec *vec, unsigned long idx) {
 }
 
 int vecHas(Vec *vec, void *needle) {
-    for (unsigned long i = 0; i < vec->size; ++i) {
+    for (u64 i = 0; i < vec->size; ++i) {
         if (vec->type->match(vec->entries[i], needle)) {
             return 1;
         }
@@ -191,7 +191,7 @@ void vecClear(Vec *vec) {
     if (vec->size != 0) {
         int (*free_value)(void *) = vec->type->release;
         if (free_value) {
-            for (unsigned long i = 0; i < vec->size; ++i) {
+            for (u64 i = 0; i < vec->size; ++i) {
                 free_value(vec->entries[i]);
             }
         }
@@ -221,7 +221,7 @@ AoStr *vecEntriesToString(Vec *vec) {
         return buf;
     }
     aoStrCatLen(buf, str_lit("["));
-    for (unsigned long i = 0; i < vec->size; ++i) {
+    for (u64 i = 0; i < vec->size; ++i) {
         vec->type->stringify(buf, vec->entries[i]);
         if (i + 1 != vec->size) {
             aoStrCatLen(buf, str_lit(", "));
@@ -271,7 +271,7 @@ void setPrintStats(Set *set) {
     aoStrRelease(stats);
 }
 
-Set *setNew(unsigned long capacity, SetType *type) {
+Set *setNew(u64 capacity, SetType *type) {
     Set *set = (Set *)malloc(sizeof(Set));
     set->size = 0;
     set->capacity = capacity;
@@ -285,9 +285,9 @@ Set *setNew(unsigned long capacity, SetType *type) {
     return set;
 }
 
-static unsigned long setGetNextIdx(Set *set, void *key, int *_is_free) { 
-    unsigned long hash = set->type->hash(key);
-    unsigned long idx = hash & set->mask;
+static u64 setGetNextIdx(Set *set, void *key, int *_is_free) { 
+    u64 hash = set->type->hash(key);
+    u64 idx = hash & set->mask;
     SetNode *cur = &set->entries[idx];
 
     while (cur->occupied) {
@@ -305,13 +305,13 @@ static unsigned long setGetNextIdx(Set *set, void *key, int *_is_free) {
 /* We need this function as often we are storing a key which may be a pointer 
  * to a larger string and we want to be able to use the length of the part of
  * the string we are interested in. */
-static unsigned long setGetCStringNextIdx(Set *set,
+static u64 setGetCStringNextIdx(Set *set,
                                           char *key,
-                                          long key_len,
+                                          s64 key_len,
                                           int *_is_free)
 {
-    unsigned long hash = mapCStringHashLen(key, key_len);
-    unsigned long idx = hash & set->mask;
+    u64 hash = mapCStringHashLen(key, key_len);
+    u64 idx = hash & set->mask;
     SetNode *cur = &set->entries[idx];
 
     while (cur->occupied) {
@@ -327,9 +327,9 @@ static unsigned long setGetCStringNextIdx(Set *set,
     return idx;
 }
 
-static unsigned long setGetIdx(Set *set, void *key, int *_ok) {
-    unsigned long hash = set->type->hash(key);
-    unsigned long idx = hash & set->mask;
+static u64 setGetIdx(Set *set, void *key, int *_ok) {
+    u64 hash = set->type->hash(key);
+    u64 idx = hash & set->mask;
     SetNode *cur = &set->entries[idx];
 
     while (cur->occupied) { 
@@ -344,9 +344,9 @@ static unsigned long setGetIdx(Set *set, void *key, int *_ok) {
     return 0;
 }
 
-static unsigned long setGetCStringIdx(Set *set, char *key, long len, int *_ok) {
-    unsigned long hash = cstringMurmur(key, len);
-    unsigned long idx = hash & set->mask;
+static u64 setGetCStringIdx(Set *set, char *key, s64 len, int *_ok) {
+    u64 hash = cstringMurmur(key, len);
+    u64 idx = hash & set->mask;
     SetNode *cur = &set->entries[idx];
 
     while (cur->occupied) {
@@ -365,9 +365,9 @@ static int setResize(Set *set) {
     SetNode *old_entries = set->entries;
     Vec *old_index_entries = set->indexes;
 
-    unsigned long new_capacity = set->capacity << 1;
-    unsigned long new_mask = new_capacity - 1;
-    unsigned long indexes_size = set->indexes->size;
+    u64 new_capacity = set->capacity << 1;
+    u64 new_mask = new_capacity - 1;
+    u64 indexes_size = set->indexes->size;
 
     int is_cstring_key = !strncmp(set->type->type, str_lit("char *"));
 
@@ -388,13 +388,13 @@ static int setResize(Set *set) {
     set->entries = new_entries;
     set->capacity = new_capacity;
 
-    unsigned long new_size = 0;
+    u64 new_size = 0;
     int is_free;
-    for (unsigned long i = 0; i < indexes_size; ++i) {
-        unsigned long idx = (unsigned long)vecGetAt(old_index_entries, i);
+    for (u64 i = 0; i < indexes_size; ++i) {
+        u64 idx = (unsigned long)vecGetAt(old_index_entries, i);
         SetNode *old = &old_entries[idx];
         if (old->occupied) {
-            unsigned long new_idx = 0;
+            u64 new_idx = 0;
             if (is_cstring_key) {
                 new_idx = setGetCStringNextIdx(set,
                                            old->key,
@@ -433,7 +433,7 @@ int setAdd(Set *set, void *key) {
     }
 
     int is_free = 0;
-    unsigned long idx = setGetNextIdx(set, key, &is_free);
+    u64 idx = setGetNextIdx(set, key, &is_free);
 
     /* Add only if not in the set */
     if (is_free) {
@@ -451,7 +451,7 @@ int setAdd(Set *set, void *key) {
 
 void *setRemove(Set *set, void *key) {
     int ok = 0;
-    unsigned long idx = setGetIdx(set, key, &ok);
+    u64 idx = setGetIdx(set, key, &ok);
     if (ok) {
         /* We do nothing with the indexes, this does mean if there are multiple 
          * deletes the indexes vector would grow indefinitely */
@@ -472,17 +472,17 @@ int setHas(Set *set, void *key) {
     return ok == 1;
 }
 
-int setHasLen(Set *set, char *key, long len) {
+int setHasLen(Set *set, char *key, s64 len) {
     int ok = 0;
     setGetCStringIdx(set, key, len, &ok);
     return ok == 1;
 }
 
-void *setGetAt(Set *set, long index) {
+void *setGetAt(Set *set, s64 index) {
     if (index < 0 || (unsigned long)index >= set->indexes->size)
         return NULL;
         
-    long idx = (long)vecGetAt(set->indexes, index);
+    s64 idx = (long)vecGetAt(set->indexes, index);
     SetNode *node = &set->entries[idx];
     return node->key;
 }
@@ -522,7 +522,7 @@ SetIter *setIterNew(Set *set) {
 
 void *setNext(SetIter *it) {
     while (it->vecidx < it->set->indexes->size) {
-        long idx = (long)vecGetAt(it->set->indexes, it->vecidx);
+        s64 idx = (long)vecGetAt(it->set->indexes, it->vecidx);
         SetNode *node = &it->set->entries[idx];
         it->vecidx++;
         if (node->occupied) {
@@ -536,7 +536,7 @@ void *setNext(SetIter *it) {
 
 int setIterNext(SetIter *it) {
     while (it->vecidx < it->set->indexes->size) {
-        long idx = (long)vecGetAt(it->set->indexes, it->vecidx);
+        s64 idx = (long)vecGetAt(it->set->indexes, it->vecidx);
         SetNode *node = &it->set->entries[idx];
         it->vecidx++;
         if (node->occupied) {
@@ -711,7 +711,7 @@ static AoStr *mapTypeToString(Map *map) {
     }
 }
 
-unsigned long roundUpToNextPowerOf2(unsigned long v) {
+u64 roundUpToNextPowerOf2(u64 v) {
     v--;
     v |= v >> 1;
     v |= v >> 2;
@@ -723,7 +723,7 @@ unsigned long roundUpToNextPowerOf2(unsigned long v) {
     return v;
 }
 
-Map *mapNew(unsigned long capacity, MapType *type) {
+Map *mapNew(u64 capacity, MapType *type) {
     Map *map = (Map *)malloc(sizeof(Map));
     capacity = roundUpToNextPowerOf2(capacity);
     map->capacity = capacity;
@@ -741,15 +741,15 @@ Map *mapNew(unsigned long capacity, MapType *type) {
     return map;
 }
 
-Map *mapNewWithParent(Map *parent, unsigned long capacity, MapType *type) {
+Map *mapNewWithParent(Map *parent, u64 capacity, MapType *type) {
     Map *map = mapNew(capacity, type);
     map->parent = parent;
     return map;
 }
 
-static unsigned long mapGetNextIdx(Map *map, void *key, int *_is_free) {
-    unsigned long hash = map->type->hash(key);
-    unsigned long idx = hash & map->mask;
+static u64 mapGetNextIdx(Map *map, void *key, int *_is_free) {
+    u64 hash = map->type->hash(key);
+    u64 idx = hash & map->mask;
     MapNode *cur = &map->entries[idx];
     *_is_free = 1;
 
@@ -771,9 +771,9 @@ static unsigned long mapGetNextIdx(Map *map, void *key, int *_is_free) {
     return idx;
 }
 
-static unsigned long mapGetIdx(Map *map, void *key, int *_ok) {
-    unsigned long hash = map->type->hash(key);
-    unsigned long idx = hash & map->mask;
+static u64 mapGetIdx(Map *map, void *key, int *_ok) {
+    u64 hash = map->type->hash(key);
+    u64 idx = hash & map->mask;
     MapNode *cur = &map->entries[idx];
 
     /* We are only interested in TAKEN nodes */
@@ -790,13 +790,13 @@ static unsigned long mapGetIdx(Map *map, void *key, int *_ok) {
     return 0;
 }
 
-static unsigned long mapGetCStringNextIdx(Map *map,
+static u64 mapGetCStringNextIdx(Map *map,
                                           char *key,
-                                          long key_len,
+                                          s64 key_len,
                                           int *_is_free)
 {
-    unsigned long hash = mapCStringHashLen(key, key_len);
-    unsigned long idx = hash & map->mask;
+    u64 hash = mapCStringHashLen(key, key_len);
+    u64 idx = hash & map->mask;
     MapNode *cur = &map->entries[idx];
     *_is_free = 1;
 
@@ -822,13 +822,13 @@ static unsigned long mapGetCStringNextIdx(Map *map,
 }
 
 
-static unsigned long mapGetCStringIdx(Map *map,
+static u64 mapGetCStringIdx(Map *map,
                                       char *key,
-                                      long key_len,
+                                      s64 key_len,
                                       int *_ok)
 {
-    unsigned long hash = mapCStringHashLen(key, key_len);
-    unsigned long idx = hash & map->mask;
+    u64 hash = mapCStringHashLen(key, key_len);
+    u64 idx = hash & map->mask;
     MapNode *cur = &map->entries[idx];
 
     /* We are only interested in TAKEN nodes */
@@ -847,10 +847,10 @@ static unsigned long mapGetCStringIdx(Map *map,
 
 static int mapResize(Map *map) {
     int is_free;
-    unsigned long new_capacity = map->capacity << 1;
-    unsigned long new_mask = new_capacity - 1;
+    u64 new_capacity = map->capacity << 1;
+    u64 new_mask = new_capacity - 1;
     Vec *old_index_entries = map->indexes;
-    unsigned long indexes_size = map->indexes->size;
+    u64 indexes_size = map->indexes->size;
     MapNode *old_entries = map->entries;
 
     void **new_indexes = (void **)calloc(indexes_size, sizeof(void *));
@@ -869,7 +869,7 @@ static int mapResize(Map *map) {
     map->mask = new_mask;
     map->entries = new_entries;
     map->capacity = new_capacity;
-    long new_size = 0;
+    s64 new_size = 0;
     int is_cstring_key = !strncmp(map->type->key_type, str_lit("char *"));
 
     memset(map->entries, 1, sizeof(MapNode) * map->capacity);
@@ -877,12 +877,12 @@ static int mapResize(Map *map) {
     /* Keeps insertion order, and does not have to go over the capacity of 
      * the hashtable which should in theory be faster, but there are more 
      * array lookups however they should have good spatial locality */
-    for (unsigned long i = 0; i < indexes_size; ++i) {
-        unsigned long idx = (unsigned long)vecGetAt(old_index_entries, i);
+    for (u64 i = 0; i < indexes_size; ++i) {
+        u64 idx = (unsigned long)vecGetAt(old_index_entries, i);
         MapNode *old = &old_entries[idx];
         if (old->flags & MAP_FLAG_TAKEN) {
             
-            unsigned long new_idx = 0;
+            u64 new_idx = 0;
             if (is_cstring_key) {
                 new_idx = mapGetCStringNextIdx(map,old->key,old->key_len,&is_free);
             } else {
@@ -912,7 +912,7 @@ static int mapResize(Map *map) {
     return 1;
 }
 
-int mapAddLen(Map *map, char *key, long key_len, void *value) {
+int mapAddLen(Map *map, char *key, s64 key_len, void *value) {
     if (map->size >= map->threashold) {
         if (!mapResize(map)) {
             /* This means we have run out of memory */
@@ -921,7 +921,7 @@ int mapAddLen(Map *map, char *key, long key_len, void *value) {
     }
 
     int is_free;
-    unsigned long idx = mapGetCStringNextIdx(map, key, key_len, &is_free);
+    u64 idx = mapGetCStringNextIdx(map, key, key_len, &is_free);
     MapNode *n = &map->entries[idx];
 
     /* Only if it is not free do we add to the vector... Though this does mean
@@ -947,7 +947,7 @@ int mapAdd(Map *map, void *key, void *value) {
     }
 
     int is_free;
-    unsigned long idx = mapGetNextIdx(map, key, &is_free);
+    u64 idx = mapGetNextIdx(map, key, &is_free);
     MapNode *n = &map->entries[idx];
 
     /* Only if it is not free do we add to the vector... Though this does mean
@@ -973,7 +973,7 @@ int mapAddOrErr(Map *map, void *key, void *value) {
     }
 
     int is_free = 0;
-    unsigned long idx = mapGetNextIdx(map, key, &is_free);
+    u64 idx = mapGetNextIdx(map, key, &is_free);
 
     /* We only add if it is free otherwise this operation is an error - 
      * in practice this ensures we can't overwrite values. */
@@ -992,7 +992,7 @@ int mapAddOrErr(Map *map, void *key, void *value) {
 
 void mapRemove(Map *map, void *key) {
     int ok = 0;
-    unsigned long idx = mapGetIdx(map, key, &ok);
+    u64 idx = mapGetIdx(map, key, &ok);
     if (ok == 0) return;
     MapNode *n = &map->entries[idx];
     if (map->type->value_release) map->type->value_release(n->value);
@@ -1009,7 +1009,7 @@ void mapRemove(Map *map, void *key) {
 
 int mapHas(Map *map, void *key) {
     int ok = 0;
-    unsigned long idx = mapGetIdx(map, key, &ok);
+    u64 idx = mapGetIdx(map, key, &ok);
     if (ok == 0) return 0;
     map->cached_key = key;
     map->cached_idx = idx;
@@ -1037,9 +1037,9 @@ out:
     return retval;
 }
 
-void *mapGetAt(Map *map, unsigned long index) {
-    for (unsigned long i = index; i < (unsigned long)map->indexes->size; ++i) {
-        long vec_idx = (long)map->indexes->entries[i];
+void *mapGetAt(Map *map, u64 index) {
+    for (u64 i = index; i < (unsigned long)map->indexes->size; ++i) {
+        s64 vec_idx = (long)map->indexes->entries[i];
         MapNode *n = &map->entries[vec_idx];
         if (n->flags & MAP_FLAG_TAKEN) {
             return n->value;
@@ -1060,7 +1060,7 @@ void *mapGet(Map *map, void *key) {
 
     for (; map != NULL; map = map->parent) {
         int ok = 0;
-        unsigned long idx = mapGetIdx(map, key, &ok);
+        u64 idx = mapGetIdx(map, key, &ok);
         if (ok) {
             /* May as well... at least it means the value is not stale */
             MapNode *n = &map->entries[idx];
@@ -1072,7 +1072,7 @@ void *mapGet(Map *map, void *key) {
     return NULL;
 }
 
-void *mapGetLen(Map *map, char *key, long len) {
+void *mapGetLen(Map *map, char *key, s64 len) {
     /* Retrive from cache if we can */
     if (map->cached_key == key) {
         MapNode *n = &map->entries[map->cached_idx];
@@ -1084,7 +1084,7 @@ void *mapGetLen(Map *map, char *key, long len) {
 
     for (; map != NULL; map = map->parent) {
         int ok = 0;
-        unsigned long idx = mapGetCStringIdx(map, key, len, &ok);
+        u64 idx = mapGetCStringIdx(map, key, len, &ok);
         if (ok) {
             /* May as well... at least it means the value is not stale */
             MapNode *n = &map->entries[idx];
@@ -1143,7 +1143,7 @@ MapIter *mapIterNew(Map *map) {
 
 int mapIterNext(MapIter *it) {
     while (it->vecidx < it->map->indexes->size) {
-        unsigned long idx = (unsigned long)vecGetAt(it->map->indexes, it->vecidx);
+        u64 idx = (unsigned long)vecGetAt(it->map->indexes, it->vecidx);
         MapNode *n = &it->map->entries[idx];
         it->vecidx++;
         if (n->flags & MAP_FLAG_TAKEN) {
@@ -1248,7 +1248,7 @@ int mapIntKeyMatch(void *a, void *b) {
     return (long)a == (long)b;
 }
 
-long mapIntKeyLen(void *key) {
+s64 mapIntKeyLen(void *key) {
     (void)key;
     return 0;
 }
@@ -1257,7 +1257,7 @@ long mapIntKeyLen(void *key) {
  * enough. _mostly_ in this application the integers are incrementing 
  * which means they're not going to clash, though will bunch together meaning
  * wasted space */
-unsigned long mapIntKeyHash(void *key) {
+u64 mapIntKeyHash(void *key) {
     return (unsigned long)(long)key;
 }
 
@@ -1269,8 +1269,8 @@ int mapAoStrKeyMatch(void *s1, void *s2) {
     return aoStrEq((AoStr *)s1, (AoStr *)s2);
 }
 
-long mapAoStrLen(void *s) {
-    return (long )aoStrGetLen((AoStr *)s);
+s64 mapAoStrLen(void *s) {
+    return (s64 )aoStrGetLen((AoStr *)s);
 }
 
 AoStr *mapAoStrToString(void *s) {
@@ -1281,28 +1281,28 @@ void mapAoStrRelease(void *s) {
     aoStrRelease((AoStr *)s);
 }
 
-unsigned long mapCStringHashLen(void *str, long len) {
+u64 mapCStringHashLen(void *str, s64 len) {
     return cstringMurmur(str, len);
 }
 
-unsigned long mapCStringHash(void *str) {
-    long len = strlen(str);
+u64 mapCStringHash(void *str) {
+    s64 len = strlen(str);
     return cstringMurmur(str, len);
 }
 
 int mapCStringEq(void *s1, void *s2) {
     if (s1 == NULL || s2 == NULL) return 0;
-    long s1_len = strlen(s1);
-    long s2_len = strlen(s2);
+    s64 s1_len = strlen(s1);
+    s64 s2_len = strlen(s2);
     return s1_len == s2_len && !memcmp(s1, s2, s1_len);
 }
 
-long mapCStringLen(void *s) {
+s64 mapCStringLen(void *s) {
     return strlen((char *)s);
 }
 
 AoStr *mapCStringToString(void *s) {
-    unsigned long len = strlen(s);
+    u64 len = strlen(s);
     return aoStrDupRaw(s, len);
 }
 

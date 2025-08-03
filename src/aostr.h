@@ -11,28 +11,30 @@
 #include <stddef.h>
 #include <sys/types.h>
 
+#include "types.h"
+
 typedef struct AoStr {
     char *data;
-    size_t len;
-    size_t capacity;
+    u64 len;
+    u64 capacity;
 } AoStr;
 
-AoStr *aoStrAlloc(size_t capacity);
+AoStr *aoStrAlloc(u64 capacity);
 AoStr *aoStrNew(void);
 void aoStrRelease(AoStr *buf);
 
-int aoStrExtendBuffer(AoStr *buf, size_t additional);
+int aoStrExtendBuffer(AoStr *buf, u64 additional);
 void aoStrToLowerCase(AoStr *buf);
 void aoStrToUpperCase(AoStr *buf);
 void aoStrPutChar(AoStr *buf, char ch);
 void aoStrRepeatChar(AoStr *buf, char ch, int times);
 int aoStrCmp(AoStr *b1, AoStr *b2);
-AoStr *aoStrDupRaw(char *s, size_t len);
+AoStr *aoStrDupRaw(char *s, u64 len);
 AoStr *aoStrDup(AoStr *buf);
 
 char *aoStrMove(AoStr *buf);
 
-void aoStrCatLen(AoStr *buf, const void *d, size_t len);
+void aoStrCatLen(AoStr *buf, const void *d, u64 len);
 void aoStrCatAoStr(AoStr *buf, AoStr *s2);
 void aoStrCat(AoStr *buf, const void *d);
 void aoStrCatRepeat(AoStr *buf, char *str, int times);
@@ -46,13 +48,13 @@ void aoStrArrayRelease(AoStr **arr, int count);
 AoStr **aoStrSplit(char *to_split, char delimiter, int *count);
 char *mprintf(const char *fmt, ...);
 char *mprintFmt(const char *fmt, ...);
-char *mprintVa(const char *fmt, va_list ap, ssize_t *_len);
+char *mprintVa(const char *fmt, va_list ap, s64 *_len);
 AoStr *aoStrError(void);
-AoStr *aoStrIntToHumanReadableBytes(long bytes);
+AoStr *aoStrIntToHumanReadableBytes(s64 bytes);
 
-unsigned long aoStrHashFunction(AoStr *buf);
-unsigned long cstringMurmur(char *data, long len);
-size_t aoStrGetLen(AoStr *buf);
+u64 aoStrHashFunction(AoStr *buf);
+u64 cstringMurmur(char *data, s64 len);
+u64 aoStrGetLen(AoStr *buf);
 AoStr *aoStrIdentity(AoStr *buf);
 int aoStrEq(AoStr *b1, AoStr *b2);
 

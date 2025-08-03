@@ -15,7 +15,7 @@
 static Arena global_memory_arena;
 static int global_memory_arena_init = 0;
 
-void *xmalloc(size_t size) {
+void *xmalloc(u64 size) {
     void *ptr = (void *)malloc(size);
     if (!ptr) {
         loggerPanic("OOM: %s\n", aoStrError()->data);
@@ -27,14 +27,14 @@ void xfree(void *ptr) {
     if (ptr) free(ptr);
 }
 
-void globalArenaInit(unsigned int capcity) {
+void globalArenaInit(u32 capcity) {
     if (!global_memory_arena_init) {
         arenaInit(&global_memory_arena, capcity);
         global_memory_arena_init = 1;
     }
 }
 
-void *globalArenaAllocate(unsigned int size) {
+void *globalArenaAllocate(u32 size) {
     return (void *)arenaAlloc(&global_memory_arena, size);
 }
 

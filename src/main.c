@@ -18,6 +18,7 @@
 #include "list.h"
 #include "memory.h"
 #include "transpiler.h"
+#include "types.h"
 #include "util.h"
 
 int is_terminal;
@@ -119,8 +120,8 @@ int hccLibInit(hccLib *lib, CliArgs *args, char *name) {
 
 int writeAsmToTmp(AoStr *asmbuf) {
     int fd;
-    ssize_t written = 0;
-    size_t towrite = 0;
+    s64 written = 0;
+    u64 towrite = 0;
     char *ptr;
     ptr = asmbuf->data;
 
@@ -159,7 +160,7 @@ void emitFile(AoStr *asmbuf, CliArgs *args) {
         safeSystem(cmd->data);
     } else if (args->asm_outfile && args->assemble_only) {
         int fd;
-        unsigned long flags = O_CREAT|O_RDWR|O_TRUNC;
+        u64 flags = O_CREAT|O_RDWR|O_TRUNC;
 
         if (args->to_stdout) {
             fd = STDOUT_FILENO;
@@ -172,10 +173,10 @@ void emitFile(AoStr *asmbuf, CliArgs *args) {
             loggerPanic("Failed to open '%s' - %s\n",
                 args->asm_outfile, strerror(errno));
         }
-        ssize_t written = write(fd,asmbuf->data,asmbuf->len);
-        if (written != (ssize_t)asmbuf->len) {
-            loggerPanic("Failed to write data expected %ld got %ld\n",
-                    (ssize_t)asmbuf->len, written);
+        s64 written = write(fd,asmbuf->data,asmbuf->len);
+        if (written != (s64)asmbuf->len) {
+            loggerPanic("Failed to write data expected %lld got %lld\n",
+                    (s64)asmbuf->len, written);
         }
         close(fd);
     } else if (args->emit_dylib) {
@@ -237,7 +238,7 @@ void assemble(CliArgs *args) {
     AoStr *run_cmd = aoStrNew();
 
     if (args->run) {
-        ssize_t len = 0;
+        s64 len = 0;
         char *buffer = lexReadfile(args->infile,&len);
         AoStr asm_buf = {
             .data = buffer,

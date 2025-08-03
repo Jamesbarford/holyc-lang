@@ -94,12 +94,12 @@ static CliParser parsers[] = {
     {str_lit("--terry"),    0, CLI_TERRY, "--terry", "Information about Terry A. Davis", &cliParseNop},
 };
 
-static size_t longestCommand(void) {
+static u64 longestCommand(void) {
     int commands_len = (int)(sizeof(parsers)/sizeof(parsers[0]));
-    size_t max_len = 0;
+    u64 max_len = 0;
     for (int i = 0; i < commands_len; ++i) {
         CliParser *parser = &parsers[i];
-        size_t len = strlen(parser->optname);
+        u64 len = strlen(parser->optname);
         if (len > max_len) {
             max_len = len;
         }
@@ -126,7 +126,7 @@ const char *getBuildModeStr(void) {
 /* For creating error messages that can't take advantage of the nicer cctrl one */
 __noreturn void cliPanicGeneric(const char *const_msg, const char *fmt, va_list ap) {
     char buffer[BUFSIZ];
-    size_t len = vsnprintf(buffer, sizeof(buffer), fmt, ap);
+    u64 len = vsnprintf(buffer, sizeof(buffer), fmt, ap);
     buffer[len] = '\0';
     if (const_msg) {
         if (is_terminal) {
@@ -197,7 +197,7 @@ __noreturn void cliNoInputFiles(void) {
 
 __noreturn void cliPrintUsage(void) {
     int commands_len = (int)(sizeof(parsers)/sizeof(parsers[0]));
-    size_t longest = longestCommand() + 4;
+    u64 longest = longestCommand() + 4;
     AoStr *buffer = aoStrNew();
 
     if (is_terminal) {
@@ -231,7 +231,7 @@ __noreturn void cliPrintUsage(void) {
 
         /* Making the spacing uniform */
         if (parser->optlen < longest) {
-            for (size_t optlen = parser->optlen; optlen < longest; ++optlen) {
+            for (u64 optlen = parser->optlen; optlen < longest; ++optlen) {
                 aoStrPutChar(buffer, ' '); 
             }
         }
@@ -243,7 +243,7 @@ __noreturn void cliPrintUsage(void) {
     exit(EXIT_SUCCESS);
 }
 
-CliParser *cliParserFind(char *arg, size_t arg_len) {
+CliParser *cliParserFind(char *arg, u64 arg_len) {
     int len = (int)(sizeof(parsers)/sizeof(parsers[0]));
 
     for (int i = 0; i < len; ++i) {
@@ -277,7 +277,7 @@ enum CliFileType {
     HC_ASSEMBLY,
 };
 
-enum CliFileType cliGetFileType(char *filename, size_t filename_len) {
+enum CliFileType cliGetFileType(char *filename, u64 filename_len) {
     char *end = &filename[filename_len-1];
     if (tolower(*end) == 'c' && tolower(*(end-1)) == 'h' && *(end-2) == '.') {
         return HC_SOURCE;
@@ -290,7 +290,7 @@ enum CliFileType cliGetFileType(char *filename, size_t filename_len) {
     }
 }
 
-void getASMFileName(CliArgs *args, enum CliFileType file_type, char *filename, size_t filename_len) {
+void getASMFileName(CliArgs *args, enum CliFileType file_type, char *filename, u64 filename_len) {
     switch (file_type) {
         case HC_INVALID:
             cliPanic("Unknown file extension, file must end with .HC, .HH or .s case insensitive. Got: %s\n", filename);
@@ -338,7 +338,7 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
 
     for (int i = 0; i < argc; i++) {
         char *arg = argv[i];
-        size_t arg_len = strlen(arg);
+        u64 arg_len = strlen(arg);
         char *next_arg = i + 1 < argc ? argv[i+1] : NULL;
         char *arg_to_parse = NULL;
 

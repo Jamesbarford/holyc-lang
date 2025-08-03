@@ -90,11 +90,11 @@ Lexeme *lexerAllocLexeme(void) {
     return (Lexeme *)arenaAlloc(&lexeme_arena, sizeof(Lexeme));
 }
 
-char *lexerAllocateBuffer(unsigned int size) {
+char *lexerAllocateBuffer(u32 size) {
     return (char *)arenaAlloc(&lexeme_arena, size);
 }
 
-char *lexerReAllocBuffer(char *ptr, unsigned int old_size, unsigned int new_size) {
+char *lexerReAllocBuffer(char *ptr, u32 old_size, u32 new_size) {
     (void)ptr;
     char *buffer = lexerAllocateBuffer(new_size);
     memcpy(buffer,ptr,old_size);
@@ -196,7 +196,7 @@ Lexeme *lexemeSentinal(void) {
     return le;
 }
 
-void lexemeAssignOp(Lexeme *le, char *start, int len, long op, int line) {
+void lexemeAssignOp(Lexeme *le, char *start, int len, s64 op, int line) {
     le->tk_type = TK_PUNCT;
     le->line = line;
     le->start = start;
@@ -204,7 +204,7 @@ void lexemeAssignOp(Lexeme *le, char *start, int len, long op, int line) {
     le->i64 = op; /* instead of 'char'*/
 }
 
-Lexeme *lexemeTokNew(char *start, int len, int line, long ch) {
+Lexeme *lexemeTokNew(char *start, int len, int line, s64 ch) {
     Lexeme *copy = lexerAllocLexeme();
     copy->tk_type = TK_PUNCT;
     copy->start = start;
@@ -220,7 +220,7 @@ Lexeme *lexemeCopy(Lexeme *le) {
     return copy;
 }
 
-Lexeme *lexemeNewOp(char *start, int len, long op, int line) {
+Lexeme *lexemeNewOp(char *start, int len, s64 op, int line) {
     Lexeme *le = lexemeNew(start,len);
     lexemeAssignOp(le,start,len,op,line);
     return le;
@@ -266,7 +266,7 @@ void lexSetBuiltinRoot(Lexer *l, char *root) {
 }
 
 /* Is the lexeme both of type TK_PUNCT and does 'ch' match */
-int tokenPunctIs(Lexeme *tok, long ch) {
+int tokenPunctIs(Lexeme *tok, s64 ch) {
     return tok && (tok->tk_type == TK_PUNCT || tok->tk_type == TK_EOF) && tok->i64 == ch;
 }
 
@@ -292,7 +292,7 @@ char *lexemeTypeToString(int tk_type) {
 }
 
 /* This is for something that will play nicely with HTML or GraphViz*/
-char *lexemePunctToEncodedString(long op) {
+char *lexemePunctToEncodedString(s64 op) {
     static char buf[4];
     switch(op) {
     case '\\':               return "\\";
@@ -365,7 +365,7 @@ char *lexemePunctToEncodedString(long op) {
 }
 
 /* Convert all of this to a massive lookup table */
-char *lexemePunctToString(long op) {
+char *lexemePunctToString(s64 op) {
     static char buf[4];
     switch (op) {
     case '\\':               return "\\";
@@ -408,7 +408,7 @@ char *lexemePunctToString(long op) {
     }
 }
 
-char *lexemePunctToStringWithFlags(long op, unsigned long flags) {
+char *lexemePunctToStringWithFlags(s64 op, u64 flags) {
     if (flags & LEXEME_ENCODE_PUNCT) return lexemePunctToEncodedString(op);
     else                             return lexemePunctToString(op);
 }
@@ -575,7 +575,7 @@ static char lexPeek(Lexer *l) {
 }
 
 /* Read an entire file to a mallocated buffer */
-char *lexReadfile(char *path, ssize_t *_len) {
+char *lexReadfile(char *path, s64 *_len) {
     int fd;
     if ((fd = open(path, O_RDONLY, 0644)) == -1) {
         loggerPanic("Failed to open file: %s\n", path);
@@ -606,7 +606,7 @@ void lexPushFile(Lexer *l, AoStr *filename) {
     /* We need to save what we are currently lexing and 
      * make the file we've just seen the file we want to lex */
     LexFile *f = (LexFile *)malloc(sizeof(LexFile));
-    ssize_t file_len = 0;
+    s64 file_len = 0;
     char *src = lexReadfile(filename->data, &file_len);
     AoStr *src_code = aoStrNew();
     src_code->data = src;
@@ -736,10 +736,10 @@ int lexIdentifier(Lexer *l, char ch) {
 /* As this function escapes strings we pass in `_real_len` to be able 
  * to capture the length of the string minus escape sequences. 
  * The string is allocated from the lexers arean not the global allocator */
-char *lexString(Lexer *l, char terminator, long *_real_len, int *_buffer_len) {
-    unsigned int capacity = 64;
+char *lexString(Lexer *l, char terminator, s64 *_real_len, int *_buffer_len) {
+    u32 capacity = 64;
     int len = 0;
-    long real_len = 0;
+    s64 real_len = 0;
 
     char *buffer = lexerAllocateBuffer(64);
     char ch = '\0';
@@ -836,11 +836,11 @@ done:
 }
 
 /* Length of the char const is returned, it OR's in at max 8 characters. 
- * A long being 64 bits and 64/8 = 8. */
-unsigned long lexCharConst(Lexer *l) {
-    unsigned long char_const = 0, idx;
-    long hex_num = 0;
-    long len;
+ * A s64 being 64 bits and 64/8 = 8. */
+u64 lexCharConst(Lexer *l) {
+    u64 char_const = 0, idx;
+    s64 hex_num = 0;
+    s64 len;
     char ch;
 
     for (len = 0; len < LEX_CHAR_CONST_LEN; ++len) {
@@ -935,7 +935,7 @@ LexerType *lexPreProcDirective(Lexer *l) {
     Lexeme le;
     if (!lex(l,&le)) return 0;
     char buffer[32];
-    ssize_t len = snprintf(buffer,sizeof(buffer),"#%.*s",le.len,le.start);
+    s64 len = snprintf(buffer,sizeof(buffer),"#%.*s",le.len,le.start);
     LexerType *type = mapGetLen(l->symbol_table,buffer,len);
     if (!type) {
         loggerPanic("line %d: invalid preprocessor directive '%s'\n", le.line, buffer);
@@ -1027,9 +1027,9 @@ int lex(Lexer *l, Lexeme *le) {
                 if (*l->ptr == '/' || *l->ptr == '*') {
                     start = l->ptr-1;
                     lexSkipCodeComment(l);
-                    ssize_t lineno = l->lineno;
+                    s64 lineno = l->lineno;
                     if (l->flags & CCF_ACCEPT_COMMENTS) {
-                        ssize_t len = l->ptr-start;
+                        s64 len = l->ptr-start;
                         le->start = start;
                         le->len = len;
                         le->line = lineno;
@@ -1405,7 +1405,7 @@ Lexeme *lexDefine(Map *macro_defs, Lexer *l) {
                         next.line, ident->data);
             }
         } else if (tk_type == TK_F64) {
-            expanded->f64 = (long double)evalFloatExpr(ast);
+            expanded->f64 = (f64)evalFloatExpr(ast);
             expanded->line = start->line;
         } else if (tk_type == TK_I64 || tk_type == TK_CHAR_CONST) {
             if (ast) {
@@ -1510,7 +1510,7 @@ int lexPreProcIf(Map *macro_defs, Lexer *l) {
     if (tk_type == TK_STR) {
         should_collect = 1;
     } else if (tk_type == TK_F64) {
-        expanded->f64 = (long double)evalFloatExpr(ast);
+        expanded->f64 = (s64)evalFloatExpr(ast);
         if (expanded->f64 != 0) {
             should_collect = 1;
         }
@@ -1723,13 +1723,13 @@ void lexReleaseAllFiles(Lexer *l) {
             ((void (*)(void *))&lexReleaseLexFile));
 }
 
-char *lexerReportLine(Lexer *l, ssize_t lineno) {
+char *lexerReportLine(Lexer *l, s64 lineno) {
     AoStr *buf = aoStrAlloc(256);
 
     char *ptr = l->cur_file->src->data;
-    ssize_t size = l->cur_file->src->len;
-    ssize_t line = 1;
-    ssize_t i = 0;
+    s64 size = l->cur_file->src->len;
+    s64 line = 1;
+    s64 i = 0;
     
     for (; i < size-1; ++i) {
         if (ptr[i] == '\n') {

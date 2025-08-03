@@ -83,7 +83,7 @@ static BuiltInType built_in_types[] = {
 };
 
 static void cctrlAddBuiltinMacros(Cctrl *cc) {
-    long bufsize = sizeof(char)*128;
+    s64 bufsize = sizeof(char)*128;
 
     Lexeme *le = lexemeSentinal();
     if (IS_BSD)   mapAdd(cc->macro_defs,"IS_BSD",le);
@@ -107,7 +107,7 @@ static void cctrlAddBuiltinMacros(Cctrl *cc) {
 
     struct timeval tm;
     gettimeofday(&tm,NULL);
-    long milliseconds = (tm.tv_sec*1000) +
+    s64 milliseconds = (tm.tv_sec*1000) +
         (tm.tv_usec/1000);
     time_t seconds = milliseconds / 1000;
     struct tm *ptm = localtime(&seconds);
@@ -116,7 +116,7 @@ static void cctrlAddBuiltinMacros(Cctrl *cc) {
     char *date = (char *)malloc(bufsize);
     char *time_stamp = (char *)malloc(bufsize);
 
-    long len = snprintf(time,bufsize,"%02d:%02d:%02d",
+    s64 len = snprintf(time,bufsize,"%02d:%02d:%02d",
             ptm->tm_hour,ptm->tm_min,ptm->tm_sec);
     time[len] = '\0';
     le = lexemeNew(time,len);
@@ -238,7 +238,7 @@ TokenRingBuffer *tokenRingBufferStaticNew(void) {
     ring_buffer->size = 0;
     ring_buffer->entries = token_ring_buffer;
     ring_buffer->capacity = CCTRL_TOKEN_BUFFER_SIZE;
-    for (ssize_t i = 0; i < CCTRL_TOKEN_BUFFER_SIZE; ++i) {
+    for (s64 i = 0; i < CCTRL_TOKEN_BUFFER_SIZE; ++i) {
         ring_buffer->entries[i] = NULL;
     }
     return ring_buffer;
@@ -253,7 +253,7 @@ TokenRingBuffer *tokenRingBufferNew(void) {
 }
 
 /* This always moves forward by one so is more of a get next */
-ssize_t tokenRingBufferGetIdx(ssize_t idx, size_t capacity) {
+s64 tokenRingBufferGetIdx(s64 idx, u64 capacity) {
     return (idx + 1) & (capacity - 1);
 }
 
@@ -294,12 +294,12 @@ Lexeme *tokenRingBufferPop(TokenRingBuffer *ring_buffer) {
     return token;
 }
 
-Lexeme *tokenRingBufferPeekBy(TokenRingBuffer *ring_buffer, ssize_t offset) {
+Lexeme *tokenRingBufferPeekBy(TokenRingBuffer *ring_buffer, s64 offset) {
     /* we are out of tokens */
     if (tokenRingBufferEmpty(ring_buffer)) {
         return NULL;
     }
-    ssize_t idx = tokenRingBufferGetIdx(ring_buffer->tail + offset,
+    s64 idx = tokenRingBufferGetIdx(ring_buffer->tail + offset,
                                         ring_buffer->capacity);
     return ring_buffer->entries[idx];
 }
@@ -318,8 +318,8 @@ int tokenRingBufferRewind(TokenRingBuffer *ring_buffer) {
     //}
 
     Lexeme *token = ring_buffer->entries[ring_buffer->tail];
-    size_t capacity = ring_buffer->capacity;
-    ssize_t offset = 1;
+    u64 capacity = ring_buffer->capacity;
+    s64 offset = 1;
     do {
         ring_buffer->tail = ((ring_buffer->tail - offset) + capacity) & (capacity-1);
         token = ring_buffer->entries[ring_buffer->tail];
@@ -329,8 +329,8 @@ int tokenRingBufferRewind(TokenRingBuffer *ring_buffer) {
     return 1;
 }
 
-void cctrLoadNextTokens(Cctrl *cc, ssize_t token_count) {
-    for (ssize_t i = 0; i < token_count; ++i) {
+void cctrLoadNextTokens(Cctrl *cc, s64 token_count) {
+    for (s64 i = 0; i < token_count; ++i) {
         Lexeme *token = lexToken(cc->macro_defs,cc->lexer_);
         if (!token) break;
         tokenRingBufferPush(cc->token_buffer, token);
@@ -382,7 +382,7 @@ Lexeme *cctrlTokenPeekBy(Cctrl *cc, int cnt) {
 
 Lexeme *cctrlTokenPeek(Cctrl *cc) {
     Lexeme *token = tokenRingBufferPeek(cc->token_buffer);
-    ssize_t offset = 0;
+    s64 offset = 0;
     while (token) {
         if (token->tk_type == TK_COMMENT) {
             token = tokenRingBufferPeekBy(cc->token_buffer, offset);
@@ -487,7 +487,7 @@ AoStr *cctrlSeverityMessage(int severity) {
     return buf;
 }
 
-void cctrlFileAndLine(Cctrl *cc, AoStr *buf, ssize_t lineno, ssize_t char_pos, char *msg, int severity) {
+void cctrlFileAndLine(Cctrl *cc, AoStr *buf, s64 lineno, s64 char_pos, char *msg, int severity) {
     AoStr *severity_msg = cctrlSeverityMessage(severity);
 
     aoStrCatFmt(buf,"%S%s", severity_msg, msg);
@@ -556,7 +556,7 @@ char *lexemeToColor(Cctrl *cc, Lexeme *tok, int is_err) {
     }
 }
 
-ssize_t cctrlGetCharErrorIdx(Cctrl *cc, Lexeme *cur_tok,
+s64 cctrlGetCharErrorIdx(Cctrl *cc, Lexeme *cur_tok,
                              const char *line_buffer)
 {
     (void)cc;
@@ -564,8 +564,8 @@ ssize_t cctrlGetCharErrorIdx(Cctrl *cc, Lexeme *cur_tok,
     Lexer l;
     lexInit(&l, (char *)line_buffer, CCF_ACCEPT_WHITESPACE);
 
-    ssize_t offset = 0;
-    ssize_t latest_offset = 0;
+    s64 offset = 0;
+    s64 latest_offset = 0;
     int match = 0;
     /* to the beginning of the line */
     while (lex(&l,&tok)) {
@@ -583,7 +583,7 @@ ssize_t cctrlGetCharErrorIdx(Cctrl *cc, Lexeme *cur_tok,
     return latest_offset;
 }
 
-ssize_t cctrlGetErrorIdx(Cctrl *cc, ssize_t line, char ch,
+s64 cctrlGetErrorIdx(Cctrl *cc, s64 line, char ch,
                          const char *line_buffer)
 {
     (void)cc;
@@ -600,12 +600,12 @@ ssize_t cctrlGetErrorIdx(Cctrl *cc, ssize_t line, char ch,
 
 void cctrlCreateColoredLine(Cctrl *cc,
                             AoStr *buf,
-                            ssize_t lineno,
+                            s64 lineno,
                             int should_color_err,
                             char *suggestion,
-                            ssize_t char_pos,
-                            ssize_t *_offset,
-                            ssize_t *_tok_len,
+                            s64 char_pos,
+                            s64 *_offset,
+                            s64 *_tok_len,
                             const char *line_buffer)
 {
     (void)suggestion;
@@ -617,12 +617,12 @@ void cctrlCreateColoredLine(Cctrl *cc,
     Lexeme *cur_tok = cctrlTokenPeek(cc);
 
     AoStr *colored_buffer = aoStrNew();
-    long offset = -1;
-    long tok_len = -1;
+    s64 offset = -1;
+    s64 tok_len = -1;
     Lexeme tok;
     Lexer l;
     lexInit(&l, (char *)line_buffer, CCF_ACCEPT_WHITESPACE);
-    ssize_t current_offset = 0;
+    s64 current_offset = 0;
 
     /* This assumes we want the last match of an error as opposed to the first */
     while (lex(&l,&tok)) {
@@ -657,7 +657,7 @@ void cctrlCreateColoredLine(Cctrl *cc,
 }
 
 AoStr *cctrlCreateErrorLine(Cctrl *cc,
-                            ssize_t lineno, 
+                            s64 lineno, 
                             char *msg,
                             int severity,
                             char *suggestion)
@@ -677,10 +677,10 @@ AoStr *cctrlCreateErrorLine(Cctrl *cc,
     const char *line_buffer = lexerReportLine(cc->lexer_,lineno);
     Lexeme *cur_tok = cctrlTokenPeek(cc);
     AoStr *buf = aoStrNew();
-    long char_pos = cctrlGetCharErrorIdx(cc,cur_tok, line_buffer);
+    s64 char_pos = cctrlGetCharErrorIdx(cc,cur_tok, line_buffer);
 
-    long offset = -1;
-    long tok_len = -1;
+    s64 offset = -1;
+    s64 tok_len = -1;
 
     cctrlFileAndLine(cc,buf,cur_tok->line,char_pos,msg,severity);
     cctrlCreateColoredLine(cc, buf, lineno, 1, suggestion,
@@ -811,7 +811,7 @@ void cctrlIce(Cctrl *cc, char *fmt, ...) {
 }
 
 /* Rewind the token buffer until there is a match */
-void cctrlRewindUntilPunctMatch(Cctrl *cc, long ch, int *_count) {
+void cctrlRewindUntilPunctMatch(Cctrl *cc, s64 ch, int *_count) {
     int count = 0;
     Lexeme *peek = cctrlTokenPeek(cc);
     while (!tokenPunctIs(peek, ch)) {
@@ -838,11 +838,11 @@ void cctrlRewindUntilStrMatch(Cctrl *cc, char *str, int len, int *_count) {
 
 /* assert the token we are currently pointing at is a TK_PUNCT and the 'i64'
  * matches 'expected'. Then consume this token else throw an error */
-void cctrlTokenExpect(Cctrl *cc, long expected) {
+void cctrlTokenExpect(Cctrl *cc, s64 expected) {
     Lexeme *tok = cctrlTokenGet(cc);
     if (!tokenPunctIs(tok, expected)) {
         if (!tok) {
-            loggerPanic("line %ld: Ran out of tokens\n",cc->lineno);
+            loggerPanic("line %lld: Ran out of tokens\n",cc->lineno);
         } else {
             cctrlRewindUntilStrMatch(cc,tok->start,tok->len,NULL);
             cctrlTokenRewind(cc);
@@ -875,12 +875,12 @@ AoStr *cctrlRaiseFromTo(Cctrl *cc, int severity, char *suggestion, char from,
     char *line_buffer = lexerReportLine(cc->lexer_, cur_tok->line);
     AoStr *buf = aoStrNew();
     /* This is not a terribly efficient way of getting an error message */
-    long char_pos = cctrlGetCharErrorIdx(cc,cur_tok, line_buffer);
-    long from_idx = cctrlGetErrorIdx(cc,cur_tok->line,from, line_buffer);
-    long to_idx = cctrlGetErrorIdx(cc,cur_tok->line,to, line_buffer);
+    s64 char_pos = cctrlGetCharErrorIdx(cc,cur_tok, line_buffer);
+    s64 from_idx = cctrlGetErrorIdx(cc,cur_tok->line,from, line_buffer);
+    s64 to_idx = cctrlGetErrorIdx(cc,cur_tok->line,to, line_buffer);
 
-    long offset = -1;
-    long tok_len = -1;
+    s64 offset = -1;
+    s64 tok_len = -1;
 
     cctrlFileAndLine(cc,buf,cur_tok->line,char_pos,bold_msg->data,severity);
     cctrlCreateColoredLine(cc, buf, cur_tok->line, 0, NULL, char_pos, &offset, &tok_len, 
@@ -998,7 +998,7 @@ void cctrlSetCommandLineDefines(Cctrl *cc, List *defines_list) {
 }
 
 /* De-duplicates strings by checking their existance */
-Ast *cctrlGetOrSetString(Cctrl *cc, char *str, int len, long real_len) {
+Ast *cctrlGetOrSetString(Cctrl *cc, char *str, int len, s64 real_len) {
     Ast *ast_str = NULL;
     if (cc->strs) {
         ast_str = mapGetLen(cc->strs, str, len);

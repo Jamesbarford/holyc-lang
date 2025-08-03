@@ -1,25 +1,27 @@
 #ifndef MEMORY_ARENA_H__
 #define MEMORY_ARENA_H__
 
+#include "types.h"
+
 typedef struct ArenaBlock ArenaBlock;
 typedef struct ArenaBlock {
-    unsigned int capacity;
-    unsigned int used;
+    u32 capacity;
+    u32 used;
     void *mem;
     ArenaBlock *next; 
 } ArenaBlock; 
 
 typedef struct Arena {
-    unsigned int block_capacity;
-    unsigned int used;
+    u32 block_capacity;
+    u32 used;
     ArenaBlock *head; /* Active block */
     ArenaBlock *tail; /* Used blocks */
 } Arena;
 
-void arenaInit(Arena *arena, unsigned int capacity);
+void arenaInit(Arena *arena, u32 capacity);
 void arenaClear(Arena *arena);
-Arena *arenaNew(unsigned int capacity);
-void *arenaAlloc(Arena *arena, unsigned int size);
+Arena *arenaNew(u32 capacity);
+void *arenaAlloc(Arena *arena, u32 size);
 void arenaRelease(Arena *arena);
 void arenaPrintStats(Arena *arena);
 

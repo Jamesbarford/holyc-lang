@@ -143,7 +143,7 @@ typedef struct Lexeme {
     char *start;
     int ishex;
     union {
-        long i64;
+        s64 i64;
         double f64;
     };
 } Lexeme;
@@ -161,8 +161,8 @@ typedef struct Lexer {
     char *start;
     char cur_ch;
     char *cur_str;
-    long cur_strlen;
-    long cur_i64;
+    s64 cur_strlen;
+    s64 cur_i64;
     double cur_f64;
     int lineno;
     int flags;
@@ -181,7 +181,7 @@ void lexemeMemoryInit(void);
 void lexemeMemoryRelease(void);
 void lexemeMemoryStats(void);
 
-Lexeme *lexemeTokNew(char *start, int len, int line, long ch);
+Lexeme *lexemeTokNew(char *start, int len, int line, s64 ch);
 Lexeme *lexemeNew(char *start, int len);
 Lexeme *lexemeSentinal(void);
 void lexSetBuiltinRoot(Lexer *l, char *root);
@@ -191,18 +191,18 @@ int lex(Lexer *l, Lexeme *le);
 Lexeme *lexToken(Map *macro_defs, Lexer *l);
 void lexemePrint(Lexeme *le);
 char *lexemeTypeToString(int tk_type);
-char *lexemePunctToString(long op);
-char *lexemePunctToStringWithFlags(long op, unsigned long flags);
-char *lexemePunctToEncodedString(long op);
+char *lexemePunctToString(s64 op);
+char *lexemePunctToStringWithFlags(s64 op, u64 flags);
+char *lexemePunctToEncodedString(s64 op);
 char *lexemeToString(Lexeme *tok);
 AoStr *lexemeToAoStr(Lexeme *tok);
 void lexReleaseAllFiles(Lexer *l);
-int tokenPunctIs(Lexeme *tok, long ch);
+int tokenPunctIs(Lexeme *tok, s64 ch);
 int tokenIdentIs(Lexeme *tok, char *ident, int len);
 void lexemeFree(void *_le);
-char *lexerReportLine(Lexer *l, ssize_t lineno);
+char *lexerReportLine(Lexer *l, s64 lineno);
 int lexemeEq(Lexeme *l1, Lexeme *l2);
-char *lexReadfile(char *path, ssize_t *_len);
+char *lexReadfile(char *path, s64 *_len);
 
 
 #endif // !LEXER_H

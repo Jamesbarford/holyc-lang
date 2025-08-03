@@ -212,7 +212,7 @@ void cfgPrintAstArray(BasicBlock *bb) {
     if (bb->ast_array->size == 0) {
         printf("(null)\n");
     } else {
-        for (unsigned long i = 0; i < bb->ast_array->size; ++i) {
+        for (u64 i = 0; i < bb->ast_array->size; ++i) {
             printf("%lu: \n", i);
             astPrint(bb->ast_array->entries[i]);
         }
@@ -220,7 +220,7 @@ void cfgPrintAstArray(BasicBlock *bb) {
 }
 #endif
 
-char *bbFlagsToString(unsigned int flags) {
+char *bbFlagsToString(u32 flags) {
     if (!flags) return mprintf("(NO_FLAGS)");
     AoStr *str = aoStrNew();
     int has_flag = 0;
@@ -347,7 +347,7 @@ void bbPrint(BasicBlock *bb) {
     char *bb_str = bbToString(bb);
     AoStr *str = aoStrDupRaw((char*)bb_str, strlen(bb_str)); 
     aoStrPutChar(str,'\n');
-    for (unsigned long i = 0; i < bb->ast_array->size; ++i) {
+    for (u64 i = 0; i < bb->ast_array->size; ++i) {
         char *ast_str = astLValueToString(bb->ast_array->entries[i],0);
         aoStrCat(str,ast_str);
         aoStrPutChar(str,'\n');
@@ -358,7 +358,7 @@ void bbPrint(BasicBlock *bb) {
 
 static BasicBlock *cfgBuilderAllocBasicBlock(CFGBuilder *builder,
                                              int type,
-                                             unsigned int flags)
+                                             u32 flags)
 {
     BasicBlock *bb = (BasicBlock *)memPoolAlloc(builder->block_pool, sizeof(BasicBlock));
 
@@ -389,7 +389,7 @@ static CFG *cfgNew(AoStr *fname, BasicBlock *head_block) {
  * can be used i.e there are no asts in the array. 
  * Other times we need to allocate a new block */
 static BasicBlock *cfgSelectOrCreateBlock(CFGBuilder *builder, int type,
-        unsigned int flags)
+        u32 flags)
 {
     BasicBlock *bb = NULL;
     if (bbAstCount(builder->bb) == 0 && !bbIsLoopControl(builder->bb)) {
@@ -897,7 +897,7 @@ static void cfgHandleSwitch(CFGBuilder *builder, Ast *ast) {
     builder->flags |= CFG_BUILDER_FLAG_IN_SWITCH;
 
     /* ??? - This has the potential to be a crazy loop */
-    for (unsigned long i = 0; i < ast->cases->size; ++i) {
+    for (u64 i = 0; i < ast->cases->size; ++i) {
         cfgBuilderSetBlock(builder,bb_switch);
         Ast *_case = (Ast *)ast->cases->entries[i];
         cfgHandleCase(builder,bb_end,_case);
@@ -937,7 +937,7 @@ static void cfgLinkLeaves(Map *map, BasicBlock *bb, BasicBlock *dest) {
         mapAdd(map,(void *)(long)bb->block_no,NULL);
         switch (bb->type) {
             case BB_SWITCH:
-                for (unsigned long i = 0; i < bb->next_blocks->size; ++i) {
+                for (u64 i = 0; i < bb->next_blocks->size; ++i) {
                     cfgLinkLeaves(map,bb->next_blocks->entries[i],dest);
                 }
                 /* FALLTHROUGH */
@@ -978,7 +978,7 @@ static BasicBlock *cfgMergeBranches(CFGBuilder *builder, BasicBlock *pre,
  * @DataFlow Jamesbarford 2024/08/28
  * TODO: This function should be the one responsible for converting the ast 
  * into IR and adding what a block defines or modifies which will make liveness
- * analysis easier along with dataflow.
+ * analysis easier as64 with dataflow.
  * */
 static void cfgHandleAstNode(CFGBuilder *builder, Ast *ast) {
     assert(ast != NULL);
@@ -1140,7 +1140,7 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
 
         /* We need to get the statements that happened before the 
          * label */
-        for (unsigned long i = 0; i < dest_ast_array->size; ++i) {
+        for (u64 i = 0; i < dest_ast_array->size; ++i) {
             Ast *needle = dest_ast_array->entries[i];
             if (needle->kind == AST_LABEL && aoStrCmp(goto_label,
                         astHackedGetLabel(needle))) {
@@ -1159,7 +1159,7 @@ static void cfgRelocateGoto(CFGBuilder *builder, BasicBlock *bb_goto,
         dest_ast_array->size -= ast_move_cnt;
 
         /* Remove asts that no longer exist in the block */
-        for (unsigned long i = 0; i < dest_ast_array->size; ++i) {
+        for (u64 i = 0; i < dest_ast_array->size; ++i) {
             dest_ast_array->entries[i] = dest_ast_array->entries[ast_move_cnt+i];
         }
 
@@ -1215,7 +1215,7 @@ static void cfgAdjacencyPrintBlock(BasicBlock *bb, int is_parent) {
 }
 
 BasicBlock *cfgVecFindBlock(Vec *vec, int block_no, int *_idx) {
-    for (unsigned long i = 0; i < vec->size; ++i) {
+    for (u64 i = 0; i < vec->size; ++i) {
         BasicBlock *bb = vecGet(BasicBlock *,vec,i);
         if (bb->block_no == block_no) {
             *_idx = i;
@@ -1412,7 +1412,7 @@ static void cfgRelinkSwitch(CFG *cfg, BasicBlock *bb_switch) {
         Vec *blocks = bb_switch->next_blocks;
         /* Recurse through the graph linking all leaf nodes to the destination 
          * node, this is fairly expensive. */
-        for (unsigned long i = 0; i < blocks->size; ++i) {
+        for (u64 i = 0; i < blocks->size; ++i) {
             BasicBlock *bb_case = vecGet(BasicBlock *,blocks,i);
             cfgLinkLeaves(cache,bb_case,dest);
         }
@@ -1427,7 +1427,7 @@ static void cfgRelinkSwitch(CFG *cfg, BasicBlock *bb_switch) {
 
 static Set *cfgCreateSwitchAdjacencyList(CFG *cfg, BasicBlock *bb) {
     Set *iset = setNew(16, &set_int_type);
-    for (unsigned long i = 0; i < bb->next_blocks->size; ++i) {
+    for (u64 i = 0; i < bb->next_blocks->size; ++i) {
         BasicBlock *bb_case = (BasicBlock *)bb->next_blocks->entries[i];
         setAdd(iset,(void *)(long)bb_case->block_no);
         bbAddPrev(bb_case,bb);
@@ -1710,7 +1710,7 @@ void cfgRemoveUnreachableNodes(CFG *cfg) {
     }
 
     for (int i = 0; i < id_cnt; ++i) {
-        long block_no = (long)ids[i];
+        s64 block_no = (long)ids[i];
         mapRemove(cfg->graph,(void *)block_no);
         mapRemove(cfg->no_to_block,(void *)block_no);
     }
@@ -1733,7 +1733,7 @@ static void cfgConstructFunction(CFGBuilder *builder, List *stmts) {
         BasicBlock *bb_dest = NULL;
         Ast *ast = NULL; 
 
-        for (unsigned long i = 0; i < bb_goto->ast_array->size; ++i) {
+        for (u64 i = 0; i < bb_goto->ast_array->size; ++i) {
             ast = (Ast *)bb_goto->ast_array->entries[i];
             if (ast->kind == AST_GOTO || ast->kind == AST_JUMP) {
                 break;
@@ -1845,7 +1845,7 @@ static void _bbFindAllLoopNodes(BasicBlock *loop_head,
             break;
 
         case BB_SWITCH: {
-            for (unsigned long i = 0; i < bb->next_blocks->size; ++i) {
+            for (u64 i = 0; i < bb->next_blocks->size; ++i) {
                 BasicBlock *it = vecGet(BasicBlock *,bb->next_blocks,i);
                 _bbFindAllLoopNodes(loop_head,it,nodes,loop_cnt);
             }
@@ -1898,7 +1898,7 @@ void cfgExplore(CFG *cfg, Set *seen, int block_no) {
     SetIter it;
     setIterInit(iset, &it);
     while (setIterNext(&it)) {
-        long next_block_no = (long)it.value;
+        s64 next_block_no = (long)it.value;
         BasicBlock *bb = mapGet(cfg->no_to_block,(void *)(long)next_block_no);
         cfgExplore(cfg,seen,bb->block_no);
     }

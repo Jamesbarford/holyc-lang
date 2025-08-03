@@ -56,13 +56,13 @@ uint64_t ieee754(double _f64) {
     if (_f64 == 0.0) return 0;  // Handle zero value explicitly
 
     // Calculate exponent and adjust fraction
-    long double base2_exp = floorl(log2l(fabs(_f64)));
-    long double exponet2_removed = ldexpl(_f64, -base2_exp - 1);
+    double base2_exp = floorl(log2l(fabs(_f64)));
+    double exponet2_removed = ldexpl(_f64, -base2_exp - 1);
 
     // Initialize fraction and calculate it bit by bit
     uint64_t fraction = 0;
-    long double digit = 0.5;  // Start with 1/2
-    for (long i = 0; i != 53; i++) {
+    double digit = 0.5;  // Start with 1/2
+    for (s64 i = 0; i != 53; i++) {
         if (exponet2_removed >= digit) {
             exponet2_removed -= digit;
             fraction |= 1ULL << (52 - i);
@@ -878,7 +878,7 @@ void asmBinaryOpIntArithmetic(Cctrl *cc, AoStr *buf, Ast *ast, int reverse) {
 
     /* @BROKEN; SEE COMMENT ABOVE ^^^
     int ok = 1;
-    ssize_t result = evalIntArithmeticOrErr(ast,&ok);
+    s64 result = evalIntArithmeticOrErr(ast,&ok);
     if (!ok) {
         ok = 1;
         result = evalOneIntExprOrErr(LHS,RHS,ast->binop,&ok);
@@ -1616,7 +1616,7 @@ void asmPrepFuncCallArgs(Cctrl *cc, AoStr *buf, Ast *funcall) {
     var_arg_start = -1;
     argc = 0;
     if (flags & (FUN_EXISTS|FUN_VARARG) && !(flags & FUN_EXTERN)) {
-        for (unsigned long i = 0; i < fun->params->size; ++i) {
+        for (u64 i = 0; i < fun->params->size; ++i) {
             var_arg_start++;
             arg = fun->params->entries[i];
             if (arg->kind == AST_VAR_ARGS) {
@@ -1633,7 +1633,7 @@ void asmPrepFuncCallArgs(Cctrl *cc, AoStr *buf, Ast *funcall) {
     stack_args = listNew();
 
     funarg = NULL;
-    ssize_t i = 0;
+    s64 i = 0;
     while (1) {
         /* Handling the case for either more arguments than parameters or
          * more parameters than arguments */
@@ -1818,7 +1818,7 @@ void asmHandleSwitch(Cctrl *cc, AoStr *buf, Ast *ast) {
     /* create jump table */
     Vec *cases = ast->cases;
     Ast **jump_table = ast->jump_table_order;
-    unsigned long jump_table_size = cases->size;
+    u64 jump_table_size = cases->size;
     Ast *case_ast_min = jump_table[0];
     Ast *case_ast_max = jump_table[jump_table_size - 1];
 
@@ -1870,13 +1870,13 @@ void asmHandleSwitch(Cctrl *cc, AoStr *buf, Ast *ast) {
 
         /* pad out the table */
         for (; i < case_begin_normalised; ++i) {
-            aoStrCatPrintf(buf, ".long %s-%s\n\t",
+            aoStrCatPrintf(buf, ".s64 %s-%s\n\t",
                     end_label->data,
                     jump_table_start->data);
         }
 
         for (int j = case_begin_normalised; j <= case_normalised_range_end; ++j) {
-            aoStrCatPrintf(buf, ".long %s-%s\n\t",
+            aoStrCatPrintf(buf, ".s64 %s-%s\n\t",
                     _case->case_label->data,
                     jump_table_start->data);
         }
@@ -1884,12 +1884,12 @@ void asmHandleSwitch(Cctrl *cc, AoStr *buf, Ast *ast) {
         i += diff;
         cur_case++;
     }
-    aoStrCatPrintf(buf,".long %s-%s\n\t",
+    aoStrCatPrintf(buf,".s64 %s-%s\n\t",
             end_label->data,
             jump_table_start->data);
 
 
-    for (unsigned long i = 0; i < cases->size; ++i) {
+    for (u64 i = 0; i < cases->size; ++i) {
         Ast *_case = cases->entries[i];
         asmExpression(cc,buf,_case);
     }
@@ -2212,7 +2212,7 @@ void asmDataInternal(AoStr *buf, Ast *data) {
 
     switch (data->type->size) {
         case 1: aoStrCatPrintf(buf, ".byte %d\n\t", data->i64); break;
-        case 4: aoStrCatPrintf(buf, ".long %d\n\t", data->i64); break;
+        case 4: aoStrCatPrintf(buf, ".s64 %d\n\t", data->i64); break;
         case 8: aoStrCatPrintf(buf, ".quad %d\n\t", data->i64); break;
         default:
             loggerPanic("Cannot create size information for: %s\n",
@@ -2398,7 +2398,7 @@ int asmFunctionInit(Cctrl *cc, AoStr *buf, Ast *func) {
         }
     }
 
-    for (unsigned long i = 0; i < func->params->size; ++i) {
+    for (u64 i = 0; i < func->params->size; ++i) {
         ast_tmp = vecGet(Ast *, func->params, i);
         switch (ast_tmp->kind) {
         case AST_DEFAULT_PARAM:
@@ -2424,7 +2424,7 @@ int asmFunctionInit(Cctrl *cc, AoStr *buf, Ast *func) {
 
     /* We can use register arguments */
     offset = stack_space;
-    for (unsigned long i = 0; i < func->params->size; ++i) {
+    for (u64 i = 0; i < func->params->size; ++i) {
         ast_tmp = vecGet(Ast *, func->params, i);
 
         if (ast_tmp->kind != AST_VAR_ARGS && astIsFloatType(ast_tmp->type)) {

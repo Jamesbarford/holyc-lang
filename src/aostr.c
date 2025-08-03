@@ -16,11 +16,11 @@ static AoStr *_aoStrAlloc(void) {
     return (AoStr *)globalArenaAllocate(sizeof(AoStr));
 }
 
-static char *aoStrBufferAlloc(size_t capacity) {
+static char *aoStrBufferAlloc(u64 capacity) {
     return (char *)globalArenaAllocate((unsigned int)capacity);
 }
 
-AoStr *aoStrAlloc(size_t capacity) {
+AoStr *aoStrAlloc(u64 capacity) {
     AoStr *buf = _aoStrAlloc();
     capacity += 10;
     buf->capacity = capacity;
@@ -47,8 +47,8 @@ char *aoStrMove(AoStr *buf) {
 }
 
 /* Grow the capacity of the string buffer by `additional` space */
-int aoStrExtendBuffer(AoStr *buf, size_t additional) {
-    size_t new_capacity = (buf->capacity*2) + additional;
+int aoStrExtendBuffer(AoStr *buf, u64 additional) {
+    u64 new_capacity = (buf->capacity*2) + additional;
     assert(new_capacity > buf->capacity);
     if (new_capacity <= buf->capacity) {
         return -1;
@@ -66,7 +66,7 @@ int aoStrExtendBuffer(AoStr *buf, size_t additional) {
 
 /* Only extend the buffer if the additional space required would overspill the
  * current allocated capacity of the buffer */
-static int aoStrExtendBufferIfNeeded(AoStr *buf, size_t additional) {
+static int aoStrExtendBufferIfNeeded(AoStr *buf, u64 additional) {
     if ((buf->len + additional + 1) >= buf->capacity) {
         return aoStrExtendBuffer(buf, additional+1);
     }
@@ -74,13 +74,13 @@ static int aoStrExtendBufferIfNeeded(AoStr *buf, size_t additional) {
 }
 
 void aoStrToLowerCase(AoStr *buf) {
-    for (size_t i = 0; i < buf->len; ++i) {
+    for (u64 i = 0; i < buf->len; ++i) {
         buf->data[i] = tolower(buf->data[i]);
     }
 }
 
 void aoStrToUpperCase(AoStr *buf) {
-    for (size_t i = 0; i < buf->len; ++i) {
+    for (u64 i = 0; i < buf->len; ++i) {
         buf->data[i] = toupper(buf->data[i]);
     }
 }
@@ -98,13 +98,13 @@ void aoStrRepeatChar(AoStr *buf, char ch, int times) {
 }
 
 int aoStrCmp(AoStr *b1, AoStr *b2) {
-    size_t l1 = b1->len;
-    size_t l2 = b2->len;
+    u64 l1 = b1->len;
+    u64 l2 = b2->len;
     return l1==l2&&!memcmp(b1->data, b2->data, l1);
 }
 
-AoStr *aoStrDupRaw(char *s, size_t len) {
-    size_t capacity = len+10;
+AoStr *aoStrDupRaw(char *s, u64 len) {
+    u64 capacity = len+10;
     AoStr *dupe = aoStrAlloc(capacity);
     memcpy(dupe->data, s, len);
     dupe->len = len;
@@ -122,7 +122,7 @@ AoStr *aoStrDup(AoStr *buf) {
     return dupe;
 }
 
-void aoStrCatLen(AoStr *buf, const void *d, size_t len) {
+void aoStrCatLen(AoStr *buf, const void *d, u64 len) {
     aoStrExtendBufferIfNeeded(buf, len);
     memcpy(buf->data + buf->len, d, len);
     buf->len += len;
@@ -134,7 +134,7 @@ void aoStrCatAoStr(AoStr *buf, AoStr *s2) {
 }
 
 void aoStrCat(AoStr *buf, const void *d) {
-    size_t len = strlen(d);
+    u64 len = strlen(d);
     aoStrCatLen(buf, d, len);
 }
 
@@ -145,7 +145,7 @@ void aoStrCatRepeat(AoStr *buf, char *str, int times) {
     }
 }
 
-char *aoStrEncodeChar(long op) {
+char *aoStrEncodeChar(s64 op) {
     static char buf[4];
     switch(op) {
     case '\\':               return "\\";
@@ -297,7 +297,7 @@ void aoStrArrayRelease(AoStr **arr, int count) {
  */
 AoStr **aoStrSplit(char *to_split, char delimiter, int *_count) {
     AoStr **outArr;
-    long start, end;
+    s64 start, end;
     char *ptr = to_split;
 
     if (*ptr == delimiter) {
@@ -346,12 +346,12 @@ error:
     return NULL;
 }
 
-static char *mprintVaImpl(const char *fmt, va_list ap, size_t *_len, size_t *_allocated) {
+static char *mprintVaImpl(const char *fmt, va_list ap, u64 *_len, u64 *_allocated) {
     va_list copy;
 
     /* Probably big enough */
-    size_t fmt_len = strlen(fmt);
-    size_t bufferlen = 1024;
+    u64 fmt_len = strlen(fmt);
+    u64 bufferlen = 1024;
     if (fmt_len > bufferlen) {
         bufferlen = fmt_len;
     }
@@ -384,13 +384,13 @@ static char *mprintVaImpl(const char *fmt, va_list ap, size_t *_len, size_t *_al
     return buf;
 }
 
-char *mprintVa(const char *fmt, va_list ap, ssize_t *_len) {
-    return mprintVaImpl(fmt,ap,(size_t *)_len,NULL);
+char *mprintVa(const char *fmt, va_list ap, s64 *_len) {
+    return mprintVaImpl(fmt,ap,(u64 *)_len,NULL);
 }
 
 static AoStr *aoStrPrintfVa(const char *fmt, va_list ap) {
-    size_t len = 0;
-    size_t capacity = 0;
+    u64 len = 0;
+    u64 capacity = 0;
     char *new_buf = mprintVaImpl(fmt,ap,&len,&capacity);
     AoStr *buffer = _aoStrAlloc();
     buffer->data = new_buf;
@@ -420,7 +420,7 @@ void aoStrCatPrintf(AoStr *b, const char *fmt, ...) {
     va_end(ap);
 }
 
-char *mprintFmtVa(const char *fmt, va_list ap, size_t *_len, size_t *_allocated) {
+char *mprintFmtVa(const char *fmt, va_list ap, u64 *_len, u64 *_allocated) {
     AoStr _buf = { .data = aoStrBufferAlloc(256), .len = 0, .capacity = 256 };
     AoStr *buf = &_buf;
     const char *ptr = fmt;
@@ -447,7 +447,7 @@ char *mprintFmtVa(const char *fmt, va_list ap, size_t *_len, size_t *_allocated)
 
                     case '.': {
                         if (*(ptr+1) == '*' && *(ptr+2) == 's') {
-                            ssize_t len = va_arg(ap,ssize_t);
+                            s64 len = va_arg(ap,ssize_t);
                             char *str = va_arg(ap,char*);
                             aoStrCatLen(buf,str,len);
                             ptr += 2;
@@ -458,19 +458,19 @@ char *mprintFmtVa(const char *fmt, va_list ap, size_t *_len, size_t *_allocated)
                     }
 
                     case 'U': {
-                        size_t uint_ = va_arg(ap, size_t);
+                        u64 uint_ = va_arg(ap, size_t);
                         aoStrCatPrintf(buf,"%zu",uint_);
                         break;
                     }
 
                     case 'u': {
-                        unsigned int uint_ = va_arg(ap, unsigned int);
+                        u32 uint_ = va_arg(ap, unsigned int);
                         aoStrCatPrintf(buf,"%u",uint_);
                         break;
                     }
 
                     case 'I': {
-                        ssize_t int_ = va_arg(ap, ssize_t);
+                        s64 int_ = va_arg(ap, ssize_t);
                         aoStrCatPrintf(buf,"%lld",int_);
                         break;
                     }
@@ -526,8 +526,8 @@ done:
 void aoStrCatFmt(AoStr *buf, const char *fmt, ...) {
     va_list ap;
     va_start(ap,fmt);
-    size_t buffer_len = 0;
-    size_t buffer_capacity = 0;
+    u64 buffer_len = 0;
+    u64 buffer_capacity = 0;
     char *buffer = mprintFmtVa(fmt,ap,&buffer_len,&buffer_capacity);
     aoStrCatLen(buf,buffer,buffer_len);
     va_end(ap);
@@ -555,43 +555,43 @@ AoStr *aoStrError(void) {
     return str;
 }
 
-AoStr *aoStrIntToHumanReadableBytes(long bytes) {
+AoStr *aoStrIntToHumanReadableBytes(s64 bytes) {
     AoStr *str = aoStrAlloc(32);
     double d;
 
     if (bytes < 1024) {
         aoStrCatFmt(str, "%uB", bytes);
     } else if (bytes < (1024*1024)) {
-        d = (double)bytes/(1024);
+        d = (f64)bytes/(1024);
         aoStrCatPrintf(str, "%.2fK", d);
     } else if (bytes < (1024LL*1024*1024)) {
-        d = (double)bytes/(1024*1024);
+        d = (f64)bytes/(1024*1024);
         aoStrCatPrintf(str, "%.2fM", d);
-    } else if ((long long)bytes < (1024LL*1024*1024*1024)) {
-        d = (double)bytes/(1024LL*1024*1024);
+    } else if ((u64)bytes < (1024LL*1024*1024*1024)) {
+        d = (f64)bytes/(1024LL*1024*1024);
         aoStrCatPrintf(str, "%.2fG", d);
     }
     return str;
 }
 
 /* Murmur hash function modified to return a `unsigned long` */
-static unsigned long murmur(const char *key, unsigned long len, unsigned long seed) {
-    const unsigned char *data = (const unsigned char*)key;
+static u64 murmur(const char *key, u64 len, u64 seed) {
+    const u8 *data = (const u8*)key;
     const int nblocks = len / 8;
 
-    unsigned long h1 = seed;
-    unsigned long h2 = seed;
+    u64 h1 = seed;
+    u64 h2 = seed;
 
-    const unsigned long c1 = 0x87c37b91114253d5ULL;
-    const unsigned long c2 = 0x4cf5ad432745937fULL;
+    const u64 c1 = 0x87c37b91114253d5ULL;
+    const u64 c2 = 0x4cf5ad432745937fULL;
 
 #define ROT(x,n1,n2) ((x << n1) | (x >> n2))
 
     // Body
-    const unsigned long *blocks = (const unsigned long *)(data);
+    const u64 *blocks = (const u64 *)(data);
 
     for (int i = 0; i < nblocks; i++) {
-        unsigned long k1 = blocks[i];
+        u64 k1 = blocks[i];
 
         k1 *= c1; 
         k1 = ROT(k1, 31 ,33);
@@ -609,8 +609,8 @@ static unsigned long murmur(const char *key, unsigned long len, unsigned long se
     }
 
     // Tail
-    const unsigned char *tail = (const unsigned char*)(data + nblocks*8);
-    unsigned long k1 = 0;
+    const u8 *tail = (const u8*)(data + nblocks*8);
+    u64 k1 = 0;
 
     switch (len & 7) {
     case 7: k1 ^= ((unsigned long)tail[6]) << 48; /* FALLTHROUGH */
@@ -659,9 +659,9 @@ static unsigned long murmur(const char *key, unsigned long len, unsigned long se
 /* Seed for the murmur hash function, this is a meme number but works
  * surprisingly well */
 #define MURMUR_HASH_SEED (0xBABECAFE69)
-unsigned long cstringMurmur(char *key, long len) {
-//    unsigned long hash = 0;
-//    for (long i = 0; i < len; ++i) {
+u64 cstringMurmur(char *key, s64 len) {
+//    u64 hash = 0;
+//    for (s64 i = 0; i < len; ++i) {
 //        hash = ((hash << 5) - hash) + key[i];
 //    }
 //    return hash;
@@ -669,11 +669,11 @@ unsigned long cstringMurmur(char *key, long len) {
     return murmur(key, len, MURMUR_HASH_SEED);
 }
 
-unsigned long aoStrHashFunction(AoStr *str) {
+u64 aoStrHashFunction(AoStr *str) {
     return cstringMurmur(str->data, str->len);
 }
 
-size_t aoStrGetLen(AoStr *buf) {
+u64 aoStrGetLen(AoStr *buf) {
     return buf->len;
 }
 
@@ -683,7 +683,7 @@ AoStr *aoStrIdentity(AoStr *buf) {
 
 int aoStrEq(AoStr *b1, AoStr *b2) {
     if (b1 == b2) return 1;
-    size_t l1 = b1->len;
-    size_t l2 = b2->len;
+    u64 l1 = b1->len;
+    u64 l2 = b2->len;
     return l1==l2&&!memcmp(b1->data, b2->data, l1);
 }

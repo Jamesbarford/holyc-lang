@@ -5,6 +5,7 @@
 #include "cctrl.h"
 #include "containers.h"
 #include "mempool.h"
+#include "types.h"
 
 enum bbType {
     BB_GARBAGE       = -1,
@@ -56,7 +57,7 @@ typedef struct BasicBlock {
     int type;
     /* For denoting a loop head / end, not a big fan of having flags AND 
      * a type field but I presently can't think of a better way for loops. */
-    unsigned int flags;
+    u32 flags;
     int block_no;
     int visited;
 
@@ -99,7 +100,7 @@ typedef struct CFG {
 typedef struct CFGBuilder {
     int bb_count;
     int bb_block_no;
-    unsigned long flags;
+    u64 flags;
     Cctrl *cc;
     CFG *cfg;
     MemPool *block_pool;
@@ -117,7 +118,7 @@ typedef struct CFGBuilder {
 BasicBlock *bbNew(int type);
 BasicBlock *bbAddNext(BasicBlock *cur, int type, BasicBlock *next);
 char *bbTypeToString(int type);
-char *bbFlagsToString(unsigned int flags);
+char *bbFlagsToString(u32 flags);
 char *bbPreviousBlockNumbersToString(BasicBlock *bb);
 int bbPrevHas(BasicBlock *bb, int block_no);
 BasicBlock *cfgGet(CFG *cfg, int block_no);
