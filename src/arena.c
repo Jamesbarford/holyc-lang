@@ -5,7 +5,7 @@
 #include "aostr.h"
 #include "arena.h"
 
-static ArenaBlock *arenaBlockNew(unsigned int capacity) {
+static ArenaBlock *arenaBlockNew(u32 capacity) {
     ArenaBlock *block = (ArenaBlock *)malloc(sizeof(ArenaBlock));
     block->capacity = capacity;
     block->used = 0;
@@ -22,12 +22,12 @@ static void arenaBlockRelease(ArenaBlock *block) {
 }
 
 /* Align to 8 bytes */
-static unsigned int arenaAlignMemorySize(unsigned int size) {
+static u32 arenaAlignMemorySize(u32 size) {
     static const int alignment = 8;
     return (size + (alignment - 1)) & ~(alignment - 1);
 }
 
-void arenaInit(Arena *arena, unsigned int capacity) {
+void arenaInit(Arena *arena, u32 capacity) {
     arena->tail = NULL;
     arena->block_capacity = arenaAlignMemorySize(capacity);
     assert(arena->block_capacity > 0);
@@ -35,15 +35,15 @@ void arenaInit(Arena *arena, unsigned int capacity) {
     arena->head = arenaBlockNew(arena->block_capacity);
 }
 
-Arena *arenaNew(unsigned int capacity) {
+Arena *arenaNew(u32 capacity) {
     Arena *arena = (Arena *)malloc(sizeof(Arena));
     arenaInit(arena, capacity);
     return arena;
 }
 
-void *arenaAlloc(Arena *arena, unsigned int size) {
+void *arenaAlloc(Arena *arena, u32 size) {
     /* Allocate aligned memory only */
-    unsigned int allocation_size = arenaAlignMemorySize(size);
+    u32 allocation_size = arenaAlignMemorySize(size);
     /* Keep a track of how big this is getting */
     arena->used += allocation_size;
     /* If we are allocating something larger than the block allocation_size,
@@ -98,12 +98,12 @@ void arenaRelease(Arena *arena) {
 }
 
 void arenaPrintStats(Arena *arena) {
-    unsigned int total_blocks = 0;
-    unsigned int total_capacity = 0;
-    unsigned int total_used = 0;
-    unsigned int big_allocs = 0;
-    unsigned int total_non_full_blocks = 0;
-    unsigned int total_diff = 0;
+    u32 total_blocks = 0;
+    u32 total_capacity = 0;
+    u32 total_used = 0;
+    u32 big_allocs = 0;
+    u32 total_non_full_blocks = 0;
+    u32 total_diff = 0;
 
     if (arena->head) {
         total_blocks++;
@@ -128,7 +128,7 @@ void arenaPrintStats(Arena *arena) {
         block = block->next;
     }
 
-    unsigned int average_unused_amount = total_diff == 0 || total_non_full_blocks == 0 ? 0 : total_diff / total_non_full_blocks;
+    u32 average_unused_amount = total_diff == 0 || total_non_full_blocks == 0 ? 0 : total_diff / total_non_full_blocks;
 
     AoStr *total_mem = aoStrIntToHumanReadableBytes((long) total_capacity);
     AoStr *total_allocated = aoStrIntToHumanReadableBytes((long)total_used);

@@ -46,36 +46,36 @@ int parseIsFunctionCall(Ast *ast) {
            ast->kind == AST_ASM_FUNCALL);
 }
 
-void assertIsFloat(Ast *ast, long lineno) {
+void assertIsFloat(Ast *ast, s64 lineno) {
     if (ast && !astIsFloatType(ast->type)) {
-        loggerPanic("line %ld: Expected float type got %s\n",
+        loggerPanic("line %lld: Expected float type got %s\n",
                 lineno,astTypeToString(ast->type));
     }
 }
 
-void assertIsInt(Ast *ast, long lineno) {
+void assertIsInt(Ast *ast, s64 lineno) {
     if (ast && !astIsIntType(ast->type)) {
-        loggerPanic("line %ld: Expected int type got %s\n",
+        loggerPanic("line %lld: Expected int type got %s\n",
                 lineno, astTypeToString(ast->type));
     }
 }
 
-void assertIsFloatOrInt(Ast *ast, long lineno) {
+void assertIsFloatOrInt(Ast *ast, s64 lineno) {
     if (!parseIsFloatOrInt(ast)) {
-        loggerPanic("line %ld: Expected float got %s\n",
+        loggerPanic("line %lld: Expected float got %s\n",
                 lineno, astTypeToString(ast->type));
     }
 }
 
-void assertIsPointer(Ast *ast, long lineno) {
+void assertIsPointer(Ast *ast, s64 lineno) {
     if (!ast || ast->type->kind != AST_TYPE_POINTER) {
-        loggerPanic("line %ld: Expected float got %s\n",
+        loggerPanic("line %lld: Expected float got %s\n",
                 lineno,astTypeToString(ast->type));
     }
 }
 
 char *assertionTerminatorMessage(Cctrl *cc, Lexeme *tok,
-                                 long terminator_flags)
+                                 s64 terminator_flags)
 {
     if ((terminator_flags & PUNCT_TERM_SEMI) &&
         (terminator_flags & PUNCT_TERM_COMMA)) {
@@ -94,7 +94,7 @@ char *assertionTerminatorMessage(Cctrl *cc, Lexeme *tok,
 
 /* Check if one of the characters matches and the flag wants that character to
  * terminate */
-void assertTokenIsTerminator(Cctrl *cc, Lexeme *tok, long terminator_flags) {
+void assertTokenIsTerminator(Cctrl *cc, Lexeme *tok, s64 terminator_flags) {
     if (tok == NULL) {
         cctrlRaiseException(cc,"NULL token passed to assertTokenIsTerminator");
     }
@@ -109,7 +109,7 @@ void assertTokenIsTerminator(Cctrl *cc, Lexeme *tok, long terminator_flags) {
     AoStr *info_msg = NULL;
     Lexeme *next = cctrlTokenPeek(cc);
     if (tok->line != next->line) {
-        ssize_t next = cc->lineno+1;
+        s64 next = cc->lineno+1;
         while (cc->lineno <= next) {
             cctrlTokenGet(cc);
         }
@@ -133,7 +133,7 @@ void assertTokenIsTerminator(Cctrl *cc, Lexeme *tok, long terminator_flags) {
 }
 
 void assertTokenIsTerminatorWithMsg(Cctrl *cc, Lexeme *tok,
-                                    long terminator_flags,
+                                    s64 terminator_flags,
                                     const char *fmt, ...)
 {
     if ((tok->i64 == ';' && (terminator_flags & PUNCT_TERM_SEMI)) ||
@@ -264,7 +264,7 @@ double evalFloatExpr(Ast *ast) {
     return result;
 }
 
-long evalIntArithmeticOrErr(Ast *ast, int *_ok) {
+s64 evalIntArithmeticOrErr(Ast *ast, int *_ok) {
 #define eval evalIntArithmeticOrErr
     if (!astCanEval(ast,_ok,0)) {
         *_ok = 0;
@@ -309,11 +309,11 @@ long evalIntArithmeticOrErr(Ast *ast, int *_ok) {
 #undef eval
 }
 
-long evalOneIntExprOrErr(Ast *LHS, Ast *RHS, AstBinOp op, int *_ok) {
+s64 evalOneIntExprOrErr(Ast *LHS, Ast *RHS, AstBinOp op, int *_ok) {
     if (LHS->kind == AST_LITERAL && RHS->kind == AST_LITERAL) {
-        ssize_t left =  astIsIntType(LHS->type) ? LHS->i64 : (ssize_t)LHS->f64;
-        ssize_t right = astIsIntType(RHS->type) ? RHS->i64 : (ssize_t)LHS->f64;
-        ssize_t result = 0;
+        s64 left =  astIsIntType(LHS->type) ? LHS->i64 : (ssize_t)LHS->f64;
+        s64 right = astIsIntType(RHS->type) ? RHS->i64 : (ssize_t)LHS->f64;
+        s64 result = 0;
         switch (op) {
             case AST_BIN_OP_ADD:  result = left + right; break;
             case AST_BIN_OP_SUB:  result = left - right; break;
@@ -336,7 +336,7 @@ long evalOneIntExprOrErr(Ast *LHS, Ast *RHS, AstBinOp op, int *_ok) {
     return 0;
 }
 
-long evalIntConstExprOrErr(Ast *ast, int *_ok) {
+s64 evalIntConstExprOrErr(Ast *ast, int *_ok) {
     switch (ast->kind) {
         case AST_LITERAL: {
             if (astIsIntType(ast->type)) {
@@ -438,9 +438,9 @@ long evalIntConstExprOrErr(Ast *ast, int *_ok) {
     return 0;
 }
 
-long evalIntConstExpr(Ast *ast) {
+s64 evalIntConstExpr(Ast *ast) {
     int ok = 1;
-    ssize_t res = evalIntConstExprOrErr(ast,&ok);
+    s64 res = evalIntConstExprOrErr(ast,&ok);
     if (!ok) {
         loggerPanic("Expected integer expression: %s\n", astToString(ast));
     }
@@ -464,23 +464,23 @@ int assertLValue(Ast *ast) {
 }
 
 void assertUniqueSwitchCaseLabels(Vec *case_vector, Ast *case_) {
-    for (unsigned long i = 0; i < case_vector->size; ++i) {
+    for (u64 i = 0; i < case_vector->size; ++i) {
         Ast *cur = case_vector->entries[i];
         if (case_->case_end < cur->case_begin ||
             cur->case_begin < case_->case_begin) {
             continue;
         }
         if (case_->case_begin == cur->case_end) {
-            for (unsigned long j = 0; j < case_vector->size; ++j) {
+            for (u64 j = 0; j < case_vector->size; ++j) {
                 astPrint(case_vector->entries[i]);
             }
-            loggerPanic("Duplicate case value: %ld\n",case_->case_begin);
+            loggerPanic("Duplicate case value: %lld\n",case_->case_begin);
         }
-        loggerPanic("Duplicate case value: %ld\n",case_->case_begin);
+        loggerPanic("Duplicate case value: %lld\n",case_->case_begin);
     }
 }
 
-void typeCheckWarn(Cctrl *cc, long op, Ast *expected, Ast *actual) {
+void typeCheckWarn(Cctrl *cc, s64 op, Ast *expected, Ast *actual) {
     AoStr *expected_type = astTypeToColorAoStr(expected->type);
     AoStr *actual_type = astTypeToColorAoStr(actual->type);
     char *actual_str = astToString(actual);

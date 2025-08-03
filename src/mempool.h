@@ -2,6 +2,7 @@
 #define MEMPOOL_H__
 
 #include <pthread.h>
+#include "types.h"
 
 typedef enum {
     MEMPOOL_OK = 0,                          
@@ -15,28 +16,28 @@ typedef void memPoolDeallocate(void *owner, void *ptr);
 
 typedef struct MemChunk MemChunk;
 typedef struct MemChunk {
-    unsigned int segment_id; /* Which segment this block belongs to */
-    unsigned int size;       /* How big this chunk is */
+    u32 segment_id; /* Which segment this block belongs to */
+    u32 size;       /* How big this chunk is */
     MemChunk *next;          /* Next bump */
     char free;               /* Is this block free? */
 } __attribute__((aligned(8))) MemChunk;
 
 typedef struct MemSegment {
-    unsigned int id;        /* Id of this segment */
+    u32 id;        /* Id of this segment */
     MemChunk *list;         /* The memory list, which is an offset to the
                              * buffer */
 
     void *buffer;           /* The memory for this segment */
-    unsigned int allocated; /* How much memory has been allocated */
+    u32 allocated; /* How much memory has been allocated */
 } MemSegment;
 
 typedef struct MemPool {
     MemSegment **segments;         /* Segments array */
-    unsigned int segments_array_capacity; /* The capacity of the segments array */
+    u32 segments_array_capacity; /* The capacity of the segments array */
 
-    unsigned int segment_count;    /* How many segments we have */
+    u32 segment_count;    /* How many segments we have */
 
-    unsigned int segment_capacity; /* The size in bytes of a segment. Cannot
+    u32 segment_capacity; /* The size in bytes of a segment. Cannot
                                     * allocate anything bigger than this */
 
     pthread_mutex_t mutex;         /* Lock for the pool to allow for multi
@@ -56,10 +57,10 @@ char *memChunkToString(MemChunk *chunk);
 char *memPoolToString(MemPool *pool);
 char *memSegmentToString(MemSegment *segment);
 
-MemPool *memPoolNew(unsigned int bytes);
-void memPoolInit(MemPool *pool, unsigned int bytes);
-void *memPoolAlloc(MemPool *pool, unsigned int size);
-void *memPoolTryAlloc(MemPool *pool, unsigned int size);
+MemPool *memPoolNew(u32 bytes);
+void memPoolInit(MemPool *pool, u32 bytes);
+void *memPoolAlloc(MemPool *pool, u32 size);
+void *memPoolTryAlloc(MemPool *pool, u32 size);
 void memPoolSetDeallocate(MemPool *pool, memPoolDeallocate *deallocate);
 void memPoolRelease(MemPool *pool, char free_pool);
 void memPoolFree(MemPool *pool, void *ptr);
@@ -67,7 +68,7 @@ void memPoolFree(MemPool *pool, void *ptr);
 typedef struct MemPoolIterator {
     MemPool *pool;
     MemChunk *chunk;
-    unsigned int segment_id;
+    u32 segment_id;
 } MemPoolIterator;
 
 MemPoolIterator *memPoolIteratorNew(MemPool *pool);

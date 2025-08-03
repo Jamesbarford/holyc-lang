@@ -475,7 +475,7 @@ static void cfgCreatePictureUtil(CfgGraphVizBuilder *builder,
 
         case BB_SWITCH: {
             bbPrintf(builder,bb);
-            for (unsigned long i = 0; i < bb->next_blocks->size; ++i) {
+            for (u64 i = 0; i < bb->next_blocks->size; ++i) {
                 BasicBlock *it = vecGet(BasicBlock *,bb->next_blocks,i);
                 cfgCreatePictureUtil(builder,it,seen);
             }
@@ -636,7 +636,7 @@ static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
             }
 
             case BB_SWITCH: {
-                for (unsigned long i = 0; i < cur->next_blocks->size; ++i) {
+                for (u64 i = 0; i < cur->next_blocks->size; ++i) {
                     BasicBlock *bb = vecGet(BasicBlock *,cur->next_blocks,i);
                     aoStrCatPrintf(builder->viz,
                             BB_FMT_BLACK_SOLID,
@@ -662,7 +662,7 @@ static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
                 break;
 
             default:
-                loggerWarning("Unhandled! loopidx=%ld: bb%d %s\n",
+                loggerWarning("Unhandled! loopidx=%llu: bb%d %s\n",
                     it.idx,cur->block_no,bbToString(cur));
         }
     }
@@ -696,7 +696,7 @@ void cfgBuilderWriteToFile(CfgGraphVizBuilder *builder, char *filename) {
                 filename,strerror(errno));
     }
 
-    ssize_t written = write(fd, cfg_string->data, cfg_string->len);
+    s64 written = write(fd, cfg_string->data, cfg_string->len);
     if (written != (ssize_t)cfg_string->len) {
         loggerPanic("Failed to write CFG '%s'\n", filename);
     }
@@ -718,7 +718,7 @@ void cfgsToFile(Vec *cfgs, char *filename) {
     cfgGraphVizBuilderInit(&builder);
 
     aoStrCat(builder.viz,"digraph user_program {\n ");
-    for (unsigned long i = 0; i < cfgs->size; ++i) {
+    for (u64 i = 0; i < cfgs->size; ++i) {
         cfgCreateGraphViz(&builder,(CFG *)cfgs->entries[i]);
     }
     aoStrCatPrintf(builder.viz, "} // ending graph\n");

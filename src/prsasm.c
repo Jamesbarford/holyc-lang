@@ -117,7 +117,7 @@ void prsAsmLabel(Cctrl *cc, AoStr *buf) {
         cctrlRaiseException(cc,": Labels must be: '@@<int>'");
     }
     
-    long label_num = tok->i64;
+    s64 label_num = tok->i64;
     Lexeme *next = cctrlTokenPeek(cc);
     AoStr *label = aoStrDup(cc->tmp_asm_fname);
     aoStrToLowerCase(label);
@@ -192,7 +192,7 @@ Ast *prsAsmToATT(Cctrl *cc, int parse_one) {
             case TK_KEYWORD: {
                 if (tok->i64 == KW_SIZEOF) {
                     Ast *sizeof_ast = parseSizeof(cc);
-                    unsigned long size = (unsigned long)sizeof_ast->i64;
+                    u64 size = (unsigned long)sizeof_ast->i64;
                     switch (count) {
                         case 1:
                             count++;

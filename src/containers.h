@@ -2,6 +2,7 @@
 #define CONTAINERS_H__
 
 #include "aostr.h"
+#include "types.h"
 
 #define MAP_LOAD 0.60
 
@@ -28,8 +29,8 @@ struct VecType {
 
 /* For pointers */
 struct Vec {
-    unsigned long size;
-    unsigned long capacity;
+    u64 size;
+    u64 capacity;
     void **entries;
     VecType *type;
 };
@@ -42,14 +43,14 @@ struct Vec {
 
 Vec *vecNew(VecType *type);
 Vec *vecNewFrom(VecType *type, ...);
-void vecReserve(Vec *vec, unsigned long capacity);
+void vecReserve(Vec *vec, u64 capacity);
 void vecPush(Vec *vec, void *value);
-void vecPushInt(Vec *vec, unsigned long value);
+void vecPushInt(Vec *vec, u64 value);
 void *vecPop(Vec *vec, int *_ok);
 int vecRemove(Vec *vec, void *value);
-int vecRemoveAt(Vec *vec, unsigned long idx);
-void vecInsertAt(Vec *vec, void *value, unsigned long idx);
-void *vecGetAt(Vec *vec, unsigned long idx);
+int vecRemoveAt(Vec *vec, u64 idx);
+void vecInsertAt(Vec *vec, void *value, u64 idx);
+void *vecGetAt(Vec *vec, u64 idx);
 int vecHas(Vec *vec, void *needle);
 void vecRelease(Vec *vec);
 void vecClear(Vec *vec);
@@ -73,8 +74,8 @@ typedef struct MapType MapType;
 #define MAP_FLAG_DELETED (1<<2)
 
 typedef int (mapKeyMatch)(void *v1, void *v2);
-typedef unsigned long (mapKeyHash)(void *value);
-typedef long (mapKeyLen)(void *value);
+typedef u64 (mapKeyHash)(void *value);
+typedef s64 (mapKeyLen)(void *value);
 typedef AoStr *(mapKeyToString)(void *value);
 typedef AoStr *(mapValueToString)(void *value);
 typedef void (mapValueRelease)(void *value);
@@ -93,17 +94,17 @@ struct MapType {
 };
 
 struct MapNode {
-    unsigned int flags;
+    u32 flags;
     void *key;
     void *value;
-    long key_len;
+    s64 key_len;
 };
 
 struct Map {
-    unsigned long size;
-    unsigned long capacity;
-    unsigned long mask;
-    unsigned long threashold;
+    u64 size;
+    u64 capacity;
+    u64 mask;
+    u64 threashold;
     MapNode *entries;
     Vec *indexes;
     MapType *type;
@@ -112,7 +113,7 @@ struct Map {
      * immediately followed by a `mapGet(...)` so we cache the key on
      * `mapHas(...)` */
     void *cached_key;
-    unsigned long cached_idx;
+    u64 cached_idx;
 };
 
 #define mapSetValueToString(map, func) ((map)->type->value_to_string = (func))
@@ -123,21 +124,21 @@ struct Map {
 struct MapIter {
     Map *map;
     MapNode *node;
-    unsigned long idx;
-    unsigned long vecidx;
+    u64 idx;
+    u64 vecidx;
 };
 
-Map *mapNew(unsigned long capacity, MapType *type);
-Map *mapNewWithParent(Map *parent, unsigned long capacity, MapType *type);
+Map *mapNew(u64 capacity, MapType *type);
+Map *mapNewWithParent(Map *parent, u64 capacity, MapType *type);
 int mapAdd(Map *map, void *key, void *value);
 int mapAddOrErr(Map *map, void *key, void *value);
-int mapAddLen(Map *map, char *key, long key_len, void *value);
+int mapAddLen(Map *map, char *key, s64 key_len, void *value);
 void mapRemove(Map *map, void *key);
 int mapHas(Map *map, void *key);
 int mapHasAll(Map *map, ...);
 void *mapGet(Map *map, void *key);
-void *mapGetLen(Map *map, char *key, long len);
-void *mapGetAt(Map *map, unsigned long index);
+void *mapGetLen(Map *map, char *key, s64 len);
+void *mapGetAt(Map *map, u64 index);
 void mapClear(Map *map);
 void mapRelease(Map *map);
 MapIter *mapIterNew(Map *map);
@@ -151,17 +152,17 @@ void mapMerge(Map *map1, Map *map2);
 void mapPrintStats(Map *map);
 
 int mapIntKeyMatch(void *a, void *b);
-long mapIntKeyLen(void *key);
-unsigned long mapIntKeyHash(void *key);
+s64 mapIntKeyLen(void *key);
+u64 mapIntKeyHash(void *key);
 AoStr *mapIntToString(void *key);
 int mapAoStrKeyMatch(void *s1, void *s2);
-long mapAoStrLen(void *s);
+s64 mapAoStrLen(void *s);
 AoStr *mapAoStrToString(void *s);
 void mapAoStrRelease(void *s);
-unsigned long mapCStringHashLen(void *str, long len);
-unsigned long mapCStringHash(void *str);
+u64 mapCStringHashLen(void *str, s64 len);
+u64 mapCStringHash(void *str);
 int mapCStringEq(void *s1, void *s2);
-long mapCStringLen(void *s);
+s64 mapCStringLen(void *s);
 AoStr *mapCStringToString(void *s);
 
 extern MapType map_cstring_cstring_type;
@@ -176,10 +177,10 @@ typedef struct SetType SetType;
 typedef struct SetNode SetNode;
 
 typedef int (setValueMatch)(void *v1, void *v2);
-typedef unsigned long (setValueHash)(void *value);
+typedef u64 (setValueHash)(void *value);
 typedef AoStr *(setValueToString)(void *value);
 typedef void (setValueRelease)(void *value);
-typedef long (setKeyLen)(void *key);
+typedef s64 (setKeyLen)(void *key);
 
 struct SetType {
     setValueMatch *match;
@@ -193,17 +194,17 @@ struct SetType {
 struct SetNode {
     int occupied;
     void *key;
-    long key_len;
+    s64 key_len;
 };
 
 extern SetType set_aostr_type;
 extern SetType set_int_type;
 
 struct Set {
-    unsigned long size;
-    unsigned long capacity;
-    unsigned long mask;
-    unsigned long threashold;
+    u64 size;
+    u64 capacity;
+    u64 mask;
+    u64 threashold;
     SetNode *entries;
     Vec *indexes;
     SetType *type;
@@ -220,19 +221,19 @@ struct SetIter {
     /* Set being iterated over */
     Set *set;
     /* The user facing index which the size relative to the size of the Set */
-    unsigned long idx;
+    u64 idx;
     /* The internal index into the vector of indexes */
-    unsigned long vecidx;
+    u64 vecidx;
     /* Current value being pointed to */
     void *value;
 };
 
-Set *setNew(unsigned long capacity, SetType *type);
+Set *setNew(u64 capacity, SetType *type);
 int setAdd(Set *set, void *key);
 void *setRemove(Set *set, void *key);
 int setHas(Set *set, void *key);
-int setHasLen(Set *set, char *key, long len);
-void *setGetAt(Set *set, long index);
+int setHasLen(Set *set, char *key, s64 len);
+void *setGetAt(Set *set, s64 index);
 void setClear(Set *set);
 void setRelease(Set *set);
 SetIter *setIterNew(Set *set);
@@ -257,5 +258,5 @@ extern SetType set_cstring_type;
 /* `Set<char *>` the set owns the `char *`*/
 extern SetType set_cstring_owned_type;
 
-unsigned long roundUpToNextPowerOf2(unsigned long v);
+u64 roundUpToNextPowerOf2(u64 v);
 #endif

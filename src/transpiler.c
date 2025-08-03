@@ -25,7 +25,7 @@ typedef struct TranspilationMapping {
 } TranspilationMapping;
 
 typedef struct TranspileCtx {
-    unsigned long flags;
+    u64 flags;
     Set *used_types;
     Set *used_defines;
     Set *skip_defines;
@@ -39,9 +39,9 @@ static void transpileFields(TranspileCtx *ctx,
                             Map *seen,
                             char *clsname, 
                             AoStr *buf,
-                            ssize_t *ident);
+                            s64 *ident);
 AoStr *transpileVarDecl(TranspileCtx *ctx, AstType *type, char *name);
-void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent);
+void transpileAstInternal(Ast *ast, TranspileCtx *ctx, s64 *indent);
 AoStr *transpileArgvList(Vec *argv, TranspileCtx *ctx);
 AoStr *transpileAst(Ast *ast, TranspileCtx *ctx);
 AoStr *transpileFunctionProto(TranspileCtx *ctx, AstType *type, char *name);
@@ -248,20 +248,20 @@ void transpileInitMaps(void) {
         transpile_skip_defines_set = setNew(32, &set_cstring_type);
         transpile_skip_classes_set = setNew(32, &set_cstring_type);
 
-        ssize_t len = static_size(transpile_skip_defines);
-        for (ssize_t i = 0; i < len; ++i) {
+        s64 len = static_size(transpile_skip_defines);
+        for (s64 i = 0; i < len; ++i) {
             char *define = transpile_skip_defines[i];
             setAdd(transpile_skip_defines_set, define);
         }
 
         len = static_size(transpile_skip_classes);
-        for (ssize_t i = 0; i < len; ++i) {
+        for (s64 i = 0; i < len; ++i) {
             char *cls = transpile_skip_classes[i];
             setAdd(transpile_skip_classes_set, cls);
         }
     
         len = static_size(transpile_function_substitutions_table);
-        for (ssize_t i = 0; i < len; ++i) {
+        for (s64 i = 0; i < len; ++i) {
             TranspilationMapping *sub = &transpile_function_substitutions_table[i]; 
             mapAdd(transpile_function_substitutions,sub->name,sub->sub);
         }
@@ -364,19 +364,19 @@ char *transpileKeyWordHighlight(TranspileCtx *ctx, int ast_kind) {
     return NULL;
 }
 
-char *transpileHighlightInt(TranspileCtx *ctx, long integer) {
+char *transpileHighlightInt(TranspileCtx *ctx, s64 integer) {
     static char buf[64];
     if (ctx->flags & TRANSPILE_FLAG_ISATTY) {
-        snprintf(buf,sizeof(buf),ESC_WHITE"%ld"ESC_RESET,integer);
+        snprintf(buf,sizeof(buf),ESC_WHITE"%lld"ESC_RESET,integer);
     } else {
-        snprintf(buf,sizeof(buf),"%ld",integer);
+        snprintf(buf,sizeof(buf),"%lld",integer);
     }
     return buf;
 }
 
 char *transpileHighlightChar(TranspileCtx *ctx, char character) {
     static char buf[64];
-    ssize_t len = 0;
+    s64 len = 0;
     if (ctx->flags & TRANSPILE_FLAG_ISATTY) {
         len = snprintf(buf,sizeof(buf),ESC_CYAN"'%c'"ESC_RESET,character);
     } else {
@@ -435,9 +435,9 @@ void transpileBinaryOp(TranspileCtx *ctx,
                        AoStr *buf,
                        char *op,
                        Ast *ast,
-                       ssize_t *indent)
+                       s64 *indent)
 {
-    ssize_t saved_indent = *indent;
+    s64 saved_indent = *indent;
     int needs_brackets = 0;
 
     *indent = 0;
@@ -499,7 +499,7 @@ void transpileBinaryOp(TranspileCtx *ctx,
 
 AoStr *transpileLValue(Ast *ast, TranspileCtx *ctx) {
     AoStr *buf = aoStrNew();
-    ssize_t indent = 0;
+    s64 indent = 0;
     AoStr *saved = ctx->buf;
     transpileCtxSetBuffer(ctx, buf);
     transpileAstInternal(ast,ctx,&indent);
@@ -507,10 +507,10 @@ AoStr *transpileLValue(Ast *ast, TranspileCtx *ctx) {
     return buf;
 }
 
-void transpileUnary(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
+void transpileUnary(Ast *ast, TranspileCtx *ctx, s64 *indent) {
     int operand_is_binop = astIsBinOp(ast->operand);
     char *op = (char *)astUnOpKindToString(ast->unop);
-    ssize_t saved_indent = *indent;
+    s64 saved_indent = *indent;
 
     *indent = 0;
 
@@ -540,14 +540,14 @@ void transpileUnary(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
     *indent = saved_indent;
 }
 
-void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
+void transpileAstInternal(Ast *ast, TranspileCtx *ctx, s64 *indent) {
     if (ast == NULL) {
         return;
     }
 
     AoStr *buf = ctx->buf;
 
-    ssize_t saved_indent = 0;
+    s64 saved_indent = 0;
     List *node;
 
     switch(ast->kind) {
@@ -561,10 +561,10 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
         case AST_TYPE_CHAR:  {
             char tmp_buf[32];
             char *tmp_ptr = tmp_buf;
-            unsigned long ch = ast->i64;
+            u64 ch = ast->i64;
             int i = 0;
             for (; i < 8; ++i) {
-                unsigned long idx = i * 8;
+                u64 idx = i * 8;
                 char ch2 = ((unsigned long)ch) >> idx & 0xFF;
                 if ((idx > 0 && !ch2) || (ch2 < 0)) break;
                 switch (ch2) {
@@ -956,7 +956,7 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
             ctx->flags |= TRANSPILE_FLAG_SWITCH_CHAR;
         }
         *indent += 4;
-        for (unsigned long i = 0; i < ast->cases->size; ++i) {
+        for (u64 i = 0; i < ast->cases->size; ++i) {
             Ast *_case = ast->cases->entries[i];
             aoStrRepeatChar(buf, ' ', *indent);
             transpileAstInternal(_case,ctx,indent);
@@ -1072,7 +1072,7 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, ssize_t *indent) {
 }
 
 AoStr *transpileAst(Ast *ast, TranspileCtx *ctx) {
-    ssize_t indent = 4;
+    s64 indent = 4;
     AoStr *body_buf = aoStrNew();
     AoStr *saved = ctx->buf;
     transpileCtxSetBuffer(ctx, body_buf);
@@ -1084,7 +1084,7 @@ AoStr *transpileAst(Ast *ast, TranspileCtx *ctx) {
 AoStr *transpileParamsList(Vec *params, TranspileCtx *ctx) {
     AoStr *buf = aoStrNew();
     AoStr *decl = NULL;
-    for (unsigned long i = 0; i < params->size; ++i) {
+    for (u64 i = 0; i < params->size; ++i) {
         Ast *param = params->entries[i];
         if (param->kind == AST_DEFAULT_PARAM) {
             decl = transpileVarDecl(ctx, param->declvar->type,
@@ -1107,7 +1107,7 @@ AoStr *transpileParamsList(Vec *params, TranspileCtx *ctx) {
 AoStr *transpileArgvList(Vec *argv, TranspileCtx *ctx) {
     if (!argv) return NULL;
     AoStr *buf = aoStrNew();
-    for (unsigned long i = 0; i < argv->size; ++i) {
+    for (u64 i = 0; i < argv->size; ++i) {
         Ast *arg = argv->entries[i];
         AoStr *var = transpileLValue(arg, ctx);
         aoStrCatFmt(buf, "%S", var);
@@ -1320,7 +1320,7 @@ static void transpileFields(TranspileCtx *ctx,
                             Map *seen,
                             char *clsname,
                             AoStr *buf,
-                            ssize_t *indent)
+                            s64 *indent)
 {
     MapIter it;
     mapIterInit(fields, &it);
@@ -1363,7 +1363,7 @@ static void transpileFields(TranspileCtx *ctx,
 
 void transpileClassDefinitions(Cctrl *cc, TranspileCtx *ctx, Map *built_in_types) {
     AoStr *buf = ctx->buf;
-    ssize_t indent = 4;
+    s64 indent = 4;
     Map *seen = astTypeMapNew();
     MapIter it;
     mapIterInit(cc->clsdefs, &it);
@@ -1394,7 +1394,7 @@ void transpileClassDefinitions(Cctrl *cc, TranspileCtx *ctx, Map *built_in_types
 }
 
 void transpileUnionDefinitions(Cctrl *cc, TranspileCtx *ctx) {
-    ssize_t indent = 4;
+    s64 indent = 4;
     AoStr *buf = ctx->buf;
     Map *seen = astTypeMapNew();
     MapIter it;
@@ -1486,7 +1486,7 @@ char *transpileFormatAsmLine(Cctrl *cc, char *line) {
     char *tmp_fname_ptr;
     char *tmp_ptr = buffer;
     int first_space = 1;
-    ssize_t len = 0;
+    s64 len = 0;
 
     while (*line) {
         /* Swap out the assembly names for c function names */
@@ -1649,16 +1649,16 @@ void transpileAstList(Cctrl *cc, TranspileCtx *ctx) {
                 mapAdd(seen, ast->asmfname->data, ast);
             }
         } else if (ast->kind == AST_COMMENT) {
-            ssize_t indent = 0;
+            s64 indent = 0;
             transpileAstInternal(ast, ctx, &indent);
         }
     }
 }
 
 AoStr *transpileIncludes(TranspileCtx *ctx) {
-    ssize_t len = static_size(transpile_used_c_headers);
+    s64 len = static_size(transpile_used_c_headers);
     AoStr *buf = aoStrNew();
-    for (ssize_t i = 0; i < len; ++i) {
+    for (s64 i = 0; i < len; ++i) {
         if (ctx->flags & TRANSPILE_FLAG_ISATTY) {
             aoStrCatFmt(buf,ESC_GREEN"#include"ESC_RESET);
             aoStrCatFmt(buf,ESC_RED" <%s>\n"ESC_RESET,transpile_used_c_headers[i]);
@@ -1729,8 +1729,8 @@ AoStr *transpileToC(Cctrl *cc, CliArgs *args) {
     AoStr *code = aoStrAlloc(ast_buf->len + define_buf->len +
                              class_buf->len + union_buf->len);
 
-    ssize_t len = static_size(buffers);
-    for (ssize_t i = 0; i < len; ++i) {
+    s64 len = static_size(buffers);
+    for (s64 i = 0; i < len; ++i) {
         AoStr *buf = buffers[i];
         if (buf->len > 0) {
             aoStrCatAoStr(code,buf);

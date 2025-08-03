@@ -118,7 +118,7 @@ Ast *parseDefaultFunctionParam(Cctrl *cc, Ast *var) {
     return astFunctionDefaultParam(var,init);
 }
 
-Vec *parseParams(Cctrl *cc, long terminator, int *has_var_args, int store) {
+Vec *parseParams(Cctrl *cc, s64 terminator, int *has_var_args, int store) {
     Vec *params = astVecNew();
 
     Lexeme *tok, *pname;
@@ -409,7 +409,7 @@ Ast *findFunctionDecl(Cctrl *cc, char *fname, int len) {
     return NULL;
 }
 
-Vec *parseArgv(Cctrl *cc, Ast *decl, long terminator, char *fname, int len) {
+Vec *parseArgv(Cctrl *cc, Ast *decl, s64 terminator, char *fname, int len) {
     List *var_args = NULL;
     Ast *ast, *param = NULL;
     AstType *check;
@@ -535,7 +535,7 @@ Ast *parseInlineFunctionCall(Cctrl *cc, Ast *fn, Vec *argv) {
 }
 
 /* Read function arguments for a function being called */
-Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, long terminator) {
+Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, s64 terminator) {
     AstType *rettype = NULL;
     Ast *maybe_fn = findFunctionDecl(cc,fname,len);
     Vec *argv = parseArgv(cc,maybe_fn,terminator,fname,len);
@@ -706,7 +706,7 @@ static Ast *parsePrimary(Cctrl *cc) {
         }
         return ast;
     case TK_STR: {
-        long real_len = 0;
+        s64 real_len = 0;
         AoStr *str = aoStrNew();
         cctrlTokenRewind(cc);
         /* Concatinate adjacent strings together */
@@ -1072,7 +1072,7 @@ Ast *parseSizeof(Cctrl *cc) {
 
     /* If we have a string we want the _true_ length of it which as the string
      * is escaped needs to be calculated manually. */
-    long size = 0; 
+    s64 size = 0; 
     if (ast && ast->kind == AST_STRING) {
         size = ast->real_len;
     } else {

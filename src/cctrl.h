@@ -24,10 +24,10 @@
 #define CCTRL_ERROR 3
 
 typedef struct TokenRingBuffer {
-    ssize_t tail;
-    ssize_t head;
-    ssize_t size;
-    ssize_t capacity;
+    s64 tail;
+    s64 head;
+    s64 size;
+    s64 capacity;
     Lexeme **entries;
 } TokenRingBuffer;
 
@@ -41,7 +41,7 @@ Lexeme *tokenRingBufferPeek(TokenRingBuffer *ring_buffer);
 int tokenRingBufferRewind(TokenRingBuffer *ring_buffer);
 
 typedef struct Cctrl {
-    unsigned long flags;
+    u64 flags;
     /* The global environment for user defined types, functions and global
      * variables */
     Map *global_env;
@@ -121,9 +121,9 @@ typedef struct Cctrl {
     AoStr *tmp_fname;
 
     /* current line number */
-    ssize_t lineno;
+    s64 lineno;
 
-    long stack_local_space;
+    s64 stack_local_space;
 
     /* Is the current type or function static,
      * with functions this has no real difference */
@@ -142,7 +142,7 @@ Lexeme *cctrlTokenPeek(Cctrl *cc);
 Lexeme *cctrlTokenPeekBy(Cctrl *cc, int cnt);
 void cctrlInitMacroProcessor(Cctrl *cc);
 void cctrlTokenRewind(Cctrl *cc);
-void cctrlTokenExpect(Cctrl *cc, long expected);
+void cctrlTokenExpect(Cctrl *cc, s64 expected);
 void cctrlSetCommandLineDefines(Cctrl *cc, List *defines_list);
 
 void cctrlInitParse(Cctrl *cc, Lexer *lexer_);
@@ -157,8 +157,8 @@ __noreturn void cctrlRaiseExceptionFromTo(Cctrl *cc, char *suggestion, char from
 __noreturn void cctrlRaiseException(Cctrl *cc, char *fmt, ...);
 __noreturn void cctrlRaiseSuggestion(Cctrl *cc, char *suggestion, char *fmt, ...);
 __noreturn void cctrlIce(Cctrl *cc, char *fmt, ...);
-Ast *cctrlGetOrSetString(Cctrl *cc, char *str, int len, long real_len);
-void cctrlRewindUntilPunctMatch(Cctrl *cc, long ch, int *_count);
+Ast *cctrlGetOrSetString(Cctrl *cc, char *str, int len, s64 real_len);
+void cctrlRewindUntilPunctMatch(Cctrl *cc, s64 ch, int *_count);
 void cctrlRewindUntilStrMatch(Cctrl *cc, char *str, int len, int *_count);
 AoStr *cctrlMessagePrintF(Cctrl *cc, int severity, char *fmt,...);
 

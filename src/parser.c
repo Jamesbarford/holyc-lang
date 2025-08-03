@@ -21,7 +21,7 @@
 Ast *parseStatement(Cctrl *cc);
 Ast *parseIfStatement(Cctrl *cc);
 Ast *parseForStatement(Cctrl *cc);
-Ast *parseVariableInitialiser(Cctrl *cc, Ast *var, long terminator_flags);
+Ast *parseVariableInitialiser(Cctrl *cc, Ast *var, s64 terminator_flags);
 Ast *parseDecl(Cctrl *cc);
 Ast *parseDeclOrStatement(Cctrl *cc);
 Ast *parseCompoundStatement(Cctrl *cc);
@@ -35,7 +35,7 @@ static AoStr *getRangeLoopIdx(void) {
 
 /* Kinda cheating converting it to a string and calling printf */
 Ast *parseFloatingCharConst(Cctrl *cc, Lexeme *tok) {
-    unsigned long ch = (unsigned long)tok->i64;
+    u64 ch = (unsigned long)tok->i64;
     char str[16];
     Vec *argv = astVecNew();
     int len = 0;
@@ -90,7 +90,7 @@ Ast *parseDeclArrayInitInt(Cctrl *cc, AstType *type) {
     }
 
     initlist = listNew();
-    unsigned long i = 0;
+    u64 i = 0;
     Map *cls_fields = NULL;
     if (type->kind == AST_TYPE_CLASS) {
         cls_fields = type->fields;
@@ -128,7 +128,7 @@ Ast *parseDeclArrayInitInt(Cctrl *cc, AstType *type) {
                             astTypeToString(type));
                 }
 
-                unsigned long cls_field_idx = (unsigned long)cls_fields->indexes->entries[i];
+                u64 cls_field_idx = (unsigned long)cls_fields->indexes->entries[i];
                 MapNode *entry = &cls_fields->entries[cls_field_idx];
                 AstType *cls_field_type = entry->value;
                 parseTypeCheckClassFieldInitaliser(cc,cls_field_type,init);
@@ -180,9 +180,9 @@ ClsField *clsFieldNew(AstType *type, AoStr *field_name) {
 }
 
 List *parseClassOrUnionFields(Cctrl *cc, AoStr *name,
-        unsigned int (*computeSize)(List *), unsigned int *_size)
+        u32 (*computeSize)(List *), u32 *_size)
 {
-    unsigned int size;
+    u32 size;
     char *fnptr_name;
     int fnptr_name_len;
     Lexeme *tok, *tok_name;
@@ -295,7 +295,7 @@ List *parseClassOrUnionFields(Cctrl *cc, AoStr *name,
     return fields_list;
 }
 
-unsigned int CalcUnionSize(List *fields) {
+u32 CalcUnionSize(List *fields) {
     int max = 0;
     AstType *type;
     listForEach(fields) {
@@ -308,9 +308,9 @@ unsigned int CalcUnionSize(List *fields) {
     return max;
 }
 
-unsigned int CalcClassSize(List *fields) {
-    unsigned int offset = 0;
-    unsigned int size = 0;
+u32 CalcClassSize(List *fields) {
+    u32 offset = 0;
+    u32 size = 0;
     listForEach(fields) {
         ClsField *cls_field = (ClsField *)it->value;
         AstType *type = cls_field->type;
@@ -450,12 +450,12 @@ Map *parseUnionOffsets(Cctrl *cc, int *real_size, List *fields) {
 
 AstType *parseClassOrUnion(Cctrl *cc, Map *env,
         int is_class,
-        unsigned int (*computeSize)(List *),
+        u32 (*computeSize)(List *),
         int is_intrinsic)
 {
     AoStr *tag = NULL;
     int aligned_size = 0;
-    unsigned int class_size;
+    u32 class_size;
     Lexeme *tok = cctrlTokenGet(cc);
     AstType *prev = NULL, *ref = NULL, *base_class = NULL;
     List *fields = NULL;
@@ -536,7 +536,7 @@ AstType *parseUnionDef(Cctrl *cc) {
     return _union;
 }
 
-Ast *parseVariableAssignment(Cctrl *cc, Ast *var, long terminator_flags) {
+Ast *parseVariableAssignment(Cctrl *cc, Ast *var, s64 terminator_flags) {
     Ast *init;
     int len;
     Lexeme *peek = cctrlTokenPeek(cc);
@@ -598,7 +598,7 @@ Ast *parseVariableAssignment(Cctrl *cc, Ast *var, long terminator_flags) {
     return astDecl(var,init);
 }
 
-Ast *parseVariableInitialiser(Cctrl *cc, Ast *var, long terminator_flags) {
+Ast *parseVariableInitialiser(Cctrl *cc, Ast *var, s64 terminator_flags) {
     Lexeme *tok = cctrlTokenGet(cc);
     if (tokenPunctIs(tok,'=')) {
         return parseVariableAssignment(cc,var,terminator_flags);

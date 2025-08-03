@@ -45,7 +45,7 @@ typedef struct CliValue {
 
 typedef struct CliParser {
     char *optname;
-    size_t optlen;
+    u64 optlen;
     int arg_count;
     enum CliArgType arg_type; 
     char *usage;

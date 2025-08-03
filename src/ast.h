@@ -157,7 +157,7 @@ typedef struct AstType {
     int has_var_args;
 
     /* Alignment of a struct or union */
-    unsigned int alignment;
+    u32 alignment;
 
     /* Value signed or unsigned? */
     int issigned;
@@ -185,14 +185,14 @@ typedef struct AstType {
 typedef struct Ast Ast;
 typedef struct Ast {
     AstKind kind;
-    unsigned long flags;
+    u64 flags;
     AstType *type;
     int loff;
-    long deref_symbol;
+    s64 deref_symbol;
     union {
         struct {
         /* 8, 16, 32, 64 bit number */
-            long long i64;
+            s64 i64;
         };
 
         /* Float & Double */
@@ -211,7 +211,7 @@ typedef struct Ast {
         struct {
             AoStr *sval;
             AoStr *slabel;
-            long real_len;
+            s64 real_len;
         };
 
         /* Local variable */
@@ -335,8 +335,8 @@ typedef struct Ast {
 
         /* For a case */
         struct {
-            long case_begin;
-            long case_end;
+            s64 case_begin;
+            s64 case_end;
             AoStr *case_label;
             /* Scopes ast nodes to the case label... Think this makes sense;
              * in my head it does. As then all the top level case nodes 
@@ -391,10 +391,10 @@ void astMemoryStats(void);
 AstType *astTypeCopy(AstType *type);
 
 /* Literals */
-Ast *astI64Type(long long val);
+Ast *astI64Type(s64 val);
 Ast *astF64Type(double val);
-Ast *astCharType(long ch);
-Ast *astString(char *str, int len, long real_len);
+Ast *astCharType(s64 ch);
+Ast *astString(char *str, int len, s64 real_len);
 
 /* Declarations */
 Ast *astDecl(Ast *var, Ast *init);
@@ -421,7 +421,7 @@ Ast *astDoWhile(Ast *whilecond, Ast *whilebody, AoStr *while_begin,
         AoStr *while_end);
 Ast *astContinue(AoStr *continue_label);
 Ast *astBreak(AoStr *break_label);
-Ast *astCase(AoStr *case_label, long case_begin, long case_end, List *case_asts);
+Ast *astCase(AoStr *case_label, s64 case_begin, s64 case_end, List *case_asts);
 /* Do it with lists, then do it with a vector */
 Ast *astSwitch(Ast *cond, Vec *cases, Ast *case_default,
         AoStr *case_end_label, int switch_bounds_checked);
@@ -481,8 +481,8 @@ int astTypeIsPtr(AstType *type);
 int astTypeIsArray(AstType *type);
 int astIsVarArg(Ast *ast);
 int astIsRangeOperator(AstBinOp op);
-int astIsBinCmp(long op);
-int astIsAssignment(long op);
+int astIsBinCmp(s64 op);
+int astIsAssignment(s64 op);
 int astIsLabelMatch(Ast *ast, AoStr *goto_label);
 int astIsAddr(Ast *ast);
 int astIsDeref(Ast *ast);
@@ -500,9 +500,9 @@ Ast *astMakeLoopSentinal(void);
 char *astAnnonymousLabel(void);
 
 /* Returns `1` on successful conversion and `0` on failure */
-int astUnaryOpFromToken(long op, AstUnOp *_result);
+int astUnaryOpFromToken(s64 op, AstUnOp *_result);
 /* Returns `1` on successful conversion and `0` on failure */
-int astBinOpFromToken(long op, AstBinOp *_result);
+int astBinOpFromToken(s64 op, AstBinOp *_result);
 
 /* For debugging */
 AoStr *astTypeToAoStr(AstType *type);
@@ -515,8 +515,8 @@ char *astFunctionToString(Ast *func);
 char *astFunctionNameToString(AstType *rettype, char *fname, int len);
 char *astToString(Ast *ast);
 AoStr *astToAoStr(Ast *ast);
-char *astLValueToString(Ast *ast, unsigned long lexme_flags);
-AoStr *astLValueToAoStr(Ast *ast, unsigned long lexeme_flags);
+char *astLValueToString(Ast *ast, u64 lexme_flags);
+AoStr *astLValueToAoStr(Ast *ast, u64 lexeme_flags);
 void astPrint(Ast *ast);
 void astTypePrint(AstType *type);
 void astKindPrint(int kind);

@@ -16,6 +16,6 @@
 
 void parseToAst(Cctrl *cc);
 Ast *parseStatement(Cctrl *cc);
-long evalIntConstExpr(Ast *ast);
+s64 evalIntConstExpr(Ast *ast);
 
 #endif // !PARSER_H

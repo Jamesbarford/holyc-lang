@@ -23,10 +23,10 @@ AstType *parseGetType(Cctrl *cc, Lexeme *tok);
 int parseIsKeyword(Lexeme *tok, Cctrl *cc);
 double evalFloatExpr(Ast *ast);
 double evalFloatExprOrErr(Ast *ast, int *_ok);
-long evalIntConstExpr(Ast *ast);
-long evalIntConstExprOrErr(Ast *ast, int *_ok);
-long evalOneIntExprOrErr(Ast *LHS, Ast *RHS, AstBinOp op, int *_ok);
-long evalIntArithmeticOrErr(Ast *ast, int *_ok);
+s64 evalIntConstExpr(Ast *ast);
+s64 evalIntConstExprOrErr(Ast *ast, int *_ok);
+s64 evalOneIntExprOrErr(Ast *LHS, Ast *RHS, AstBinOp op, int *_ok);
+s64 evalIntArithmeticOrErr(Ast *ast, int *_ok);
 int evalClassRef(Ast *ast, int offset);
 int assertLValue(Ast *ast);
 int parseIsFloatOrInt(Ast *ast);
@@ -34,16 +34,16 @@ int parseIsClassOrUnion(int kind);
 int parseIsFunction(Ast *ast);
 int astIsArithmetic(Ast *ast, int is_float);
 
-void assertTokenIsTerminator(Cctrl *cc, Lexeme *tok, long terminator_flags);
+void assertTokenIsTerminator(Cctrl *cc, Lexeme *tok, s64 terminator_flags);
 void assertTokenIsTerminatorWithMsg(Cctrl *cc, Lexeme *tok,
-        long terminator_flags, const char *fmt, ...);
+        s64 terminator_flags, const char *fmt, ...);
 void assertUniqueSwitchCaseLabels(Vec *case_vector, Ast *case_);
-void assertIsFloatOrInt(Ast *ast, long lineno);
-void assertIsInt(Ast *ast, long lineno);
-void assertIsFloat(Ast *ast, long lineno);
-void assertIsPointer(Ast *ast, long lineno);
+void assertIsFloatOrInt(Ast *ast, s64 lineno);
+void assertIsInt(Ast *ast, s64 lineno);
+void assertIsFloat(Ast *ast, s64 lineno);
+void assertIsPointer(Ast *ast, s64 lineno);
 
-void typeCheckWarn(Cctrl *cc, long op, Ast *expected, Ast *actual);
+void typeCheckWarn(Cctrl *cc, s64 op, Ast *expected, Ast *actual);
 void typeCheckReturnTypeWarn(Cctrl *cc, Ast *maybe_func, 
                              AstType *check, Ast *retval);
 #endif // PRS_UTIL
