@@ -264,10 +264,12 @@ void memoryInit(void) {
     astMemoryInit();
     lexemeMemoryInit();
     globalArenaInit(4096*10);
+    irMemoryInit();
 }
 
 void memoryRelease(void) {
     astMemoryRelease();
+    irMemoryRelease();
     lexemeMemoryRelease();
     globalArenaRelease();
 }
@@ -277,6 +279,8 @@ void memoryPrintStats(void) {
     lexemeMemoryStats();
     printf("\n\n");
     astMemoryStats();
+    printf("\n\n");
+    irMemoryStats();
     printf("\n\n");
     globalArenaPrintStats();
     printf("=========== Arena Stats End ==========\n");
