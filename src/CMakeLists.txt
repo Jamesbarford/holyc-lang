@@ -50,6 +50,7 @@ set(SOURCES
     containers.c
     compile.c
     ir.c
+    ir-types.c
     lexer.c
     list.c
     main.c
@@ -75,6 +76,7 @@ set(HEADERS
     config.h
     containers.h
     ir.h
+    ir-types.h
     lexer.h
     list.h
     memory.h
