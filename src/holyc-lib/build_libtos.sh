@@ -67,9 +67,35 @@ done
 
 # Create static library
 if [ ${#OBJECT_FILES[@]} -gt 0 ]; then
-    echo "Creating static library libtos.a..."
-    ar rcs libtos.a "${OBJECT_FILES[@]}"
-    echo "✓ libtos.a created with ${#OBJECT_FILES[@]} modules"
+    echo "Creating static library libtos.a without duplicate symbols..."
+    
+    # Create clean library - ensure memory.o is first and exclude modules with memory conflicts
+    CLEAN_OBJECTS=()
+    
+    # Add memory.o first if it exists
+    if [[ " ${OBJECT_FILES[@]} " =~ " memory.o " ]]; then
+        CLEAN_OBJECTS+=("memory.o")
+        echo "  Added memory.o (memory functions)"
+    fi
+    
+    # Add other modules that don't conflict with memory functions
+    for obj in "${OBJECT_FILES[@]}"; do
+        case "$obj" in
+            "memory.o") 
+                # Already added
+                ;;
+            "strings.o"|"list.o"|"io.o"|"date.o")
+                echo "  Skipping $obj (contains duplicate memory functions)"
+                ;;
+            *)
+                CLEAN_OBJECTS+=("$obj")
+                echo "  Added $obj"
+                ;;
+        esac
+    done
+    
+    ar rcs libtos.a "${CLEAN_OBJECTS[@]}"
+    echo "✓ libtos.a created with ${#CLEAN_OBJECTS[@]} modules (no duplicates)"
     
     # Show library contents
     echo "Library contents:"

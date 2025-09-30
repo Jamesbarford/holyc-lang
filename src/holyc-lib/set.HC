@@ -1,6 +1,6 @@
 /* Implementation of CLRS redblack tree for set operations can also use the 
  * redblack tree as a hashtable if you want */
-
+#include "strings.HC"
 #define __RB_RED__   0
 #define __RB_BLACK__ 1
 
