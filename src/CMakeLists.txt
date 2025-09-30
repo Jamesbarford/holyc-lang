@@ -93,6 +93,17 @@ set(HEADERS
 
 add_executable(hcc ${SOURCES} ${HEADERS})
 
+# Custom target to build libtos.a using hcc
+add_custom_target(libtos ALL
+    COMMAND $<TARGET_FILE:hcc> -lib tos all.HC
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different tos.a ${CMAKE_BINARY_DIR}/lib/libtos.a
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/holyc-lib
+    DEPENDS hcc
+    COMMENT "Building libtos.a using HolyC compiler"
+)
+# Ensure build directory exists for library copy
+file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+
 set(HCC_PATH "${CMAKE_INSTALL_PREFIX}/bin/hcc")
 
 # Command for unit tests
@@ -110,13 +121,30 @@ target_link_libraries(hcc m)
 # Install the executable
 install(TARGETS hcc DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
 
+# Install libtos.a built by custom target
+install(FILES ${CMAKE_BINARY_DIR}/lib/libtos.a DESTINATION ${CMAKE_INSTALL_PREFIX}/lib)
 
 # Install the header file
 install(FILES ${CMAKE_SOURCE_DIR}/holyc-lib/tos.HH DESTINATION ${CMAKE_INSTALL_PREFIX}/include)
 
-# Custom installation step to run `hcc` during install
+# Custom installation step to run `hcc` during install to create libtos
+# This creates libtos.a and libtos.so in the holyc-lib directory
 if (DEFINED HCC_LINK_SQLITE3)
     install(CODE "execute_process(COMMAND \"${HCC_PATH}\" -DHCC_LINK_SQLITE3 -lib tos ${CMAKE_SOURCE_DIR}/holyc-lib/all.HC WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/holyc-lib)")
 else()
     install(CODE "execute_process(COMMAND \"${HCC_PATH}\" -lib tos ${CMAKE_SOURCE_DIR}/holyc-lib/all.HC WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/holyc-lib)")
 endif()
+
+# Install the generated libtos library files
+# Note: The actual filenames depend on the platform (libtos.a and libtos.so on Linux, libtos.dylib on macOS)
+install(CODE "
+    if(EXISTS \"${CMAKE_SOURCE_DIR}/holyc-lib/tos.a\")
+        file(INSTALL \"${CMAKE_SOURCE_DIR}/holyc-lib/tos.a\" DESTINATION \"${CMAKE_INSTALL_PREFIX}/lib\" RENAME \"libtos.a\")
+    endif()
+    if(EXISTS \"${CMAKE_SOURCE_DIR}/holyc-lib/tos.so\")
+        file(INSTALL \"${CMAKE_SOURCE_DIR}/holyc-lib/tos.so\" DESTINATION \"${CMAKE_INSTALL_PREFIX}/lib\" RENAME \"libtos.so\")
+    endif()
+    if(EXISTS \"${CMAKE_SOURCE_DIR}/holyc-lib/tos.dylib\")
+        file(INSTALL \"${CMAKE_SOURCE_DIR}/holyc-lib/tos.dylib\" DESTINATION \"${CMAKE_INSTALL_PREFIX}/lib\" RENAME \"libtos.dylib\")
+    endif()
+")
