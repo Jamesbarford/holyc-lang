@@ -1,7 +1,14 @@
 #include "./defs.HH"
 #include "./memory.HC"
 #include "./system.HC"
-#include "./strings.HC"
+
+// External C function declarations needed for builtins
+extern "c" I64 snprintf(I8 *nptr, U64 len, I8 *fmt,...);
+extern "c" I64 strtoll(U8 *nptr, U8 **endptr, I64 base=10);
+
+// External HolyC function declarations
+U64 StrLen(U8 *buf);
+U8 *FileRead(U8 *name, I64 max_bytes, U64 *_st_size);
 
 /* Yup we can mix #define's and assembly */
 #define ALIGN_16 0xFFFFFFFFFFFFFFF0
@@ -62,7 +69,7 @@ public U64 MemAddr(U0 *ptr)
 {
   U8 buffer[__BUFSIZ__];
   I64 len;
-  len = StrNPrintf(buffer, __BUFSIZ__, "%p", ptr);
+  len = snprintf(buffer, __BUFSIZ__, "%p", ptr);
   buffer[len] = '\0';
   return strtoll(buffer,NULL,16);
 }
@@ -77,7 +84,7 @@ U8 *SysExec(U8 *command, U64 *_captured_len=NULL,
   size = StrLen(command) * sizeof(U8) + 100;
   full_command = MAlloc(size);
 
-  len = StrNPrintf(full_command,size,"%s > %s",command,file_out);
+  len = snprintf(full_command,size,"%s > %s",command,file_out);
   full_command[len] = '\0';
 
   System(full_command);

@@ -10,15 +10,11 @@ echo "Building libtos library..."
 # Clean up previous builds
 rm -f *.o libtos.a 2>/dev/null || true
 
-# List of HC modules to compile (excluding problematic ones)
+# List of HC modules to compile (excluding problematic ones that include other modules)
 MODULES=(
     "memory"
-    "strings" 
     "math"
-    "io"
     "system"
-    "date"
-    "list"
     "csv"
     "stat"
     "dir"
@@ -85,7 +81,7 @@ if [ ${#OBJECT_FILES[@]} -gt 0 ]; then
                 # Already added
                 ;;
             "strings.o"|"list.o"|"io.o"|"date.o")
-                echo "  Skipping $obj (contains duplicate memory functions)"
+                echo "  Skipping $obj (contains duplicate memory/assembly functions)"
                 ;;
             *)
                 CLEAN_OBJECTS+=("$obj")
@@ -111,8 +107,11 @@ if [ ${#OBJECT_FILES[@]} -gt 0 ]; then
     
     echo "✓ Build complete!"
     echo "To install: sudo cp libtos.a /usr/local/lib/"
+    sudo cp libtos.a /usr/local/lib/
     
 else
     echo "✗ No object files created - build failed"
     exit 1
 fi
+echo "Cleaning up..."
+rm -f *.o tos.a 2>/dev/null || true
