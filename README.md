@@ -1,6 +1,6 @@
 # HolyC Programming Language
 
-> [!PATCH]
+> [!WARNING]
 > In order to make missing libtos library,When Compiler is built the first time, it gives minimal amount of functionality. After the first build you can run ./build_libtos.sh and copy libtos.a to the /usr/local/bin or custom library directory for all functionality
 
 > [!WARNING]
