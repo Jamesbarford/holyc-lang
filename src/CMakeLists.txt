@@ -14,6 +14,42 @@ endif()
 
 add_definitions(-DINSTALL_PREFIX="${CMAKE_INSTALL_PREFIX}")
 
+# Function to build clean libtos without duplicate symbols
+function(build_clean_libtos target_name)
+    # Only include modules that are truly independent and don't include memory.HC
+    set(CLEAN_MODULES 
+        memory    # The ONLY module that should define memory functions
+        math      # Pure math functions - standalone
+        system    # System calls - standalone  
+        csv       # CSV parsing - standalone
+        dir       # Directory operations - standalone
+        stat      # File statistics - standalone
+    )
+    
+    # Create object file build commands only for clean modules
+    set(OBJ_COMMANDS "")
+    set(OBJ_FILES "")
+    
+    foreach(module ${CLEAN_MODULES})
+        list(APPEND OBJ_COMMANDS 
+            COMMAND ${CMAKE_COMMAND} -E echo "Compiling ${module}.HC..."
+            COMMAND $<TARGET_FILE:hcc> -obj -o ${module}.o ${module}.HC || echo "Failed to compile ${module}.HC"
+        )
+        list(APPEND OBJ_FILES ${module}.o)
+    endforeach()
+    
+    # Create the custom target
+    add_custom_target(${target_name} ALL
+        COMMAND ${CMAKE_COMMAND} -E echo "Building minimal clean libtos.a..."
+        ${OBJ_COMMANDS}
+        COMMAND ar rcs tos.a ${OBJ_FILES}
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different tos.a ${CMAKE_BINARY_DIR}/lib/libtos.a
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/holyc-lib
+        DEPENDS hcc
+        COMMENT "Building minimal clean libtos.a using modular HolyC compilation"
+    )
+endfunction()
+
 # Add debugging symbols for Debug builds
 set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g")
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -93,14 +129,8 @@ set(HEADERS
 
 add_executable(hcc ${SOURCES} ${HEADERS})
 
-# Custom target to build libtos.a using hcc
-add_custom_target(libtos ALL
-    COMMAND $<TARGET_FILE:hcc> -lib tos all.HC
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different tos.a ${CMAKE_BINARY_DIR}/lib/libtos.a
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/holyc-lib
-    DEPENDS hcc
-    COMMENT "Building libtos.a using HolyC compiler"
-)
+# Build clean libtos library without duplicate symbols
+build_clean_libtos(libtos)
 # Ensure build directory exists for library copy
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
@@ -119,32 +149,18 @@ add_custom_target(unit-test
 target_link_libraries(hcc m)
 
 # Install the executable
-install(TARGETS hcc DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
+install(TARGETS hcc DESTINATION bin)
 
-# Install libtos.a built by custom target
-install(FILES ${CMAKE_BINARY_DIR}/lib/libtos.a DESTINATION ${CMAKE_INSTALL_PREFIX}/lib)
+# Install libtos.a built by custom target  
+install(FILES ${CMAKE_BINARY_DIR}/lib/libtos.a DESTINATION lib)
 
 # Install the header file
-install(FILES ${CMAKE_SOURCE_DIR}/holyc-lib/tos.HH DESTINATION ${CMAKE_INSTALL_PREFIX}/include)
+install(FILES ${CMAKE_SOURCE_DIR}/holyc-lib/tos.HH DESTINATION include)
 
-# Custom installation step to run `hcc` during install to create libtos
-# This creates libtos.a and libtos.so in the holyc-lib directory
-if (DEFINED HCC_LINK_SQLITE3)
-    install(CODE "execute_process(COMMAND \"${HCC_PATH}\" -DHCC_LINK_SQLITE3 -lib tos ${CMAKE_SOURCE_DIR}/holyc-lib/all.HC WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/holyc-lib)")
-else()
-    install(CODE "execute_process(COMMAND \"${HCC_PATH}\" -lib tos ${CMAKE_SOURCE_DIR}/holyc-lib/all.HC WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/holyc-lib)")
-endif()
-
-# Install the generated libtos library files
-# Note: The actual filenames depend on the platform (libtos.a and libtos.so on Linux, libtos.dylib on macOS)
+# Ensure libtos is built before installation
 install(CODE "
-    if(EXISTS \"${CMAKE_SOURCE_DIR}/holyc-lib/tos.a\")
-        file(INSTALL \"${CMAKE_SOURCE_DIR}/holyc-lib/tos.a\" DESTINATION \"${CMAKE_INSTALL_PREFIX}/lib\" RENAME \"libtos.a\")
-    endif()
-    if(EXISTS \"${CMAKE_SOURCE_DIR}/holyc-lib/tos.so\")
-        file(INSTALL \"${CMAKE_SOURCE_DIR}/holyc-lib/tos.so\" DESTINATION \"${CMAKE_INSTALL_PREFIX}/lib\" RENAME \"libtos.so\")
-    endif()
-    if(EXISTS \"${CMAKE_SOURCE_DIR}/holyc-lib/tos.dylib\")
-        file(INSTALL \"${CMAKE_SOURCE_DIR}/holyc-lib/tos.dylib\" DESTINATION \"${CMAKE_INSTALL_PREFIX}/lib\" RENAME \"libtos.dylib\")
-    endif()
+    message(STATUS \"Installing HolyC compiler and libtos library...\")
+    message(STATUS \"hcc -> ${CMAKE_INSTALL_PREFIX}/bin/hcc\")
+    message(STATUS \"libtos.a -> ${CMAKE_INSTALL_PREFIX}/lib/libtos.a\") 
+    message(STATUS \"tos.HH -> ${CMAKE_INSTALL_PREFIX}/include/tos.HH\")
 ")

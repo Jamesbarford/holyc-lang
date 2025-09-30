@@ -22,6 +22,7 @@ scratch
 *.dot
 test-runner
 .idea
+libtos-old.e
 .gdb_history
 build
 compile.sh
