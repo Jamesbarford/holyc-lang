@@ -1,5 +1,8 @@
 /* There is a lot of duplication here but it does 'work', generics would clean
  * all of this up... */
+public U0 QSortGeneric(U0 **arr, I64 high, I64 low,
+    I64 (*_compare_fn)(U0 *_arg1, U0 *_arg2));
+
 class IntVec
 {
   I64 size;

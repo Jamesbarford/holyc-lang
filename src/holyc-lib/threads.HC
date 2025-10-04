@@ -162,6 +162,7 @@ class ThreadSemaphore
   I32 val;
 }; 
 
+class ThreadWorkerJob;
 class ThreadWorkerJob
 {
   U0 (*callback)(U0 *priv_data, U0 *argv);

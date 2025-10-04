@@ -69,7 +69,7 @@ public Bool IntMapHas(IntMap *map, I64 key);
 public IntMap *IntMapNew(U64 capacity=1<<8);
 public U0 IntMapSetFreeValue(IntMap *map, U0 (*_free_value)(U0 *value));
 public U0 IntMapRelease(IntMap *map);
-public Bool IntMapResize(IntMap *map, U64 size);
+public Bool IntMapResize(IntMap *map);
 
 U64 IntMapHashFunction(I64 key, U64 mask)
 {
@@ -155,7 +155,7 @@ U0 IntMapRelease(IntMap *map)
   }
 }
 
-public Bool IntMapResize(IntMap *map, U64 size)
+public Bool IntMapResize(IntMap *map)
 {// Resize the hashtable, will return false if OMM
   U64 new_capacity,new_mask,old_mask;
   IntMapNode **new_entries, **old_entries;
@@ -350,7 +350,7 @@ public StrMap *StrMapNew(U64 capacity=1<<8);
 public U0 StrMapSetFreeValue(StrMap *map, U0 (*_free_value)(U0 *value));
 public U0 StrMapSetFreeKey(StrMap *map, U0 (*_free_key)(U0 *key));
 public U0 StrMapRelease(StrMap *map);
-public Bool StrMapResize(StrMap *map, U64 size);
+public Bool StrMapResize(StrMap *map);
 
 StrMap *StrMapNew(U64 capacity)
 {
@@ -441,7 +441,7 @@ U0 StrMapRelease(StrMap *map)
   }
 }
 
-public Bool StrMapResize(StrMap *map, U64 size)
+public Bool StrMapResize(StrMap *map)
 {// Resize the hashtable, will return false if OMM
   U64 new_capacity,new_mask,old_mask;
   StrMapNode **new_entries, **old_entries;
