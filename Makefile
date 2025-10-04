@@ -3,7 +3,7 @@ LIB_SRC        ?= ./src/holyc-lib
 C_COMPILER     ?= gcc
 BUILD_TYPE     ?= debug
 INSTALL_PREFIX ?= /usr/local
-CFLAGS         ?= '-Wextra -Wall -Wpedantic -fsanitize=address'
+CFLAGS         ?= '-Wextra -Wall -Wpedantic'
 
 default: all
 
