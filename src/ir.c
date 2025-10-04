@@ -124,6 +124,7 @@ IrFunction *irFunctionNew(AoStr *fname) {
     func->name = fname;
     func->blocks = listNew();
     func->cfg = irBlockMapNew();
+    func->stack_space = 0;
     return func;
 }
 
@@ -136,6 +137,12 @@ void irMakeFunction(Cctrl *cc, Ast *ast_func) {
     (void)cc;
     IrFunction *func = irFunctionNew(ast_func->fname);
     (void)func;
+    /* Neet to treat the params as variable declarations and save
+     * them straight to stack slots */
+    for (u64 i = 0; i < ast_func->params->size; ++i) {
+        Ast *ast = vecGet(Ast *, ast_func->params, i);
+        /* Get the name and size of the variable */
+    }
 }
 
 void irDump(Cctrl *cc) {

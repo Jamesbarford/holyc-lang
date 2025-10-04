@@ -26,6 +26,8 @@ typedef struct IrFunction {
     List *blocks;
     /* `Map<u32, IrBlockMapping *>`*/
     Map *cfg;
+    /* How much space on the stack we need */
+    u16 stack_space;
 } IrFunction;
 
 typedef struct IrProgram {
@@ -38,7 +40,6 @@ typedef struct IrCtx {
     IrFunction *cur_func;
     /* The entrity of the program in IR */
     IrProgram *prog;
-
 } IrCtx;
 
 #endif

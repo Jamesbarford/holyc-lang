@@ -376,6 +376,7 @@ Ast *astFunctionPtrCall(AstType *type,
     return ast;
 }
 
+/* This is sort of a variable declaration */
 Ast *astFunctionPtr(AstType *type, char *fname, int len, Vec *params) {
     Ast *ast = astNew();
     ast->type = type;
@@ -1416,7 +1417,7 @@ void _astToString(AoStr *str, Ast *ast, int depth) {
             aoStrPutChar(str, ' ');
         }
 
-        aoStrCatAoStr(str,ast->lname);
+        aoStrCatFmt(str, "%S (id: %u)", ast->lname, ast->lvar_id);
         break;
     }    
     
