@@ -3,7 +3,7 @@ LIB_SRC        ?= ./src/holyc-lib
 C_COMPILER     ?= gcc
 BUILD_TYPE     ?= debug
 INSTALL_PREFIX ?= /usr/local
-CFLAGS         ?= '-Wextra -Wall -Wpedantic'
+CFLAGS         ?= '-Wextra -Wall -Wpedantic -fsanitize=address'
 
 default: all
 
@@ -30,9 +30,7 @@ all:
 		&& $(MAKE) -C ./build -j2
 
 install:
-	install -c -m 555 $(TARGET) $(INSTALL_PREFIX)/bin
-	cp $(LIB_SRC)/tos.HH $(INSTALL_PREFIX)/include/tos.HH
-	cd $(LIB_SRC) && hcc -lib tos ./all.HC
+	$(MAKE) -C ./build install
 
 unit-test:
 	$(MAKE) -C ./build unit-test
