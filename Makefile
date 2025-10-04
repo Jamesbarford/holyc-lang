@@ -1,5 +1,7 @@
+TARGET         := hcc
+LIB_SRC        ?= ./src/holyc-lib
 C_COMPILER     ?= gcc
-BUILD_TYPE     ?= Release
+BUILD_TYPE     ?= debug
 INSTALL_PREFIX ?= /usr/local
 CFLAGS         ?= '-Wextra -Wall -Wpedantic'
 
@@ -28,7 +30,9 @@ all:
 		&& $(MAKE) -C ./build -j2
 
 install:
-	$(MAKE) -C ./build install
+	install -c -m 555 $(TARGET) $(INSTALL_PREFIX)/bin
+	cp $(LIB_SRC)/tos.HH $(INSTALL_PREFIX)/include/tos.HH
+	cd $(LIB_SRC) && hcc -lib tos ./all.HC
 
 unit-test:
 	$(MAKE) -C ./build unit-test
