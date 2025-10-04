@@ -1,7 +1,5 @@
-TARGET         := hcc
-LIB_SRC        ?= ./src/holyc-lib
 C_COMPILER     ?= gcc
-BUILD_TYPE     ?= debug
+BUILD_TYPE     ?= Release
 INSTALL_PREFIX ?= /usr/local
 CFLAGS         ?= '-Wextra -Wall -Wpedantic'
 
