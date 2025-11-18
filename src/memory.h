@@ -1,6 +1,8 @@
 #ifndef MEMORY_H__
 #define MEMORY_H__
 
+#include "types.h"
+
 void *xmalloc(u64 size);
 void xfree(void *ptr);
 
