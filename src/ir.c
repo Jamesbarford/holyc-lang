@@ -119,11 +119,21 @@ void irBlockRelease(IrBlock *block) {
     listRelease(block->instructions, NULL);
 }
 
+IrInstr *irInstrNew(IrOp op, u16 dst, u16 r1, u16 r2) {
+    IrInstr *instr = irAlloc(sizeof(IrInstr));
+    instr->op = op;
+    instr->dst = dst;
+    instr->r1 = r1;
+    instr->r2 = r2;
+    return instr;
+}
+
 IrFunction *irFunctionNew(AoStr *fname) {
     IrFunction *func = irAlloc(sizeof(IrFunction));
     func->name = fname;
     func->blocks = listNew();
     func->cfg = irBlockMapNew();
+    func->stack_space = 0;
     return func;
 }
 
@@ -136,6 +146,7 @@ void irMakeFunction(Cctrl *cc, Ast *ast_func) {
     (void)cc;
     IrFunction *func = irFunctionNew(ast_func->fname);
     (void)func;
+    // Calculate stack space ahead of time or as we go?
 }
 
 void irDump(Cctrl *cc) {
