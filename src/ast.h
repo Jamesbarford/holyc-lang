@@ -259,6 +259,7 @@ typedef struct Ast {
             AoStr *fname;
             Vec *args;
             Vec *params;
+            u32 fn_ptr_id;
 
             /* Declaration */
             List *locals;

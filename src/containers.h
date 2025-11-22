@@ -120,6 +120,9 @@ struct Map {
 #define mapSetValueRelease(map, func) ((map)->type->value_release = (func))
 #define mapSetValueType(map, type) ((map)->type->value_type = (type))
 #define mapSetKeyType(map, type) ((map)->type->key_type = (type))
+#define mapGetInt(map, key) (mapGet(map, ((void*)(u64)(key))))
+#define mapAddIntOrErr(map, key, value) (mapAddOrErr(map, ((void*)(u64)(key)), (value)))
+#define mapRemoveInt(map, key) (mapRemove(map, ((void*)(u64)(key))))
 
 struct MapIter {
     Map *map;

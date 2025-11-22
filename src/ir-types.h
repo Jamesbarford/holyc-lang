@@ -117,6 +117,7 @@ typedef enum IrValueKind {
 } IrValueKind;
 
 typedef enum IrCmpKind {
+    IR_CMP_INVALID = -1,
     IR_CMP_EQ,         /* Equal */
     IR_CMP_NE,         /* Not equal */
     IR_CMP_LT,         /* Less than */
@@ -230,14 +231,22 @@ struct IrBlockMapping {
 };
 
 typedef struct IrFunction {
+    /* Name of the function as defined */
     AoStr *name;
-    IrValue *return_value; /* Not sure if this is needed but for printing as a 
-                            * string it looks pretty! */
-    Vec *params;       /* Parameter list, `PtrVec<IrValue *>` */
-    IrBlock *entry_block; /* Entry */
-    IrBlock *exit_block;  /* Exit */
+    /* Not sure if this is needed but for printing as a 
+     * string it looks pretty! */
+    IrValue *return_value; 
+    /* Parameter list, `PtrVec<IrValue *>` */
+    Vec *params;
+    /* Entry */
+    IrBlock *entry_block;
+    /* Exit */
+    IrBlock *exit_block;  
+    /* `Map<u32, IrValue>` */
+    Map *variables;
+    /* Space needed on the stack for allocating variables */
     u16 stack_space;
-    /* `List<IrBlock *>`*/
+    /* `List<IrBlock *>` */
     List *blocks;
     /* `Map<u32, IrBlockMapping *>`*/
     Map *cfg;
@@ -263,5 +272,9 @@ typedef struct IrCtx {
 IrBlockMapping *irFunctionGetBlockMapping(IrFunction *func, IrBlock *ir_block);
 Map *irFunctionGetSuccessors(IrFunction *func, IrBlock *ir_block);
 Map *irFunctionGetPredecessors(IrFunction *func, IrBlock *ir_block);
+
+int irIsFloat(IrValueType type);
+int irIsInt(IrValueType type);
+int irIsStruct(IrValueType ir_value_type);
 
 #endif

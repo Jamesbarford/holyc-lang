@@ -383,6 +383,7 @@ Ast *astFunctionPtr(AstType *type, char *fname, int len, Vec *params) {
     ast->fname = aoStrDupRaw(fname, len);
     ast->params = params;
     ast->default_fn = NULL;
+    ast->fn_ptr_id = lvar_unique_id++;
     return ast;
 }
 
