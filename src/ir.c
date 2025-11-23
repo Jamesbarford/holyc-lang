@@ -1,5 +1,7 @@
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
+#include <assert.h>
 
 #include "arena.h"
 #include "ast.h"
@@ -40,11 +42,12 @@ void vecIrFunctionToString(AoStr *buf, void *_ir_func) {
     aoStrCatPrintf(buf, "%s", ir_func->name->data);
 }
 
+/* `Vec<IrFunction *>`*/
 VecType vec_ir_function_type = {
     .stringify = vecIrFunctionToString,
     .match     = NULL,
     .release   = NULL,
-    .type_str  = "long",
+    .type_str  = "IrFunction *",
 };
 
 Vec *irFunctionVecNew(void) {
@@ -55,6 +58,7 @@ void vecIrPairToString(AoStr *buf, void *_ir_pair) {
     irPairToString(buf, _ir_pair);
 }
 
+/* `Vec<IrPair *>`*/
 VecType vec_ir_pair_type = {
     .stringify = vecIrPairToString,
     .match     = NULL,
@@ -64,6 +68,24 @@ VecType vec_ir_pair_type = {
 
 Vec *irPairVecNew(void) {
     return vecNew(&vec_ir_pair_type);
+}
+
+void vecIrValueToString(AoStr *buf, void *_ir_value) {
+    AoStr *ir_value_str = irValueToString(_ir_value);
+    aoStrCatAoStr(buf, ir_value_str);
+    aoStrRelease(ir_value_str);
+}
+
+/* `Vec<IrValue *>`*/
+VecType vec_ir_value_type = {
+    .stringify = vecIrValueToString,
+    .match     = NULL,
+    .release   = NULL,
+    .type_str  = "IrValue *",
+};
+
+Vec *irValueVecNew(void) {
+    return vecNew(&vec_ir_value_type);
 }
 
 AoStr *mapIrBlockToString(void *_ir_block) {
@@ -152,8 +174,6 @@ Map *irVarValueMap(void) {
     return mapNew(8, &map_u32_to_ir_var_value_type);
 }
 
-
-
 /* Pass in the whole block to abstract away that we area using an interal 
  * datastructure to keep track of things. I'm trying a few different ones out */
 void irFunctionAddSuccessor(IrFunction *func, IrBlock *src, IrBlock *dest) {
@@ -199,13 +219,12 @@ void irResetBlockId(void) {
     ir_block_id = 1;
 }
 
-IrBlock *irBlockNew(IrFunction *ir_func) {
+IrBlock *irBlockNew(void) {
     IrBlock *block = irAlloc(sizeof(IrBlock));
     block->instructions = listNew();
     block->removed = 0;
     block->sealed = 0;
     block->id = ir_block_id++;
-    listAppend(ir_func->blocks, block);
     return block;
 }
 
@@ -248,19 +267,27 @@ IrValueType irConvertType(AstType *type) {
 
 IrValue *irValueNew(IrValueType type, IrValueKind kind) {
     IrValue *val = irAlloc(sizeof(IrValue));
+    memset(val, 0, sizeof(IrValue));
     val->kind = kind;
     val->type = type;
     return val;
 }
 
-IrValue *irTmp(IrValueType type, u32 var) {
+static u32 ir_tmp_var_id = 1;
+void irTmpVariableCountReset(void) {
+    ir_tmp_var_id = 1;
+}
+
+IrValue *irTmp(IrValueType type) {
     IrValue *val = irValueNew(type, IR_VAL_TMP);
-    val->as.var = var;
+    val->as.var = ir_tmp_var_id++;
     return val;
 }
 
 IrInstr *irInstrNew(IrOp op, IrValue *dst, IrValue *r1, IrValue *r2) {
     IrInstr *instr = irAlloc(sizeof(IrInstr));
+    memset(instr, 0, sizeof(IrInstr));
+    instr->flags = 0;
     instr->op = op;
     instr->dst = dst;
     instr->r1 = r1;
@@ -278,8 +305,22 @@ IrFunction *irFunctionNew(AoStr *fname) {
     return func;
 }
 
-IrValue *irFnGetVar(IrFunction *func, u32 var_id) {
-    return mapGetInt(func->variables, var_id);
+/* Map an ast id to an ir variable */
+void irFnAddVar(IrFunction *func, u32 lvar_id, IrValue *var) {
+    int ok = mapAddIntOrErr(func->variables, lvar_id, var);
+    if (!ok) {
+        AoStr *ir_value_str = irValueToString(var);
+        loggerPanic("Mapping exists for %u -> %s", lvar_id, ir_value_str->data);
+        free(ir_value_str);
+    }
+}
+
+void irFnAddBlock(IrFunction *fn, IrBlock *block) {
+    listAppend(fn->blocks, block);
+}
+
+IrValue *irFnGetVar(IrFunction *func, u32 lvar_id) {
+    return mapGetInt(func->variables, lvar_id);
 }
 
 int irSetVariable(IrFunction *func, u32 var_id, IrValue *var) {
@@ -311,12 +352,11 @@ IrValue *irConstFloat(IrValueType type, f64 _f64) {
     return ir_value;
 }
 
-IrInstr *irAlloca(IrCtx *ctx, u32 var_id, AstType *ast_type) {
+IrInstr *irAlloca(AstType *ast_type) {
     IrValueType ir_type = irConvertType(ast_type);
-    IrValue *tmp = irTmp(ir_type, var_id);
+    IrValue *tmp = irTmp(ir_type);
     IrValue *ir_size = irConstInt(ir_type, ast_type->size);
     IrInstr *ir_alloca = irInstrNew(IR_ALLOCA, tmp, ir_size, NULL);
-    irBlockAddInstr(ctx, ir_alloca);
     return ir_alloca;
 }
 
@@ -349,7 +389,7 @@ IrInstr *irBranch(IrFunction *func,
 
     if (cond->type != IR_TYPE_I8) {
         IrValue *zero = irConstInt(IR_TYPE_I8, 0);
-        IrValue *bool_cond = irTmp(IR_TYPE_I8, 0);
+        IrValue *bool_cond = irTmp(IR_TYPE_I8);
         IrInstr *cmp = irICmp(bool_cond, IR_CMP_NE, cond, zero);
         listAppend(block->instructions, cmp);
         cond = bool_cond;
@@ -429,29 +469,60 @@ IrInstr *irLoad(IrValue *ir_dest, IrValue *ir_value) {
     return irInstrNew(IR_LOAD, ir_dest, ir_value, NULL);
 }
 
+/* result is where we are storing something and op1 is the thing we are storing 
+ * I think op1 could/shoule have an offset as it is either going to be the 
+ * stack or it is going to be a struct/pointer offset? */
+IrInstr *irStore(IrValue *ir_dest, IrValue *ir_value) {
+    return irInstrNew(IR_STORE, ir_dest, ir_value, NULL);
+}
+
 IrValue *irExpr(IrCtx *ctx, Ast *ast);
 
+IrValue *irFnCall(IrCtx *ctx, Ast *ast) {
+    IrValueType ret_type = irConvertType(ast->type);
+    IrValue *ir_call_args = irValueNew(IR_TYPE_ARRAY, IR_VAL_UNRESOLVED);
+    IrValue *ir_ret_val = irTmp(ret_type);
+    IrInstr *ir_call_instr = irInstrNew(IR_CALL, ir_ret_val, ir_call_args, NULL);
+
+    assert(ast->kind == AST_FUNCALL);
+
+    Vec *args = irValueVecNew();
+    ir_call_args->as.array.values = args;
+    ir_call_args->as.array.label = ast->fname;
+
+    if (ast->args) {
+        for (u64 i = 0; i < ast->args->size; ++i) {
+            Ast *ast_arg = ast->args->entries[i];
+            IrValue *ir_arg = irExpr(ctx, ast_arg);
+            vecPush(args, ir_arg);
+        }
+    }
+
+    irBlockAddInstr(ctx, ir_call_instr);
+    return ir_ret_val;
+}
 
 /* Binary expressions are assumed to always be assigning to something. I'm not
  * 100% sure this is a valid assumption to make. Well I guess;
  * `I64 x = y + 32 * 10` _could_ continually be assigned to `x` */
-IrValue *irBinOpExpr(IrCtx *ctx, u32 var_id, Ast *ast) {
+IrValue *irBinOpExpr(IrCtx *ctx, Ast *ast) {
     IrValue *lhs = irExpr(ctx, ast->left);
     IrValue *rhs = irExpr(ctx, ast->right);
     IrValueType ir_type = irConvertType(ast->type);
-    IrValue *ir_result = irTmp(ir_type, var_id);
+    IrValue *ir_result = irTmp(ir_type);
     IrOp op;
     IrCmpKind cmp = IR_CMP_INVALID;
 
     if (ast->binop == AST_BIN_OP_LOG_AND) {
         IrBlock *ir_block = ctx->cur_block;
-        IrBlock *ir_right_block = irBlockNew(ctx->cur_func);
-        IrBlock *ir_end_block = irBlockNew(ctx->cur_func);
+        IrBlock *ir_right_block = irBlockNew();
+        IrBlock *ir_end_block = irBlockNew();
 
         IrValue *left = irExpr(ctx, ast->left);
-        IrValue *ir_result = irTmp(IR_TYPE_I8, var_id);
+        IrValue *ir_result = irTmp(IR_TYPE_I8);
 
         irBranch(ctx->cur_func, ir_block, left, ir_right_block, ir_end_block);
+        irFnAddBlock(ctx->cur_func, ir_right_block);
         ctx->cur_block = ir_right_block;
 
         IrValue *right = irExpr(ctx, ast->right);
@@ -459,25 +530,26 @@ IrValue *irBinOpExpr(IrCtx *ctx, u32 var_id, Ast *ast) {
         IrInstr *jump_instr = irJump(ctx->cur_func, ctx->cur_block, ir_end_block);
 
         /* Add to the current blocks instructions */
-        listAppend(ctx->cur_block->instructions, jump_instr);
+        irBlockAddInstr(ctx, jump_instr);
+        irFnAddBlock(ctx->cur_func, ir_end_block);
         ctx->cur_block = ir_end_block;
 
         IrInstr *phi_instr = irPhi(ir_result);
-        listAppend(ctx->cur_block->instructions, phi_instr);
+        irBlockAddInstr(ctx, phi_instr);
         irAddPhiIncoming(phi_instr, irConstInt(IR_TYPE_I8, 0), ir_block);
         irAddPhiIncoming(phi_instr, right, ir_right_block);
         return ir_result;
     } else if (ast->binop == AST_BIN_OP_LOG_OR) {
-
         IrBlock *ir_block = ctx->cur_block;
-        IrBlock *ir_right_block = irBlockNew(ctx->cur_func);
-        IrBlock *ir_end_block = irBlockNew(ctx->cur_func);
+        IrBlock *ir_right_block = irBlockNew();
+        IrBlock *ir_end_block = irBlockNew();
 
         IrValue *left = irExpr(ctx, ast->left);
-        IrValue *ir_result = irTmp(IR_TYPE_I8, var_id);
+        IrValue *ir_result = irTmp(IR_TYPE_I8);
 
         /* For an OR the difference is this is switched around */
         irBranch(ctx->cur_func, ir_block, left, ir_end_block, ir_right_block);
+        irFnAddBlock(ctx->cur_func, ir_right_block);
         ctx->cur_block = ir_right_block;
 
         IrValue *right = irExpr(ctx, ast->right);
@@ -485,11 +557,12 @@ IrValue *irBinOpExpr(IrCtx *ctx, u32 var_id, Ast *ast) {
         IrInstr *jump_instr = irJump(ctx->cur_func, ctx->cur_block, ir_end_block);
 
         /* Add to the current blocks instructions */
-        listAppend(ctx->cur_block->instructions, jump_instr);
+        irBlockAddInstr(ctx, jump_instr);
+        irFnAddBlock(ctx->cur_func, ir_end_block);
         ctx->cur_block = ir_end_block;
 
         IrInstr *phi_instr = irPhi(ir_result);
-        listAppend(ctx->cur_block->instructions, phi_instr);
+        irBlockAddInstr(ctx, phi_instr);
         irAddPhiIncoming(phi_instr, irConstInt(IR_TYPE_I8, 0), ir_block);
         irAddPhiIncoming(phi_instr, right, ir_right_block);
         return ir_result;
@@ -535,7 +608,6 @@ IrValue *irBinOpExpr(IrCtx *ctx, u32 var_id, Ast *ast) {
                 loggerPanic("Op `%s` not handled for float \n",
                         astBinOpKindToString(ast->binop));
         }
-        
     } else if (irIsInt(ir_type)) {
         switch (ast->binop) {
             case AST_BIN_OP_ADD:
@@ -632,7 +704,7 @@ IrValue *irBinOpExpr(IrCtx *ctx, u32 var_id, Ast *ast) {
 IrValue *irExpr(IrCtx *ctx, Ast *ast) {
     switch (ast->kind) {
         case AST_BINOP:
-            return irBinOpExpr(ctx, 300, ast);
+            return irBinOpExpr(ctx, ast);
         case AST_LITERAL:
             switch (ast->type->kind) {
                 case AST_TYPE_INT:
@@ -655,16 +727,27 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
             }
 
             IrValueType ir_value_type = irConvertType(ast->type);
-            IrValue *ir_load_dest = irTmp(ir_value_type, local_var->as.var);
+            IrValue *ir_load_dest = irTmp(ir_value_type);
 
             if (irIsStruct(local_var->type)) {
                 loggerWarning("Unhandled load of a struct!\n");
                 // irGetElementPointer(ir_block, ir_load_dest, local_var);
             } else {
                 IrInstr *load_instr = irLoad(ir_load_dest, local_var);
-                listAppend(ctx->cur_block->instructions, load_instr);
+                irBlockAddInstr(ctx, load_instr);
             }
             return ir_load_dest;
+        }
+
+        case AST_FUNCALL:
+            return irFnCall(ctx, ast);
+
+        case AST_STRING: {
+            IrValue *value = irValueNew(IR_TYPE_ARRAY,
+                    IR_VAL_CONST_STR);
+            value->as.str.str = ast->sval;
+            value->as.str.str_real_len = ast->real_len;
+            return value;
         }
 
         case AST_UNOP:
@@ -674,8 +757,6 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
         case AST_LABEL:
         case AST_FUNC:
         case AST_DECL:
-        case AST_STRING:
-        case AST_FUNCALL:
         case AST_ARRAY_INIT:
         case AST_IF:
         case AST_FOR:
@@ -705,7 +786,7 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
         case AST_SIZEOF:
         case AST_COMMENT:
         default:
-            loggerPanic("Unhandled AST kind: %s\n", astKindToString(ast->kind));
+            loggerPanic("Expr Unhandled AST kind: %s\n", astKindToString(ast->kind));
     }
 }
 
@@ -728,29 +809,65 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
         case AST_DECL: {
             Ast *var = ast->declvar;
             Ast *init = ast->declinit;
-            IrInstr *ir_alloca = irAlloca(ctx, var->lvar_id, var->type);
+            IrInstr *ir_alloca = irAlloca(var->type);
+            irBlockAddInstr(ctx, ir_alloca);
             IrValue *local = ir_alloca->dst;
-
-            int ok = 0;
-            if (!(ok = irSetVariable(ctx->cur_func, local->as.var, local))) {
-                /* I can't see how this would be hit? */
-                loggerPanic("Variable or function pointer already defined.\n"); 
-            }
-
-            irInstrPrint(ir_alloca);
+            irFnAddVar(ctx->cur_func, ast->declvar->lvar_id, local);
 
             if (init) {
-                IrValue *ir_init = irExpr(ctx, init);
+                IrValue *ir_init = NULL;
+
+                switch (init->kind) {
+                    case AST_ARRAY_INIT: {
+                        loggerPanic("Unhandled: %s\n", astKindToString(init->kind));
+                        break;
+                    }
+
+                    case AST_FUN_PROTO:
+                    case AST_FUNC:
+                    case AST_EXTERN_FUNC:
+                    case AST_ASM_FUNCDEF:
+                    case AST_ASM_FUNC_BIND: {
+                        loggerPanic("Unhandled: %s\n", astKindToString(init->kind));
+                        break;
+                    }
+
+                    case AST_ASM_FUNCALL:
+                    case AST_FUNPTR_CALL:
+                    case AST_FUNCALL: {
+                        IrValue *ret = irFnCall(ctx, init);
+                        IrInstr *ir_store = irStore(local, ret);
+                        irBlockAddInstr(ctx, ir_store);
+                        break;
+                    }
+
+                    case AST_UNOP:
+                        loggerPanic("Unhandled: %s\n", astKindToString(init->kind));
+                        break;
+
+                    default: {
+                        ir_init = irExpr(ctx, init);
+                        IrInstr *ir_store = irStore(local, ir_init);
+                        irBlockAddInstr(ctx, ir_store);
+                        break;
+                    }    
+                }
             }
             break;
         }
+
+        case AST_FUNCALL:
+            irExpr(ctx, ast);
+            break;
+
+        case AST_STRING:
+            irExpr(ctx, ast);
+            break;
 
         case AST_GVAR:
         case AST_GOTO:
         case AST_LABEL:
         case AST_FUNC:
-        case AST_STRING:
-        case AST_FUNCALL:
         case AST_LITERAL:
         case AST_ARRAY_INIT:
         case AST_IF:
@@ -780,30 +897,32 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
         case AST_SIZEOF:
         case AST_COMMENT:
         case AST_UNOP:
-          break;
+            loggerPanic("Unhandled Ast kind `%s`\n%s\n",
+                    astKindToString(ast->kind),
+                    astToString(ast));
+            break;
     }
-
-    astKindPrint(ast->kind);
 }
 
 void irMakeFunction(IrCtx *ctx, Ast *ast_func) {
     IrFunction *func = irFunctionNew(ast_func->fname);
-    IrBlock *entry = irBlockNew(func);
+    IrBlock *entry = irBlockNew();
 
     ctx->cur_block = entry;
     func->entry_block = entry;
     ctx->cur_func = func;
 
-
+    irFnAddBlock(ctx->cur_func, entry);
     irLowerAst(ctx, ast_func->body);
-    IrBlock *exit_block = irBlockNew(func);
-    IrInstr *ir_return_space = irAlloca(ctx, -1, ast_func->type->rettype);
+    IrBlock *exit_block = irBlockNew();
+    IrInstr *ir_return_space = irAlloca(ast_func->type->rettype);
     IrValue *ir_return_var = ir_return_space->dst;
     func->return_value = ir_return_var;
     IrBlockMapping *ir_exit_block_mapping = irBlockMappingNew(exit_block->id);
     mapAddIntOrErr(func->cfg, ir_exit_block_mapping->id, ir_exit_block_mapping);
 
     func->exit_block = exit_block;
+    irFnAddBlock(ctx->cur_func, exit_block);
 
     irPrintFunction(func);
 }

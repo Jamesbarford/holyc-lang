@@ -414,7 +414,7 @@ void irPairToString(AoStr *buf, IrPair *ir_phi_pair) {
 
 /* Convert an instruction to a string. */
 AoStr *irInstrToString(IrInstr *ir_instr) {
-    IrValue *ir_values[4] = {
+    IrValue *ir_values[3] = {
         ir_instr->dst,
         ir_instr->r1,
         ir_instr->r2,
@@ -433,10 +433,10 @@ AoStr *irInstrToString(IrInstr *ir_instr) {
                         aoStrCatLen(buf,str_lit("    "));
                     }
                     if (is_terminal) {
-                        aoStrCatFmt(buf, ESC_BLUE"%-8s "ESC_RESET"%S\n",
-                                    "arg", ir_value_str);
+                        aoStrCatFmt(buf, ESC_BLUE"arg      "ESC_RESET"%S\n",
+                                    ir_value_str);
                     } else {
-                        aoStrCatFmt(buf, "%-8s %S\n", "arg", ir_value_str);
+                        aoStrCatFmt(buf, "arg       %S\n", ir_value_str);
                     }
                     aoStrRelease(ir_value_str);
                 }
@@ -445,10 +445,10 @@ AoStr *irInstrToString(IrInstr *ir_instr) {
 
             if (ir_instr->dst) {
                 AoStr *ir_ret_var = irValueToString(ir_instr->dst);
-                aoStrCatFmt(buf, "%s %S, %S", op, ir_ret_var, ir_instr->r1->as.name);
+                aoStrCatFmt(buf, "%s %S, %S", op, ir_ret_var, ir_instr->r1->as.array.label);
                 aoStrRelease(ir_ret_var);
             } else {
-                aoStrCatFmt(buf, "%s %S", op, ir_instr->r1->as.name);
+                aoStrCatFmt(buf, "%s %S", op, ir_instr->r1->as.array.label);
             }
             break;
         }

@@ -143,6 +143,8 @@ typedef struct IrValueGlobal IrValueGlobal;
 typedef struct IrValueString IrValueString;
 
 struct IrValueArray {
+    /* Either the name of a function call OR the label for
+     * the array in initialisers */
     AoStr *label;
     int nesting;
     int length_per_array;
@@ -242,7 +244,7 @@ typedef struct IrFunction {
     IrBlock *entry_block;
     /* Exit */
     IrBlock *exit_block;  
-    /* `Map<u32, IrValue>` */
+    /* Maps an ast lvar_id to an IrValue `Map<u32, IrValue>` */
     Map *variables;
     /* Space needed on the stack for allocating variables */
     u16 stack_space;
