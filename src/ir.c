@@ -251,6 +251,19 @@ IrValue *irTmp(IrValueType type) {
     return val;
 }
 
+IrCtx *irCtxNew(Cctrl *cc) {
+    IrCtx *ctx = malloc(sizeof(IrCtx));
+    ctx->prog = malloc(sizeof(IrProgram));
+    ctx->prog->functions = irFunctionVecNew();
+    ctx->prog->globals = NULL;
+    ctx->cc = cc;
+    return ctx;
+}
+
+void irCtxAddFunction(IrCtx *ctx, IrFunction *func) {
+    vecPush(ctx->prog->functions, func);
+}
+
 IrInstr *irInstrNew(IrOp op, IrValue *dst, IrValue *r1, IrValue *r2) {
     IrInstr *instr = irAlloc(sizeof(IrInstr));
     memset(instr, 0, sizeof(IrInstr));
@@ -778,6 +791,7 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
             Ast *var = ast->declvar;
             Ast *init = ast->declinit;
             IrInstr *ir_alloca = irAlloca(var->type);
+            irAddStackSpace(ctx, var->type->size);
             irBlockAddInstr(ctx, ir_alloca);
             IrValue *local = ir_alloca->dst;
             irFnAddVar(ctx->cur_func, ast->declvar->lvar_id, local);
@@ -917,6 +931,7 @@ void irMakeFunction(IrCtx *ctx, Ast *ast_func) {
     irLowerAst(ctx, ast_func->body);
     IrBlock *exit_block = irBlockNew();
     IrInstr *ir_return_space = irAlloca(ast_func->type->rettype);
+    irAddStackSpace(ctx, ast_func->type->rettype->size);
     IrValue *ir_return_var = ir_return_space->dst;
     func->return_value = ir_return_var;
     IrBlockMapping *ir_exit_block_mapping = irBlockMappingNew(exit_block->id);
@@ -924,18 +939,29 @@ void irMakeFunction(IrCtx *ctx, Ast *ast_func) {
 
     func->exit_block = exit_block;
     irFnAddBlock(ctx->cur_func, exit_block);
-
-    irPrintFunction(func);
 }
 
 void irDump(Cctrl *cc) {
-    IrCtx *ctx = malloc(sizeof(IrCtx));
-    ctx->cc = cc;
-
+    IrCtx *ctx = irCtxNew(cc);
     listForEach(cc->ast_list) {
         Ast *ast = (Ast *)it->value;
         if (ast->kind == AST_FUNC) {
+            ctx->cur_func = NULL;
             irMakeFunction(ctx, ast);
+            irPrintFunction(ctx->cur_func);
         }
     }
+}
+
+IrCtx *irLowerProgram(Cctrl *cc) {
+    IrCtx *ctx = irCtxNew(cc);
+    listForEach(cc->ast_list) {
+        Ast *ast = (Ast *)it->value;
+        if (ast->kind == AST_FUNC) {
+            ctx->cur_func = NULL;
+            irMakeFunction(ctx, ast);
+            irCtxAddFunction(ctx, ctx->cur_func);
+        }
+    }
+    return ctx;
 }
