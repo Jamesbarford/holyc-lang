@@ -13,6 +13,7 @@ const char *irValueKindToString(IrValueKind ir_value_kind);
 const char *irValueKindToPrettyString(IrValueKind ir_value_kind);
 void irArrayInitToString(AoStr *buf, IrValue *ir_value);
 AoStr *irValueToString(IrValue *ir_value);
+void irValuePrint(IrValue *val);
 const char *irCmpKindToString(IrCmpKind ir_cmp_kind);
 const char *irOpcodeToString(IrInstr *ir_instr);
 void irPairToString(AoStr *buf, IrPair *ir_phi_pair);
@@ -24,7 +25,6 @@ void irPrintFunction(IrFunction *ir_function);
 AoStr *irBlockToStringSimplified(IrBlock *ir_block);
 AoStr *irFunctionCFGToString(IrFunction *func);
 
-void irValuePrint(IrValue *ir_value);
 void irInstrPrint(IrInstr *ir_instr);
 
 #endif

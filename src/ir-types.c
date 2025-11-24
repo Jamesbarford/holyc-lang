@@ -4,41 +4,46 @@
 #include "ir-types.h"
 #include "util.h"
 
-int irOpIsCmp(IrOp opcode) {
+u8 irOpIsCmp(IrOp opcode) {
     if (opcode == IR_ICMP || opcode == IR_FCMP) {
         return 1;
     }
     return 0;
 }
 
-int irIsFloat(IrValueType type) {
+u8 irIsFloat(IrValueType type) {
     return type == IR_TYPE_F64;
 }
 
-int irIsInt(IrValueType type) {
+u8 irIsInt(IrValueType type) {
     return type == IR_TYPE_I8 ||
            type == IR_TYPE_I16 ||
            type == IR_TYPE_I32 ||
            type == IR_TYPE_I64;
 }
 
-int irIsStruct(IrValueType ir_value_type) {
+u8 irIsConstInt(IrValue *val) {
+    return irIsInt(val->type) &&
+           val->kind == IR_VAL_CONST_INT;
+}
+
+u8 irIsStruct(IrValueType ir_value_type) {
     return ir_value_type == IR_TYPE_STRUCT;
 }
 
-int irIsPtr(IrValueType ir_value_type) {
+u8 irIsPtr(IrValueType ir_value_type) {
     return ir_value_type == IR_TYPE_PTR;
 }
 
-int irIsStore(IrOp opcode) {
+u8 irIsStore(IrOp opcode) {
     return opcode = IR_STORE;
 }
 
-int irIsLoad(IrOp opcode) {
+u8 irIsLoad(IrOp opcode) {
     return opcode = IR_LOAD;
 }
 
-int irTypeIsScalar(IrValueType ir_value_type) {
+u8 irTypeIsScalar(IrValueType ir_value_type) {
     return irIsFloat(ir_value_type) || irIsInt(ir_value_type);
 }
 
@@ -52,7 +57,7 @@ int irGetIntSize(IrValueType ir_value_type) {
     }
 }
 
-int irIsConst(IrValueKind ir_value_kind) {
+u8 irIsConst(IrValueKind ir_value_kind) {
     return ir_value_kind == IR_VAL_CONST_INT || 
            ir_value_kind == IR_VAL_CONST_FLOAT;
 }
@@ -79,7 +84,7 @@ int irAreCompatibleCmpTypes(IrValueType t1, IrValueType t2) {
 int irVarEq(IrValue *v1, IrValue *v2) {
     if (!v2 || !v1) return 0;
     if (v1 == v2) return 1;
-    if (v1->kind == v2->kind && v1->type == v2->type && v1->as.var == v2->as.var) {
+    if (v1->kind == v2->kind && v1->type == v2->type && v1->as.var.id == v2->as.var.id) {
         return 1;
     }
     return 0;

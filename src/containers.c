@@ -677,6 +677,15 @@ SetType set_int_type = {
     .type          = "long",
 };
 
+SetType set_uint_type = {
+    .match         = (mapKeyMatch *)mapIntKeyMatch,
+    .hash          = (mapKeyHash *)mapIntKeyHash,
+    .get_key_len   = mapIntKeyLen,
+    .stringify     = (mapKeyToString *)mapIntToString,
+    .value_release = NULL,
+    .type          = "u64",
+};
+
 SetType set_cstring_type = {
     .match         = mapCStringEq,
     .hash          = mapCStringHash,
@@ -1328,4 +1337,17 @@ MapType map_cstring_opaque_type = {
     .value_release   = NULL,
     .key_type        = "char *",
     .value_type      = "void *",
+};
+
+/* `Map<u64, u64>` */
+MapType map_uint_to_uint_type = {
+    .match           = mapIntKeyMatch,
+    .hash            = mapIntKeyHash,
+    .get_key_len     = mapIntKeyLen,
+    .key_to_string   = mapIntToString,
+    .key_release     = NULL,
+    .value_to_string = NULL,
+    .value_release   = NULL,
+    .key_type        = "u64",
+    .value_type      = "u64",
 };

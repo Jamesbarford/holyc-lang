@@ -158,9 +158,17 @@ struct IrValueGlobal {
 };
 
 struct IrValueString {
+    AoStr *label;
     AoStr *str;
     int str_real_len;
 };
+
+typedef struct IrVar {
+    /* Variable id */
+    u32 id;
+    /* How big the variable is */
+    u16 size;
+} IrVar;
 
 struct IrValue {
     IrValueType type;
@@ -172,7 +180,7 @@ struct IrValue {
                       * previous implementation */
         s64 _i64; /* For integer constants */
         f64 _f64; /* Float constants */
-        u32 var;  /* 'name' of the variable, essentially an id */
+        IrVar var;  /* 'name' of the variable, essentially an id */
 
         IrInstr *phi; /* Notes that the value is a phi node, used for either
                        * a logical `OR` or an `AND` */
@@ -277,16 +285,17 @@ IrBlockMapping *irFunctionGetBlockMapping(IrFunction *func, IrBlock *ir_block);
 Map *irFunctionGetSuccessors(IrFunction *func, IrBlock *ir_block);
 Map *irFunctionGetPredecessors(IrFunction *func, IrBlock *ir_block);
 
-int irOpIsCmp(IrOp opcode);
-int irIsFloat(IrValueType ir_value_type);
-int irIsInt(IrValueType ir_value_type);
-int irTypeIsScalar(IrValueType ir_value_type);
+u8 irOpIsCmp(IrOp opcode);
+u8 irIsFloat(IrValueType ir_value_type);
+u8 irIsInt(IrValueType ir_value_type);
+u8 irTypeIsScalar(IrValueType ir_value_type);
+u8 irIsConst(IrValueKind ir_value_kind);
+u8 irIsPtr(IrValueType ir_value_type);
+u8 irIsStore(IrOp opcode);
+u8 irIsLoad(IrOp opcode);
+u8 irIsStruct(IrValueType ir_value_type);
+u8 irIsConstInt(IrValue *val);
 int irGetIntSize(IrValueType ir_value_type);
-int irIsConst(IrValueKind ir_value_kind);
-int irIsPtr(IrValueType ir_value_type);
-int irIsStore(IrOp opcode);
-int irIsLoad(IrOp opcode);
-int irIsStruct(IrValueType ir_value_type);
 
 IrBlock *irInstrEvalConstBranch(IrInstr *ir_cmp, IrInstr *ir_branch);
 u8 irBlocksPointToEachOther(IrFunction *func, IrBlock *prev_block, IrBlock *next_block);

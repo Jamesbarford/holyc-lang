@@ -245,9 +245,10 @@ void irTmpVariableCountReset(void) {
     ir_tmp_var_id = 1;
 }
 
-IrValue *irTmp(IrValueType type) {
+IrValue *irTmp(IrValueType type, u16 size) {
     IrValue *val = irValueNew(type, IR_VAL_TMP);
-    val->as.var = ir_tmp_var_id++;
+    val->as.var.id = ir_tmp_var_id++;
+    val->as.var.size = size;
     return val;
 }
 
@@ -335,8 +336,8 @@ IrValue *irConstFloat(IrValueType type, f64 _f64) {
 
 IrInstr *irAlloca(AstType *ast_type) {
     IrValueType ir_type = irConvertType(ast_type);
-    IrValue *tmp = irTmp(ir_type);
     IrValue *ir_size = irConstInt(ir_type, ast_type->size);
+    IrValue *tmp = irTmp(ir_type, ast_type->size);
     IrInstr *ir_alloca = irInstrNew(IR_ALLOCA, tmp, ir_size, NULL);
     return ir_alloca;
 }
@@ -370,7 +371,7 @@ IrInstr *irBranch(IrFunction *func,
 
     if (cond->type != IR_TYPE_I8) {
         IrValue *zero = irConstInt(IR_TYPE_I8, 0);
-        IrValue *bool_cond = irTmp(IR_TYPE_I8);
+        IrValue *bool_cond = irTmp(IR_TYPE_I8, 1);
         IrInstr *cmp = irICmp(bool_cond, IR_CMP_NE, cond, zero);
         listAppend(block->instructions, cmp);
         cond = bool_cond;
@@ -462,7 +463,7 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast);
 IrValue *irFnCall(IrCtx *ctx, Ast *ast) {
     IrValueType ret_type = irConvertType(ast->type);
     IrValue *ir_call_args = irValueNew(IR_TYPE_ARRAY, IR_VAL_UNRESOLVED);
-    IrValue *ir_ret_val = irTmp(ret_type);
+    IrValue *ir_ret_val = irTmp(ret_type, ast->type->size);
     IrInstr *ir_call_instr = irInstrNew(IR_CALL, ir_ret_val, ir_call_args, NULL);
 
     assert(ast->kind == AST_FUNCALL);
@@ -490,7 +491,7 @@ IrValue *irBinOpExpr(IrCtx *ctx, Ast *ast) {
     IrValue *lhs = irExpr(ctx, ast->left);
     IrValue *rhs = irExpr(ctx, ast->right);
     IrValueType ir_type = irConvertType(ast->type);
-    IrValue *ir_result = irTmp(ir_type);
+    IrValue *ir_result = irTmp(ir_type, ast->type->size);
     IrOp op;
     IrCmpKind cmp = IR_CMP_INVALID;
 
@@ -500,7 +501,7 @@ IrValue *irBinOpExpr(IrCtx *ctx, Ast *ast) {
         IrBlock *ir_end_block = irBlockNew();
 
         IrValue *left = irExpr(ctx, ast->left);
-        IrValue *ir_result = irTmp(IR_TYPE_I8);
+        IrValue *ir_result = irTmp(IR_TYPE_I8, 1);
 
         irBranch(ctx->cur_func, ir_block, left, ir_right_block, ir_end_block);
         irFnAddBlock(ctx->cur_func, ir_right_block);
@@ -526,7 +527,7 @@ IrValue *irBinOpExpr(IrCtx *ctx, Ast *ast) {
         IrBlock *ir_end_block = irBlockNew();
 
         IrValue *left = irExpr(ctx, ast->left);
-        IrValue *ir_result = irTmp(IR_TYPE_I8);
+        IrValue *ir_result = irTmp(IR_TYPE_I8, 1);
 
         /* For an OR the difference is this is switched around */
         irBranch(ctx->cur_func, ir_block, left, ir_end_block, ir_right_block);
@@ -708,7 +709,7 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
             }
 
             IrValueType ir_value_type = irConvertType(ast->type);
-            IrValue *ir_load_dest = irTmp(ir_value_type);
+            IrValue *ir_load_dest = irTmp(ir_value_type, ast->type->size);
 
             if (irIsStruct(local_var->type)) {
                 loggerWarning("Unhandled load of a struct!\n");
@@ -724,9 +725,9 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
             return irFnCall(ctx, ast);
 
         case AST_STRING: {
-            IrValue *value = irValueNew(IR_TYPE_ARRAY,
-                    IR_VAL_CONST_STR);
+            IrValue *value = irValueNew(IR_TYPE_ARRAY, IR_VAL_CONST_STR);
             value->as.str.str = ast->sval;
+            value->as.str.label = ast->slabel;
             value->as.str.str_real_len = ast->real_len;
             return value;
         }
@@ -918,10 +919,12 @@ void irMakeFunction(IrCtx *ctx, Ast *ast_func) {
                     astKindToString(ast_param->kind));
         }
 
-        IrValue *ir_tmp_var = irTmp(irConvertType(ast_param->type));
+        IrValue *ir_tmp_var = irTmp(irConvertType(ast_param->type),
+                                    ast_param->type->size);
         ir_tmp_var->kind = IR_VAL_PARAM;
         irFnAddVar(func, key, ir_tmp_var);
         vecPush(func->params, ir_tmp_var);
+        irAddStackSpace(ctx, ast_param->type->size);
     }
 
     if (ast_var_args) {
