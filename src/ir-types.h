@@ -235,6 +235,10 @@ struct IrBlockMapping {
 typedef struct IrFunction {
     /* Name of the function as defined */
     AoStr *name;
+    /* Space needed on the stack for allocating variables */
+    u16 stack_space;
+    /* Does the function have variable arguments? */
+    u8 has_var_args;
     /* Not sure if this is needed but for printing as a 
      * string it looks pretty! */
     IrValue *return_value; 
@@ -246,8 +250,6 @@ typedef struct IrFunction {
     IrBlock *exit_block;  
     /* Maps an ast lvar_id to an IrValue `Map<u32, IrValue>` */
     Map *variables;
-    /* Space needed on the stack for allocating variables */
-    u16 stack_space;
     /* `List<IrBlock *>` */
     List *blocks;
     /* `Map<u32, IrBlockMapping *>`*/
@@ -275,8 +277,22 @@ IrBlockMapping *irFunctionGetBlockMapping(IrFunction *func, IrBlock *ir_block);
 Map *irFunctionGetSuccessors(IrFunction *func, IrBlock *ir_block);
 Map *irFunctionGetPredecessors(IrFunction *func, IrBlock *ir_block);
 
-int irIsFloat(IrValueType type);
-int irIsInt(IrValueType type);
+int irOpIsCmp(IrOp opcode);
+int irIsFloat(IrValueType ir_value_type);
+int irIsInt(IrValueType ir_value_type);
+int irTypeIsScalar(IrValueType ir_value_type);
+int irGetIntSize(IrValueType ir_value_type);
+int irIsConst(IrValueKind ir_value_kind);
+int irIsPtr(IrValueType ir_value_type);
+int irIsStore(IrOp opcode);
+int irIsLoad(IrOp opcode);
 int irIsStruct(IrValueType ir_value_type);
+
+IrBlock *irInstrEvalConstBranch(IrInstr *ir_cmp, IrInstr *ir_branch);
+u8 irBlocksPointToEachOther(IrFunction *func, IrBlock *prev_block, IrBlock *next_block);
+IrValueType irConvertType(AstType *type);
+
+IrBlock *irInstrGetTargetBlock(IrInstr *instr);
+IrBlock *irInstrGetFallthroughBlock(IrInstr *instr);
 
 #endif

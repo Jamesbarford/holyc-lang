@@ -232,39 +232,6 @@ void irBlockRelease(IrBlock *block) {
     listRelease(block->instructions, NULL);
 }
 
-IrValueType irConvertType(AstType *type) {
-    switch (type->kind) {
-        case AST_TYPE_VOID: return IR_TYPE_VOID;
-        case AST_TYPE_INT: {
-            switch (type->size) {
-                case 1: return IR_TYPE_I8;
-                case 2: return IR_TYPE_I16;
-                case 4: return IR_TYPE_I32;
-                case 8: return IR_TYPE_I64;
-                default:
-                    loggerPanic("Invalid integer size `%d` for type %s\n",
-                            type->size,
-                            astTypeToString(type));
-            }
-        }
-        case AST_TYPE_CHAR:    return IR_TYPE_I8;
-        case AST_TYPE_FLOAT:   return IR_TYPE_F64;
-        case AST_TYPE_ARRAY:   return IR_TYPE_ARRAY;
-        case AST_TYPE_POINTER: return IR_TYPE_PTR;
-        case AST_TYPE_FUNC:    return IR_TYPE_FUNCTION;
-        case AST_TYPE_CLASS:   return IR_TYPE_STRUCT;
-        case AST_TYPE_UNION:   return IR_TYPE_STRUCT;
-        case AST_TYPE_VIS_MODIFIER:
-            loggerPanic("Type visibility modifier is not a type!\n");
-        case AST_TYPE_INLINE:
-            loggerPanic("Type `inline` is not a type!\n");
-        case AST_TYPE_AUTO:
-            loggerPanic("Type `auto` failed to infer it's runtime type\n");
-        default:
-            loggerPanic("Type `%s` unhandled\n",astTypeToString(type));
-    }
-}
-
 IrValue *irValueNew(IrValueType type, IrValueKind kind) {
     IrValue *val = irAlloc(sizeof(IrValue));
     memset(val, 0, sizeof(IrValue));
@@ -302,6 +269,7 @@ IrFunction *irFunctionNew(AoStr *fname) {
     func->cfg = irBlockMappingMapNew();
     func->variables = irVarValueMap();
     func->stack_space = 0;
+    func->params = irValueVecNew();
     return func;
 }
 
@@ -913,6 +881,39 @@ void irMakeFunction(IrCtx *ctx, Ast *ast_func) {
     ctx->cur_func = func;
 
     irFnAddBlock(ctx->cur_func, entry);
+
+    Ast *ast_var_args = NULL;
+    for (u64 i = 0; i < ast_func->params->size; ++i) {
+        Ast *ast_param = vecGet(Ast *,ast_func->params,i);
+
+        if (ast_param->kind == AST_VAR_ARGS) {
+            assert(func->has_var_args);
+            ast_var_args = ast_param;
+            break;
+        }
+
+        u32 key = 0;
+        if (ast_param->kind == AST_LVAR) {
+            key = ast_param->lvar_id;
+        } else if (ast_param->kind == AST_FUNPTR) {
+            key = ast_param->fn_ptr_id;
+        } else if (ast_param->kind == AST_DEFAULT_PARAM) {
+            key = ast_param->declvar->lvar_id;
+        } else {
+            loggerPanic("Unhandled key kind: %s\n",
+                    astKindToString(ast_param->kind));
+        }
+
+        IrValue *ir_tmp_var = irTmp(irConvertType(ast_param->type));
+        ir_tmp_var->kind = IR_VAL_PARAM;
+        irFnAddVar(func, key, ir_tmp_var);
+        vecPush(func->params, ir_tmp_var);
+    }
+
+    if (ast_var_args) {
+        loggerWarning("%s\n", astToString(ast_var_args));
+    }
+
     irLowerAst(ctx, ast_func->body);
     IrBlock *exit_block = irBlockNew();
     IrInstr *ir_return_space = irAlloca(ast_func->type->rettype);

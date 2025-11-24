@@ -156,7 +156,7 @@ void vecInsertAt(Vec *vec, void *value, u64 idx) {
     }
 #ifdef DEBUG
     if (idx >= vec->size) {
-        loggerWarning("Vec - idx %lu is out of range\n", idx);
+        loggerWarning("Vec - idx %llu is out of range\n", idx);
     }
 #endif
     u64 elements_to_move = vec->size - idx;
@@ -171,7 +171,7 @@ void *vecGetAt(Vec *vec, u64 idx) {
     /* Bounds check */
 #ifdef DEBUG
     if (idx >= vec->size) {
-        loggerWarning("Vec - idx %lu is out of range for Vec of size %lu\n",
+        loggerWarning("Vec - idx %llu is out of range for Vec of size %llu\n",
                 idx, vec->size);
     }
 #endif

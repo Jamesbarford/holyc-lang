@@ -10,8 +10,12 @@ typedef struct List {
 #define listForEach(l) \
     for (List *it = l->next; it != l; it = it->next)
 
+#define listValue(type, node) \
+    ((type)node->value)
+
 void listInit(List *l);
 List *listNew(void);
+int listIsOne(List *l);
 int listEmpty(List *l);
 void listAppend(List *head, void *value);
 void listPrepend(List *head, void *value);
@@ -19,6 +23,7 @@ void listInsertBefore(List *ll, List *new_node);
 void listInsertValueBefore(List *ll, void *value);
 void *listDeque(void *l);
 void *listHead(List *ll);
+List *listTail(List *ll);
 void *listPop(void *l);
 void listRelease(List *ll, void (*freeValue)(void *));
 void listClear(List *ll, void (*freeValue)(void *));

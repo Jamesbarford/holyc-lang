@@ -607,9 +607,9 @@ AoStr *irFunctionToString(IrFunction *ir_func) {
     /* This is not as high fidelity as LLVM's ir */
     const char *ir_return_type_str = irValueTypeToString(ir_func->return_value->type);
     aoStrCatFmt(buf, "%s %S(", ir_return_type_str, ir_func->name);
-    //AoStr *params_str = irParamsToString(ir_func->params);
-    //aoStrCatFmt(buf, "%S) {\n", params_str);
-    //aoStrRelease(params_str);
+    AoStr *params_str = irParamsToString(ir_func->params);
+    aoStrCatFmt(buf, "%S) {\n", params_str);
+    aoStrRelease(params_str);
 
     listForEach(ir_func->blocks) {
         IrBlock *ir_block = (IrBlock *)it->value;

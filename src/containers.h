@@ -123,6 +123,7 @@ struct Map {
 #define mapGetInt(map, key) (mapGet(map, ((void*)(u64)(key))))
 #define mapAddIntOrErr(map, key, value) (mapAddOrErr(map, ((void*)(u64)(key)), (value)))
 #define mapRemoveInt(map, key) (mapRemove(map, ((void*)(u64)(key))))
+#define mapHasInt(map, key) (mapHas(map, ((void*)(u64)(key))))
 
 struct MapIter {
     Map *map;
