@@ -303,5 +303,7 @@ IrValueType irConvertType(AstType *type);
 
 IrBlock *irInstrGetTargetBlock(IrInstr *instr);
 IrBlock *irInstrGetFallthroughBlock(IrInstr *instr);
+Map *irBlockGetSuccessors(IrFunction *func, IrBlock *block);
+int irBlockIsStartOrEnd(IrFunction *func, IrBlock *block);
 
 #endif

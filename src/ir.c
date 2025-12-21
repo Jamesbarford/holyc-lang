@@ -887,6 +887,29 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
     }
 }
 
+void irSimplifyFunction(IrFunction *fn) {
+    Set *work_queue_ids = setNew(16, &set_uint_type);
+    List *queue = listNew();
+    Set *blocks_to_delete = setNew(16, &set_int_type);
+
+    (void)work_queue_ids;
+    (void)queue;
+    (void)blocks_to_delete;
+
+    /* Any blocks that don't have a successor lets assume they jump to 
+     * the return */
+    listForEach(fn->blocks) {
+        IrBlock *block = it->value;
+        if (irBlockIsStartOrEnd(fn, block)) continue;
+        Map *cur_successors = irBlockGetSuccessors(fn, block);
+        if (cur_successors && cur_successors->size == 0) {
+            /* @TODO
+             * Think I need a new file to contain making ir instructions/ values*/
+            irJump(fn, block, fn->exit_block);
+        }
+    }
+}
+
 void irMakeFunction(IrCtx *ctx, Ast *ast_func) {
     IrFunction *func = irFunctionNew(ast_func->fname);
     IrBlock *entry = irBlockNew();
@@ -942,6 +965,7 @@ void irMakeFunction(IrCtx *ctx, Ast *ast_func) {
 
     func->exit_block = exit_block;
     irFnAddBlock(ctx->cur_func, exit_block);
+    irSimplifyFunction(func);
 }
 
 void irDump(Cctrl *cc) {

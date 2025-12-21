@@ -55,10 +55,11 @@ void aarch64CtxSetVarOffset(AArch64Ctx *ctx, u32 var_id, u32 offset) {
 }
 
 u32 aarch64GetFreeReg(AArch64Ctx *ctx) {
-
+    (void)ctx;
+    return 0;
 } 
 
-static int alignTo(int value, int alignment) {
+int alignTo(int value, int alignment) {
     return (value + alignment) & ~alignment;
 }
 
@@ -82,6 +83,7 @@ void aarch64GenStore(AArch64Ctx *ctx, IrValue *dest, char *reg) {
 }
 
 void aarch64GenInstr(AArch64Ctx *ctx, IrInstr *instr, IrInstr *next_instr) {
+    (void)next_instr;
     switch (instr->op) {
         case IR_NOP:
         case IR_ALLOCA:
@@ -89,7 +91,7 @@ void aarch64GenInstr(AArch64Ctx *ctx, IrInstr *instr, IrInstr *next_instr) {
 
         case IR_STORE: {
             switch (instr->dst->type) {
-                case IR_TYPE_I64:
+                case IR_TYPE_I64: {
                     u32 offset = aarch64CtxGetVarOffset(ctx, instr->dst->as.var.id);
                     assert(offset != 0);
                     if (irIsConstInt(instr->r1)) {
@@ -97,6 +99,7 @@ void aarch64GenInstr(AArch64Ctx *ctx, IrInstr *instr, IrInstr *next_instr) {
                     }
                     aoStrCatFmt(ctx->buf, "str x8, [sp, #%u]\n\t", offset);
                     break;
+                }
                 case IR_TYPE_I8:
                 case IR_TYPE_I16:
                 case IR_TYPE_I32:
@@ -117,12 +120,13 @@ void aarch64GenInstr(AArch64Ctx *ctx, IrInstr *instr, IrInstr *next_instr) {
 
         case IR_LOAD: {
             switch (instr->dst->type) {
-                case IR_TYPE_I64:
+                case IR_TYPE_I64: {
                     u32 offset = aarch64CtxGetVarOffset(ctx, instr->r1->as.var.id);
                     u32 reg = aarch64GetIntRegister(ctx);
                     assert(offset != 0);
                     aoStrCatFmt(ctx->buf, "ldr x%u, [sp, #%u]\n\t", reg, offset);
                     break;
+                }
                 case IR_TYPE_I8:
                 case IR_TYPE_I16:
                 case IR_TYPE_I32:
