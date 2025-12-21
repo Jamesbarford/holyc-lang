@@ -1664,6 +1664,8 @@ void asmPrepFuncCallArgs(Cctrl *cc, AoStr *buf, Ast *funcall) {
                     loggerPanic("Default parameter not provided for function call: %s()\n",
                             funcall->fname->data);
                 }
+            } else {
+                loggerPanic("Expected %zu arguments, but got %zu\n", fun->params->size, funcall->args->size);
             }
         } else if (funparam) {
             /* Handling default function parameters, these can only come at
@@ -1671,8 +1673,10 @@ void asmPrepFuncCallArgs(Cctrl *cc, AoStr *buf, Ast *funcall) {
             /* For function pointers the value is stored elsewhere */
             if (funparam->kind == AST_FUNPTR) {
                 tmp = funparam->default_fn->declinit;
-            } else {
+            } else if (funparam->kind == AST_DEFAULT_PARAM) {
                 tmp = funparam->declinit;
+            } else {
+                loggerPanic("Expected %zu arguments, but got %zu\n", fun->params->size, funcall->args->size);
             }
         } else {
             break;
