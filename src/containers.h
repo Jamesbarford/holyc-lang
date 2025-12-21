@@ -120,6 +120,10 @@ struct Map {
 #define mapSetValueRelease(map, func) ((map)->type->value_release = (func))
 #define mapSetValueType(map, type) ((map)->type->value_type = (type))
 #define mapSetKeyType(map, type) ((map)->type->key_type = (type))
+#define mapGetInt(map, key) (mapGet(map, ((void*)(u64)(key))))
+#define mapAddIntOrErr(map, key, value) (mapAddOrErr(map, ((void*)(u64)(key)), (value)))
+#define mapRemoveInt(map, key) (mapRemove(map, ((void*)(u64)(key))))
+#define mapHasInt(map, key) (mapHas(map, ((void*)(u64)(key))))
 
 struct MapIter {
     Map *map;
@@ -169,6 +173,8 @@ extern MapType map_cstring_cstring_type;
 /* `Map<char *, void *>` for when we don't care about the value, this should
  * be used sparingly */
 extern MapType map_cstring_opaque_type;
+/* `Map<u64, u64>` */
+extern MapType map_uint_to_uint_type;
 
 /*================== Generic SET =============================================*/
 typedef struct Set Set;
@@ -199,6 +205,7 @@ struct SetNode {
 
 extern SetType set_aostr_type;
 extern SetType set_int_type;
+extern SetType set_uint_type;
 
 struct Set {
     u64 size;
@@ -257,6 +264,8 @@ void setPrintStats(Set *set);
 extern SetType set_cstring_type;
 /* `Set<char *>` the set owns the `char *`*/
 extern SetType set_cstring_owned_type;
+/* `Set<uint>` */
+extern SetType set_uint_type;
 
 u64 roundUpToNextPowerOf2(u64 v);
 #endif

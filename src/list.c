@@ -21,6 +21,12 @@ int listEmpty(List *l) {
     return l->next == l;
 }
 
+/* List is one element in size */
+int listIsOne(List *l) {
+    if (listEmpty(l)) return 0;
+    return l->next->next == l;
+}
+
 void listAppend(List *head, void *value) {
     List *node = listNew();
     List *tail = head->prev;
@@ -68,6 +74,11 @@ void listInsertValueBefore(List *ll, void *value) {
 
 void *listHead(List *ll) {
     return ll->prev->value;
+}
+
+List *listTail(List *ll) {
+    if (listEmpty(ll)) return NULL;
+    return ll->prev;
 }
 
 void *listPop(void *l) {

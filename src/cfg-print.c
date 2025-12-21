@@ -557,7 +557,7 @@ static void cfgCreatePicture(CfgGraphVizBuilder *builder, CFG *cfg) {
 }
 
 static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
-    loggerDebug("Creating mappings for: %s, size: %lu\n",
+    loggerDebug("Creating mappings for: %s, size: %llu\n",
             cfg->ref_fname->data,cfg->no_to_block->size);
     MapIter it;
     mapIterInit(cfg->no_to_block, &it);

@@ -213,7 +213,7 @@ void cfgPrintAstArray(BasicBlock *bb) {
         printf("(null)\n");
     } else {
         for (u64 i = 0; i < bb->ast_array->size; ++i) {
-            printf("%lu: \n", i);
+            printf("%llu: \n", i);
             astPrint(bb->ast_array->entries[i]);
         }
     }

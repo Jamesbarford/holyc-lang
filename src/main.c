@@ -12,9 +12,11 @@
 #include "cfg-print.h"
 #include "cfg.h"
 #include "cli.h"
+#include "codegen-aarch64.h"
 #include "compile.h"
 #include "config.h"
 #include "ir.h"
+#include "ir-types.h"
 #include "lexer.h"
 #include "list.h"
 #include "memory.h"
@@ -355,9 +357,14 @@ int main(int argc, char **argv) {
         goto success;
     }
 
+#if IS_ARM_64 && defined(__USE_NEW_BACKEND__)
+    IrCtx *ir_ctx = irLowerProgram(cc);
+    asmbuf = aarch64GenCode(ir_ctx);
+    printf("%s\n", asmbuf->data);
+#else
     asmbuf = compileToAsm(cc);
-
     emitFile(asmbuf, &args);
+#endif // IS_ARM_64
     if (args.defines_list) {
         listRelease(args.defines_list,NULL);
     }

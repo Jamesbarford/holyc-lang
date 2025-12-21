@@ -156,7 +156,7 @@ void vecInsertAt(Vec *vec, void *value, u64 idx) {
     }
 #ifdef DEBUG
     if (idx >= vec->size) {
-        loggerWarning("Vec - idx %lu is out of range\n", idx);
+        loggerWarning("Vec - idx %llu is out of range\n", idx);
     }
 #endif
     u64 elements_to_move = vec->size - idx;
@@ -171,7 +171,7 @@ void *vecGetAt(Vec *vec, u64 idx) {
     /* Bounds check */
 #ifdef DEBUG
     if (idx >= vec->size) {
-        loggerWarning("Vec - idx %lu is out of range for Vec of size %lu\n",
+        loggerWarning("Vec - idx %llu is out of range for Vec of size %llu\n",
                 idx, vec->size);
     }
 #endif
@@ -675,6 +675,15 @@ SetType set_int_type = {
     .stringify     = (mapKeyToString *)mapIntToString,
     .value_release = NULL,
     .type          = "long",
+};
+
+SetType set_uint_type = {
+    .match         = (mapKeyMatch *)mapIntKeyMatch,
+    .hash          = (mapKeyHash *)mapIntKeyHash,
+    .get_key_len   = mapIntKeyLen,
+    .stringify     = (mapKeyToString *)mapIntToString,
+    .value_release = NULL,
+    .type          = "u64",
 };
 
 SetType set_cstring_type = {
@@ -1328,4 +1337,17 @@ MapType map_cstring_opaque_type = {
     .value_release   = NULL,
     .key_type        = "char *",
     .value_type      = "void *",
+};
+
+/* `Map<u64, u64>` */
+MapType map_uint_to_uint_type = {
+    .match           = mapIntKeyMatch,
+    .hash            = mapIntKeyHash,
+    .get_key_len     = mapIntKeyLen,
+    .key_to_string   = mapIntToString,
+    .key_release     = NULL,
+    .value_to_string = NULL,
+    .value_release   = NULL,
+    .key_type        = "u64",
+    .value_type      = "u64",
 };
