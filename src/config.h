@@ -7,6 +7,7 @@
 #endif
 #if defined(__APPLE__) && defined(MAC_OS_X_VERSION_10_6) || \
         defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+#define OS_STR "BSD"
 #define IS_BSD 1
 #define IS_LINUX 0
 #elif defined(__linux__)
