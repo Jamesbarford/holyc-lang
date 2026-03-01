@@ -393,7 +393,7 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
             case CLI_TRANSPILE:          args->transpile = 1; break;
             case CLI_TO_STDOUT:          args->to_stdout = 1; break;
             case CLI_OUTPUT_FILENAME:    args->output_filename = mprintf("%s", value.str); break;
-            case CLI_CLIBS:              args->clibs = mprintf("%s", value.str); break;
+            case CLI_CLIBS:              args->clibs = mprintf("%s", arg); break;
             case CLI_DEFINES_LIST: {
                 /* @Leak who owns this memory? This list or the macro_defs hashtable
                  * on Cctrl? */
