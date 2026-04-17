@@ -18,6 +18,16 @@ default: all
 #```
 
 all:
+
+	LIBTOS_CHECK := $(shell $(CC) -ltos 2>&1 >/dev/null || echo "missing")
+
+	ifeq ($(LIBTOS_CHECK),missing)
+	    $(error Warning: libtos not found, compilation cannot be done. Use the zip file at https://github.com/Jamesbarford/holyc-lang/releases to circumvent the error)
+	    HAVE_LIBTOS = 0
+	else
+		HAVE_LIBTOS = 1
+	endif
+
 	cmake -S ./src \
 		-B ./build \
 		-G 'Unix Makefiles' \
