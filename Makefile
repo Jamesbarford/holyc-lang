@@ -19,7 +19,7 @@ default: all
 
 all:
 
-	LIBTOS_CHECK := $(shell $(CC) -ltos 2>&1 >/dev/null || echo "missing")
+	LIBTOS_CHECK := $(shell $(C_COMPILER) -ltos 2>&1 >/dev/null || echo "missing")
 
 	ifeq ($(LIBTOS_CHECK),missing)
 	    $(error Warning: libtos not found, compilation cannot be done. Use the zip file at https://github.com/Jamesbarford/holyc-lang/releases to circumvent the error)
