@@ -32,7 +32,15 @@ int is_terminal;
     #define _CC "gcc"
 #endif
 
-#define ASM_TMP_FILE "/tmp/holyc-asm.s"
+static const char *getAsmTmpFile(void) {
+    static char buf[512];
+    const char *tmpdir = getenv("TMPDIR");
+    if (!tmpdir) tmpdir = "/tmp";
+    snprintf(buf, sizeof(buf), "%s/holyc-asm.s", tmpdir);
+    return buf;
+}
+
+#define ASM_TMP_FILE getAsmTmpFile()
 #define LIB_BUFSIZ 256
 
 #ifndef INSTALL_PREFIX
