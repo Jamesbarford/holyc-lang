@@ -229,9 +229,6 @@ void emitFile(AoStr *asmbuf, CliArgs *args) {
         }
         safeSystem(cmd->data);
     }
-    if (strnlen(args->clibs,10) > 1) {
-        free(args->clibs);
-    }
     remove(ASM_TMP_FILE);
     aoStrRelease(cmd);
     aoStrRelease(asmbuf);
