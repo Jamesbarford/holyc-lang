@@ -82,7 +82,7 @@ static CliParser parsers[] = {
     {str_lit("-S"),         0, CLI_ASSEMBLE_ONLY, "-S", "Emit assembly only", &cliParseNop},
     {str_lit("-obj"),       0, CLI_EMIT_OBJECT, "-obj", "Emit an objectfile", &cliParseNop},
     {str_lit("-lib"),       1, CLI_EMIT_DYLIB, "-lib <libname>", "Emit a dynamic and static library: `-lib <libname>`", &cliParseString},
-    {str_lit("-clibs"),     0, CLI_CLIBS, "-clibs", "Link c libraries like: -clibs=`-lSDL2 -lxml2 -lcurl...`", &cliParseNop},
+    {str_lit("-clibs"),     1, CLI_CLIBS, "-clibs", "Link c libraries like: -clibs=`-lSDL2 -lxml2 -lcurl...`", &cliParseString},
     {str_lit("-run"),       0, CLI_RUN, "-run", "Immediately run the file (not JIT)", &cliParseNop},
     {str_lit("-o"),         1, CLI_OUTPUT_FILENAME, "-o <binary_name>", "Output filename: `-o <name> ./<file>.HC`", &cliParseString},
     {str_lit("-o-"),        0, CLI_TO_STDOUT, "-o-", "Output assembly to stdout, only for use with -S", &cliParseNop},
