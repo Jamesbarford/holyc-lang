@@ -460,6 +460,106 @@ IrInstr *irStore(IrValue *ir_dest, IrValue *ir_value) {
 
 IrValue *irExpr(IrCtx *ctx, Ast *ast);
 
+/* Slice-0 eligibility: walk an AST and reject anything we don't yet lower. */
+static int irTypeIsSliceInt(AstType *type) {
+    return type && type->kind == AST_TYPE_INT;
+}
+
+static int irExprIsSliceEligible(Ast *ast);
+static int irStmtIsSliceEligible(Ast *ast);
+
+static int irBinOpIsSliceArith(AstBinOp op) {
+    switch (op) {
+    case AST_BIN_OP_ADD: case AST_BIN_OP_SUB: case AST_BIN_OP_MUL:
+    case AST_BIN_OP_DIV: case AST_BIN_OP_MOD:
+    case AST_BIN_OP_SHL: case AST_BIN_OP_SHR:
+    case AST_BIN_OP_BIT_AND: case AST_BIN_OP_BIT_OR: case AST_BIN_OP_BIT_XOR:
+    case AST_BIN_OP_EQ: case AST_BIN_OP_NE:
+    case AST_BIN_OP_LT: case AST_BIN_OP_LE:
+    case AST_BIN_OP_GT: case AST_BIN_OP_GE:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int irExprIsSliceEligible(Ast *ast) {
+    if (!ast) return 0;
+    switch (ast->kind) {
+    case AST_LITERAL:
+        return ast->type && ast->type->kind == AST_TYPE_INT;
+    case AST_LVAR:
+        return irTypeIsSliceInt(ast->type);
+    case AST_BINOP:
+        if (ast->binop == AST_BIN_OP_ASSIGN) {
+            /* `x = expr` as expression: LHS must be a plain int local */
+            return ast->left && ast->left->kind == AST_LVAR
+                && irTypeIsSliceInt(ast->left->type)
+                && irExprIsSliceEligible(ast->right);
+        }
+        if (!irBinOpIsSliceArith(ast->binop)) return 0;
+        if (!irTypeIsSliceInt(ast->type)) return 0;
+        return irExprIsSliceEligible(ast->left)
+            && irExprIsSliceEligible(ast->right);
+    default:
+        return 0;
+    }
+}
+
+static int irStmtIsSliceEligible(Ast *ast) {
+    if (!ast) return 1;
+    switch (ast->kind) {
+    case AST_COMPOUND_STMT: {
+        listForEach(ast->stms) {
+            if (!irStmtIsSliceEligible((Ast *)it->value)) return 0;
+        }
+        return 1;
+    }
+    case AST_DECL:
+        if (!ast->declvar || !irTypeIsSliceInt(ast->declvar->type)) return 0;
+        if (ast->declinit && !irExprIsSliceEligible(ast->declinit)) return 0;
+        return 1;
+    case AST_RETURN:
+        if (!ast->retval) return 1;
+        return irExprIsSliceEligible(ast->retval);
+    case AST_IF:
+        if (!irExprIsSliceEligible(ast->cond)) return 0;
+        if (!irStmtIsSliceEligible(ast->then)) return 0;
+        if (ast->els && !irStmtIsSliceEligible(ast->els)) return 0;
+        return 1;
+    case AST_BINOP:
+        /* Statement-level: only assignment is meaningful */
+        return irExprIsSliceEligible(ast);
+    default:
+        return 0;
+    }
+}
+
+int irFunctionEligibleForSlice(Ast *ast_func) {
+    if (!ast_func || ast_func->kind != AST_FUNC) return 0;
+    if (ast_func->flags & AST_FLAG_INLINE) return 0;
+    if (ast_func->has_var_args) return 0;
+    AstType *rettype = ast_func->type ? ast_func->type->rettype : NULL;
+    if (!rettype) return 0;
+    if (rettype->kind != AST_TYPE_VOID && rettype->kind != AST_TYPE_INT) return 0;
+
+    if (ast_func->params) {
+        for (u64 i = 0; i < ast_func->params->size; ++i) {
+            Ast *p = vecGet(Ast *, ast_func->params, i);
+            if (p->kind != AST_LVAR) return 0;
+            if (!irTypeIsSliceInt(p->type)) return 0;
+        }
+    }
+
+    listForEach(ast_func->locals) {
+        Ast *l = (Ast *)it->value;
+        if (l->kind != AST_LVAR) return 0;
+        if (!irTypeIsSliceInt(l->type)) return 0;
+    }
+
+    return irStmtIsSliceEligible(ast_func->body);
+}
+
 IrValue *irFnCall(IrCtx *ctx, Ast *ast) {
     IrValueType ret_type = irConvertType(ast->type);
     IrValue *ir_call_args = irValueNew(IR_TYPE_ARRAY, IR_VAL_UNRESOLVED);
@@ -772,21 +872,95 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
     }
 }
 
+/* Lower an assignment expression `lvar = rhs` and return the assigned value.
+ * Used both as a statement and as a sub-expression. */
+static IrValue *irLowerAssign(IrCtx *ctx, Ast *ast) {
+    Ast *lhs = ast->left;
+    IrValue *rhs_val = irExpr(ctx, ast->right);
+    IrValue *local = irFnGetVar(ctx->cur_func, lhs->lvar_id);
+    if (!local) {
+        loggerPanic("irLowerAssign: unknown local %s\n", astToString(lhs));
+    }
+    IrInstr *st = irStore(local, rhs_val);
+    irBlockAddInstr(ctx, st);
+    return rhs_val;
+}
+
 void irLowerAst(IrCtx *ctx, Ast *ast) {
     if (!ast) return;
+
+    /* Once a block is sealed (it ended in ret/jmp/br) any subsequent statement
+     * is unreachable; just drop it. */
+    if (ctx->cur_block && ctx->cur_block->sealed) return;
 
     switch (ast->kind) {
         case AST_COMPOUND_STMT: {
             listForEach(ast->stms) {
                 Ast *next = (Ast *)it->value;
+                if (ctx->cur_block && ctx->cur_block->sealed) break;
                 irLowerAst(ctx, next);
             }
             break;
         }
- 
-        case AST_BINOP:
+
         case AST_LVAR:
+            /* Bare lvalue at statement level — no side effect. */
             break;
+
+        case AST_BINOP: {
+            if (ast->binop == AST_BIN_OP_ASSIGN) {
+                irLowerAssign(ctx, ast);
+            } else {
+                /* No-op statement; keep evaluation in case of hidden effects. */
+                irExpr(ctx, ast);
+            }
+            break;
+        }
+
+        case AST_RETURN: {
+            if (ast->retval && ctx->cur_func->return_value) {
+                IrValue *val = irExpr(ctx, ast->retval);
+                IrInstr *st = irStore(ctx->cur_func->return_value, val);
+                irBlockAddInstr(ctx, st);
+            }
+            IrInstr *jmp = irJump(ctx->cur_func, ctx->cur_block,
+                                  ctx->cur_func->exit_block);
+            irBlockAddInstr(ctx, jmp);
+            break;
+        }
+
+        case AST_IF: {
+            IrValue *cond_val = irExpr(ctx, ast->cond);
+            IrBlock *then_block = irBlockNew();
+            IrBlock *else_block = ast->els ? irBlockNew() : NULL;
+            IrBlock *join_block = irBlockNew();
+            IrBlock *false_target = else_block ? else_block : join_block;
+
+            irBranch(ctx->cur_func, ctx->cur_block, cond_val,
+                     then_block, false_target);
+
+            irFnAddBlock(ctx->cur_func, then_block);
+            ctx->cur_block = then_block;
+            irLowerAst(ctx, ast->then);
+            if (!ctx->cur_block->sealed) {
+                IrInstr *jmp = irJump(ctx->cur_func, ctx->cur_block, join_block);
+                irBlockAddInstr(ctx, jmp);
+            }
+
+            if (else_block) {
+                irFnAddBlock(ctx->cur_func, else_block);
+                ctx->cur_block = else_block;
+                irLowerAst(ctx, ast->els);
+                if (!ctx->cur_block->sealed) {
+                    IrInstr *jmp = irJump(ctx->cur_func, ctx->cur_block, join_block);
+                    irBlockAddInstr(ctx, jmp);
+                }
+            }
+
+            irFnAddBlock(ctx->cur_func, join_block);
+            ctx->cur_block = join_block;
+            break;
+        }
 
         case AST_DECL: {
             Ast *var = ast->declvar;
@@ -853,9 +1027,7 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
         case AST_FUNC:
         case AST_LITERAL:
         case AST_ARRAY_INIT:
-        case AST_IF:
         case AST_FOR:
-        case AST_RETURN:
         case AST_WHILE:
         case AST_CLASS_REF:
         case AST_ASM_STMT:
@@ -910,26 +1082,28 @@ void irSimplifyFunction(IrFunction *fn) {
     }
 }
 
-void irMakeFunction(IrCtx *ctx, Ast *ast_func) {
+IrFunction *irLowerFunction(IrCtx *ctx, Ast *ast_func) {
     IrFunction *func = irFunctionNew(ast_func->fname);
     IrBlock *entry = irBlockNew();
+    IrBlock *exit_block = irBlockNew();
 
     ctx->cur_block = entry;
-    func->entry_block = entry;
     ctx->cur_func = func;
+    func->entry_block = entry;
+    func->exit_block = exit_block;
+    irFnAddBlock(func, entry);
 
-    irFnAddBlock(ctx->cur_func, entry);
-
+    /* Lower parameters into per-id IrValue slots. The slice constrains params
+     * to AST_LVAR (int), but keep the existing fan-out so out-of-slice callers
+     * (the ARM64 backend behind __USE_NEW_BACKEND__) still work. */
     Ast *ast_var_args = NULL;
     for (u64 i = 0; i < ast_func->params->size; ++i) {
-        Ast *ast_param = vecGet(Ast *,ast_func->params,i);
-
+        Ast *ast_param = vecGet(Ast *, ast_func->params, i);
         if (ast_param->kind == AST_VAR_ARGS) {
             assert(func->has_var_args);
             ast_var_args = ast_param;
             break;
         }
-
         u32 key = 0;
         if (ast_param->kind == AST_LVAR) {
             key = ast_param->lvar_id;
@@ -941,7 +1115,6 @@ void irMakeFunction(IrCtx *ctx, Ast *ast_func) {
             loggerPanic("Unhandled key kind: %s\n",
                     astKindToString(ast_param->kind));
         }
-
         IrValue *ir_tmp_var = irTmp(irConvertType(ast_param->type),
                                     ast_param->type->size);
         ir_tmp_var->kind = IR_VAL_PARAM;
@@ -949,34 +1122,65 @@ void irMakeFunction(IrCtx *ctx, Ast *ast_func) {
         vecPush(func->params, ir_tmp_var);
         irAddStackSpace(ctx, ast_param->type->size);
     }
-
     if (ast_var_args) {
         loggerWarning("%s\n", astToString(ast_var_args));
     }
 
-    irLowerAst(ctx, ast_func->body);
-    IrBlock *exit_block = irBlockNew();
-    IrInstr *ir_return_space = irAlloca(ast_func->type->rettype);
-    irAddStackSpace(ctx, ast_func->type->rettype->size);
-    IrValue *ir_return_var = ir_return_space->dst;
+    /* Reserve a stack slot for the return value (skipped for void). Allocated
+     * in the entry block before any user code so AST_RETURN can store into it
+     * and the exit block can load from it. */
+    AstType *rettype = ast_func->type->rettype;
+    IrValue *ir_return_var = NULL;
+    if (rettype && rettype->kind != AST_TYPE_VOID) {
+        IrInstr *ir_return_alloca = irAlloca(rettype);
+        irAddStackSpace(ctx, rettype->size);
+        irBlockAddInstr(ctx, ir_return_alloca);
+        ir_return_var = ir_return_alloca->dst;
+    }
     func->return_value = ir_return_var;
-    IrBlockMapping *ir_exit_block_mapping = irBlockMappingNew(exit_block->id);
-    mapAddIntOrErr(func->cfg, ir_exit_block_mapping->id, ir_exit_block_mapping);
 
-    func->exit_block = exit_block;
-    irFnAddBlock(ctx->cur_func, exit_block);
-    irSimplifyFunction(func);
+    irLowerAst(ctx, ast_func->body);
+
+    /* Fall through to exit if the body didn't already end in a return. */
+    if (!ctx->cur_block->sealed) {
+        IrInstr *jmp = irJump(func, ctx->cur_block, exit_block);
+        irBlockAddInstr(ctx, jmp);
+    }
+
+    /* Populate the exit block: optional load, then ret. */
+    irFnAddBlock(func, exit_block);
+    ctx->cur_block = exit_block;
+    if (ir_return_var) {
+        IrValue *ir_load_dst = irTmp(ir_return_var->type,
+                                     irGetIntSize(ir_return_var->type));
+        IrInstr *ir_load = irLoad(ir_load_dst, ir_return_var);
+        irBlockAddInstr(ctx, ir_load);
+        /* IR_RET stores the return value in `dst` to match the existing
+         * convention used by IR_BR (debug printer, ARM64 backend). */
+        IrInstr *ir_ret = irInstrNew(IR_RET, ir_load_dst, NULL, NULL);
+        irBlockAddInstr(ctx, ir_ret);
+    } else {
+        IrInstr *ir_ret = irInstrNew(IR_RET, NULL, NULL, NULL);
+        irBlockAddInstr(ctx, ir_ret);
+    }
+    exit_block->sealed = 1;
+
+    return func;
 }
 
 void irDump(Cctrl *cc) {
     IrCtx *ctx = irCtxNew(cc);
     listForEach(cc->ast_list) {
         Ast *ast = (Ast *)it->value;
-        if (ast->kind == AST_FUNC) {
-            ctx->cur_func = NULL;
-            irMakeFunction(ctx, ast);
-            irPrintFunction(ctx->cur_func);
+        if (ast->kind != AST_FUNC) continue;
+        ctx->cur_func = NULL;
+        if (!irFunctionEligibleForSlice(ast)) {
+            printf("# function %s: not in slice\n",
+                   ast->fname ? ast->fname->data : "<anon>");
+            continue;
         }
+        irLowerFunction(ctx, ast);
+        irPrintFunction(ctx->cur_func);
     }
 }
 
@@ -986,7 +1190,7 @@ IrCtx *irLowerProgram(Cctrl *cc) {
         Ast *ast = (Ast *)it->value;
         if (ast->kind == AST_FUNC) {
             ctx->cur_func = NULL;
-            irMakeFunction(ctx, ast);
+            irLowerFunction(ctx, ast);
             irCtxAddFunction(ctx, ctx->cur_func);
         }
     }

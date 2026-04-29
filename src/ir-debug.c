@@ -283,12 +283,14 @@ AoStr *irValueToString(IrValue *ir_value) {
                 }
                 break;
             }
-            /* @TODO: I am not sure these are correct */
-            case IR_VAL_PARAM:       aoStrCatFmt(buf, "%S", ir_value->as.name); break;
-            case IR_VAL_LOCAL:       aoStrCatFmt(buf, "%S", ir_value->as.name); break;
-            case IR_VAL_LABEL:       aoStrCatFmt(buf, "%S", ir_value->as.name); break;
+            case IR_VAL_PARAM:       aoStrCatFmt(buf, "%%p%u", ir_value->as.var.id); break;
+            case IR_VAL_LOCAL:       aoStrCatFmt(buf, "%%l%u", ir_value->as.var.id); break;
+            case IR_VAL_LABEL:
+                if (ir_value->as.name) aoStrCatFmt(buf, "%S", ir_value->as.name);
+                else                   aoStrCatFmt(buf, "<label>");
+                break;
 
-            case IR_VAL_TMP:         aoStrCatFmt(buf, "%%t%u", ir_value->as.var); break;
+            case IR_VAL_TMP:         aoStrCatFmt(buf, "%%t%u", ir_value->as.var.id); break;
             case IR_VAL_PHI:         aoStrCatFmt(buf, "phi"); break;
             case IR_VAL_UNDEFINED:   aoStrCatFmt(buf, "undefined"); break;
             case IR_VAL_UNRESOLVED:  aoStrCatFmt(buf, "unresolved"); break;
