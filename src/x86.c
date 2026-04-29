@@ -8,8 +8,12 @@
 #include "aostr.h"
 #include "ast.h"
 #include "cctrl.h"
+#include "cli.h"
+#include "codegen-x86-ir.h"
 #include "config.h"
 #include "containers.h"
+#include "ir.h"
+#include "ir-debug.h"
 #include "list.h"
 #include "prsutil.h"
 #include "util.h"
@@ -2591,7 +2595,11 @@ AoStr *asmGenerate(Cctrl *cc) {
             if (ast->flags & AST_FLAG_INLINE) {
                 continue;
             }
-            asmFunction(cc,asmbuf,ast);
+            if (irFunctionEligibleForSlice(ast)) {
+                asmFunctionFromIr(cc,asmbuf,ast);
+            } else {
+                asmFunction(cc,asmbuf,ast);
+            }
         } else if (ast->kind == AST_DECL || ast->kind == AST_GVAR) {
             asmGlobalVar(seen_globals,asmbuf,ast);
         } else if (ast->kind == AST_ASM_STMT) {
