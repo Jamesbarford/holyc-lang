@@ -8,6 +8,7 @@
 #include "codegen-x86-ir.h"
 #include "containers.h"
 #include "ir.h"
+#include "ir-fold.h"
 #include "ir-types.h"
 #include "list.h"
 #include "prsutil.h"
@@ -93,12 +94,14 @@ static void irCgBindAstLoffs(IrCgCtx *ctx, Ast *ast_func) {
 }
 
 /* For everything else (return-value alloca, intermediate tmps), pre-allocate
- * stack slots so the prologue knows the total space to subtract. */
+ * stack slots so the prologue knows the total space to subtract. Skips
+ * IR_NOP since the folder marks dropped instructions that way. */
 static void irCgAllocAllTmps(IrCgCtx *ctx, int starting_offset) {
     listForEach(ctx->func->blocks) {
         IrBlock *block = (IrBlock *)it->value;
         listForEach(block->instructions) {
             IrInstr *instr = (IrInstr *)it->value;
+            if (instr->op == IR_NOP) continue;
             irCgAllocTmp(ctx, instr->dst, starting_offset);
             irCgAllocTmp(ctx, instr->r1, starting_offset);
             irCgAllocTmp(ctx, instr->r2, starting_offset);
@@ -157,6 +160,10 @@ static void irCgBlockLabel(IrCgCtx *ctx, IrBlock *block, char *out, int n) {
  * handled by the caller. */
 static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
     switch (instr->op) {
+    case IR_NOP:
+        /* Folded away by an earlier pass. */
+        break;
+
     case IR_ALLOCA:
         /* Stack slot already reserved at prologue time. */
         break;
@@ -279,6 +286,10 @@ void asmFunctionFromIr(Cctrl *cc, AoStr *buf, Ast *ast_func) {
      *    fine to leave the structures in place after we emit assembly. */
     IrCtx *ir_ctx = irCtxNew(cc);
     IrFunction *func = irLowerFunction(ir_ctx, ast_func);
+
+    /* 2a. Run constant folding before codegen so we emit fewer redundant
+     *     loads/stores. */
+    irFoldFunction(func);
 
     /* 3. Bind known IR values to existing AST loffs. */
     IrCgCtx ctx;

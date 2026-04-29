@@ -8,6 +8,7 @@
 #include "ir.h"
 #include "ir-types.h"
 #include "ir-debug.h"
+#include "ir-fold.h"
 #include "util.h"
 
 static Arena ir_arena;
@@ -1180,6 +1181,10 @@ void irDump(Cctrl *cc) {
             continue;
         }
         irLowerFunction(ctx, ast);
+        printf("# === before constant-fold ===\n");
+        irPrintFunction(ctx->cur_func);
+        irFoldFunction(ctx->cur_func);
+        printf("# === after constant-fold ===\n");
         irPrintFunction(ctx->cur_func);
     }
 }

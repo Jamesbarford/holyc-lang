@@ -53,6 +53,7 @@ set(SOURCES
     compile.c
     ir.c
     ir-debug.c
+    ir-fold.c
     ir-types.c
     lexer.c
     list.c
@@ -82,6 +83,7 @@ set(HEADERS
     containers.h
     ir.h
     ir-debug.h
+    ir-fold.h
     ir-types.h
     lexer.h
     list.h
