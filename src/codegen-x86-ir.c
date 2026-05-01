@@ -45,6 +45,12 @@ extern IrValue *irFnGetVar(IrFunction *func, u32 lvar_id);
  * these bits exclusively during codegen. */
 #define IRCG_FUSE_TO_NEXT (1u << 0)
 #define IRCG_R1_IN_RAX    (1u << 1)
+/* Set on an IR_PHI when the value can live in %rax across the block boundary
+ * (the only phi at this block's head and all predecessors arrive via IR_JMP,
+ * not IR_BR). When set, predecessors materialise the incoming value into
+ * %rax before their jmp; the phi itself emits nothing; the slot allocator
+ * skips the phi's dst. */
+#define IRCG_PHI_IN_RAX   (1u << 2)
 
 typedef struct IrCgCtx {
     Cctrl *cc;
@@ -57,6 +63,10 @@ typedef struct IrCgCtx {
     /* Unique block-label prefix per function so multiple slice functions
      * compiled in the same translation unit don't collide. */
     int func_uid;
+    /* Set during the per-block emission loop so terminator codegen knows
+     * who's emitting and which block (if any) follows in layout order. */
+    IrBlock *cur_block;
+    IrBlock *next_block;
 } IrCgCtx;
 
 static int ircg_func_seq = 0;
@@ -156,6 +166,14 @@ static void irCgAllocOperandsForInstr(IrCgCtx *ctx, IrInstr *I, int start) {
         if (I->dst && load_r1) irCgAllocTmp(ctx, I->dst, start);
         return;
 
+    case IR_PHI:
+        /* Rax-resident phi: no slot. Slot-resident phi: dst gets a slot,
+         * predecessors store into it, in-block consumers reload from it. */
+        if (!(I->flags & IRCG_PHI_IN_RAX)) {
+            irCgAllocTmp(ctx, I->dst, start);
+        }
+        return;
+
     default:
         /* Be conservative for ops we don't model yet. */
         irCgAllocTmp(ctx, I->dst, start);
@@ -226,6 +244,7 @@ static void irCgBlockLabel(IrCgCtx *ctx, IrBlock *block, char *out, int n) {
 /* True if the instruction's natural codegen ends with the result in %rax,
  * i.e. it's a candidate to "leave in rax" rather than spill to a slot. */
 static int instrDefsIntoRax(IrInstr *I) {
+    if (I->op == IR_PHI && (I->flags & IRCG_PHI_IN_RAX)) return 1;
     switch (I->op) {
     case IR_LOAD:
     case IR_IADD: case IR_ISUB: case IR_IMUL:
@@ -236,6 +255,45 @@ static int instrDefsIntoRax(IrInstr *I) {
         return 1;
     default:
         return 0;
+    }
+}
+
+/* Classify each IR_PHI: rax-resident if it is the only phi at its block's
+ * head and every predecessor reaches the block via IR_JMP / IR_LOOP. Anything
+ * else (multiple phis, branch-arrived predecessor) gets a stack slot and the
+ * usual store-to-slot-then-load codegen. */
+static void irCgClassifyPhis(IrFunction *func) {
+    listForEach(func->blocks) {
+        IrBlock *B = (IrBlock *)it->value;
+        if (listEmpty(B->instructions)) continue;
+
+        int phi_count = 0;
+        IrInstr *the_phi = NULL;
+        listForEach(B->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (I->op == IR_PHI) { phi_count++; the_phi = I; continue; }
+            if (I->op == IR_NOP) continue;
+            break;
+        }
+        if (phi_count != 1) continue;
+
+        Map *preds = irFunctionGetPredecessors(func, B);
+        if (!preds || preds->size == 0) continue;
+
+        int all_jmp = 1;
+        MapIter *iter = mapIterNew(preds);
+        while (mapIterNext(iter)) {
+            IrBlock *P = (IrBlock *)iter->node->value;
+            IrInstr *term = (IrInstr *)listValue(IrInstr *,
+                                                 listTail(P->instructions));
+            if (!term || (term->op != IR_JMP && term->op != IR_LOOP)) {
+                all_jmp = 0; break;
+            }
+        }
+        mapIterRelease(iter);
+        if (!all_jmp) continue;
+
+        the_phi->flags |= IRCG_PHI_IN_RAX;
     }
 }
 
@@ -364,14 +422,59 @@ static void irCgSpillDst(IrCgCtx *ctx, IrInstr *instr, const char *reg) {
     irCgStoreReg(ctx, instr->dst, reg);
 }
 
+/* Emit, for each phi at the head of `to`, the move(s) that put the value
+ * coming from `from` into either %rax (rax-resident phi) or the phi's
+ * stack slot. Caller has already arranged that we're at the end of `from`'s
+ * block, just before its terminator. */
+static void irCgEmitPhiMaterialize(IrCgCtx *ctx, IrBlock *from, IrBlock *to) {
+    if (!to || !from) return;
+    listForEach(to->instructions) {
+        IrInstr *I = (IrInstr *)it->value;
+        if (I->op == IR_NOP) continue;
+        if (I->op != IR_PHI) break;          /* past the phi prefix */
+
+        IrPair *match = NULL;
+        if (I->extra.phi_pairs) {
+            for (u64 i = 0; i < I->extra.phi_pairs->size; ++i) {
+                IrPair *p = vecGet(IrPair *, I->extra.phi_pairs, i);
+                if (p->ir_block == from) { match = p; break; }
+            }
+        }
+        if (!match || !match->ir_value) continue;  /* well-formed IR shouldn't hit this */
+
+        irCgLoadToReg(ctx, match->ir_value, "rax");
+        if (!(I->flags & IRCG_PHI_IN_RAX)) {
+            irCgStoreReg(ctx, I->dst, "rax");
+        }
+    }
+}
+
+/* Does this block start with at least one IR_PHI? */
+static int blockHasPhi(IrBlock *bb) {
+    if (!bb) return 0;
+    listForEach(bb->instructions) {
+        IrInstr *I = (IrInstr *)it->value;
+        if (I->op == IR_PHI) return 1;
+        if (I->op != IR_NOP) return 0;
+    }
+    return 0;
+}
+
 static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
     switch (instr->op) {
     case IR_NOP:
-        /* Folded away by an earlier pass. */
+        /* Folded / mem2reg'd away. */
         break;
 
     case IR_ALLOCA:
         /* Stack slot already reserved at prologue time. */
+        break;
+
+    case IR_PHI:
+        /* Phi values are produced at the predecessor side (see
+         * irCgEmitPhiMaterialize). The phi itself emits nothing. For an
+         * in-rax phi, the value is already in %rax at block entry; for a
+         * slot-resident phi, it's already in the slot. */
         break;
 
     case IR_LOAD:
@@ -454,23 +557,58 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
     }
 
     case IR_BR: {
+        IrBlock *t = instr->extra.blocks.target_block;
+        IrBlock *f = instr->extra.blocks.fallthrough_block;
         char tlbl[64], flbl[64];
-        irCgBlockLabel(ctx, instr->extra.blocks.target_block, tlbl, sizeof(tlbl));
-        irCgBlockLabel(ctx, instr->extra.blocks.fallthrough_block, flbl, sizeof(flbl));
+        irCgBlockLabel(ctx, t, tlbl, sizeof(tlbl));
+        irCgBlockLabel(ctx, f, flbl, sizeof(flbl));
+
         irCgLoadFirstSrc(ctx, instr, instr->dst);
-        aoStrCatPrintf(ctx->buf,
-                       "testq  %%rax, %%rax\n\t"
-                       "je     %s\n\t"
-                       "jmp    %s\n\t",
-                       flbl, tlbl);
+
+        int t_phi = blockHasPhi(t);
+        int f_phi = blockHasPhi(f);
+        if (!t_phi && !f_phi) {
+            aoStrCatPrintf(ctx->buf,
+                           "testq  %%rax, %%rax\n\t"
+                           "je     %s\n\t"
+                           "jmp    %s\n\t",
+                           flbl, tlbl);
+        } else {
+            /* Inline per-arm phi materialisation. Phis at BR targets are
+             * always slot-resident (the classifier rejects rax-residency
+             * if any predecessor reaches via BR), so materialisation
+             * doesn't need rax preserved across — we write to slots via
+             * rax and let the next arm reuse it. */
+            static int br_seq = 0;
+            char else_lbl[64];
+            int br_id = br_seq++;
+            snprintf(else_lbl, sizeof(else_lbl), ".LIRBR%d_E%d",
+                     ctx->func_uid, br_id);
+            aoStrCatPrintf(ctx->buf,
+                           "testq  %%rax, %%rax\n\t"
+                           "je     %s\n\t",
+                           else_lbl);
+            irCgEmitPhiMaterialize(ctx, ctx->cur_block, t);
+            aoStrCatPrintf(ctx->buf, "jmp    %s\n", tlbl);
+            aoStrCatPrintf(ctx->buf, "%s:\n\t", else_lbl);
+            irCgEmitPhiMaterialize(ctx, ctx->cur_block, f);
+            aoStrCatPrintf(ctx->buf, "jmp    %s\n\t", flbl);
+        }
         break;
     }
 
     case IR_JMP:
     case IR_LOOP: {
-        char tlbl[64];
-        irCgBlockLabel(ctx, instr->extra.blocks.target_block, tlbl, sizeof(tlbl));
-        aoStrCatPrintf(ctx->buf, "jmp    %s\n\t", tlbl);
+        IrBlock *target = instr->extra.blocks.target_block;
+        irCgEmitPhiMaterialize(ctx, ctx->cur_block, target);
+        /* JMP elision: if we're about to fall straight into the target
+         * label, the unconditional jump is dead weight. Phi materialisation
+         * still has to run (the values must be in place). */
+        if (target != ctx->next_block) {
+            char tlbl[64];
+            irCgBlockLabel(ctx, target, tlbl, sizeof(tlbl));
+            aoStrCatPrintf(ctx->buf, "jmp    %s\n\t", tlbl);
+        }
         break;
     }
 
@@ -506,7 +644,12 @@ void asmFunctionFromIr(Cctrl *cc, AoStr *buf, Ast *ast_func) {
      *     mem2reg first means fold sees through what used to be loads. */
     irFoldFunction(func);
 
-    /* 2c. Mark fusion pairs (single-use def whose result is consumed by the
+    /* 2c. Classify phi nodes: rax-resident vs slot-resident. Has to run
+     *     before fusion analysis because fusion treats rax-resident phis
+     *     as defs-into-rax. */
+    irCgClassifyPhis(func);
+
+    /* 2d. Mark fusion pairs (single-use def whose result is consumed by the
      *     immediately following instruction). The emitter and the slot
      *     allocator both honor these flags. */
     irCgAnnotate(func);
@@ -519,6 +662,8 @@ void asmFunctionFromIr(Cctrl *cc, AoStr *buf, Ast *ast_func) {
     ctx.id_to_loff = mapNew(32, &map_uint_to_uint_type);
     ctx.extra_stack = 0;
     ctx.func_uid = ircg_func_seq++;
+    ctx.cur_block = NULL;
+    ctx.next_block = NULL;
     irCgBindAstLoffs(&ctx, ast_func);
 
     /* 4. Reserve slots for return-value alloca and every SSA tmp. */
@@ -530,11 +675,18 @@ void asmFunctionFromIr(Cctrl *cc, AoStr *buf, Ast *ast_func) {
         aoStrCatPrintf(buf, "subq   $%d, %%rsp\n\t", extra_aligned);
     }
 
-    /* 6. Walk blocks in order, emit label + instructions. The very first
-     *    block is the entry; we don't strictly need a label on it, but
-     *    emitting one keeps the codegen uniform and harmless. */
-    listForEach(func->blocks) {
-        IrBlock *block = (IrBlock *)it->value;
+    /* 6. Walk blocks in order, emit label + instructions. We track the
+     *    next block in layout order so JMP elision can skip a redundant
+     *    fall-through jump. */
+    for (List *bn = func->blocks->next;
+         bn != func->blocks;
+         bn = bn->next)
+    {
+        IrBlock *block = (IrBlock *)bn->value;
+        ctx.cur_block = block;
+        ctx.next_block = (bn->next != func->blocks)
+                         ? (IrBlock *)bn->next->value
+                         : NULL;
         char lbl[64];
         irCgBlockLabel(&ctx, block, lbl, sizeof(lbl));
         aoStrCatPrintf(buf, "%s:\n\t", lbl);
