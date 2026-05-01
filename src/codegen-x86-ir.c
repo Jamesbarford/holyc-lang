@@ -449,6 +449,12 @@ static void irCgEmitPhiMaterialize(IrCgCtx *ctx, IrBlock *from, IrBlock *to) {
     }
 }
 
+/* Mirror of the BR/JMP emission's layout decisions: returns the set of
+ * block ids that are actually referenced by some asm jump after elision.
+ * Blocks not in the set still have their bodies emitted, but their label
+ * header is dead code and can be dropped. */
+static Set *irCgComputeReferencedBlocks(IrFunction *func);
+
 /* Does this block start with at least one IR_PHI? */
 static int blockHasPhi(IrBlock *bb) {
     if (!bb) return 0;
@@ -458,6 +464,71 @@ static int blockHasPhi(IrBlock *bb) {
         if (I->op != IR_NOP) return 0;
     }
     return 0;
+}
+
+static IrInstr *blockTerminator(IrBlock *bb) {
+    IrInstr *term = NULL;
+    listForEach(bb->instructions) {
+        IrInstr *I = (IrInstr *)it->value;
+        if (I->op == IR_NOP) continue;
+        term = I;
+    }
+    return term;
+}
+
+static Set *irCgComputeReferencedBlocks(IrFunction *func) {
+    Set *referenced = setNew(16, &set_uint_type);
+    for (List *bn = func->blocks->next;
+         bn != func->blocks;
+         bn = bn->next)
+    {
+        IrBlock *block = (IrBlock *)bn->value;
+        IrBlock *next_block = (bn->next != func->blocks)
+                              ? (IrBlock *)bn->next->value
+                              : NULL;
+        IrInstr *term = blockTerminator(block);
+        if (!term) continue;
+
+        switch (term->op) {
+        case IR_JMP:
+        case IR_LOOP: {
+            IrBlock *t = term->extra.blocks.target_block;
+            if (t && t != next_block) {
+                setAdd(referenced, (void *)(u64)t->id);
+            }
+            break;
+        }
+        case IR_BR: {
+            IrBlock *t = term->extra.blocks.target_block;
+            IrBlock *f = term->extra.blocks.fallthrough_block;
+            int t_phi = blockHasPhi(t);
+            int f_phi = blockHasPhi(f);
+            if (!t_phi && !f_phi) {
+                if (next_block == t) {
+                    if (f) setAdd(referenced, (void *)(u64)f->id);
+                } else if (next_block == f) {
+                    if (t) setAdd(referenced, (void *)(u64)t->id);
+                } else {
+                    if (t) setAdd(referenced, (void *)(u64)t->id);
+                    if (f) setAdd(referenced, (void *)(u64)f->id);
+                }
+            } else {
+                /* Phi case always emits `jmp tlbl` after the true-arm
+                 * materialisation; the trailing `jmp flbl` is elidable
+                 * when next == f. */
+                if (t) setAdd(referenced, (void *)(u64)t->id);
+                if (f && next_block != f) {
+                    setAdd(referenced, (void *)(u64)f->id);
+                }
+            }
+            break;
+        }
+        default:
+            /* IR_RET — no jump targets to mark. */
+            break;
+        }
+    }
+    return referenced;
 }
 
 static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
@@ -568,17 +639,29 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
         int t_phi = blockHasPhi(t);
         int f_phi = blockHasPhi(f);
         if (!t_phi && !f_phi) {
-            aoStrCatPrintf(ctx->buf,
-                           "testq  %%rax, %%rax\n\t"
-                           "je     %s\n\t"
-                           "jmp    %s\n\t",
-                           flbl, tlbl);
+            /* Layout-aware: avoid emitting a `jmp` that's an immediate
+             * fall-through. If the next block is the true target, use
+             * `je flbl` and fall through. If it's the false target,
+             * invert to `jne tlbl`. Otherwise emit both jumps. */
+            aoStrCatPrintf(ctx->buf, "testq  %%rax, %%rax\n\t");
+            if (ctx->next_block == t) {
+                aoStrCatPrintf(ctx->buf, "je     %s\n\t", flbl);
+            } else if (ctx->next_block == f) {
+                aoStrCatPrintf(ctx->buf, "jne    %s\n\t", tlbl);
+            } else {
+                aoStrCatPrintf(ctx->buf,
+                               "je     %s\n\t"
+                               "jmp    %s\n\t",
+                               flbl, tlbl);
+            }
         } else {
             /* Inline per-arm phi materialisation. Phis at BR targets are
              * always slot-resident (the classifier rejects rax-residency
              * if any predecessor reaches via BR), so materialisation
              * doesn't need rax preserved across — we write to slots via
-             * rax and let the next arm reuse it. */
+             * rax and let the next arm reuse it. The trailing `jmp flbl`
+             * after the false-arm materialisation can also fall through
+             * if flbl is the next block. */
             static int br_seq = 0;
             char else_lbl[64];
             int br_id = br_seq++;
@@ -592,7 +675,9 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
             aoStrCatPrintf(ctx->buf, "jmp    %s\n", tlbl);
             aoStrCatPrintf(ctx->buf, "%s:\n\t", else_lbl);
             irCgEmitPhiMaterialize(ctx, ctx->cur_block, f);
-            aoStrCatPrintf(ctx->buf, "jmp    %s\n\t", flbl);
+            if (ctx->next_block != f) {
+                aoStrCatPrintf(ctx->buf, "jmp    %s\n\t", flbl);
+            }
         }
         break;
     }
@@ -675,9 +760,10 @@ void asmFunctionFromIr(Cctrl *cc, AoStr *buf, Ast *ast_func) {
         aoStrCatPrintf(buf, "subq   $%d, %%rsp\n\t", extra_aligned);
     }
 
-    /* 6. Walk blocks in order, emit label + instructions. We track the
-     *    next block in layout order so JMP elision can skip a redundant
-     *    fall-through jump. */
+    /* 6. Walk blocks in order, emit label (if referenced) + instructions.
+     *    `referenced` mirrors the BR/JMP layout decisions so we know which
+     *    block labels actually appear as jump targets in the asm output. */
+    Set *referenced = irCgComputeReferencedBlocks(func);
     for (List *bn = func->blocks->next;
          bn != func->blocks;
          bn = bn->next)
@@ -687,14 +773,17 @@ void asmFunctionFromIr(Cctrl *cc, AoStr *buf, Ast *ast_func) {
         ctx.next_block = (bn->next != func->blocks)
                          ? (IrBlock *)bn->next->value
                          : NULL;
-        char lbl[64];
-        irCgBlockLabel(&ctx, block, lbl, sizeof(lbl));
-        aoStrCatPrintf(buf, "%s:\n\t", lbl);
+        if (setHas(referenced, (void *)(u64)block->id)) {
+            char lbl[64];
+            irCgBlockLabel(&ctx, block, lbl, sizeof(lbl));
+            aoStrCatPrintf(buf, "%s:\n\t", lbl);
+        }
         listForEach(block->instructions) {
             IrInstr *instr = (IrInstr *)it->value;
             irCgEmitInstr(&ctx, instr);
         }
     }
+    setRelease(referenced);
 
     /* 7. Safety net: if the exit block didn't already terminate with `ret`,
      *    emit one. The exit block always ends in IR_RET, so this is a
