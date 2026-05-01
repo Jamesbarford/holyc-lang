@@ -454,6 +454,26 @@ static int irBinOpIsSliceArith(AstBinOp op) {
     }
 }
 
+/* Compound-assign forms: x op= y. We lower as `x = x op y` so codegen
+ * needs nothing new. */
+static int irBinOpIsCompoundAssign(AstBinOp op) {
+    switch (op) {
+    case AST_BIN_OP_ADD_ASSIGN:
+    case AST_BIN_OP_SUB_ASSIGN:
+    case AST_BIN_OP_MUL_ASSIGN:
+    case AST_BIN_OP_DIV_ASSIGN:
+    case AST_BIN_OP_MOD_ASSIGN:
+    case AST_BIN_OP_SHL_ASSIGN:
+    case AST_BIN_OP_SHR_ASSIGN:
+    case AST_BIN_OP_AND_ASSIGN:
+    case AST_BIN_OP_XOR_ASSIGN:
+    case AST_BIN_OP_OR_ASSIGN:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 static int irUnOpIsSliceIncDec(AstUnOp op) {
     switch (op) {
     case AST_UN_OP_PRE_INC:  case AST_UN_OP_PRE_DEC:
@@ -480,8 +500,9 @@ static int irExprIsSliceEligible(Ast *ast) {
     case AST_LVAR:
         return irTypeIsSliceInt(ast->type);
     case AST_BINOP:
-        if (ast->binop == AST_BIN_OP_ASSIGN) {
-            /* `x = expr` as expression: LHS must be a plain int local */
+        if (ast->binop == AST_BIN_OP_ASSIGN ||
+            irBinOpIsCompoundAssign(ast->binop)) {
+            /* `x = expr` and `x op= expr`: LHS must be a plain int local. */
             return ast->left && ast->left->kind == AST_LVAR
                 && irTypeIsSliceInt(ast->left->type)
                 && irExprIsSliceEligible(ast->right);
@@ -819,11 +840,12 @@ static IrValue *irLowerAssign(IrCtx *ctx, Ast *ast);
 IrValue *irExpr(IrCtx *ctx, Ast *ast) {
     switch (ast->kind) {
         case AST_BINOP:
-            /* Assignment isn't really a binop in our IR — it's a store
-             * disguised as one. Route it through the dedicated lowering
-             * so a nested `y = (x = 5)` doesn't fall into the int-binop
-             * "op not handled" panic. */
-            if (ast->binop == AST_BIN_OP_ASSIGN) {
+            /* Assignments (= and compound op=) lower to a store, not a
+             * binop in our IR. Route through the dedicated lowering so
+             * nested forms like `y = (x += 5)` don't fall into the
+             * int-binop "op not handled" panic. */
+            if (ast->binop == AST_BIN_OP_ASSIGN ||
+                irBinOpIsCompoundAssign(ast->binop)) {
                 return irLowerAssign(ctx, ast);
             }
             return irBinOpExpr(ctx, ast);
@@ -945,18 +967,54 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
     }
 }
 
-/* Lower an assignment expression `lvar = rhs` and return the assigned value.
- * Used both as a statement and as a sub-expression. */
+/* Map a compound-assign AstBinOp (e.g. AST_BIN_OP_ADD_ASSIGN) to the IR
+ * arithmetic op that implements its `op` half. Signedness comes from the
+ * lvar's type for div/mod where it matters. */
+static IrOp irCompoundAssignToIrOp(AstBinOp op, int issigned) {
+    switch (op) {
+    case AST_BIN_OP_ADD_ASSIGN: return IR_IADD;
+    case AST_BIN_OP_SUB_ASSIGN: return IR_ISUB;
+    case AST_BIN_OP_MUL_ASSIGN: return IR_IMUL;
+    case AST_BIN_OP_DIV_ASSIGN: return issigned ? IR_IDIV : IR_UDIV;
+    case AST_BIN_OP_MOD_ASSIGN: return issigned ? IR_IREM : IR_UREM;
+    case AST_BIN_OP_SHL_ASSIGN: return IR_SHL;
+    case AST_BIN_OP_SHR_ASSIGN: return IR_SHR;
+    case AST_BIN_OP_AND_ASSIGN: return IR_AND;
+    case AST_BIN_OP_XOR_ASSIGN: return IR_XOR;
+    case AST_BIN_OP_OR_ASSIGN:  return IR_OR;
+    default:
+        loggerPanic("Not a compound assign: %s\n", astBinOpKindToString(op));
+    }
+}
+
+/* Lower `lvar op= rhs` (or `lvar = rhs` when op is AST_BIN_OP_ASSIGN) and
+ * return the value written back. Used both as a statement and as a
+ * sub-expression. */
 static IrValue *irLowerAssign(IrCtx *ctx, Ast *ast) {
     Ast *lhs = ast->left;
-    IrValue *rhs_val = irExpr(ctx, ast->right);
     IrValue *local = irFnGetVar(ctx->cur_func, lhs->lvar_id);
     if (!local) {
         loggerPanic("irLowerAssign: unknown local %s\n", astToString(lhs));
     }
-    IrInstr *st = irStore(local, rhs_val);
+
+    IrValue *new_val;
+    if (ast->binop == AST_BIN_OP_ASSIGN) {
+        new_val = irExpr(ctx, ast->right);
+    } else {
+        /* Compound: `x op= y`  ->  load x, compute x op y, store result. */
+        IrValueType ir_type = irConvertType(lhs->type);
+        IrValue *cur = irTmp(ir_type, lhs->type->size);
+        irBlockAddInstr(ctx, irLoad(cur, local));
+        IrValue *rhs = irExpr(ctx, ast->right);
+        IrOp ir_op = irCompoundAssignToIrOp(ast->binop, lhs->type->issigned);
+        new_val = irTmp(ir_type, lhs->type->size);
+        IrInstr *bin = irInstrNew(ir_op, new_val, cur, rhs);
+        irBlockAddInstr(ctx, bin);
+    }
+
+    IrInstr *st = irStore(local, new_val);
     irBlockAddInstr(ctx, st);
-    return rhs_val;
+    return new_val;
 }
 
 void irLowerAst(IrCtx *ctx, Ast *ast) {
@@ -981,7 +1039,8 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
             break;
 
         case AST_BINOP: {
-            if (ast->binop == AST_BIN_OP_ASSIGN) {
+            if (ast->binop == AST_BIN_OP_ASSIGN ||
+                irBinOpIsCompoundAssign(ast->binop)) {
                 irLowerAssign(ctx, ast);
             } else {
                 /* No-op statement; keep evaluation in case of hidden effects. */
