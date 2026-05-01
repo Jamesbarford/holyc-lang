@@ -196,20 +196,6 @@ void irFunctionAddPredecessor(IrFunction *func, IrBlock *src, IrBlock *prev) {
     mapAddIntOrErr(ir_block_mapping->predecessors, prev->id, prev);
 }
 
-void irFunctionRemoveSuccessor(IrFunction *func, IrBlock *src, IrBlock *dest) {
-    IrBlockMapping *ir_block_mapping = (IrBlockMapping *)mapGetInt(func->cfg, src->id);
-    if (ir_block_mapping) {
-        mapRemoveInt(ir_block_mapping->successors, dest->id);
-    }
-}
-
-void irFunctionRemovePredecessor(IrFunction *func, IrBlock *src, IrBlock *prev) {
-    IrBlockMapping *ir_block_mapping = (IrBlockMapping *)mapGetInt(func->cfg, src->id);
-    if (ir_block_mapping) {
-        mapRemoveInt(ir_block_mapping->predecessors, prev->id);
-    }
-}
-
 void irFunctionAddMapping(IrFunction *func, IrBlock *src, IrBlock *dest) {
     irFunctionAddSuccessor(func, src, dest);
     irFunctionAddPredecessor(func, dest, src);
@@ -228,10 +214,6 @@ IrBlock *irBlockNew(void) {
     block->sealed = 0;
     block->id = ir_block_id++;
     return block;
-}
-
-void irBlockRelease(IrBlock *block) {
-    listRelease(block->instructions, NULL);
 }
 
 IrValue *irValueNew(IrValueType type, IrValueKind kind) {
@@ -305,15 +287,6 @@ void irFnAddBlock(IrFunction *fn, IrBlock *block) {
 
 IrValue *irFnGetVar(IrFunction *func, u32 lvar_id) {
     return mapGetInt(func->variables, lvar_id);
-}
-
-int irSetVariable(IrFunction *func, u32 var_id, IrValue *var) {
-    return mapAddIntOrErr(func->variables, var_id, var);
-}
-
-void irFunctionRelease(IrFunction *func) {
-    listRelease(func->blocks, (void (*)(void *))&irBlockRelease);
-    mapRelease(func->cfg);
 }
 
 void irAddStackSpace(IrCtx *ctx, int size) {
@@ -421,10 +394,6 @@ IrInstr *irJumpInternal(IrFunction *func,
 
 IrInstr *irJump(IrFunction *func, IrBlock *block, IrBlock *target) {
     return irJumpInternal(func, block,target,IR_JMP);
-}
-
-IrInstr *irLoop(IrFunction *func, IrBlock *block, IrBlock *target) {
-    return irJumpInternal(func, block,target,IR_LOOP);
 }
 
 IrPair *irPairNew(IrBlock *ir_block, IrValue *ir_value) {
@@ -845,9 +814,18 @@ IrValue *irBinOpExpr(IrCtx *ctx, Ast *ast) {
     return ir_result;
 }
 
+static IrValue *irLowerAssign(IrCtx *ctx, Ast *ast);
+
 IrValue *irExpr(IrCtx *ctx, Ast *ast) {
     switch (ast->kind) {
         case AST_BINOP:
+            /* Assignment isn't really a binop in our IR — it's a store
+             * disguised as one. Route it through the dedicated lowering
+             * so a nested `y = (x = 5)` doesn't fall into the int-binop
+             * "op not handled" panic. */
+            if (ast->binop == AST_BIN_OP_ASSIGN) {
+                return irLowerAssign(ctx, ast);
+            }
             return irBinOpExpr(ctx, ast);
         case AST_LITERAL:
             switch (ast->type->kind) {
@@ -1249,29 +1227,6 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
                     astKindToString(ast->kind),
                     astToString(ast));
             break;
-    }
-}
-
-void irSimplifyFunction(IrFunction *fn) {
-    Set *work_queue_ids = setNew(16, &set_uint_type);
-    List *queue = listNew();
-    Set *blocks_to_delete = setNew(16, &set_int_type);
-
-    (void)work_queue_ids;
-    (void)queue;
-    (void)blocks_to_delete;
-
-    /* Any blocks that don't have a successor lets assume they jump to 
-     * the return */
-    listForEach(fn->blocks) {
-        IrBlock *block = it->value;
-        if (irBlockIsStartOrEnd(fn, block)) continue;
-        Map *cur_successors = irBlockGetSuccessors(fn, block);
-        if (cur_successors && cur_successors->size == 0) {
-            /* @TODO
-             * Think I need a new file to contain making ir instructions/ values*/
-            irJump(fn, block, fn->exit_block);
-        }
     }
 }
 

@@ -281,29 +281,16 @@ typedef struct IrCtx {
 } IrCtx;
 
 
-IrBlockMapping *irFunctionGetBlockMapping(IrFunction *func, IrBlock *ir_block);
 Map *irFunctionGetSuccessors(IrFunction *func, IrBlock *ir_block);
 Map *irFunctionGetPredecessors(IrFunction *func, IrBlock *ir_block);
+Map *irBlockGetSuccessors(IrFunction *func, IrBlock *block);
 
-u8 irOpIsCmp(IrOp opcode);
 u8 irIsFloat(IrValueType ir_value_type);
 u8 irIsInt(IrValueType ir_value_type);
-u8 irTypeIsScalar(IrValueType ir_value_type);
-u8 irIsConst(IrValueKind ir_value_kind);
-u8 irIsPtr(IrValueType ir_value_type);
-u8 irIsStore(IrOp opcode);
-u8 irIsLoad(IrOp opcode);
 u8 irIsStruct(IrValueType ir_value_type);
 u8 irIsConstInt(IrValue *val);
 int irGetIntSize(IrValueType ir_value_type);
 
-IrBlock *irInstrEvalConstBranch(IrInstr *ir_cmp, IrInstr *ir_branch);
-u8 irBlocksPointToEachOther(IrFunction *func, IrBlock *prev_block, IrBlock *next_block);
 IrValueType irConvertType(AstType *type);
-
-IrBlock *irInstrGetTargetBlock(IrInstr *instr);
-IrBlock *irInstrGetFallthroughBlock(IrInstr *instr);
-Map *irBlockGetSuccessors(IrFunction *func, IrBlock *block);
-int irBlockIsStartOrEnd(IrFunction *func, IrBlock *block);
 
 #endif

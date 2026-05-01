@@ -528,18 +528,6 @@ static void irCgSpillDst(IrCgCtx *ctx, IrInstr *instr, const char *reg) {
  * slot A is about to read. We collect all phis here, then repeatedly pick
  * one whose dst is not read by any still-pending phi (a leaf in the
  * read-dependency graph). Cycles fall back to scratch via %rcx. */
-static int phiPairValIsPhiDstAtBlock(IrValue *v, IrBlock *bb) {
-    if (!v || v->kind != IR_VAL_TMP) return 0;
-    listForEach(bb->instructions) {
-        IrInstr *I = (IrInstr *)it->value;
-        if (I->op == IR_NOP) continue;
-        if (I->op != IR_PHI) return 0;
-        if (I->dst && I->dst->kind == IR_VAL_TMP &&
-            I->dst->as.var.id == v->as.var.id) return 1;
-    }
-    return 0;
-}
-
 static void irCgEmitOnePhi(IrCgCtx *ctx, IrInstr *phi, IrPair *match) {
     irCgLoadToReg(ctx, match->ir_value, "rax");
     if (!(phi->flags & IRCG_PHI_IN_RAX)) {
@@ -614,7 +602,6 @@ static void irCgEmitPhiMaterialize(IrCgCtx *ctx, IrBlock *from, IrBlock *to) {
             loggerPanic("ir-cg: phi materialisation cycle (NYI)\n");
         }
     }
-    (void)phiPairValIsPhiDstAtBlock;
 }
 
 /* Mirror of the BR/JMP emission's layout decisions: returns the set of

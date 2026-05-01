@@ -492,7 +492,13 @@ AoStr *irInstrToString(IrInstr *ir_instr) {
                     aoStrPutChar(phi_pairs_str, ' ');;
                 }
             }
-            aoStrCatFmt(buf,"%s %S",op, phi_pairs_str);
+            if (ir_instr->dst) {
+                AoStr *dst_str = irValueToString(ir_instr->dst);
+                aoStrCatFmt(buf, "%s %S, %S", op, dst_str, phi_pairs_str);
+                aoStrRelease(dst_str);
+            } else {
+                aoStrCatFmt(buf, "%s %S", op, phi_pairs_str);
+            }
             aoStrRelease(phi_pairs_str);
             break;
         }
