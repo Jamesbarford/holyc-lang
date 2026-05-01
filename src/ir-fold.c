@@ -86,9 +86,7 @@ static int foldCmp(IrCmpKind kind, s64 a, s64 b, s64 *out) {
     }
 }
 
-static void foldBlock(IrBlock *block) {
-    Map *known = foldCtxNewMap();
-
+static void foldBlock(IrBlock *block, Map *known) {
     listForEach(block->instructions) {
         IrInstr *instr = (IrInstr *)it->value;
 
@@ -99,6 +97,20 @@ static void foldBlock(IrBlock *block) {
         instr->r2 = foldResolve(known, instr->r2);
         if (instr->op == IR_BR || instr->op == IR_RET) {
             instr->dst = foldResolve(known, instr->dst);
+        }
+        if (instr->op == IR_PHI && instr->extra.phi_pairs) {
+            for (u64 i = 0; i < instr->extra.phi_pairs->size; ++i) {
+                IrPair *p = vecGet(IrPair *, instr->extra.phi_pairs, i);
+                p->ir_value = foldResolve(known, p->ir_value);
+            }
+        }
+        if (instr->op == IR_CALL && instr->r1 &&
+            instr->r1->as.array.values) {
+            Vec *args = instr->r1->as.array.values;
+            for (u64 i = 0; i < args->size; ++i) {
+                args->entries[i] = foldResolve(known,
+                                               (IrValue *)args->entries[i]);
+            }
         }
 
         s64 result;
@@ -121,14 +133,19 @@ static void foldBlock(IrBlock *block) {
             instr->r2 = NULL;
         }
     }
-
-    mapRelease(known);
 }
 
 void irFoldFunction(IrFunction *func) {
     if (!func) return;
+    /* known is function-wide so use sites in successor blocks (phi pairs,
+     * call args, etc.) can substitute folded constants for tmps defined
+     * in earlier blocks. SSA's single-def-per-tmp guarantees this is
+     * safe — the constant value is whatever the unique defining block
+     * computed. */
+    Map *known = foldCtxNewMap();
     listForEach(func->blocks) {
         IrBlock *block = (IrBlock *)it->value;
-        foldBlock(block);
+        foldBlock(block, known);
     }
+    mapRelease(known);
 }

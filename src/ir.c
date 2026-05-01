@@ -485,6 +485,24 @@ static int irBinOpIsSliceArith(AstBinOp op) {
     }
 }
 
+static int irUnOpIsSliceIncDec(AstUnOp op) {
+    switch (op) {
+    case AST_UN_OP_PRE_INC:  case AST_UN_OP_PRE_DEC:
+    case AST_UN_OP_POST_INC: case AST_UN_OP_POST_DEC:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* Strings are only sensible as function-call args (slice doesn't have a way
+ * to assign or return them). */
+static int irArgIsSliceEligible(Ast *ast) {
+    if (!ast) return 0;
+    if (ast->kind == AST_STRING) return 1;
+    return irExprIsSliceEligible(ast);
+}
+
 static int irExprIsSliceEligible(Ast *ast) {
     if (!ast) return 0;
     switch (ast->kind) {
@@ -503,6 +521,27 @@ static int irExprIsSliceEligible(Ast *ast) {
         if (!irTypeIsSliceInt(ast->type)) return 0;
         return irExprIsSliceEligible(ast->left)
             && irExprIsSliceEligible(ast->right);
+    case AST_UNOP:
+        /* Slice supports ++/-- on int locals (any position). */
+        if (!irUnOpIsSliceIncDec(ast->unop)) return 0;
+        if (!ast->operand || ast->operand->kind != AST_LVAR) return 0;
+        return irTypeIsSliceInt(ast->operand->type);
+    case AST_FUNCALL: {
+        /* Slice supports calls returning int or void with up to 6 args
+         * (System V's int-arg register set). Args may be int expressions
+         * or string literals (printf-style). No float args yet. */
+        if (!ast->type) return 0;
+        AstTypeKind rk = ast->type->kind;
+        if (rk != AST_TYPE_INT && rk != AST_TYPE_VOID) return 0;
+        if (!ast->args || ast->args->size > 6) return 0;
+        for (u64 i = 0; i < ast->args->size; ++i) {
+            Ast *arg = vecGet(Ast *, ast->args, i);
+            if (!irArgIsSliceEligible(arg)) return 0;
+            if (arg->kind == AST_LITERAL && arg->type &&
+                arg->type->kind == AST_TYPE_FLOAT) return 0;
+        }
+        return 1;
+    }
     default:
         return 0;
     }
@@ -529,8 +568,28 @@ static int irStmtIsSliceEligible(Ast *ast) {
         if (!irStmtIsSliceEligible(ast->then)) return 0;
         if (ast->els && !irStmtIsSliceEligible(ast->els)) return 0;
         return 1;
+    case AST_FOR:
+        if (ast->forinit && !irStmtIsSliceEligible(ast->forinit)) return 0;
+        if (ast->forcond && !irExprIsSliceEligible(ast->forcond)) return 0;
+        if (ast->forstep && !irStmtIsSliceEligible(ast->forstep)) return 0;
+        if (ast->forbody && !irStmtIsSliceEligible(ast->forbody)) return 0;
+        return 1;
+    case AST_WHILE:
+        if (!irExprIsSliceEligible(ast->whilecond)) return 0;
+        if (ast->whilebody && !irStmtIsSliceEligible(ast->whilebody)) return 0;
+        return 1;
+    case AST_DO_WHILE:
+        if (!irExprIsSliceEligible(ast->whilecond)) return 0;
+        if (ast->whilebody && !irStmtIsSliceEligible(ast->whilebody)) return 0;
+        return 1;
     case AST_BINOP:
         /* Statement-level: only assignment is meaningful */
+        return irExprIsSliceEligible(ast);
+    case AST_UNOP:
+        /* Statement-level ++/-- on int locals. */
+        return irExprIsSliceEligible(ast);
+    case AST_FUNCALL:
+        /* Discard return value. */
         return irExprIsSliceEligible(ast);
     default:
         return 0;
@@ -546,6 +605,7 @@ int irFunctionEligibleForSlice(Ast *ast_func) {
     if (rettype->kind != AST_TYPE_VOID && rettype->kind != AST_TYPE_INT) return 0;
 
     if (ast_func->params) {
+        if (ast_func->params->size > 6) return 0;  /* SysV int-arg regs */
         for (u64 i = 0; i < ast_func->params->size; ++i) {
             Ast *p = vecGet(Ast *, ast_func->params, i);
             if (p->kind != AST_LVAR) return 0;
@@ -834,7 +894,40 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
             return value;
         }
 
-        case AST_UNOP:
+        case AST_UNOP: {
+            /* Slice supports ++/-- on int locals. The store to the lvar's
+             * slot is the side effect; we return either the original value
+             * (POST) or the incremented one (PRE). */
+            if (ast->unop != AST_UN_OP_PRE_INC &&
+                ast->unop != AST_UN_OP_PRE_DEC &&
+                ast->unop != AST_UN_OP_POST_INC &&
+                ast->unop != AST_UN_OP_POST_DEC) {
+                loggerPanic("Slice unop only supports ++/--, got %s\n",
+                            astUnOpKindToString(ast->unop));
+            }
+            Ast *lvar = ast->operand;
+            IrValue *slot = irFnGetVar(ctx->cur_func, lvar->lvar_id);
+            if (!slot) loggerPanic("inc/dec on unknown lvar\n");
+
+            IrValueType ir_type = irConvertType(lvar->type);
+            int size = lvar->type->size;
+
+            IrValue *cur = irTmp(ir_type, size);
+            irBlockAddInstr(ctx, irLoad(cur, slot));
+
+            int is_inc = (ast->unop == AST_UN_OP_PRE_INC ||
+                          ast->unop == AST_UN_OP_POST_INC);
+            IrValue *one = irConstInt(ir_type, 1);
+            IrValue *new_val = irTmp(ir_type, size);
+            IrInstr *op = irInstrNew(is_inc ? IR_IADD : IR_ISUB,
+                                     new_val, cur, one);
+            irBlockAddInstr(ctx, op);
+            irBlockAddInstr(ctx, irStore(slot, new_val));
+
+            int is_post = (ast->unop == AST_UN_OP_POST_INC ||
+                           ast->unop == AST_UN_OP_POST_DEC);
+            return is_post ? cur : new_val;
+        }
 
         case AST_GVAR:
         case AST_GOTO:
@@ -964,6 +1057,108 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
             break;
         }
 
+        case AST_UNOP: {
+            /* Bare ++/-- as a statement: lower as expression and discard. */
+            irExpr(ctx, ast);
+            break;
+        }
+
+        case AST_FOR: {
+            /* `for (init; cond; step) body` ->
+             *   <pre-header>: init ; jmp header
+             *   header: cond ; br body, end
+             *   body: <body> ; <step> ; jmp header
+             *   end: ...
+             *
+             * AST locals declared in `init` (e.g. `for (I64 i = 0; ...)`)
+             * already appear in func->locals so AST_DECL lowering reserves
+             * the slot in the entry block; the init expression here writes
+             * to it. */
+            if (!ast->forbody) break;
+            if (ast->forinit) irLowerAst(ctx, ast->forinit);
+            if (ctx->cur_block->sealed) break;
+
+            IrBlock *header = irBlockNew();
+            IrBlock *body   = irBlockNew();
+            IrBlock *end    = irBlockNew();
+
+            IrInstr *to_header = irJump(ctx->cur_func, ctx->cur_block, header);
+            irBlockAddInstr(ctx, to_header);
+
+            irFnAddBlock(ctx->cur_func, header);
+            ctx->cur_block = header;
+            if (ast->forcond) {
+                IrValue *cond_val = irExpr(ctx, ast->forcond);
+                irBranch(ctx->cur_func, ctx->cur_block, cond_val, body, end);
+            } else {
+                IrInstr *j = irJump(ctx->cur_func, ctx->cur_block, body);
+                irBlockAddInstr(ctx, j);
+            }
+
+            irFnAddBlock(ctx->cur_func, body);
+            ctx->cur_block = body;
+            irLowerAst(ctx, ast->forbody);
+            if (!ctx->cur_block->sealed && ast->forstep) {
+                irLowerAst(ctx, ast->forstep);
+            }
+            if (!ctx->cur_block->sealed) {
+                IrInstr *j = irJump(ctx->cur_func, ctx->cur_block, header);
+                irBlockAddInstr(ctx, j);
+            }
+
+            irFnAddBlock(ctx->cur_func, end);
+            ctx->cur_block = end;
+            break;
+        }
+
+        case AST_WHILE: {
+            if (!ast->whilecond) break;
+            IrBlock *header = irBlockNew();
+            IrBlock *body   = irBlockNew();
+            IrBlock *end    = irBlockNew();
+
+            IrInstr *to_header = irJump(ctx->cur_func, ctx->cur_block, header);
+            irBlockAddInstr(ctx, to_header);
+
+            irFnAddBlock(ctx->cur_func, header);
+            ctx->cur_block = header;
+            IrValue *cond_val = irExpr(ctx, ast->whilecond);
+            irBranch(ctx->cur_func, ctx->cur_block, cond_val, body, end);
+
+            irFnAddBlock(ctx->cur_func, body);
+            ctx->cur_block = body;
+            if (ast->whilebody) irLowerAst(ctx, ast->whilebody);
+            if (!ctx->cur_block->sealed) {
+                IrInstr *j = irJump(ctx->cur_func, ctx->cur_block, header);
+                irBlockAddInstr(ctx, j);
+            }
+
+            irFnAddBlock(ctx->cur_func, end);
+            ctx->cur_block = end;
+            break;
+        }
+
+        case AST_DO_WHILE: {
+            if (!ast->whilecond) break;
+            IrBlock *body = irBlockNew();
+            IrBlock *end  = irBlockNew();
+
+            IrInstr *to_body = irJump(ctx->cur_func, ctx->cur_block, body);
+            irBlockAddInstr(ctx, to_body);
+
+            irFnAddBlock(ctx->cur_func, body);
+            ctx->cur_block = body;
+            if (ast->whilebody) irLowerAst(ctx, ast->whilebody);
+            if (!ctx->cur_block->sealed) {
+                IrValue *cond_val = irExpr(ctx, ast->whilecond);
+                irBranch(ctx->cur_func, ctx->cur_block, cond_val, body, end);
+            }
+
+            irFnAddBlock(ctx->cur_func, end);
+            ctx->cur_block = end;
+            break;
+        }
+
         case AST_DECL: {
             Ast *var = ast->declvar;
             Ast *init = ast->declinit;
@@ -1029,8 +1224,6 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
         case AST_FUNC:
         case AST_LITERAL:
         case AST_ARRAY_INIT:
-        case AST_FOR:
-        case AST_WHILE:
         case AST_CLASS_REF:
         case AST_ASM_STMT:
         case AST_ASM_FUNC_BIND:
@@ -1047,13 +1240,11 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
         case AST_CASE:
         case AST_JUMP:
         case AST_EXTERN_FUNC:
-        case AST_DO_WHILE:
         case AST_PLACEHOLDER:
         case AST_SWITCH:
         case AST_DEFAULT:
         case AST_SIZEOF:
         case AST_COMMENT:
-        case AST_UNOP:
             loggerPanic("Unhandled Ast kind `%s`\n%s\n",
                     astKindToString(ast->kind),
                     astToString(ast));

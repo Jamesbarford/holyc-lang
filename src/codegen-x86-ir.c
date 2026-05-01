@@ -174,6 +174,17 @@ static void irCgAllocOperandsForInstr(IrCgCtx *ctx, IrInstr *I, int start) {
         }
         return;
 
+    case IR_CALL:
+        /* dst (return value) gets a slot like any other def, unless fused.
+         * r1 is the args wrapper (IR_VAL_UNRESOLVED), not a tmp — no slot.
+         * The arg values themselves are loaded directly into argument
+         * registers from their existing slots at emit time. */
+        if (spill_dst && I->dst && I->dst->type != IR_TYPE_VOID &&
+            I->dst->kind == IR_VAL_TMP) {
+            irCgAllocTmp(ctx, I->dst, start);
+        }
+        return;
+
     default:
         /* Be conservative for ops we don't model yet. */
         irCgAllocTmp(ctx, I->dst, start);
@@ -198,6 +209,12 @@ static void irCgLoadToReg(IrCgCtx *ctx, IrValue *val, const char *reg) {
     case IR_VAL_CONST_INT:
         aoStrCatPrintf(ctx->buf, "movq   $%lld, %%%s\n\t",
                        (long long)val->as._i64, reg);
+        return;
+    case IR_VAL_CONST_STR:
+        /* String literal address. The data section was emitted earlier in
+         * asmGenerate with this label, so we just take its address. */
+        aoStrCatPrintf(ctx->buf, "leaq   %s(%%rip), %%%s\n\t",
+                       val->as.str.label->data, reg);
         return;
     case IR_VAL_TMP:
     case IR_VAL_LOCAL:
@@ -253,16 +270,61 @@ static int instrDefsIntoRax(IrInstr *I) {
     case IR_SHL:  case IR_SHR:  case IR_SAR:
     case IR_ICMP:
         return 1;
+    case IR_CALL:
+        /* Non-void return value lives in %rax after the call. */
+        return I->dst && I->dst->type != IR_TYPE_VOID;
     default:
         return 0;
     }
 }
 
-/* Classify each IR_PHI: rax-resident if it is the only phi at its block's
- * head and every predecessor reaches the block via IR_JMP / IR_LOOP. Anything
- * else (multiple phis, branch-arrived predecessor) gets a stack slot and the
- * usual store-to-slot-then-load codegen. */
+/* Classify each IR_PHI: rax-resident if
+ *   (a) it's the only phi at the block head,
+ *   (b) every predecessor arrives via IR_JMP / IR_LOOP (so %rax survives),
+ *   (c) the phi's dst is used at most once in the rest of the function —
+ *       otherwise the second consumer would expect a stack slot we never
+ *       allocated and we'd read garbage.
+ * All other phis fall back to slot-resident (store on the pred side, load
+ * on the use side, just like an alloca). */
 static void irCgClassifyPhis(IrFunction *func) {
+    /* Pre-compute use counts for tmp values across the whole function. We
+     * count r1, r2, dst (for BR/RET — they treat dst as a source), and
+     * phi pair values (consumed at materialisation time). */
+    Map *uses = mapNew(64, &map_uint_to_uint_type);
+#define BUMP_TMP(v) do { \
+    if ((v) && (v)->kind == IR_VAL_TMP) { \
+        u32 _id = (v)->as.var.id; \
+        int _n = mapHasInt(uses, _id) ? (int)(intptr_t)mapGetInt(uses, _id) : 0; \
+        mapAdd(uses, (void *)(u64)_id, (void *)(intptr_t)(_n + 1)); \
+    } \
+} while (0)
+    listForEach(func->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (I->op == IR_NOP) continue;
+            if (I->op == IR_CALL && I->r1 && I->r1->as.array.values) {
+                Vec *args = I->r1->as.array.values;
+                for (u64 i = 0; i < args->size; ++i) {
+                    BUMP_TMP((IrValue *)args->entries[i]);
+                }
+            } else {
+                BUMP_TMP(I->r1);
+            }
+            BUMP_TMP(I->r2);
+            if (I->op == IR_BR || I->op == IR_RET) {
+                BUMP_TMP(I->dst);
+            }
+            if (I->op == IR_PHI && I->extra.phi_pairs) {
+                for (u64 i = 0; i < I->extra.phi_pairs->size; ++i) {
+                    IrPair *p = vecGet(IrPair *, I->extra.phi_pairs, i);
+                    BUMP_TMP(p->ir_value);
+                }
+            }
+        }
+    }
+#undef BUMP_TMP
+
     listForEach(func->blocks) {
         IrBlock *B = (IrBlock *)it->value;
         if (listEmpty(B->instructions)) continue;
@@ -293,8 +355,16 @@ static void irCgClassifyPhis(IrFunction *func) {
         mapIterRelease(iter);
         if (!all_jmp) continue;
 
+        if (!the_phi->dst || the_phi->dst->kind != IR_VAL_TMP) continue;
+        u32 dst_id = the_phi->dst->as.var.id;
+        int dst_uses = mapHasInt(uses, dst_id)
+                       ? (int)(intptr_t)mapGetInt(uses, dst_id) : 0;
+        if (dst_uses > 1) continue;
+
         the_phi->flags |= IRCG_PHI_IN_RAX;
     }
+
+    mapRelease(uses);
 }
 
 /* The single source operand the instruction loads into %rax first. NULL
@@ -333,7 +403,16 @@ static void irCgAnnotate(IrFunction *func) {
         IrBlock *bb = (IrBlock *)it->value;
         listForEach(bb->instructions) {
             IrInstr *I = (IrInstr *)it->value;
-            bumpUseIfTmp(uses, I->r1);
+            if (I->op == IR_CALL && I->r1 && I->r1->as.array.values) {
+                /* IR_CALL's r1 is the args wrapper — count each arg, not
+                 * the wrapper itself. */
+                Vec *args = I->r1->as.array.values;
+                for (u64 i = 0; i < args->size; ++i) {
+                    bumpUseIfTmp(uses, (IrValue *)args->entries[i]);
+                }
+            } else {
+                bumpUseIfTmp(uses, I->r1);
+            }
             bumpUseIfTmp(uses, I->r2);
             if (I->op == IR_BR || I->op == IR_RET) {
                 bumpUseIfTmp(uses, I->dst);
@@ -705,42 +784,140 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
         aoStrCatPrintf(ctx->buf, "leave\n\tret\n");
         break;
 
+    case IR_CALL: {
+        /* r1 is the args wrapper carrying the Vec of arg IrValues plus the
+         * function name as as.array.label. */
+        static const char *kArgRegs[] = {
+            "rdi", "rsi", "rdx", "rcx", "r8", "r9"
+        };
+        IrValue *wrap = instr->r1;
+        Vec *args = wrap ? wrap->as.array.values : NULL;
+        AoStr *fname = wrap ? wrap->as.array.label : NULL;
+        if (!fname) {
+            loggerPanic("ir-cg: IR_CALL with no function name\n");
+        }
+        u64 n = args ? args->size : 0;
+        if (n > 6) {
+            loggerPanic("ir-cg: IR_CALL with %llu args (slice limit 6)\n",
+                        (unsigned long long)n);
+        }
+        for (u64 i = 0; i < n; ++i) {
+            IrValue *a = vecGet(IrValue *, args, i);
+            irCgLoadToReg(ctx, a, kArgRegs[i]);
+        }
+
+        /* If the callee is variadic, System V says %al holds the number of
+         * SSE registers used. The slice doesn't pass float args yet, so
+         * zero it. We look the function up by name in the global env. */
+        Ast *callee = (Ast *)mapGetLen(ctx->cc->global_env,
+                                       fname->data, fname->len);
+        int callee_variadic =
+            callee && callee->type && callee->type->has_var_args;
+        if (callee_variadic) {
+            aoStrCatPrintf(ctx->buf, "xorl   %%eax, %%eax\n\t");
+        }
+
+        aoStrCatPrintf(ctx->buf, "call   %s\n\t",
+                       asmNormaliseFunctionName(fname->data));
+
+        if (instr->dst && instr->dst->type != IR_TYPE_VOID &&
+            instr->dst->kind == IR_VAL_TMP) {
+            irCgSpillDst(ctx, instr, "rax");
+        }
+        break;
+    }
+
     default:
         loggerPanic("ir-cg: unsupported op %d in slice\n", instr->op);
+    }
+}
+
+/* Mirror asmFunctionInit's loff-assignment logic without emitting any asm.
+ * Used by the IR path so we can know the AST-side stack budget before
+ * we've decided how much tmp space to add. Slice constraints (no varargs,
+ * int-only locals/params, AST_LVAR params) make this much simpler than
+ * the AST path's version. Returns the locals+params reservation, NOT
+ * 16-byte-aligned. */
+static int irCgComputeAstLayout(Ast *func) {
+    int total = 0;
+    int new_offset = 0;
+
+    listForEach(func->locals) {
+        Ast *l = (Ast *)it->value;
+        total += align(l->type->size, 8);
+        new_offset -= l->type->size;
+        l->loff = new_offset;
+    }
+
+    int param_total = 0;
+    if (func->params) {
+        for (u64 i = 0; i < func->params->size; ++i) {
+            Ast *p = vecGet(Ast *, func->params, i);
+            param_total += align(p->type->size, 8);
+        }
+    }
+    total += param_total;
+    int locals_aligned = total ? align(total, 16) : 0;
+
+    /* Params live at the bottom of the locals+params region: first param
+     * at the most-negative offset, working upward toward locals. Matches
+     * asmFunctionInit's layout. */
+    int offset = locals_aligned;
+    if (func->params) {
+        for (u64 i = 0; i < func->params->size; ++i) {
+            Ast *p = vecGet(Ast *, func->params, i);
+            p->loff = -offset;
+            offset -= align(p->type->size, 8);
+        }
+    }
+    return locals_aligned;
+}
+
+static void irCgEmitFunctionPrologue(AoStr *buf, Ast *func, int total_stack) {
+    char *fname = asmNormaliseFunctionName(func->fname->data);
+    aoStrCatPrintf(buf,
+                   ".text\n\t"
+                   ".global %s\n"
+                   "%s:\n\t"
+                   "push   %%rbp\n\t"
+                   "movq   %%rsp, %%rbp\n\t",
+                   fname, fname);
+    if (total_stack > 0) {
+        aoStrCatPrintf(buf, "subq   $%d, %%rsp\n\t", total_stack);
+    }
+}
+
+static void irCgEmitParamSpills(AoStr *buf, Ast *func) {
+    static const char *kArgRegs[] = {
+        "rdi", "rsi", "rdx", "rcx", "r8", "r9"
+    };
+    if (!func->params) return;
+    for (u64 i = 0; i < func->params->size; ++i) {
+        Ast *p = vecGet(Ast *, func->params, i);
+        aoStrCatPrintf(buf, "movq   %%%s, %d(%%rbp)\n\t",
+                       kArgRegs[i], p->loff);
     }
 }
 
 void asmFunctionFromIr(Cctrl *cc, AoStr *buf, Ast *ast_func) {
     assert(ast_func->kind == AST_FUNC);
 
-    /* 1. Standard prologue + AST loff assignment. */
-    int stack_used = asmFunctionInit(cc, buf, ast_func);
+    /* 1. Compute the AST-side stack layout (loffs for locals + params)
+     *    without emitting yet — we need to know IR tmp space first to
+     *    fold both reservations into a single subq. */
+    int locals_params_space = irCgComputeAstLayout(ast_func);
 
-    /* 2. Lower to IR. The IR arena is reset between programs by the global
-     *    irMemoryRelease but persists for the duration of compilation, so it's
-     *    fine to leave the structures in place after we emit assembly. */
+    /* 2. Lower to IR. */
     IrCtx *ir_ctx = irCtxNew(cc);
     IrFunction *func = irLowerFunction(ir_ctx, ast_func);
 
-    /* 2a. Promote single-store allocas to plain SSA value flow before
-     *     anything else looks at the IR. */
+    /* 3. Run analyses. */
     irMem2Reg(func);
-
-    /* 2b. Run constant folding so we emit fewer redundant loads/stores.
-     *     mem2reg first means fold sees through what used to be loads. */
     irFoldFunction(func);
-
-    /* 2c. Classify phi nodes: rax-resident vs slot-resident. Has to run
-     *     before fusion analysis because fusion treats rax-resident phis
-     *     as defs-into-rax. */
     irCgClassifyPhis(func);
-
-    /* 2d. Mark fusion pairs (single-use def whose result is consumed by the
-     *     immediately following instruction). The emitter and the slot
-     *     allocator both honor these flags. */
     irCgAnnotate(func);
 
-    /* 3. Bind known IR values to existing AST loffs. */
+    /* 4. Bind IR values to the loffs we computed in step 1. */
     IrCgCtx ctx;
     ctx.cc = cc;
     ctx.buf = buf;
@@ -752,16 +929,16 @@ void asmFunctionFromIr(Cctrl *cc, AoStr *buf, Ast *ast_func) {
     ctx.next_block = NULL;
     irCgBindAstLoffs(&ctx, ast_func);
 
-    /* 4. Reserve slots for return-value alloca and every SSA tmp. */
-    irCgAllocAllTmps(&ctx, stack_used);
+    /* 5. Allocate slots for IR tmps starting just below the params area. */
+    irCgAllocAllTmps(&ctx, locals_params_space);
 
-    /* 5. Extend the stack frame for tmp slots (16-byte aligned). */
-    if (ctx.extra_stack > 0) {
-        int extra_aligned = align(ctx.extra_stack, 16);
-        aoStrCatPrintf(buf, "subq   $%d, %%rsp\n\t", extra_aligned);
-    }
+    /* 6. Emit prologue with one subq covering params + locals + tmps. */
+    int total_stack = locals_params_space + ctx.extra_stack;
+    if (total_stack > 0) total_stack = align(total_stack, 16);
+    irCgEmitFunctionPrologue(buf, ast_func, total_stack);
+    irCgEmitParamSpills(buf, ast_func);
 
-    /* 6. Walk blocks in order, emit label (if referenced) + instructions.
+    /* 7. Walk blocks in order, emit label (if referenced) + instructions.
      *    `referenced` mirrors the BR/JMP layout decisions so we know which
      *    block labels actually appear as jump targets in the asm output. */
     Set *referenced = irCgComputeReferencedBlocks(func);

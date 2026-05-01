@@ -235,7 +235,12 @@ void irArrayInitToString(AoStr *buf, IrValue *ir_value) {
 AoStr *irValueToString(IrValue *ir_value) {
     AoStr *buf = aoStrNew();
     AoStr *flags_str = NULL;
-    
+
+    if (!ir_value) {
+        aoStrCatLen(buf, str_lit("<undef>"));
+        return buf;
+    }
+
     if (ir_value->flags != 0) {
         flags_str = aoStrPrintf(ESC_BLUE"0b"ESC_RESET);
         for (int i = 4; i >= 0; --i) {
@@ -607,7 +612,9 @@ AoStr *irParamsToString(Vec *ir_value_vector) {
 AoStr *irFunctionToString(IrFunction *ir_func) {
     AoStr *buf = aoStrNew();
     /* This is not as high fidelity as LLVM's ir */
-    const char *ir_return_type_str = irValueTypeToString(ir_func->return_value->type);
+    const char *ir_return_type_str = ir_func->return_value
+        ? irValueTypeToString(ir_func->return_value->type)
+        : "void";
     aoStrCatFmt(buf, "%s %S(", ir_return_type_str, ir_func->name);
     AoStr *params_str = irParamsToString(ir_func->params);
     aoStrCatFmt(buf, "%S) {\n", params_str);

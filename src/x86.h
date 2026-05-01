@@ -13,5 +13,6 @@ int asmFunctionInit(Cctrl *cc, AoStr *buf, Ast *func);
 void asmFunctionLeave(AoStr *buf);
 int asmHasRet(AoStr *buf);
 void asmRemovePreviousTab(AoStr *buf);
+char *asmNormaliseFunctionName(char *fname);
 
 #endif // !ASM_H
