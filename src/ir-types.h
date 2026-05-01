@@ -269,6 +269,16 @@ typedef struct IrProgram {
     Vec *globals;
 } IrProgram;
 
+/* One frame in the loop-context stack maintained by irLowerAst while
+ * lowering for/while/do-while. Lets AST_BREAK / AST_CONTINUE find their
+ * jump targets without walking the AST or carrying labels around. */
+typedef struct IrLoopCtx {
+    IrBlock *continue_block;  /* target of `continue` */
+    IrBlock *break_block;     /* target of `break` */
+} IrLoopCtx;
+
+#define IR_LOOP_STACK_MAX 16
+
 typedef struct IrCtx {
     /* Current function being converted to IR */
     IrFunction *cur_func;
@@ -278,6 +288,10 @@ typedef struct IrCtx {
     IrProgram *prog;
     /* The main compiler struct */
     Cctrl *cc;
+
+    /* Loop-context stack for break/continue. Slice-0 doesn't go deep. */
+    IrLoopCtx loop_stack[IR_LOOP_STACK_MAX];
+    int loop_depth;
 } IrCtx;
 
 

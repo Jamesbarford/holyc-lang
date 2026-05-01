@@ -242,7 +242,30 @@ IrCtx *irCtxNew(Cctrl *cc) {
     ctx->prog->functions = irFunctionVecNew();
     ctx->prog->globals = NULL;
     ctx->cc = cc;
+    ctx->loop_depth = 0;
     return ctx;
+}
+
+static void irPushLoopCtx(IrCtx *ctx, IrBlock *cont, IrBlock *brk) {
+    if (ctx->loop_depth >= IR_LOOP_STACK_MAX) {
+        loggerPanic("Loop nesting > %d not supported in slice\n",
+                    IR_LOOP_STACK_MAX);
+    }
+    ctx->loop_stack[ctx->loop_depth].continue_block = cont;
+    ctx->loop_stack[ctx->loop_depth].break_block = brk;
+    ctx->loop_depth++;
+}
+
+static void irPopLoopCtx(IrCtx *ctx) {
+    if (ctx->loop_depth == 0) {
+        loggerPanic("irPopLoopCtx underflow\n");
+    }
+    ctx->loop_depth--;
+}
+
+static IrLoopCtx *irCurLoopCtx(IrCtx *ctx) {
+    if (ctx->loop_depth == 0) return NULL;
+    return &ctx->loop_stack[ctx->loop_depth - 1];
 }
 
 void irCtxAddFunction(IrCtx *ctx, IrFunction *func) {
@@ -571,6 +594,10 @@ static int irStmtIsSliceEligible(Ast *ast) {
     case AST_DO_WHILE:
         if (!irExprIsSliceEligible(ast->whilecond)) return 0;
         if (ast->whilebody && !irStmtIsSliceEligible(ast->whilebody)) return 0;
+        return 1;
+    case AST_BREAK:
+    case AST_CONTINUE:
+        /* Lowering enforces these appear inside a loop. */
         return 1;
     case AST_BINOP:
         /* Statement-level: only assignment is meaningful */
@@ -1102,21 +1129,18 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
 
         case AST_FOR: {
             /* `for (init; cond; step) body` ->
-             *   <pre-header>: init ; jmp header
+             *   pre-header: init ; jmp header
              *   header: cond ; br body, end
-             *   body: <body> ; <step> ; jmp header
-             *   end: ...
-             *
-             * AST locals declared in `init` (e.g. `for (I64 i = 0; ...)`)
-             * already appear in func->locals so AST_DECL lowering reserves
-             * the slot in the entry block; the init expression here writes
-             * to it. */
+             *   body:   <body>     ; jmp step    (continue: jmp step)
+             *   step:   <step>     ; jmp header  (back-edge)
+             *   end:    ...                       (break: jmp end) */
             if (!ast->forbody) break;
             if (ast->forinit) irLowerAst(ctx, ast->forinit);
             if (ctx->cur_block->sealed) break;
 
             IrBlock *header = irBlockNew();
             IrBlock *body   = irBlockNew();
+            IrBlock *step   = irBlockNew();
             IrBlock *end    = irBlockNew();
 
             IrInstr *to_header = irJump(ctx->cur_func, ctx->cur_block, header);
@@ -1132,16 +1156,25 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
                 irBlockAddInstr(ctx, j);
             }
 
+            irPushLoopCtx(ctx, step, end);
+
             irFnAddBlock(ctx->cur_func, body);
             ctx->cur_block = body;
             irLowerAst(ctx, ast->forbody);
-            if (!ctx->cur_block->sealed && ast->forstep) {
-                irLowerAst(ctx, ast->forstep);
+            if (!ctx->cur_block->sealed) {
+                IrInstr *j = irJump(ctx->cur_func, ctx->cur_block, step);
+                irBlockAddInstr(ctx, j);
             }
+
+            irFnAddBlock(ctx->cur_func, step);
+            ctx->cur_block = step;
+            if (ast->forstep) irLowerAst(ctx, ast->forstep);
             if (!ctx->cur_block->sealed) {
                 IrInstr *j = irJump(ctx->cur_func, ctx->cur_block, header);
                 irBlockAddInstr(ctx, j);
             }
+
+            irPopLoopCtx(ctx);
 
             irFnAddBlock(ctx->cur_func, end);
             ctx->cur_block = end;
@@ -1162,6 +1195,8 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
             IrValue *cond_val = irExpr(ctx, ast->whilecond);
             irBranch(ctx->cur_func, ctx->cur_block, cond_val, body, end);
 
+            irPushLoopCtx(ctx, header, end);
+
             irFnAddBlock(ctx->cur_func, body);
             ctx->cur_block = body;
             if (ast->whilebody) irLowerAst(ctx, ast->whilebody);
@@ -1170,29 +1205,59 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
                 irBlockAddInstr(ctx, j);
             }
 
+            irPopLoopCtx(ctx);
+
             irFnAddBlock(ctx->cur_func, end);
             ctx->cur_block = end;
             break;
         }
 
         case AST_DO_WHILE: {
+            /* Cond runs at end of body, but we put it in its own block so
+             * `continue` has a target. */
             if (!ast->whilecond) break;
             IrBlock *body = irBlockNew();
+            IrBlock *cond = irBlockNew();
             IrBlock *end  = irBlockNew();
 
             IrInstr *to_body = irJump(ctx->cur_func, ctx->cur_block, body);
             irBlockAddInstr(ctx, to_body);
 
+            irPushLoopCtx(ctx, cond, end);
+
             irFnAddBlock(ctx->cur_func, body);
             ctx->cur_block = body;
             if (ast->whilebody) irLowerAst(ctx, ast->whilebody);
             if (!ctx->cur_block->sealed) {
-                IrValue *cond_val = irExpr(ctx, ast->whilecond);
-                irBranch(ctx->cur_func, ctx->cur_block, cond_val, body, end);
+                IrInstr *j = irJump(ctx->cur_func, ctx->cur_block, cond);
+                irBlockAddInstr(ctx, j);
             }
+
+            irFnAddBlock(ctx->cur_func, cond);
+            ctx->cur_block = cond;
+            IrValue *cond_val = irExpr(ctx, ast->whilecond);
+            irBranch(ctx->cur_func, ctx->cur_block, cond_val, body, end);
+
+            irPopLoopCtx(ctx);
 
             irFnAddBlock(ctx->cur_func, end);
             ctx->cur_block = end;
+            break;
+        }
+
+        case AST_BREAK: {
+            IrLoopCtx *lc = irCurLoopCtx(ctx);
+            if (!lc) loggerPanic("break outside a loop\n");
+            IrInstr *j = irJump(ctx->cur_func, ctx->cur_block, lc->break_block);
+            irBlockAddInstr(ctx, j);
+            break;
+        }
+
+        case AST_CONTINUE: {
+            IrLoopCtx *lc = irCurLoopCtx(ctx);
+            if (!lc) loggerPanic("continue outside a loop\n");
+            IrInstr *j = irJump(ctx->cur_func, ctx->cur_block, lc->continue_block);
+            irBlockAddInstr(ctx, j);
             break;
         }
 
@@ -1267,8 +1332,6 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
         case AST_ASM_FUNCALL:
         case AST_FUNPTR:
         case AST_FUNPTR_CALL:
-        case AST_BREAK:
-        case AST_CONTINUE:
         case AST_DEFAULT_PARAM:
         case AST_VAR_ARGS:
         case AST_ASM_FUNCDEF:

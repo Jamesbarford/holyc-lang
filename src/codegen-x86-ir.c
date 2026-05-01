@@ -278,12 +278,15 @@ static int instrDefsIntoRax(IrInstr *I) {
     }
 }
 
+static IrValue *firstRaxSource(IrInstr *I);
+
 /* Classify each IR_PHI: rax-resident if
  *   (a) it's the only phi at the block head,
  *   (b) every predecessor arrives via IR_JMP / IR_LOOP (so %rax survives),
- *   (c) the phi's dst is used at most once in the rest of the function —
- *       otherwise the second consumer would expect a stack slot we never
- *       allocated and we'd read garbage.
+ *   (c) the phi's dst has at most one use across the function, AND
+ *   (d) that use is the very next non-NOP instruction in this block, as
+ *       its first-rax source — so the value in rax is consumed before any
+ *       arithmetic / call clobbers it.
  * All other phis fall back to slot-resident (store on the pred side, load
  * on the use side, just like an alloca). */
 static void irCgClassifyPhis(IrFunction *func) {
@@ -360,6 +363,26 @@ static void irCgClassifyPhis(IrFunction *func) {
         int dst_uses = mapHasInt(uses, dst_id)
                        ? (int)(intptr_t)mapGetInt(uses, dst_id) : 0;
         if (dst_uses > 1) continue;
+
+        /* The single use must be in *this* block as the very next non-NOP
+         * instruction's first-rax source — otherwise rax may be clobbered
+         * before the use. (If the use is in a successor's phi pair, the
+         * predecessor-side materialisation can't read it from rax either.) */
+        IrInstr *next = NULL;
+        int seen_phi = 0;
+        listForEach(B->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (I == the_phi) { seen_phi = 1; continue; }
+            if (!seen_phi) continue;
+            if (I->op == IR_NOP) continue;
+            if (I->op == IR_PHI) continue;   /* skip sibling phis */
+            next = I;
+            break;
+        }
+        if (!next) continue;
+        IrValue *next_src = firstRaxSource(next);
+        if (!next_src || next_src->kind != IR_VAL_TMP) continue;
+        if (next_src->as.var.id != dst_id) continue;
 
         the_phi->flags |= IRCG_PHI_IN_RAX;
     }
