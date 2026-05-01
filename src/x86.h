@@ -12,5 +12,6 @@ AoStr *asmGenerate(Cctrl *cc);
 int asmFunctionInit(Cctrl *cc, AoStr *buf, Ast *func);
 void asmFunctionLeave(AoStr *buf);
 int asmHasRet(AoStr *buf);
+void asmRemovePreviousTab(AoStr *buf);
 
 #endif // !ASM_H

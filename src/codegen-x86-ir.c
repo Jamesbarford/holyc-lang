@@ -673,6 +673,7 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                            else_lbl);
             irCgEmitPhiMaterialize(ctx, ctx->cur_block, t);
             aoStrCatPrintf(ctx->buf, "jmp    %s\n", tlbl);
+            asmRemovePreviousTab(ctx->buf);
             aoStrCatPrintf(ctx->buf, "%s:\n\t", else_lbl);
             irCgEmitPhiMaterialize(ctx, ctx->cur_block, f);
             if (ctx->next_block != f) {
@@ -776,6 +777,7 @@ void asmFunctionFromIr(Cctrl *cc, AoStr *buf, Ast *ast_func) {
         if (setHas(referenced, (void *)(u64)block->id)) {
             char lbl[64];
             irCgBlockLabel(&ctx, block, lbl, sizeof(lbl));
+            asmRemovePreviousTab(buf);
             aoStrCatPrintf(buf, "%s:\n\t", lbl);
         }
         listForEach(block->instructions) {
