@@ -417,6 +417,15 @@ static void irCgAnnotate(IrFunction *func) {
             if (I->op == IR_BR || I->op == IR_RET) {
                 bumpUseIfTmp(uses, I->dst);
             }
+            /* Phi pair values are consumed at predecessor-side
+             * materialisation; count them so the zero-use slot-skip
+             * heuristic below doesn't drop slots a phi still reads from. */
+            if (I->op == IR_PHI && I->extra.phi_pairs) {
+                for (u64 i = 0; i < I->extra.phi_pairs->size; ++i) {
+                    IrPair *p = vecGet(IrPair *, I->extra.phi_pairs, i);
+                    bumpUseIfTmp(uses, p->ir_value);
+                }
+            }
             /* Make sure stale flag bits from a previous compilation can't
              * leak in if instructions ever get recycled. */
             I->flags &= ~(u64)(IRCG_FUSE_TO_NEXT | IRCG_R1_IN_RAX);
@@ -438,6 +447,14 @@ static void irCgAnnotate(IrFunction *func) {
             int use_count = mapHasInt(uses, cur->dst->as.var.id)
                             ? (int)(intptr_t)mapGetInt(uses, cur->dst->as.var.id)
                             : 0;
+            /* Zero-use def: the result is dead, so we still emit the op
+             * (it may have side effects — IR_CALL — or simply be cheap to
+             * leave) but skip the spill. The slot allocator drops the
+             * unused dst's slot. */
+            if (use_count == 0) {
+                cur->flags |= IRCG_FUSE_TO_NEXT;
+                continue;
+            }
             if (use_count != 1) continue;
 
             /* Find the next instruction that actually emits something. Skip
@@ -504,14 +521,49 @@ static void irCgSpillDst(IrCgCtx *ctx, IrInstr *instr, const char *reg) {
 /* Emit, for each phi at the head of `to`, the move(s) that put the value
  * coming from `from` into either %rax (rax-resident phi) or the phi's
  * stack slot. Caller has already arranged that we're at the end of `from`'s
- * block, just before its terminator. */
+ * block, just before its terminator.
+ *
+ * Order matters: when phi A's pair value reads phi B's dst at this same
+ * block, A must materialise before B — otherwise B's write clobbers the
+ * slot A is about to read. We collect all phis here, then repeatedly pick
+ * one whose dst is not read by any still-pending phi (a leaf in the
+ * read-dependency graph). Cycles fall back to scratch via %rcx. */
+static int phiPairValIsPhiDstAtBlock(IrValue *v, IrBlock *bb) {
+    if (!v || v->kind != IR_VAL_TMP) return 0;
+    listForEach(bb->instructions) {
+        IrInstr *I = (IrInstr *)it->value;
+        if (I->op == IR_NOP) continue;
+        if (I->op != IR_PHI) return 0;
+        if (I->dst && I->dst->kind == IR_VAL_TMP &&
+            I->dst->as.var.id == v->as.var.id) return 1;
+    }
+    return 0;
+}
+
+static void irCgEmitOnePhi(IrCgCtx *ctx, IrInstr *phi, IrPair *match) {
+    irCgLoadToReg(ctx, match->ir_value, "rax");
+    if (!(phi->flags & IRCG_PHI_IN_RAX)) {
+        irCgStoreReg(ctx, phi->dst, "rax");
+    }
+}
+
 static void irCgEmitPhiMaterialize(IrCgCtx *ctx, IrBlock *from, IrBlock *to) {
     if (!to || !from) return;
+
+    /* Gather (phi, pair-from-`from`) pairs and a `done` flag. */
+    enum { kMaxPhis = 32 };
+    IrInstr *phis[kMaxPhis];
+    IrPair  *pairs[kMaxPhis];
+    int     done[kMaxPhis];
+    int n = 0;
+
     listForEach(to->instructions) {
         IrInstr *I = (IrInstr *)it->value;
         if (I->op == IR_NOP) continue;
-        if (I->op != IR_PHI) break;          /* past the phi prefix */
-
+        if (I->op != IR_PHI) break;
+        if (n >= kMaxPhis) {
+            loggerPanic("ir-cg: too many phis at one block (>%d)\n", kMaxPhis);
+        }
         IrPair *match = NULL;
         if (I->extra.phi_pairs) {
             for (u64 i = 0; i < I->extra.phi_pairs->size; ++i) {
@@ -519,13 +571,50 @@ static void irCgEmitPhiMaterialize(IrCgCtx *ctx, IrBlock *from, IrBlock *to) {
                 if (p->ir_block == from) { match = p; break; }
             }
         }
-        if (!match || !match->ir_value) continue;  /* well-formed IR shouldn't hit this */
+        if (!match || !match->ir_value) continue;
+        phis[n] = I;
+        pairs[n] = match;
+        done[n] = 0;
+        n++;
+    }
+    if (n == 0) return;
 
-        irCgLoadToReg(ctx, match->ir_value, "rax");
-        if (!(I->flags & IRCG_PHI_IN_RAX)) {
-            irCgStoreReg(ctx, I->dst, "rax");
+    /* Repeatedly pick a phi whose dst isn't read by any still-pending
+     * phi's pair. That's a leaf in the read-dependency graph: emitting
+     * it can't break any later read. */
+    int emitted = 0;
+    while (emitted < n) {
+        int progress = 0;
+        for (int i = 0; i < n; ++i) {
+            if (done[i]) continue;
+            int read_by_pending = 0;
+            for (int j = 0; j < n; ++j) {
+                if (i == j || done[j]) continue;
+                IrValue *v = pairs[j]->ir_value;
+                if (v && v->kind == IR_VAL_TMP &&
+                    phis[i]->dst &&
+                    phis[i]->dst->kind == IR_VAL_TMP &&
+                    v->as.var.id == phis[i]->dst->as.var.id) {
+                    read_by_pending = 1;
+                    break;
+                }
+            }
+            if (!read_by_pending) {
+                irCgEmitOnePhi(ctx, phis[i], pairs[i]);
+                done[i] = 1;
+                emitted++;
+                progress = 1;
+            }
+        }
+        if (!progress) {
+            /* Cycle (every remaining phi's dst is read by another). Stash
+             * the next pending phi's source value in a scratch slot via
+             * %rcx, then break the cycle. For slice-0 with structured
+             * loops, cycles are rare — panic for now so we notice. */
+            loggerPanic("ir-cg: phi materialisation cycle (NYI)\n");
         }
     }
+    (void)phiPairValIsPhiDstAtBlock;
 }
 
 /* Mirror of the BR/JMP emission's layout decisions: returns the set of
@@ -832,27 +921,49 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
     }
 }
 
-/* Mirror asmFunctionInit's loff-assignment logic without emitting any asm.
- * Used by the IR path so we can know the AST-side stack budget before
- * we've decided how much tmp space to add. Slice constraints (no varargs,
- * int-only locals/params, AST_LVAR params) make this much simpler than
- * the AST path's version. Returns the locals+params reservation, NOT
- * 16-byte-aligned. */
-static int irCgComputeAstLayout(Ast *func) {
+/* AST loff layout for the IR codegen. Runs *after* mem2reg so we can skip
+ * locals whose alloca got promoted away — they have no readers/writers
+ * left and don't deserve a slot. Slice constraints (no varargs, int-only
+ * locals/params, AST_LVAR params) keep this short. Returns the locals
+ * + params reservation, NOT 16-byte-aligned. */
+static int irCgComputeAstLayout(Ast *ast_func, IrFunction *ir_func) {
+    Set *surviving = setNew(8, &set_uint_type);
+    listForEach(ir_func->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (I->op == IR_ALLOCA && I->dst &&
+                I->dst->kind == IR_VAL_TMP) {
+                setAdd(surviving, (void *)(u64)I->dst->as.var.id);
+            }
+        }
+    }
+
     int total = 0;
     int new_offset = 0;
 
-    listForEach(func->locals) {
+    listForEach(ast_func->locals) {
         Ast *l = (Ast *)it->value;
+        u32 lid = (l->kind == AST_DEFAULT_PARAM)
+                  ? l->declvar->lvar_id : l->lvar_id;
+        IrValue *iv = irFnGetVar(ir_func, lid);
+        int promoted = iv && iv->kind == IR_VAL_TMP &&
+                       !setHas(surviving, (void *)(u64)iv->as.var.id);
+        if (promoted) {
+            /* mem2reg killed the alloca — skip the slot entirely. The AST
+             * loff is no longer reachable (loads/stores via lvar_id were
+             * NOP'd) so leaving it 0 is safe. */
+            continue;
+        }
         total += align(l->type->size, 8);
         new_offset -= l->type->size;
         l->loff = new_offset;
     }
 
     int param_total = 0;
-    if (func->params) {
-        for (u64 i = 0; i < func->params->size; ++i) {
-            Ast *p = vecGet(Ast *, func->params, i);
+    if (ast_func->params) {
+        for (u64 i = 0; i < ast_func->params->size; ++i) {
+            Ast *p = vecGet(Ast *, ast_func->params, i);
             param_total += align(p->type->size, 8);
         }
     }
@@ -863,13 +974,14 @@ static int irCgComputeAstLayout(Ast *func) {
      * at the most-negative offset, working upward toward locals. Matches
      * asmFunctionInit's layout. */
     int offset = locals_aligned;
-    if (func->params) {
-        for (u64 i = 0; i < func->params->size; ++i) {
-            Ast *p = vecGet(Ast *, func->params, i);
+    if (ast_func->params) {
+        for (u64 i = 0; i < ast_func->params->size; ++i) {
+            Ast *p = vecGet(Ast *, ast_func->params, i);
             p->loff = -offset;
             offset -= align(p->type->size, 8);
         }
     }
+    setRelease(surviving);
     return locals_aligned;
 }
 
@@ -902,22 +1014,22 @@ static void irCgEmitParamSpills(AoStr *buf, Ast *func) {
 void asmFunctionFromIr(Cctrl *cc, AoStr *buf, Ast *ast_func) {
     assert(ast_func->kind == AST_FUNC);
 
-    /* 1. Compute the AST-side stack layout (loffs for locals + params)
-     *    without emitting yet — we need to know IR tmp space first to
-     *    fold both reservations into a single subq. */
-    int locals_params_space = irCgComputeAstLayout(ast_func);
-
-    /* 2. Lower to IR. */
+    /* 1. Lower to IR. */
     IrCtx *ir_ctx = irCtxNew(cc);
     IrFunction *func = irLowerFunction(ir_ctx, ast_func);
 
-    /* 3. Run analyses. */
+    /* 2. Run analyses. mem2reg promotes allocas away; the layout pass
+     *    below uses that info to skip slots for promoted locals. */
     irMem2Reg(func);
     irFoldFunction(func);
     irCgClassifyPhis(func);
     irCgAnnotate(func);
 
-    /* 4. Bind IR values to the loffs we computed in step 1. */
+    /* 3. Compute AST-side layout *after* mem2reg so promoted locals
+     *    don't reserve dead slots. */
+    int locals_params_space = irCgComputeAstLayout(ast_func, func);
+
+    /* 4. Bind IR values to the loffs we just computed. */
     IrCgCtx ctx;
     ctx.cc = cc;
     ctx.buf = buf;
