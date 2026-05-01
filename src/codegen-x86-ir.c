@@ -185,6 +185,22 @@ static void irCgAllocOperandsForInstr(IrCgCtx *ctx, IrInstr *I, int start) {
         }
         return;
 
+    case IR_GEP: {
+        /* Get-element-pointer for stack-allocated structs. dst aliases
+         * `base + offset` — we bind its loff right here so subsequent
+         * loads/stores through it just look up the right %rbp offset. */
+        if (!I->dst || I->dst->kind != IR_VAL_TMP ||
+            !I->r1 || !I->r2 || I->r2->kind != IR_VAL_CONST_INT) {
+            return;
+        }
+        int base_loff = irCgGetLoff(ctx, I->r1);
+        int field_loff = base_loff + (int)I->r2->as._i64;
+        if (!mapHasInt(ctx->id_to_loff, I->dst->as.var.id)) {
+            irCgSetLoff(ctx, I->dst->as.var.id, field_loff);
+        }
+        return;
+    }
+
     default:
         /* Be conservative for ops we don't model yet. */
         irCgAllocTmp(ctx, I->dst, start);
@@ -724,6 +740,11 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
          * irCgEmitPhiMaterialize). The phi itself emits nothing. For an
          * in-rax phi, the value is already in %rax at block entry; for a
          * slot-resident phi, it's already in the slot. */
+        break;
+
+    case IR_GEP:
+        /* All bookkeeping happened at slot-allocation time; the dst's
+         * loff is already bound to base+offset. Nothing to emit. */
         break;
 
     case IR_LOAD:

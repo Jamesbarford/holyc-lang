@@ -525,10 +525,13 @@ static int irExprIsSliceEligible(Ast *ast) {
     case AST_BINOP:
         if (ast->binop == AST_BIN_OP_ASSIGN ||
             irBinOpIsCompoundAssign(ast->binop)) {
-            /* `x = expr` and `x op= expr`: LHS must be a plain int local. */
-            return ast->left && ast->left->kind == AST_LVAR
-                && irTypeIsSliceInt(ast->left->type)
-                && irExprIsSliceEligible(ast->right);
+            /* LHS may be a plain int local OR an int-typed class field. */
+            if (!ast->left) return 0;
+            int lhs_ok = (ast->left->kind == AST_LVAR &&
+                          irTypeIsSliceInt(ast->left->type)) ||
+                         (ast->left->kind == AST_CLASS_REF &&
+                          irExprIsSliceEligible(ast->left));
+            return lhs_ok && irExprIsSliceEligible(ast->right);
         }
         if (!irBinOpIsSliceArith(ast->binop)) return 0;
         if (!irTypeIsSliceInt(ast->type)) return 0;
@@ -555,6 +558,14 @@ static int irExprIsSliceEligible(Ast *ast) {
         }
         return 1;
     }
+    case AST_CLASS_REF:
+        /* `cls.field` or (later) deref-then-field. Slice supports int
+         * fields of a stack-allocated class only. */
+        if (!ast->type || !irTypeIsSliceInt(ast->type)) return 0;
+        if (!ast->cls || ast->cls->kind != AST_LVAR) return 0;
+        if (!ast->cls->type ||
+            ast->cls->type->kind != AST_TYPE_CLASS) return 0;
+        return 1;
     default:
         return 0;
     }
@@ -569,10 +580,21 @@ static int irStmtIsSliceEligible(Ast *ast) {
         }
         return 1;
     }
-    case AST_DECL:
-        if (!ast->declvar || !irTypeIsSliceInt(ast->declvar->type)) return 0;
-        if (ast->declinit && !irExprIsSliceEligible(ast->declinit)) return 0;
-        return 1;
+    case AST_DECL: {
+        if (!ast->declvar || !ast->declvar->type) return 0;
+        AstType *t = ast->declvar->type;
+        if (t->kind == AST_TYPE_INT) {
+            if (ast->declinit &&
+                !irExprIsSliceEligible(ast->declinit)) return 0;
+            return 1;
+        }
+        if (t->kind == AST_TYPE_CLASS) {
+            /* No struct copy / aggregate init in slice yet. */
+            if (ast->declinit) return 0;
+            return 1;
+        }
+        return 0;
+    }
     case AST_RETURN:
         if (!ast->retval) return 1;
         return irExprIsSliceEligible(ast->retval);
@@ -633,7 +655,14 @@ int irFunctionEligibleForSlice(Ast *ast_func) {
     listForEach(ast_func->locals) {
         Ast *l = (Ast *)it->value;
         if (l->kind != AST_LVAR) return 0;
-        if (!irTypeIsSliceInt(l->type)) return 0;
+        if (!l->type) return 0;
+        if (l->type->kind == AST_TYPE_INT) continue;
+        /* Stack-allocated class with int-only fields. We don't validate
+         * fields here; AST_CLASS_REF accesses are checked against
+         * irTypeIsSliceInt at use-site, so non-int fields just mean the
+         * function loses eligibility through some specific access. */
+        if (l->type->kind == AST_TYPE_CLASS) continue;
+        return 0;
     }
 
     return irStmtIsSliceEligible(ast_func->body);
@@ -921,6 +950,26 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
             return value;
         }
 
+        case AST_CLASS_REF: {
+            /* Compute field address via IR_GEP, then load. */
+            Ast *cls = ast->cls;
+            if (!cls || cls->kind != AST_LVAR) {
+                loggerPanic("Slice AST_CLASS_REF only supports AST_LVAR cls\n");
+            }
+            IrValue *base = irFnGetVar(ctx->cur_func, cls->lvar_id);
+            if (!base) loggerPanic("AST_CLASS_REF on unknown lvar\n");
+
+            IrValue *field_addr = irTmp(IR_TYPE_PTR, 8);
+            IrValue *off = irConstInt(IR_TYPE_I64, ast->type->offset);
+            IrInstr *gep = irInstrNew(IR_GEP, field_addr, base, off);
+            irBlockAddInstr(ctx, gep);
+
+            IrValueType ir_type = irConvertType(ast->type);
+            IrValue *load_dst = irTmp(ir_type, ast->type->size);
+            irBlockAddInstr(ctx, irLoad(load_dst, field_addr));
+            return load_dst;
+        }
+
         case AST_UNOP: {
             /* Slice supports ++/-- on int locals. The store to the lvar's
              * slot is the side effect; we return either the original value
@@ -966,7 +1015,6 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
         case AST_FOR:
         case AST_RETURN:
         case AST_WHILE:
-        case AST_CLASS_REF:
         case AST_COMPOUND_STMT:
         case AST_ASM_STMT:
         case AST_ASM_FUNC_BIND:
@@ -1014,33 +1062,54 @@ static IrOp irCompoundAssignToIrOp(AstBinOp op, int issigned) {
     }
 }
 
-/* Lower `lvar op= rhs` (or `lvar = rhs` when op is AST_BIN_OP_ASSIGN) and
- * return the value written back. Used both as a statement and as a
- * sub-expression. */
-static IrValue *irLowerAssign(IrCtx *ctx, Ast *ast) {
-    Ast *lhs = ast->left;
-    IrValue *local = irFnGetVar(ctx->cur_func, lhs->lvar_id);
-    if (!local) {
-        loggerPanic("irLowerAssign: unknown local %s\n", astToString(lhs));
+/* Address of an LHS the slice can assign to: an int local (the alloca
+ * slot itself) or an int field of a stack-allocated class (a fresh GEP
+ * tmp aliasing base+offset). */
+static IrValue *irLowerAssignTarget(IrCtx *ctx, Ast *lhs, AstType **out_type) {
+    if (lhs->kind == AST_LVAR) {
+        IrValue *local = irFnGetVar(ctx->cur_func, lhs->lvar_id);
+        if (!local) loggerPanic("irLowerAssign: unknown local %s\n",
+                                astToString(lhs));
+        *out_type = lhs->type;
+        return local;
     }
+    if (lhs->kind == AST_CLASS_REF) {
+        Ast *cls = lhs->cls;
+        if (!cls || cls->kind != AST_LVAR) {
+            loggerPanic("Slice AST_CLASS_REF only supports AST_LVAR cls\n");
+        }
+        IrValue *base = irFnGetVar(ctx->cur_func, cls->lvar_id);
+        if (!base) loggerPanic("AST_CLASS_REF on unknown lvar\n");
+        IrValue *field_addr = irTmp(IR_TYPE_PTR, 8);
+        IrValue *off = irConstInt(IR_TYPE_I64, lhs->type->offset);
+        irBlockAddInstr(ctx, irInstrNew(IR_GEP, field_addr, base, off));
+        *out_type = lhs->type;
+        return field_addr;
+    }
+    loggerPanic("irLowerAssign: unsupported LHS %s\n", astKindToString(lhs->kind));
+}
+
+/* Lower `<lhs> op= rhs` (or `<lhs> = rhs` when op is AST_BIN_OP_ASSIGN)
+ * and return the value written back. */
+static IrValue *irLowerAssign(IrCtx *ctx, Ast *ast) {
+    AstType *lhs_type = NULL;
+    IrValue *target = irLowerAssignTarget(ctx, ast->left, &lhs_type);
 
     IrValue *new_val;
     if (ast->binop == AST_BIN_OP_ASSIGN) {
         new_val = irExpr(ctx, ast->right);
     } else {
-        /* Compound: `x op= y`  ->  load x, compute x op y, store result. */
-        IrValueType ir_type = irConvertType(lhs->type);
-        IrValue *cur = irTmp(ir_type, lhs->type->size);
-        irBlockAddInstr(ctx, irLoad(cur, local));
+        /* Compound: load through target, op, store back. */
+        IrValueType ir_type = irConvertType(lhs_type);
+        IrValue *cur = irTmp(ir_type, lhs_type->size);
+        irBlockAddInstr(ctx, irLoad(cur, target));
         IrValue *rhs = irExpr(ctx, ast->right);
-        IrOp ir_op = irCompoundAssignToIrOp(ast->binop, lhs->type->issigned);
-        new_val = irTmp(ir_type, lhs->type->size);
-        IrInstr *bin = irInstrNew(ir_op, new_val, cur, rhs);
-        irBlockAddInstr(ctx, bin);
+        IrOp ir_op = irCompoundAssignToIrOp(ast->binop, lhs_type->issigned);
+        new_val = irTmp(ir_type, lhs_type->size);
+        irBlockAddInstr(ctx, irInstrNew(ir_op, new_val, cur, rhs));
     }
 
-    IrInstr *st = irStore(local, new_val);
-    irBlockAddInstr(ctx, st);
+    irBlockAddInstr(ctx, irStore(target, new_val));
     return new_val;
 }
 
@@ -1326,7 +1395,6 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
         case AST_FUNC:
         case AST_LITERAL:
         case AST_ARRAY_INIT:
-        case AST_CLASS_REF:
         case AST_ASM_STMT:
         case AST_ASM_FUNC_BIND:
         case AST_ASM_FUNCALL:
