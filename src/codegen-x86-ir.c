@@ -9,6 +9,7 @@
 #include "containers.h"
 #include "ir.h"
 #include "ir-fold.h"
+#include "ir-mem2reg.h"
 #include "ir-types.h"
 #include "list.h"
 #include "prsutil.h"
@@ -289,20 +290,53 @@ static void irCgAnnotate(IrFunction *func) {
         IrBlock *bb = (IrBlock *)it->value;
         if (listEmpty(bb->instructions)) continue;
         for (List *node = bb->instructions->next;
-             node != bb->instructions && node->next != bb->instructions;
+             node != bb->instructions;
              node = node->next)
         {
             IrInstr *cur = (IrInstr *)node->value;
-            IrInstr *next = (IrInstr *)node->next->value;
-
+            if (cur->op == IR_NOP) continue;
             if (!instrDefsIntoRax(cur)) continue;
             if (!cur->dst || cur->dst->kind != IR_VAL_TMP) continue;
-            if (cur->op == IR_NOP) continue;
 
             int use_count = mapHasInt(uses, cur->dst->as.var.id)
                             ? (int)(intptr_t)mapGetInt(uses, cur->dst->as.var.id)
                             : 0;
             if (use_count != 1) continue;
+
+            /* Find the next instruction that actually emits something. Skip
+             * IR_NOPs left by mem2reg / fold. If we hit an IR_JMP whose
+             * target has a single predecessor (this block) we can chase
+             * into the target — %rax survives an unconditional jump. We
+             * stop at IR_BR / IR_LOOP since branch arms may need different
+             * rax setups. */
+            IrInstr *next = NULL;
+            IrBlock *scan_bb = bb;
+            List *scan = node->next;
+            int hops = 0;
+            while (1) {
+                while (scan == scan_bb->instructions) {
+                    /* end of current block — try to chase through a jmp */
+                    IrInstr *term = (IrInstr *)listValue(IrInstr *,
+                                                         listTail(scan_bb->instructions));
+                    if (!term || term->op != IR_JMP) { scan_bb = NULL; break; }
+                    IrBlock *tgt = term->extra.blocks.target_block;
+                    if (!tgt) { scan_bb = NULL; break; }
+                    Map *preds = irFunctionGetPredecessors(func, tgt);
+                    if (!preds || preds->size != 1) { scan_bb = NULL; break; }
+                    scan_bb = tgt;
+                    scan = scan_bb->instructions->next;
+                    if (++hops > 8) { scan_bb = NULL; break; }
+                }
+                if (!scan_bb) break;
+                IrInstr *cand = (IrInstr *)scan->value;
+                if (cand->op != IR_NOP && cand->op != IR_JMP) {
+                    next = cand;
+                    break;
+                }
+                /* Treat IR_JMP as "end of block" so the outer loop chases. */
+                scan = scan->next;
+            }
+            if (!next) continue;
 
             IrValue *next_src = firstRaxSource(next);
             if (!next_src || next_src->kind != IR_VAL_TMP) continue;
@@ -464,11 +498,15 @@ void asmFunctionFromIr(Cctrl *cc, AoStr *buf, Ast *ast_func) {
     IrCtx *ir_ctx = irCtxNew(cc);
     IrFunction *func = irLowerFunction(ir_ctx, ast_func);
 
-    /* 2a. Run constant folding before codegen so we emit fewer redundant
-     *     loads/stores. */
+    /* 2a. Promote single-store allocas to plain SSA value flow before
+     *     anything else looks at the IR. */
+    irMem2Reg(func);
+
+    /* 2b. Run constant folding so we emit fewer redundant loads/stores.
+     *     mem2reg first means fold sees through what used to be loads. */
     irFoldFunction(func);
 
-    /* 2b. Mark fusion pairs (single-use def whose result is consumed by the
+    /* 2c. Mark fusion pairs (single-use def whose result is consumed by the
      *     immediately following instruction). The emitter and the slot
      *     allocator both honor these flags. */
     irCgAnnotate(func);

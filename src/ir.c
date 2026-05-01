@@ -9,6 +9,7 @@
 #include "ir-types.h"
 #include "ir-debug.h"
 #include "ir-fold.h"
+#include "ir-mem2reg.h"
 #include "util.h"
 
 static Arena ir_arena;
@@ -1181,7 +1182,10 @@ void irDump(Cctrl *cc) {
             continue;
         }
         irLowerFunction(ctx, ast);
-        printf("# === before constant-fold ===\n");
+        printf("# === lowered ===\n");
+        irPrintFunction(ctx->cur_func);
+        irMem2Reg(ctx->cur_func);
+        printf("# === after mem2reg ===\n");
         irPrintFunction(ctx->cur_func);
         irFoldFunction(ctx->cur_func);
         printf("# === after constant-fold ===\n");
