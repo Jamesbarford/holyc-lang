@@ -521,16 +521,33 @@ static int irExprIsSliceEligible(Ast *ast) {
     case AST_LITERAL:
         return ast->type && ast->type->kind == AST_TYPE_INT;
     case AST_LVAR:
-        return irTypeIsSliceInt(ast->type);
+        /* Slice locals/params are int, pointer, or stack class. Loading an
+         * int reads its value; loading a pointer reads its pointer value;
+         * loading a class isn't valid here (struct copy isn't supported)
+         * but accessing fields via AST_CLASS_REF is. */
+        if (!ast->type) return 0;
+        return ast->type->kind == AST_TYPE_INT ||
+               ast->type->kind == AST_TYPE_POINTER;
     case AST_BINOP:
         if (ast->binop == AST_BIN_OP_ASSIGN ||
             irBinOpIsCompoundAssign(ast->binop)) {
-            /* LHS may be a plain int local OR an int-typed class field. */
+            /* LHS may be:
+             *  - a plain int local,
+             *  - a pointer local (just reassigning a pointer),
+             *  - an int-typed class field (`p.x` or `p->x`),
+             *  - a deref of a pointer (`*p`). */
             if (!ast->left) return 0;
-            int lhs_ok = (ast->left->kind == AST_LVAR &&
-                          irTypeIsSliceInt(ast->left->type)) ||
-                         (ast->left->kind == AST_CLASS_REF &&
-                          irExprIsSliceEligible(ast->left));
+            Ast *lhs = ast->left;
+            int lhs_ok = 0;
+            if (lhs->kind == AST_LVAR && lhs->type) {
+                lhs_ok = lhs->type->kind == AST_TYPE_INT ||
+                         lhs->type->kind == AST_TYPE_POINTER;
+            } else if (lhs->kind == AST_CLASS_REF) {
+                lhs_ok = irExprIsSliceEligible(lhs);
+            } else if (lhs->kind == AST_UNOP &&
+                       lhs->unop == AST_UN_OP_DEREF) {
+                lhs_ok = irExprIsSliceEligible(lhs);
+            }
             return lhs_ok && irExprIsSliceEligible(ast->right);
         }
         if (!irBinOpIsSliceArith(ast->binop)) return 0;
@@ -538,10 +555,18 @@ static int irExprIsSliceEligible(Ast *ast) {
         return irExprIsSliceEligible(ast->left)
             && irExprIsSliceEligible(ast->right);
     case AST_UNOP:
-        /* Slice supports ++/-- on int locals (any position). */
-        if (!irUnOpIsSliceIncDec(ast->unop)) return 0;
-        if (!ast->operand || ast->operand->kind != AST_LVAR) return 0;
-        return irTypeIsSliceInt(ast->operand->type);
+        if (irUnOpIsSliceIncDec(ast->unop)) {
+            if (!ast->operand || ast->operand->kind != AST_LVAR) return 0;
+            return irTypeIsSliceInt(ast->operand->type);
+        }
+        if (ast->unop == AST_UN_OP_DEREF) {
+            /* `*p` where p is a pointer; result must be slice-int. */
+            if (!ast->operand || !ast->operand->type) return 0;
+            if (ast->operand->type->kind != AST_TYPE_POINTER) return 0;
+            if (!irTypeIsSliceInt(ast->type)) return 0;
+            return irExprIsSliceEligible(ast->operand);
+        }
+        return 0;
     case AST_FUNCALL: {
         /* Slice supports calls returning int or void with up to 6 args
          * (System V's int-arg register set). Args may be int expressions
@@ -558,14 +583,18 @@ static int irExprIsSliceEligible(Ast *ast) {
         }
         return 1;
     }
-    case AST_CLASS_REF:
-        /* `cls.field` or (later) deref-then-field. Slice supports int
-         * fields of a stack-allocated class only. */
+    case AST_CLASS_REF: {
+        /* `cls.field` (stack class) or `cls->field` (pointer to class).
+         * Field type must be slice-int. */
         if (!ast->type || !irTypeIsSliceInt(ast->type)) return 0;
         if (!ast->cls || ast->cls->kind != AST_LVAR) return 0;
-        if (!ast->cls->type ||
-            ast->cls->type->kind != AST_TYPE_CLASS) return 0;
-        return 1;
+        AstType *ct = ast->cls->type;
+        if (!ct) return 0;
+        if (ct->kind == AST_TYPE_CLASS) return 1;
+        if (ct->kind == AST_TYPE_POINTER && ct->ptr &&
+            ct->ptr->kind == AST_TYPE_CLASS) return 1;
+        return 0;
+    }
     default:
         return 0;
     }
@@ -648,7 +677,10 @@ int irFunctionEligibleForSlice(Ast *ast_func) {
         for (u64 i = 0; i < ast_func->params->size; ++i) {
             Ast *p = vecGet(Ast *, ast_func->params, i);
             if (p->kind != AST_LVAR) return 0;
-            if (!irTypeIsSliceInt(p->type)) return 0;
+            if (!p->type) return 0;
+            if (p->type->kind == AST_TYPE_INT) continue;
+            if (p->type->kind == AST_TYPE_POINTER) continue;
+            return 0;
         }
     }
 
@@ -662,6 +694,7 @@ int irFunctionEligibleForSlice(Ast *ast_func) {
          * irTypeIsSliceInt at use-site, so non-int fields just mean the
          * function loses eligibility through some specific access. */
         if (l->type->kind == AST_TYPE_CLASS) continue;
+        if (l->type->kind == AST_TYPE_POINTER) continue;
         return 0;
     }
 
@@ -951,7 +984,13 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
         }
 
         case AST_CLASS_REF: {
-            /* Compute field address via IR_GEP, then load. */
+            /* Two shapes:
+             *   stack class: cls is AST_LVAR with class type. Field is at
+             *                a known offset within the local's stack
+             *                frame; IR_GEP aliases that loff.
+             *   pointer:     cls is AST_LVAR with pointer-to-class type.
+             *                Load the pointer, add the field offset, then
+             *                dereference. */
             Ast *cls = ast->cls;
             if (!cls || cls->kind != AST_LVAR) {
                 loggerPanic("Slice AST_CLASS_REF only supports AST_LVAR cls\n");
@@ -959,18 +998,45 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
             IrValue *base = irFnGetVar(ctx->cur_func, cls->lvar_id);
             if (!base) loggerPanic("AST_CLASS_REF on unknown lvar\n");
 
-            IrValue *field_addr = irTmp(IR_TYPE_PTR, 8);
-            IrValue *off = irConstInt(IR_TYPE_I64, ast->type->offset);
-            IrInstr *gep = irInstrNew(IR_GEP, field_addr, base, off);
-            irBlockAddInstr(ctx, gep);
+            IrValueType field_ir_type = irConvertType(ast->type);
+            IrValue *load_dst = irTmp(field_ir_type, ast->type->size);
+            int offset = ast->type->offset;
 
-            IrValueType ir_type = irConvertType(ast->type);
-            IrValue *load_dst = irTmp(ir_type, ast->type->size);
+            if (cls->type && cls->type->kind == AST_TYPE_POINTER) {
+                /* Pointer-to-class: load pointer, add offset, deref. */
+                IrValue *ptr_val = irTmp(IR_TYPE_PTR, 8);
+                irBlockAddInstr(ctx, irLoad(ptr_val, base));
+                IrValue *addr = ptr_val;
+                if (offset != 0) {
+                    addr = irTmp(IR_TYPE_PTR, 8);
+                    IrValue *off_const = irConstInt(IR_TYPE_I64, offset);
+                    irBlockAddInstr(ctx,
+                        irInstrNew(IR_IADD, addr, ptr_val, off_const));
+                }
+                irBlockAddInstr(ctx,
+                    irInstrNew(IR_LOAD_DEREF, load_dst, addr, NULL));
+                return load_dst;
+            }
+
+            /* Stack-allocated class. */
+            IrValue *field_addr = irTmp(IR_TYPE_PTR, 8);
+            IrValue *off = irConstInt(IR_TYPE_I64, offset);
+            irBlockAddInstr(ctx,
+                irInstrNew(IR_GEP, field_addr, base, off));
             irBlockAddInstr(ctx, irLoad(load_dst, field_addr));
             return load_dst;
         }
 
         case AST_UNOP: {
+            if (ast->unop == AST_UN_OP_DEREF) {
+                /* `*p`: evaluate the pointer expression, then load through it. */
+                IrValue *ptr = irExpr(ctx, ast->operand);
+                IrValueType ir_type = irConvertType(ast->type);
+                IrValue *load_dst = irTmp(ir_type, ast->type->size);
+                irBlockAddInstr(ctx,
+                    irInstrNew(IR_LOAD_DEREF, load_dst, ptr, NULL));
+                return load_dst;
+            }
             /* Slice supports ++/-- on int locals. The store to the lvar's
              * slot is the side effect; we return either the original value
              * (POST) or the incremented one (PRE). */
@@ -978,7 +1044,7 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
                 ast->unop != AST_UN_OP_PRE_DEC &&
                 ast->unop != AST_UN_OP_POST_INC &&
                 ast->unop != AST_UN_OP_POST_DEC) {
-                loggerPanic("Slice unop only supports ++/--, got %s\n",
+                loggerPanic("Slice unop only supports ++/-- and *, got %s\n",
                             astUnOpKindToString(ast->unop));
             }
             Ast *lvar = ast->operand;
@@ -1062,17 +1128,26 @@ static IrOp irCompoundAssignToIrOp(AstBinOp op, int issigned) {
     }
 }
 
-/* Address of an LHS the slice can assign to: an int local (the alloca
- * slot itself) or an int field of a stack-allocated class (a fresh GEP
- * tmp aliasing base+offset). */
-static IrValue *irLowerAssignTarget(IrCtx *ctx, Ast *lhs, AstType **out_type) {
+/* Address-mode info for an assignment LHS. `target` is the IrValue used
+ * by the IR_STORE / IR_STORE_DEREF; `indirect` says which one to use. */
+typedef struct {
+    IrValue *target;
+    AstType *type;
+    int indirect;   /* 1 -> IR_STORE_DEREF, 0 -> IR_STORE. */
+} IrAssignTarget;
+
+static IrAssignTarget irLowerAssignTarget(IrCtx *ctx, Ast *lhs) {
+    IrAssignTarget out = { NULL, NULL, 0 };
+
     if (lhs->kind == AST_LVAR) {
         IrValue *local = irFnGetVar(ctx->cur_func, lhs->lvar_id);
         if (!local) loggerPanic("irLowerAssign: unknown local %s\n",
                                 astToString(lhs));
-        *out_type = lhs->type;
-        return local;
+        out.target = local;
+        out.type = lhs->type;
+        return out;
     }
+
     if (lhs->kind == AST_CLASS_REF) {
         Ast *cls = lhs->cls;
         if (!cls || cls->kind != AST_LVAR) {
@@ -1080,36 +1155,69 @@ static IrValue *irLowerAssignTarget(IrCtx *ctx, Ast *lhs, AstType **out_type) {
         }
         IrValue *base = irFnGetVar(ctx->cur_func, cls->lvar_id);
         if (!base) loggerPanic("AST_CLASS_REF on unknown lvar\n");
+        int offset = lhs->type->offset;
+        out.type = lhs->type;
+
+        if (cls->type && cls->type->kind == AST_TYPE_POINTER) {
+            /* Pointer-to-class: load pointer, optionally add offset; the
+             * resulting tmp holds the field's runtime address. */
+            IrValue *ptr_val = irTmp(IR_TYPE_PTR, 8);
+            irBlockAddInstr(ctx, irLoad(ptr_val, base));
+            IrValue *addr = ptr_val;
+            if (offset != 0) {
+                addr = irTmp(IR_TYPE_PTR, 8);
+                IrValue *off_const = irConstInt(IR_TYPE_I64, offset);
+                irBlockAddInstr(ctx,
+                    irInstrNew(IR_IADD, addr, ptr_val, off_const));
+            }
+            out.target = addr;
+            out.indirect = 1;
+            return out;
+        }
+
+        /* Stack-allocated class: alias base+offset directly. */
         IrValue *field_addr = irTmp(IR_TYPE_PTR, 8);
-        IrValue *off = irConstInt(IR_TYPE_I64, lhs->type->offset);
+        IrValue *off = irConstInt(IR_TYPE_I64, offset);
         irBlockAddInstr(ctx, irInstrNew(IR_GEP, field_addr, base, off));
-        *out_type = lhs->type;
-        return field_addr;
+        out.target = field_addr;
+        return out;
     }
+
+    if (lhs->kind == AST_UNOP && lhs->unop == AST_UN_OP_DEREF) {
+        /* `*p = ...`: evaluate the pointer; STORE_DEREF takes care of the
+         * indirection. */
+        IrValue *ptr = irExpr(ctx, lhs->operand);
+        out.target = ptr;
+        out.type = lhs->type;
+        out.indirect = 1;
+        return out;
+    }
+
     loggerPanic("irLowerAssign: unsupported LHS %s\n", astKindToString(lhs->kind));
 }
 
 /* Lower `<lhs> op= rhs` (or `<lhs> = rhs` when op is AST_BIN_OP_ASSIGN)
  * and return the value written back. */
 static IrValue *irLowerAssign(IrCtx *ctx, Ast *ast) {
-    AstType *lhs_type = NULL;
-    IrValue *target = irLowerAssignTarget(ctx, ast->left, &lhs_type);
+    IrAssignTarget tgt = irLowerAssignTarget(ctx, ast->left);
 
     IrValue *new_val;
     if (ast->binop == AST_BIN_OP_ASSIGN) {
         new_val = irExpr(ctx, ast->right);
     } else {
         /* Compound: load through target, op, store back. */
-        IrValueType ir_type = irConvertType(lhs_type);
-        IrValue *cur = irTmp(ir_type, lhs_type->size);
-        irBlockAddInstr(ctx, irLoad(cur, target));
+        IrValueType ir_type = irConvertType(tgt.type);
+        IrValue *cur = irTmp(ir_type, tgt.type->size);
+        IrOp load_op = tgt.indirect ? IR_LOAD_DEREF : IR_LOAD;
+        irBlockAddInstr(ctx, irInstrNew(load_op, cur, tgt.target, NULL));
         IrValue *rhs = irExpr(ctx, ast->right);
-        IrOp ir_op = irCompoundAssignToIrOp(ast->binop, lhs_type->issigned);
-        new_val = irTmp(ir_type, lhs_type->size);
+        IrOp ir_op = irCompoundAssignToIrOp(ast->binop, tgt.type->issigned);
+        new_val = irTmp(ir_type, tgt.type->size);
         irBlockAddInstr(ctx, irInstrNew(ir_op, new_val, cur, rhs));
     }
 
-    irBlockAddInstr(ctx, irStore(target, new_val));
+    IrOp store_op = tgt.indirect ? IR_STORE_DEREF : IR_STORE;
+    irBlockAddInstr(ctx, irInstrNew(store_op, tgt.target, new_val, NULL));
     return new_val;
 }
 

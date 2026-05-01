@@ -148,6 +148,18 @@ static void irCgAllocOperandsForInstr(IrCgCtx *ctx, IrInstr *I, int start) {
         if (load_r1) irCgAllocTmp(ctx, I->r1, start);
         return;
 
+    case IR_LOAD_DEREF:
+        /* dst = *r1; r1 holds a runtime pointer in its slot. */
+        if (spill_dst) irCgAllocTmp(ctx, I->dst, start);
+        irCgAllocTmp(ctx, I->r1, start);
+        return;
+
+    case IR_STORE_DEREF:
+        /* *dst = r1; dst holds a runtime pointer, r1 the value. */
+        irCgAllocTmp(ctx, I->dst, start);
+        irCgAllocTmp(ctx, I->r1, start);
+        return;
+
     case IR_IADD: case IR_ISUB: case IR_IMUL:
     case IR_AND:  case IR_OR:   case IR_XOR:
     case IR_IDIV: case IR_UDIV: case IR_IREM: case IR_UREM:
@@ -759,6 +771,21 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
          * always writes memory so spill-skipping doesn't apply. */
         irCgLoadFirstSrc(ctx, instr, instr->r1);
         irCgStoreReg(ctx, instr->dst, "rax");
+        break;
+
+    case IR_LOAD_DEREF:
+        /* dst = *r1, where r1 is a runtime pointer value (not a slot id).
+         * Load the pointer into rcx, then dereference. */
+        irCgLoadToReg(ctx, instr->r1, "rcx");
+        aoStrCatPrintf(ctx->buf, "movq   (%%rcx), %%rax\n\t");
+        irCgSpillDst(ctx, instr, "rax");
+        break;
+
+    case IR_STORE_DEREF:
+        /* *dst = r1; dst holds a runtime pointer, r1 is the value. */
+        irCgLoadFirstSrc(ctx, instr, instr->r1);
+        irCgLoadToReg(ctx, instr->dst, "rcx");
+        aoStrCatPrintf(ctx->buf, "movq   %%rax, (%%rcx)\n\t");
         break;
 
     case IR_IADD:

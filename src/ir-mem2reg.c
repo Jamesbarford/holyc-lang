@@ -85,7 +85,10 @@ static void rewriteOperands(IrInstr *I, Map *rename) {
     if (I->op == IR_NOP) return;
     I->r1 = chase(rename, I->r1);
     I->r2 = chase(rename, I->r2);
-    if (I->op == IR_BR || I->op == IR_RET) {
+    /* dst is a source operand for branches/returns and for stores
+     * (which read dst as the destination address). */
+    if (I->op == IR_BR || I->op == IR_RET ||
+        I->op == IR_STORE || I->op == IR_STORE_DEREF) {
         I->dst = chase(rename, I->dst);
     }
     if (I->op == IR_PHI && I->extra.phi_pairs) {
