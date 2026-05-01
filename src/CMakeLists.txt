@@ -103,6 +103,21 @@ add_executable(hcc ${SOURCES} ${HEADERS})
 
 set(HCC_PATH "${CMAKE_INSTALL_PREFIX}/bin/hcc")
 
+# IR folding pass tests. Reuses every compiler source except main.c; not
+# fast to build but avoids carving out a static-lib refactor for one test.
+set(SOURCES_NO_MAIN ${SOURCES})
+list(REMOVE_ITEM SOURCES_NO_MAIN main.c)
+
+add_executable(ir-fold-test EXCLUDE_FROM_ALL test_ir_fold.c ${SOURCES_NO_MAIN})
+target_link_libraries(ir-fold-test m)
+
+add_custom_target(ir-fold-run
+    COMMAND $<TARGET_FILE:ir-fold-test>
+    DEPENDS ir-fold-test
+    COMMENT "Running ir-fold unit tests"
+    USES_TERMINAL
+)
+
 # Command for unit tests
 add_custom_target(unit-test
     COMMAND ${CMAKE_COMMAND} -E echo "Running unit tests..."
