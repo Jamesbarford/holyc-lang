@@ -22,16 +22,28 @@ extern IrValue *irFnGetVar(IrFunction *func, u32 lvar_id);
 /*
  * IR -> x86_64 codegen for slice-0.
  *
- * Strategy: every IR temp gets its own stack slot. Each instruction loads
- * its sources into rax/rcx, performs the op, and writes the result to its
- * tmp's slot. This is naive but correct, matches the existing AST->x86
- * codegen's "%rax holds the current value" feel, and keeps register
- * allocation out of slice-0.
+ * Baseline strategy: every IR temp gets its own stack slot. Each instruction
+ * loads its sources into rax/rcx, performs the op, and writes the result to
+ * its tmp's slot.
+ *
+ * On top of that we run a tiny "fusion" pre-pass that sets two flag bits on
+ * each IrInstr (IRCG_FUSE_TO_NEXT, IRCG_R1_IN_RAX) when a single-use def is
+ * immediately consumed as the next instruction's first %rax source. The
+ * emitter then skips the spill on the def and the reload on the use, and
+ * the slot allocator drops the (unused) stack slot. This collapses the bulk
+ * of the bloat — straight-line code keeps values in %rax exactly the way
+ * the AST -> x86 codegen does.
  *
  * Locals and parameters re-use the offsets that asmFunctionInit assigned
  * to AST nodes, so the prologue (and any future fix-ups to it) stays in
  * one place.
  */
+
+/* Codegen-private bits stored on IrInstr.flags. ir.c initialises flags to 0
+ * and no other code (ir-fold, ir-debug, ARM64) reads or writes it, so we own
+ * these bits exclusively during codegen. */
+#define IRCG_FUSE_TO_NEXT (1u << 0)
+#define IRCG_R1_IN_RAX    (1u << 1)
 
 typedef struct IrCgCtx {
     Cctrl *cc;
@@ -93,18 +105,70 @@ static void irCgBindAstLoffs(IrCgCtx *ctx, Ast *ast_func) {
     }
 }
 
-/* For everything else (return-value alloca, intermediate tmps), pre-allocate
- * stack slots so the prologue knows the total space to subtract. Skips
- * IR_NOP since the folder marks dropped instructions that way. */
+/* Allocate slots only for tmps the emitter is actually going to touch.
+ * Operand roles per opcode:
+ *   - "spill dst"    (write rax to slot) — skip if IRCG_FUSE_TO_NEXT.
+ *   - "load r1"      (read slot to rax)  — skip if IRCG_R1_IN_RAX.
+ *   - "address dst"  (offset literal)    — always needs a slot.
+ *   - "load r2"      (read slot to rcx)  — always needs a slot.
+ * Fused (dst, r1) pairs are never spilled or read, so their tmp ids
+ * legitimately have no slot. */
+static void irCgAllocOperandsForInstr(IrCgCtx *ctx, IrInstr *I, int start) {
+    int spill_dst   = !(I->flags & IRCG_FUSE_TO_NEXT);
+    int load_r1     = !(I->flags & IRCG_R1_IN_RAX);
+
+    switch (I->op) {
+    case IR_NOP:
+    case IR_JMP:
+    case IR_LOOP:
+        return;
+
+    case IR_ALLOCA:
+        irCgAllocTmp(ctx, I->dst, start);
+        return;
+
+    case IR_LOAD:
+        if (spill_dst) irCgAllocTmp(ctx, I->dst, start);
+        irCgAllocTmp(ctx, I->r1, start);            /* address */
+        return;
+
+    case IR_STORE:
+        irCgAllocTmp(ctx, I->dst, start);           /* address */
+        if (load_r1) irCgAllocTmp(ctx, I->r1, start);
+        return;
+
+    case IR_IADD: case IR_ISUB: case IR_IMUL:
+    case IR_AND:  case IR_OR:   case IR_XOR:
+    case IR_IDIV: case IR_UDIV: case IR_IREM: case IR_UREM:
+    case IR_SHL:  case IR_SHR:  case IR_SAR:
+    case IR_ICMP:
+        if (spill_dst) irCgAllocTmp(ctx, I->dst, start);
+        if (load_r1)   irCgAllocTmp(ctx, I->r1, start);
+        irCgAllocTmp(ctx, I->r2, start);
+        return;
+
+    case IR_BR:
+        if (load_r1) irCgAllocTmp(ctx, I->dst, start);
+        return;
+
+    case IR_RET:
+        if (I->dst && load_r1) irCgAllocTmp(ctx, I->dst, start);
+        return;
+
+    default:
+        /* Be conservative for ops we don't model yet. */
+        irCgAllocTmp(ctx, I->dst, start);
+        irCgAllocTmp(ctx, I->r1, start);
+        irCgAllocTmp(ctx, I->r2, start);
+    }
+}
+
 static void irCgAllocAllTmps(IrCgCtx *ctx, int starting_offset) {
     listForEach(ctx->func->blocks) {
         IrBlock *block = (IrBlock *)it->value;
         listForEach(block->instructions) {
             IrInstr *instr = (IrInstr *)it->value;
-            if (instr->op == IR_NOP) continue;
-            irCgAllocTmp(ctx, instr->dst, starting_offset);
-            irCgAllocTmp(ctx, instr->r1, starting_offset);
-            irCgAllocTmp(ctx, instr->r2, starting_offset);
+            irCgAllocOperandsForInstr(ctx, instr, starting_offset);
         }
     }
 }
@@ -156,8 +220,116 @@ static void irCgBlockLabel(IrCgCtx *ctx, IrBlock *block, char *out, int n) {
     snprintf(out, n, ".LIRBB%d_%u", ctx->func_uid, block->id);
 }
 
+/* ---- fusion pre-pass --------------------------------------------------- */
+
+/* True if the instruction's natural codegen ends with the result in %rax,
+ * i.e. it's a candidate to "leave in rax" rather than spill to a slot. */
+static int instrDefsIntoRax(IrInstr *I) {
+    switch (I->op) {
+    case IR_LOAD:
+    case IR_IADD: case IR_ISUB: case IR_IMUL:
+    case IR_AND:  case IR_OR:   case IR_XOR:
+    case IR_IDIV: case IR_UDIV: case IR_IREM: case IR_UREM:
+    case IR_SHL:  case IR_SHR:  case IR_SAR:
+    case IR_ICMP:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* The single source operand the instruction loads into %rax first. NULL
+ * when the op doesn't have one (alloca, unconditional jmp, nop, ...). */
+static IrValue *firstRaxSource(IrInstr *I) {
+    switch (I->op) {
+    case IR_STORE:
+    case IR_IADD: case IR_ISUB: case IR_IMUL:
+    case IR_AND:  case IR_OR:   case IR_XOR:
+    case IR_IDIV: case IR_UDIV: case IR_IREM: case IR_UREM:
+    case IR_SHL:  case IR_SHR:  case IR_SAR:
+    case IR_ICMP:
+        return I->r1;
+    case IR_BR:
+    case IR_RET:
+        return I->dst;
+    default:
+        return NULL;
+    }
+}
+
+static void bumpUseIfTmp(Map *uses, IrValue *v) {
+    if (!v || v->kind != IR_VAL_TMP) return;
+    int n = mapHasInt(uses, v->as.var.id)
+            ? (int)(intptr_t)mapGetInt(uses, v->as.var.id) : 0;
+    mapAdd(uses, (void *)(u64)v->as.var.id, (void *)(intptr_t)(n + 1));
+}
+
+/* Walk every instruction once, counting tmp source-uses; then walk again to
+ * mark FUSE_TO_NEXT / R1_IN_RAX pairs. Sources for use-counting purposes are:
+ * r1, r2, and dst (for IR_BR / IR_RET only — those treat dst as a source). */
+static void irCgAnnotate(IrFunction *func) {
+    Map *uses = mapNew(64, &map_uint_to_uint_type);
+
+    listForEach(func->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            bumpUseIfTmp(uses, I->r1);
+            bumpUseIfTmp(uses, I->r2);
+            if (I->op == IR_BR || I->op == IR_RET) {
+                bumpUseIfTmp(uses, I->dst);
+            }
+            /* Make sure stale flag bits from a previous compilation can't
+             * leak in if instructions ever get recycled. */
+            I->flags &= ~(u64)(IRCG_FUSE_TO_NEXT | IRCG_R1_IN_RAX);
+        }
+    }
+
+    listForEach(func->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        if (listEmpty(bb->instructions)) continue;
+        for (List *node = bb->instructions->next;
+             node != bb->instructions && node->next != bb->instructions;
+             node = node->next)
+        {
+            IrInstr *cur = (IrInstr *)node->value;
+            IrInstr *next = (IrInstr *)node->next->value;
+
+            if (!instrDefsIntoRax(cur)) continue;
+            if (!cur->dst || cur->dst->kind != IR_VAL_TMP) continue;
+            if (cur->op == IR_NOP) continue;
+
+            int use_count = mapHasInt(uses, cur->dst->as.var.id)
+                            ? (int)(intptr_t)mapGetInt(uses, cur->dst->as.var.id)
+                            : 0;
+            if (use_count != 1) continue;
+
+            IrValue *next_src = firstRaxSource(next);
+            if (!next_src || next_src->kind != IR_VAL_TMP) continue;
+            if (next_src->as.var.id != cur->dst->as.var.id) continue;
+
+            cur->flags |= IRCG_FUSE_TO_NEXT;
+            next->flags |= IRCG_R1_IN_RAX;
+        }
+    }
+
+    mapRelease(uses);
+}
+
 /* Emit the body of a single IR instruction. Block boundaries / labels are
  * handled by the caller. */
+/* Helpers wrapping the spill / first-rax-load sites so the bit-flag checks
+ * happen in one place. */
+static void irCgLoadFirstSrc(IrCgCtx *ctx, IrInstr *instr, IrValue *src) {
+    if (instr->flags & IRCG_R1_IN_RAX) return;
+    irCgLoadToReg(ctx, src, "rax");
+}
+
+static void irCgSpillDst(IrCgCtx *ctx, IrInstr *instr, const char *reg) {
+    if (instr->flags & IRCG_FUSE_TO_NEXT) return;
+    irCgStoreReg(ctx, instr->dst, reg);
+}
+
 static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
     switch (instr->op) {
     case IR_NOP:
@@ -169,15 +341,16 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
         break;
 
     case IR_LOAD:
-        /* dst = *r1. For our slice every "address" is itself a slot, so
-         * load = read that slot's value. */
+        /* dst = *r1. r1 is a slot pointer (always addressed by offset, never
+         * read into rax), so R1_IN_RAX never applies here. */
         irCgLoadToReg(ctx, instr->r1, "rax");
-        irCgStoreReg(ctx, instr->dst, "rax");
+        irCgSpillDst(ctx, instr, "rax");
         break;
 
     case IR_STORE:
-        /* *dst = r1. Same simplification: dst's slot holds the value. */
-        irCgLoadToReg(ctx, instr->r1, "rax");
+        /* *dst = r1. dst is a slot pointer; r1 is the value. The store
+         * always writes memory so spill-skipping doesn't apply. */
+        irCgLoadFirstSrc(ctx, instr, instr->r1);
         irCgStoreReg(ctx, instr->dst, "rax");
         break;
 
@@ -197,10 +370,10 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
         case IR_XOR:  op = "xorq"; break;
         default: assert(0);
         }
-        irCgLoadToReg(ctx, instr->r1, "rax");
+        irCgLoadFirstSrc(ctx, instr, instr->r1);
         irCgLoadToReg(ctx, instr->r2, "rcx");
         aoStrCatPrintf(ctx->buf, "%s   %%rcx, %%rax\n\t", op);
-        irCgStoreReg(ctx, instr->dst, "rax");
+        irCgSpillDst(ctx, instr, "rax");
         break;
     }
 
@@ -208,16 +381,20 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
     case IR_UDIV:
     case IR_IREM:
     case IR_UREM: {
-        irCgLoadToReg(ctx, instr->r1, "rax");
+        irCgLoadFirstSrc(ctx, instr, instr->r1);
         irCgLoadToReg(ctx, instr->r2, "rcx");
         if (instr->op == IR_IDIV || instr->op == IR_IREM) {
             aoStrCatPrintf(ctx->buf, "cqto\n\tidivq %%rcx\n\t");
         } else {
             aoStrCatPrintf(ctx->buf, "xorq %%rdx, %%rdx\n\tdivq %%rcx\n\t");
         }
-        const char *result = (instr->op == IR_IREM || instr->op == IR_UREM)
-                             ? "rdx" : "rax";
-        irCgStoreReg(ctx, instr->dst, result);
+        /* idivq/divq leave the quotient in rax and the remainder in rdx.
+         * Park the result in rax so spill or fused consumer always reads
+         * from one place. */
+        if (instr->op == IR_IREM || instr->op == IR_UREM) {
+            aoStrCatPrintf(ctx->buf, "movq   %%rdx, %%rax\n\t");
+        }
+        irCgSpillDst(ctx, instr, "rax");
         break;
     }
 
@@ -226,19 +403,19 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
     case IR_SAR: {
         const char *op = (instr->op == IR_SHL) ? "shlq"
                        : (instr->op == IR_SAR) ? "sarq" : "shrq";
-        irCgLoadToReg(ctx, instr->r1, "rax");
+        irCgLoadFirstSrc(ctx, instr, instr->r1);
         irCgLoadToReg(ctx, instr->r2, "rcx");
         aoStrCatPrintf(ctx->buf, "%s   %%cl, %%rax\n\t", op);
-        irCgStoreReg(ctx, instr->dst, "rax");
+        irCgSpillDst(ctx, instr, "rax");
         break;
     }
 
     case IR_ICMP: {
-        irCgLoadToReg(ctx, instr->r1, "rax");
+        irCgLoadFirstSrc(ctx, instr, instr->r1);
         irCgLoadToReg(ctx, instr->r2, "rcx");
         aoStrCatPrintf(ctx->buf, "cmpq   %%rcx, %%rax\n\t");
         irCgEmitSetCC(ctx, instr->extra.cmp_kind);
-        irCgStoreReg(ctx, instr->dst, "rax");
+        irCgSpillDst(ctx, instr, "rax");
         break;
     }
 
@@ -246,7 +423,7 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
         char tlbl[64], flbl[64];
         irCgBlockLabel(ctx, instr->extra.blocks.target_block, tlbl, sizeof(tlbl));
         irCgBlockLabel(ctx, instr->extra.blocks.fallthrough_block, flbl, sizeof(flbl));
-        irCgLoadToReg(ctx, instr->dst, "rax");
+        irCgLoadFirstSrc(ctx, instr, instr->dst);
         aoStrCatPrintf(ctx->buf,
                        "testq  %%rax, %%rax\n\t"
                        "je     %s\n\t"
@@ -265,7 +442,7 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
 
     case IR_RET:
         if (instr->dst) {
-            irCgLoadToReg(ctx, instr->dst, "rax");
+            irCgLoadFirstSrc(ctx, instr, instr->dst);
         }
         aoStrCatPrintf(ctx->buf, "leave\n\tret\n");
         break;
@@ -290,6 +467,11 @@ void asmFunctionFromIr(Cctrl *cc, AoStr *buf, Ast *ast_func) {
     /* 2a. Run constant folding before codegen so we emit fewer redundant
      *     loads/stores. */
     irFoldFunction(func);
+
+    /* 2b. Mark fusion pairs (single-use def whose result is consumed by the
+     *     immediately following instruction). The emitter and the slot
+     *     allocator both honor these flags. */
+    irCgAnnotate(func);
 
     /* 3. Bind known IR values to existing AST loffs. */
     IrCgCtx ctx;
