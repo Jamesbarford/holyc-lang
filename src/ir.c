@@ -835,10 +835,13 @@ static int irExprIsSliceEligible(Ast *ast) {
         if (!ast->type) return 0;
         AstTypeKind ftk = ast->type->kind;
         /* AST_TYPE_FUNC: a function-pointer field (`t->fn` in fzf.HC).
-         * Holds an 8-byte pointer at runtime; treat the same as POINTER. */
+         * Holds an 8-byte pointer at runtime; treat the same as POINTER.
+         * AST_TYPE_ARRAY: an embedded fixed-size array field (e.g.
+         * `sockaddr_un.sun_path[104]`). When read, decays to a pointer
+         * to the first element (same shape as the addr-of-field path). */
         if (ftk != AST_TYPE_INT && ftk != AST_TYPE_CHAR &&
             ftk != AST_TYPE_POINTER && ftk != AST_TYPE_FLOAT &&
-            ftk != AST_TYPE_FUNC) return 0;
+            ftk != AST_TYPE_FUNC && ftk != AST_TYPE_ARRAY) return 0;
         if (!ast->cls) return 0;
         /* Walk the CLASS_REF chain to its root. Intermediate CLASS_REFs
          * carry CLASS type (sub-struct view) which would fail the scalar
@@ -982,7 +985,6 @@ int irFunctionEligibleForSliceCc(Cctrl *cc, Ast *ast_func) {
 int irFunctionEligibleForSlice(Ast *ast_func) {
     if (!ast_func || ast_func->kind != AST_FUNC) return 0;
     if (ast_func->flags & AST_FLAG_INLINE) return 0;
-    if (ast_func->has_var_args) return 0;
     AstType *rettype = ast_func->type ? ast_func->type->rettype : NULL;
     if (!rettype) return 0;
     if (rettype->kind != AST_TYPE_VOID &&
@@ -1007,6 +1009,14 @@ int irFunctionEligibleForSlice(Ast *ast_func) {
             /* AST_FUNPTR params hold a runtime pointer (8 bytes); behave
              * just like an int/pointer param for slot allocation. */
             if (p->kind == AST_FUNPTR) continue;
+            /* AST_VAR_ARGS: trailing `...` in the signature. Carries an
+             * `argc` (count) and `argv` (pointer to caller-pushed args)
+             * lvar; we materialize both as regular slots in the prologue
+             * and the body uses them as plain locals. */
+            if (p->kind == AST_VAR_ARGS) {
+                if (!p->argc || !p->argv) return 0;
+                continue;
+            }
             if (p->kind != AST_LVAR) return 0;
             if (!p->type) return 0;
             if (p->type->kind == AST_TYPE_INT) continue;
@@ -1494,6 +1504,16 @@ static IrValue *irLowerCast(IrCtx *ctx, IrValue *src,
     int to_float = to_type->kind == AST_TYPE_FLOAT;
 
     if (from_int && to_float) {
+        /* HolyC variadic-slot cast `argv[i](F64)`: the source's type
+         * carries `has_var_args=1` (the parser tags the argv element
+         * type). The slot holds raw 8 bytes that were pushed as the
+         * F64 bit pattern — reinterpret rather than convert, matching
+         * `asmToFloat`'s `movq %rax, %xmm0` path. */
+        if (from_type->has_var_args) {
+            IrValue *dst = irTmp(IR_TYPE_F64, 8);
+            irBlockAddInstr(ctx, irInstrNew(IR_BITCAST, dst, src, NULL));
+            return dst;
+        }
         IrValue *dst = irTmp(IR_TYPE_F64, 8);
         irBlockAddInstr(ctx, irInstrNew(IR_SITOFP, dst, src, NULL));
         return dst;
@@ -1634,8 +1654,11 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
              *                pointer-typed expression. Evaluate it, add
              *                the field offset, then deref. */
             Ast *cls = ast->cls;
-            IrValueType field_ir_type = irConvertType(ast->type);
-            IrValue *load_dst = irTmp(field_ir_type, ast->type->size);
+            int field_is_array = ast->type->kind == AST_TYPE_ARRAY;
+            IrValueType field_ir_type = field_is_array
+                ? IR_TYPE_PTR : irConvertType(ast->type);
+            IrValue *load_dst = irTmp(field_ir_type,
+                                      field_is_array ? 8 : ast->type->size);
             int offset = ast->type->offset;
 
             /* Nested CLASS_REF: walk the chain summing offsets until we
@@ -1657,6 +1680,11 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
                     irBlockAddInstr(ctx,
                         irInstrNew(IR_IADD, addr, ptr_val, off_const));
                 }
+                if (field_is_array) {
+                    /* `p->arr` decays to the address of the first
+                     * element — that's just the field pointer itself. */
+                    return addr;
+                }
                 irBlockAddInstr(ctx,
                     irInstrNew(IR_LOAD_DEREF, load_dst, addr, NULL));
                 return load_dst;
@@ -1674,6 +1702,16 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
             IrValue *off = irConstInt(IR_TYPE_I64, offset);
             irBlockAddInstr(ctx,
                 irInstrNew(IR_GEP, field_addr, base, off));
+            if (field_is_array) {
+                /* `cls.arr` decays to the field's address — but the GEP
+                 * tmp aliases the stack slot rather than holding a
+                 * runtime pointer, so emit an explicit IR_LEA to
+                 * materialize the pointer value. */
+                IrValue *dst = irTmp(IR_TYPE_PTR, 8);
+                irBlockAddInstr(ctx,
+                    irInstrNew(IR_LEA, dst, field_addr, NULL));
+                return dst;
+            }
             irBlockAddInstr(ctx, irLoad(load_dst, field_addr));
             return load_dst;
         }
@@ -2587,12 +2625,26 @@ IrFunction *irLowerFunction(IrCtx *ctx, Ast *ast_func) {
     /* Lower parameters into per-id IrValue slots. The slice constrains params
      * to AST_LVAR (int), but keep the existing fan-out so out-of-slice callers
      * (the ARM64 backend behind __USE_NEW_BACKEND__) still work. */
-    Ast *ast_var_args = NULL;
     for (u64 i = 0; i < ast_func->params->size; ++i) {
         Ast *ast_param = vecGet(Ast *, ast_func->params, i);
         if (ast_param->kind == AST_VAR_ARGS) {
             assert(func->has_var_args);
-            ast_var_args = ast_param;
+            /* Materialize argc and argv as ordinary parameter slots. The
+             * codegen prologue (asmFunctionFromIr) is responsible for
+             * spilling the next-int-reg into argc and storing
+             * `&caller_stack` into argv; from the body's perspective they
+             * read like plain int/ptr locals. */
+            IrValue *argc_iv = irTmp(IR_TYPE_I64, 8);
+            argc_iv->kind = IR_VAL_PARAM;
+            irFnAddVar(func, ast_param->argc->lvar_id, argc_iv);
+            vecPush(func->params, argc_iv);
+            irAddStackSpace(ctx, 8);
+
+            IrValue *argv_iv = irTmp(IR_TYPE_PTR, 8);
+            argv_iv->kind = IR_VAL_PARAM;
+            irFnAddVar(func, ast_param->argv->lvar_id, argv_iv);
+            vecPush(func->params, argv_iv);
+            irAddStackSpace(ctx, 8);
             break;
         }
         u32 key = 0;
@@ -2612,9 +2664,6 @@ IrFunction *irLowerFunction(IrCtx *ctx, Ast *ast_func) {
         irFnAddVar(func, key, ir_tmp_var);
         vecPush(func->params, ir_tmp_var);
         irAddStackSpace(ctx, ast_param->type->size);
-    }
-    if (ast_var_args) {
-        loggerWarning("%s\n", astToString(ast_var_args));
     }
 
     /* Reserve a stack slot for the return value (skipped for void). Allocated

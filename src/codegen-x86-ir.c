@@ -104,6 +104,15 @@ static void irCgBindAstLoffs(IrCgCtx *ctx, Ast *ast_func) {
     if (ast_func->params) {
         for (u64 i = 0; i < ast_func->params->size; ++i) {
             Ast *p = vecGet(Ast *, ast_func->params, i);
+            if (p->kind == AST_VAR_ARGS) {
+                /* Two slots, two lvar_ids — argc and argv. The layout
+                 * pass set their loffs above. */
+                IrValue *cv = irFnGetVar(ctx->func, p->argc->lvar_id);
+                if (cv) irCgSetLoff(ctx, cv->as.var.id, p->argc->loff);
+                IrValue *vv = irFnGetVar(ctx->func, p->argv->lvar_id);
+                if (vv) irCgSetLoff(ctx, vv->as.var.id, p->argv->loff);
+                continue;
+            }
             u32 pid;
             if (p->kind == AST_DEFAULT_PARAM) pid = p->declvar->lvar_id;
             else if (p->kind == AST_FUNPTR)   pid = p->fn_ptr_id;
@@ -1129,6 +1138,25 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
         break;
     }
 
+    case IR_BITCAST: {
+        /* Reinterpret an 8-byte value's bits between the integer and
+         * float register files (no numerical conversion). HolyC uses
+         * this for `argv[i](F64)` — the variadic slot was pushed as
+         * raw 8 bytes that should be read back as F64, not converted
+         * from the integer interpretation. Direction is determined by
+         * the dst's type tag. */
+        if (instr->dst && irIsFloat(instr->dst->type)) {
+            irCgLoadToReg(ctx, instr->r1, "rax");
+            aoStrCatPrintf(ctx->buf, "movq   %%rax, %%xmm0\n\t");
+            irCgStoreXmm(ctx, instr->dst, "xmm0");
+        } else {
+            irCgLoadToXmm(ctx, instr->r1, "xmm0");
+            aoStrCatPrintf(ctx->buf, "movq   %%xmm0, %%rax\n\t");
+            irCgSpillDst(ctx, instr, "rax");
+        }
+        break;
+    }
+
     case IR_FPTOSI: {
         /* F64 -> signed int (truncation toward zero). */
         irCgLoadToXmm(ctx, instr->r1, "xmm0");
@@ -1477,7 +1505,16 @@ static int irCgComputeAstLayout(Ast *ast_func, IrFunction *ir_func) {
     if (ast_func->params) {
         for (u64 i = 0; i < ast_func->params->size; ++i) {
             Ast *p = vecGet(Ast *, ast_func->params, i);
-            int sz = (p->kind == AST_FUNPTR) ? 8 : p->type->size;
+            int sz;
+            if (p->kind == AST_FUNPTR) {
+                sz = 8;
+            } else if (p->kind == AST_VAR_ARGS) {
+                /* Only argc needs a slot. argv directly aliases the
+                 * caller's variadic area at +16(%rbp) — no spill. */
+                sz = 8;
+            } else {
+                sz = p->type->size;
+            }
             param_total += align(sz, 8);
         }
     }
@@ -1491,6 +1528,19 @@ static int irCgComputeAstLayout(Ast *ast_func, IrFunction *ir_func) {
     if (ast_func->params) {
         for (u64 i = 0; i < ast_func->params->size; ++i) {
             Ast *p = vecGet(Ast *, ast_func->params, i);
+            if (p->kind == AST_VAR_ARGS) {
+                /* argc gets a real slot (carries the count register).
+                 * argv has type AST_TYPE_ARRAY in the AST, so the body
+                 * lowers `argv[i]` as `*(&argv + i*sizeof(elem))` —
+                 * meaning `&argv` already produces an absolute address.
+                 * Point its loff at +16(%rbp), which is exactly where
+                 * the caller pushed the variadic values. No bytes
+                 * reserved for it inside this frame. */
+                p->argc->loff = -offset;
+                offset -= 8;
+                p->argv->loff = 16;
+                continue;
+            }
             int sz = (p->kind == AST_FUNPTR) ? 8 : p->type->size;
             p->loff = -offset;
             offset -= align(sz, 8);
@@ -1525,6 +1575,19 @@ static void irCgEmitParamSpills(AoStr *buf, Ast *func) {
     int int_idx = 0, float_idx = 0;
     for (u64 i = 0; i < func->params->size; ++i) {
         Ast *p = vecGet(Ast *, func->params, i);
+        if (p->kind == AST_VAR_ARGS) {
+            /* HolyC variadic ABI:
+             *   - argc (count of variadic values) is in the next-after-
+             *     fixed integer register (rdi/rsi/rdx/rcx/r8/r9). Spill
+             *     it into argc's slot.
+             *   - argv is positioned at +16(%rbp) — no register, no
+             *     spill: the body's `&argv` (LEA on the slot id) directly
+             *     produces the variadic-area pointer because the loff
+             *     bound by the layout pass is +16. */
+            aoStrCatPrintf(buf, "movq   %%%s, %d(%%rbp)\n\t",
+                           kIntRegs[int_idx++], p->argc->loff);
+            continue;
+        }
         AstType *ptype = (p->kind == AST_DEFAULT_PARAM)
                          ? p->declvar->type : p->type;
         if (ptype && ptype->kind == AST_TYPE_FLOAT) {
