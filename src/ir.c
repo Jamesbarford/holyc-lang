@@ -645,37 +645,32 @@ static int irFuncReturnsAggregate(Ast *ast_func) {
     return irRetTypeIsAggregate(ast_func->type->rettype);
 }
 
-/* Inline memcpy via IR loads/stores. Walks `n_bytes` from `src` to `dst`
- * in 8-byte chunks, dropping to 4 / 2 / 1 byte chunks for the tail.
- * Used for struct-by-value return / class-typed AST_DECL initializer
- * copies; both sides are pointer values. */
-static void irEmitInlineMemcpy(IrCtx *ctx, IrValue *dst, IrValue *src,
-                               int n_bytes) {
-    int off = 0;
-    while (off < n_bytes) {
-        int chunk;
-        IrValueType vt;
-        if (n_bytes - off >= 8) { chunk = 8; vt = IR_TYPE_I64; }
-        else if (n_bytes - off >= 4) { chunk = 4; vt = IR_TYPE_I32; }
-        else if (n_bytes - off >= 2) { chunk = 2; vt = IR_TYPE_I16; }
-        else { chunk = 1; vt = IR_TYPE_I8; }
+/* Emit a struct copy of `n_bytes` from `src` to `dst` (both pointer
+ * values) by synthesizing an IR_CALL to libtos's `MEMCPY`. The asm
+ * symbol is named `MEMCPY` (the parser's `_extern _MEMCPY` binding);
+ * `asmNormaliseFunctionName` adds the `_` prefix on Mach-O.
+ *
+ * Used for struct-by-value return + class-typed AST_DECL initializer
+ * copies. The previous inline 8/4/2/1-byte chunk expansion bloated
+ * the asm with dozens of mov-via-slot round trips per copy; this is
+ * a single call. */
+static void irEmitMemcpy(IrCtx *ctx, IrValue *dst, IrValue *src,
+                         int n_bytes) {
+    IrValue *args_wrap = irValueNew(IR_TYPE_ARRAY, IR_VAL_UNRESOLVED);
+    args_wrap->as.array.label = aoStrPrintf("MEMCPY");
+    Vec *args = irValueVecNew();
+    args_wrap->as.array.values = args;
+    vecPush(args, dst);
+    vecPush(args, src);
+    vecPush(args, irConstInt(IR_TYPE_I64, n_bytes));
 
-        IrValue *src_p = src;
-        IrValue *dst_p = dst;
-        if (off != 0) {
-            IrValue *k = irConstInt(IR_TYPE_I64, off);
-            src_p = irTmp(IR_TYPE_PTR, 8);
-            irBlockAddInstr(ctx, irInstrNew(IR_IADD, src_p, src, k));
-            dst_p = irTmp(IR_TYPE_PTR, 8);
-            irBlockAddInstr(ctx, irInstrNew(IR_IADD, dst_p, dst, k));
-        }
-        IrValue *val = irTmp(vt, chunk);
-        irBlockAddInstr(ctx,
-            irInstrNew(IR_LOAD_DEREF, val, src_p, NULL));
-        irBlockAddInstr(ctx,
-            irInstrNew(IR_STORE_DEREF, dst_p, val, NULL));
-        off += chunk;
-    }
+    /* MEMCPY's return is `U0 *` (the dst pointer); we don't consume
+     * it. The codegen reserves a slot for the dst tmp anyway, but the
+     * use-counting + zero-use slot-skip in irCgAnnotate will prune
+     * it. */
+    IrValue *ret = irTmp(IR_TYPE_PTR, 8);
+    IrInstr *call = irInstrNew(IR_CALL, ret, args_wrap, NULL);
+    irBlockAddInstr(ctx, call);
 }
 
 /* Walk an AST_ARRAY_INIT (possibly nested for multi-dim arrays) and
@@ -2477,7 +2472,7 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
                     IrValue *dst_addr = irTmp(IR_TYPE_PTR, 8);
                     irBlockAddInstr(ctx,
                         irLoad(dst_addr, ctx->cur_func->return_value));
-                    irEmitInlineMemcpy(ctx, dst_addr, src_addr, rt->size);
+                    irEmitMemcpy(ctx, dst_addr, src_addr, rt->size);
                 } else {
                     IrValue *val = irExpr(ctx, ast->retval);
                     IrInstr *st = irStore(ctx->cur_func->return_value,
