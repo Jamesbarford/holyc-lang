@@ -593,6 +593,14 @@ static int irExprIsSliceEligible(Ast *ast) {
         return ast->type->kind == AST_TYPE_INT ||
                ast->type->kind == AST_TYPE_POINTER;
     case AST_BINOP:
+        /* HolyC chained range ops `a <= b <= c` (LE/LT/GE/GT whose lhs is
+         * itself an LE/LT/GE/GT) need special lowering — see
+         * asmRangeOperation. Reject from slice until IR supports them. */
+        if (astIsRangeOperator(ast->binop) && ast->left &&
+            ast->left->kind == AST_BINOP &&
+            astIsRangeOperator(ast->left->binop)) {
+            return 0;
+        }
         if (ast->binop == AST_BIN_OP_ASSIGN ||
             irBinOpIsCompoundAssign(ast->binop)) {
             /* LHS may be:
@@ -660,7 +668,14 @@ static int irExprIsSliceEligible(Ast *ast) {
     case AST_UNOP:
         if (irUnOpIsSliceIncDec(ast->unop)) {
             if (!ast->operand || ast->operand->kind != AST_LVAR) return 0;
-            return irTypeIsSliceInt(ast->operand->type);
+            if (irTypeIsSliceInt(ast->operand->type)) return 1;
+            /* Pointer ++/-- scales by sizeof(*ptr). */
+            if (ast->operand->type &&
+                ast->operand->type->kind == AST_TYPE_POINTER &&
+                ast->operand->type->ptr) {
+                return 1;
+            }
+            return 0;
         }
         if (ast->unop == AST_UN_OP_DEREF) {
             /* `*p` where p is a pointer / array. Result can be int /
@@ -1658,10 +1673,16 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
 
             int is_inc = (ast->unop == AST_UN_OP_PRE_INC ||
                           ast->unop == AST_UN_OP_POST_INC);
-            IrValue *one = irConstInt(ir_type, 1);
+            /* Pointer ++/--: step by sizeof(*ptr). */
+            int step = 1;
+            if (lvar->type->kind == AST_TYPE_POINTER && lvar->type->ptr) {
+                step = lvar->type->ptr->size;
+                if (step < 1) step = 1;
+            }
+            IrValue *delta = irConstInt(ir_type, step);
             IrValue *new_val = irTmp(ir_type, size);
             IrInstr *op = irInstrNew(is_inc ? IR_IADD : IR_ISUB,
-                                     new_val, cur, one);
+                                     new_val, cur, delta);
             irBlockAddInstr(ctx, op);
             irBlockAddInstr(ctx, irStore(slot, new_val));
 
@@ -1828,6 +1849,34 @@ static IrValue *irLowerAssign(IrCtx *ctx, Ast *ast) {
         IrOp ir_op = irCompoundAssignToIrOp(ast->binop, tgt.type->issigned);
         new_val = irTmp(ir_type, tgt.type->size);
         irBlockAddInstr(ctx, irInstrNew(ir_op, new_val, cur, rhs));
+    }
+
+    /* Make new_val's value-type width match the assignment target's width
+     * before the store. The codegens of IR_STORE / IR_STORE_DEREF both
+     * pick the memory-access width from r1's byte size; without this
+     * retype:
+     *   - storing an i64 constant TRUE into a Bool / i8 pointer would
+     *     emit movq through the pointer and trample 7 adjacent bytes
+     *     (this is what broke JsonParseNumber's `*is_hex = TRUE`);
+     *   - storing into a U8/U16/I32 stack class field via IR_GEP would
+     *     similarly walk past the field;
+     *   - storing into a 1-byte direct slot with an i64 constant would
+     *     overflow the slot into the saved %rbp.
+     * Constants get re-tagged in place; tmps wider than the target type
+     * get an explicit IR_TRUNC. */
+    if (tgt.type && tgt.type->size > 0 && new_val &&
+        !irIsFloat(new_val->type)) {
+        IrValueType narrow_ty = irConvertType(tgt.type);
+        if (new_val->kind == IR_VAL_CONST_INT) {
+            if (narrow_ty != new_val->type) {
+                new_val = irConstInt(narrow_ty, new_val->as._i64);
+            }
+        } else if (new_val->kind == IR_VAL_TMP &&
+                   new_val->as.var.size > (u16)tgt.type->size) {
+            IrValue *narrow = irTmp(narrow_ty, tgt.type->size);
+            irBlockAddInstr(ctx, irInstrNew(IR_TRUNC, narrow, new_val, NULL));
+            new_val = narrow;
+        }
     }
 
     IrOp store_op = tgt.indirect ? IR_STORE_DEREF : IR_STORE;
@@ -2107,10 +2156,33 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
 
                     default: {
                         ir_init = irExpr(ctx, init);
+                        /* Match the value's width to the variable's slot
+                         * width (mirrors irLowerAssign — see comment there).
+                         * Without this, `Bool b = FALSE` writes 8 bytes
+                         * into a 1-byte slot and corrupts the saved %rbp. */
+                        if (var->type && var->type->size > 0 && ir_init &&
+                            !irIsFloat(ir_init->type)) {
+                            IrValueType narrow_ty = irConvertType(var->type);
+                            if (ir_init->kind == IR_VAL_CONST_INT) {
+                                if (narrow_ty != ir_init->type) {
+                                    ir_init = irConstInt(narrow_ty,
+                                                         ir_init->as._i64);
+                                }
+                            } else if (ir_init->kind == IR_VAL_TMP &&
+                                       ir_init->as.var.size >
+                                           (u16)var->type->size) {
+                                IrValue *narrow = irTmp(narrow_ty,
+                                                        var->type->size);
+                                irBlockAddInstr(ctx,
+                                    irInstrNew(IR_TRUNC, narrow, ir_init,
+                                               NULL));
+                                ir_init = narrow;
+                            }
+                        }
                         IrInstr *ir_store = irStore(local, ir_init);
                         irBlockAddInstr(ctx, ir_store);
                         break;
-                    }    
+                    }
                 }
             }
             break;

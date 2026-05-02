@@ -938,10 +938,10 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
     }
 
     case IR_STORE: {
-        /* *dst = r1. dst is a slot pointer; r1 is the value. Same width
-         * concern as IR_STORE_DEREF — `p.a = 1` for a `U8 a` field in
-         * a packed class would otherwise overwrite the 7 bytes after
-         * `a`. Pick the store width from r1's value type. */
+        /* *dst = r1. dst is a slot pointer; r1 is the value. Pick width
+         * from r1's value type (irLowerAssign retypes the rhs to match
+         * the assignment target so this width comes out right for both
+         * direct slot stores and IR_GEP-aliased field writes). */
         irCgLoadFirstSrc(ctx, instr, instr->r1);
         int loff = irCgGetLoff(ctx, instr->dst);
         u32 sz = irValueByteSize(instr->r1);
