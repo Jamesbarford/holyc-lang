@@ -886,24 +886,6 @@ int irFunctionEligibleForSliceCc(Cctrl *cc, Ast *ast_func) {
     s_elig_cc = cc;
     int r = irFunctionEligibleForSlice(ast_func);
     s_elig_cc = NULL;
-    /* WORKAROUND: the IR codegen miscompiles a few helpers in
-     * holyc-lib (fzf, json, hashtable, set) — root-cause not yet
-     * identified. Disable them by source-file convention (lowercase
-     * helpers + Fz/Json/Hash/Set prefixes) to keep `make install`
-     * usable. Track via task #43. */
-    if (r && ast_func->fname && ast_func->fname->len > 0) {
-        char c0 = ast_func->fname->data[0];
-        if (c0 >= 'a' && c0 <= 'z') return 0;
-        const char *prefixes[] = { "Fz", "Json", "Hash", "Set", "Cstr",
-                                    NULL };
-        for (int i = 0; prefixes[i]; ++i) {
-            int n = (int)strlen(prefixes[i]);
-            if ((int)ast_func->fname->len >= n &&
-                !memcmp(ast_func->fname->data, prefixes[i], n)) {
-                return 0;
-            }
-        }
-    }
     return r;
 }
 

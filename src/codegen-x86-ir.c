@@ -909,13 +909,23 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
         irCgStoreReg(ctx, instr->dst, "rax");
         break;
 
-    case IR_LOAD_DEREF:
+    case IR_LOAD_DEREF: {
         /* dst = *r1, where r1 is a runtime pointer value (not a slot id).
-         * Load the pointer into rcx, then dereference. */
+         * Load the pointer into rcx, then dereference using a width
+         * appropriate for the destination type — `movq` over a 1- or
+         * 2-byte value reads adjacent bytes as garbage, which broke
+         * U8/U16 deref of array elements (e.g. `pattern[i]`). */
         irCgLoadToReg(ctx, instr->r1, "rcx");
-        aoStrCatPrintf(ctx->buf, "movq   (%%rcx), %%rax\n\t");
+        u32 sz = instr->dst ? instr->dst->as.var.size : 8;
+        switch (sz) {
+        case 1: aoStrCatPrintf(ctx->buf, "movzbq (%%rcx), %%rax\n\t"); break;
+        case 2: aoStrCatPrintf(ctx->buf, "movzwq (%%rcx), %%rax\n\t"); break;
+        case 4: aoStrCatPrintf(ctx->buf, "movslq (%%rcx), %%rax\n\t"); break;
+        default: aoStrCatPrintf(ctx->buf, "movq   (%%rcx), %%rax\n\t"); break;
+        }
         irCgSpillDst(ctx, instr, "rax");
         break;
+    }
 
     case IR_STORE_DEREF:
         /* *dst = r1; dst holds a runtime pointer, r1 is the value. */
