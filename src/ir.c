@@ -607,6 +607,57 @@ static int irArgIsSliceEligible(Ast *ast) {
     return irExprIsSliceEligible(ast);
 }
 
+/* True when a function returns a non-intrinsic class / union by value -
+ * i.e., the slice's hidden out-pointer convention applies. The caller
+ * allocates a buffer of sizeof(rettype), passes its address as a hidden
+ * first arg (in rdi), and the callee writes the struct bytes there;
+ * the call returns the buffer pointer in rax. */
+static int irRetTypeIsAggregate(AstType *rettype) {
+    if (!rettype) return 0;
+    if (rettype->kind != AST_TYPE_CLASS && rettype->kind != AST_TYPE_UNION)
+        return 0;
+    if (rettype->is_intrinsic) return 0;
+    return rettype->size > 0;
+}
+
+static int irFuncReturnsAggregate(Ast *ast_func) {
+    if (!ast_func || !ast_func->type) return 0;
+    return irRetTypeIsAggregate(ast_func->type->rettype);
+}
+
+/* Inline memcpy via IR loads/stores. Walks `n_bytes` from `src` to `dst`
+ * in 8-byte chunks, dropping to 4 / 2 / 1 byte chunks for the tail.
+ * Used for struct-by-value return / class-typed AST_DECL initializer
+ * copies; both sides are pointer values. */
+static void irEmitInlineMemcpy(IrCtx *ctx, IrValue *dst, IrValue *src,
+                               int n_bytes) {
+    int off = 0;
+    while (off < n_bytes) {
+        int chunk;
+        IrValueType vt;
+        if (n_bytes - off >= 8) { chunk = 8; vt = IR_TYPE_I64; }
+        else if (n_bytes - off >= 4) { chunk = 4; vt = IR_TYPE_I32; }
+        else if (n_bytes - off >= 2) { chunk = 2; vt = IR_TYPE_I16; }
+        else { chunk = 1; vt = IR_TYPE_I8; }
+
+        IrValue *src_p = src;
+        IrValue *dst_p = dst;
+        if (off != 0) {
+            IrValue *k = irConstInt(IR_TYPE_I64, off);
+            src_p = irTmp(IR_TYPE_PTR, 8);
+            irBlockAddInstr(ctx, irInstrNew(IR_IADD, src_p, src, k));
+            dst_p = irTmp(IR_TYPE_PTR, 8);
+            irBlockAddInstr(ctx, irInstrNew(IR_IADD, dst_p, dst, k));
+        }
+        IrValue *val = irTmp(vt, chunk);
+        irBlockAddInstr(ctx,
+            irInstrNew(IR_LOAD_DEREF, val, src_p, NULL));
+        irBlockAddInstr(ctx,
+            irInstrNew(IR_STORE_DEREF, dst_p, val, NULL));
+        off += chunk;
+    }
+}
+
 /* Walk an AST_ARRAY_INIT (possibly nested for multi-dim arrays) and
  * require every leaf scalar to be slice-eligible. */
 static int irArrayInitIsSliceEligible(Ast *ast) {
@@ -1027,9 +1078,17 @@ static int irStmtIsSliceEligible(Ast *ast) {
             return 1;
         }
         if (t->kind == AST_TYPE_CLASS || t->kind == AST_TYPE_UNION) {
-            /* Stack-allocated class / union. No aggregate init yet. */
-            if (ast->declinit) return 0;
-            return 1;
+            /* Stack-allocated class / union. The init must either be
+             * absent or a struct-by-value FUNCALL (handled by the
+             * hidden out-pointer convention). No aggregate init yet. */
+            if (!ast->declinit) return 1;
+            if ((ast->declinit->kind == AST_FUNCALL ||
+                 ast->declinit->kind == AST_FUNPTR_CALL ||
+                 ast->declinit->kind == AST_ASM_FUNCALL) &&
+                irRetTypeIsAggregate(ast->declinit->type)) {
+                return irExprIsSliceEligible(ast->declinit);
+            }
+            return 0;
         }
         if (t->kind == AST_TYPE_ARRAY) {
             /* `T arr[N];` (no init) or `T arr[N] = {1,2,3};` (incl.
@@ -1128,7 +1187,8 @@ int irFunctionEligibleForSlice(Ast *ast_func) {
         rettype->kind != AST_TYPE_CHAR &&
         rettype->kind != AST_TYPE_POINTER &&
         rettype->kind != AST_TYPE_FLOAT &&
-        !(rettype->kind == AST_TYPE_CLASS && rettype->is_intrinsic)) {
+        !(rettype->kind == AST_TYPE_CLASS && rettype->is_intrinsic) &&
+        !irRetTypeIsAggregate(rettype)) {
         return 0;
     }
 
@@ -1221,10 +1281,25 @@ int irFunctionEligibleForSlice(Ast *ast_func) {
     return irStmtIsSliceEligible(ast_func->body);
 }
 
-IrValue *irFnCall(IrCtx *ctx, Ast *ast) {
-    IrValueType ret_type = irConvertType(ast->type);
+/* Lower an AST_FUNCALL / AST_FUNPTR_CALL / AST_ASM_FUNCALL.
+ *
+ * `preallocated_out_buf`, if non-NULL, is a pointer-typed IrValue used
+ * as the hidden out-pointer for a struct-by-value return. The caller
+ * (typically AST_DECL for a class-typed local) uses this to route the
+ * call's struct result directly into the local's slot, avoiding a
+ * temp-buffer-plus-memcpy round-trip (the temp and the local would
+ * overlap if the layout pass placed them adjacently). */
+IrValue *irFnCallTo(IrCtx *ctx, Ast *ast, IrValue *preallocated_out_buf) {
+    /* Struct-by-value return: the call's nominal return type is a class
+     * but the runtime convention is "buffer pointer in rax". Make the
+     * IR_CALL produce a ptr-typed result and prepend `&buffer` as a
+     * hidden first arg below. */
+    int agg_return = irRetTypeIsAggregate(ast->type);
+    IrValueType ret_type = agg_return
+        ? IR_TYPE_PTR : irConvertType(ast->type);
+    int ret_size = agg_return ? 8 : ast->type->size;
     IrValue *ir_call_args = irValueNew(IR_TYPE_ARRAY, IR_VAL_UNRESOLVED);
-    IrValue *ir_ret_val = irTmp(ret_type, ast->type->size);
+    IrValue *ir_ret_val = irTmp(ret_type, ret_size);
     IrInstr *ir_call_instr = irInstrNew(IR_CALL, ir_ret_val, ir_call_args, NULL);
 
     assert(ast->kind == AST_FUNCALL || ast->kind == AST_FUNPTR_CALL ||
@@ -1232,6 +1307,23 @@ IrValue *irFnCall(IrCtx *ctx, Ast *ast) {
 
     Vec *args = irValueVecNew();
     ir_call_args->as.array.values = args;
+    /* Push the hidden out-buffer pointer as args[0]. Use the caller's
+     * pre-allocated buffer if provided; otherwise allocate a fresh
+     * temp slot up-front (so user-arg evaluation can't clobber it). */
+    if (agg_return) {
+        IrValue *buf_addr;
+        if (preallocated_out_buf) {
+            buf_addr = preallocated_out_buf;
+        } else {
+            IrInstr *buf_alloca = irAlloca(ast->type);
+            irAddStackSpace(ctx, ast->type->size);
+            irBlockAddInstr(ctx, buf_alloca);
+            buf_addr = irTmp(IR_TYPE_PTR, 8);
+            irBlockAddInstr(ctx,
+                irInstrNew(IR_LEA, buf_addr, buf_alloca->dst, NULL));
+        }
+        vecPush(args, buf_addr);
+    }
     /* Direct call: store the static function name on the wrapper. Indirect
      * call: leave label NULL and stash the function-pointer source in r2 so
      * the codegen knows to load it into a register and emit `call *<reg>`. */
@@ -1299,6 +1391,10 @@ IrValue *irFnCall(IrCtx *ctx, Ast *ast) {
 
     irBlockAddInstr(ctx, ir_call_instr);
     return ir_ret_val;
+}
+
+IrValue *irFnCall(IrCtx *ctx, Ast *ast) {
+    return irFnCallTo(ctx, ast, NULL);
 }
 
 /* Binary expressions are assumed to always be assigning to something. I'm not
@@ -1751,18 +1847,27 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
              * size (the AST tags it as 16). */
             int is_intrinsic_class =
                 ast->type->kind == AST_TYPE_CLASS && ast->type->is_intrinsic;
+            /* Non-intrinsic class / union read as a value: produce the
+             * lvar's address (LEA on the slot). The hidden out-pointer
+             * struct-return path and AST_RETURN-of-class handler both
+             * consume the value as `&lvar`; there is no general
+             * "load a struct into a register" lowering. */
+            int is_aggregate =
+                !is_intrinsic_class &&
+                (ast->type->kind == AST_TYPE_CLASS ||
+                 ast->type->kind == AST_TYPE_UNION);
+            if (is_aggregate) {
+                IrValue *addr = irTmp(IR_TYPE_PTR, 8);
+                irBlockAddInstr(ctx,
+                    irInstrNew(IR_LEA, addr, local_var, NULL));
+                return addr;
+            }
             IrValueType ir_value_type = is_intrinsic_class
                 ? IR_TYPE_I64 : irConvertType(ast->type);
             int load_size = is_intrinsic_class ? 8 : ast->type->size;
             IrValue *ir_load_dest = irTmp(ir_value_type, load_size);
-
-            if (!is_intrinsic_class && irIsStruct(local_var->type)) {
-                loggerWarning("Unhandled load of a struct!\n");
-                // irGetElementPointer(ir_block, ir_load_dest, local_var);
-            } else {
-                IrInstr *load_instr = irLoad(ir_load_dest, local_var);
-                irBlockAddInstr(ctx, load_instr);
-            }
+            IrInstr *load_instr = irLoad(ir_load_dest, local_var);
+            irBlockAddInstr(ctx, load_instr);
             return ir_load_dest;
         }
 
@@ -2342,9 +2447,23 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
 
         case AST_RETURN: {
             if (ast->retval && ctx->cur_func->return_value) {
-                IrValue *val = irExpr(ctx, ast->retval);
-                IrInstr *st = irStore(ctx->cur_func->return_value, val);
-                irBlockAddInstr(ctx, st);
+                /* Struct-by-value return: copy the retval's bytes into
+                 * the hidden out-pointer's destination. irExpr on a
+                 * class-typed AST_LVAR produces the lvar's address; the
+                 * out_ptr param's slot holds the destination address. */
+                AstType *rt = ast->retval->type;
+                if (rt && irRetTypeIsAggregate(rt)) {
+                    IrValue *src_addr = irExpr(ctx, ast->retval);
+                    IrValue *dst_addr = irTmp(IR_TYPE_PTR, 8);
+                    irBlockAddInstr(ctx,
+                        irLoad(dst_addr, ctx->cur_func->return_value));
+                    irEmitInlineMemcpy(ctx, dst_addr, src_addr, rt->size);
+                } else {
+                    IrValue *val = irExpr(ctx, ast->retval);
+                    IrInstr *st = irStore(ctx->cur_func->return_value,
+                                          val);
+                    irBlockAddInstr(ctx, st);
+                }
             }
             IrInstr *jmp = irJump(ctx->cur_func, ctx->cur_block,
                                   ctx->cur_func->exit_block);
@@ -2573,9 +2692,22 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
                     case AST_ASM_FUNCALL:
                     case AST_FUNPTR_CALL:
                     case AST_FUNCALL: {
-                        IrValue *ret = irFnCall(ctx, init);
-                        IrInstr *ir_store = irStore(local, ret);
-                        irBlockAddInstr(ctx, ir_store);
+                        /* Struct-by-value return: route the call's
+                         * hidden out-pointer directly at the local's
+                         * slot so the call writes the result in-place
+                         * (no temp / memcpy needed). For scalar
+                         * returns, store the call's value into the
+                         * slot as usual. */
+                        if (init->type && irRetTypeIsAggregate(init->type)) {
+                            IrValue *out = irTmp(IR_TYPE_PTR, 8);
+                            irBlockAddInstr(ctx,
+                                irInstrNew(IR_LEA, out, local, NULL));
+                            irFnCallTo(ctx, init, out);
+                        } else {
+                            IrValue *ret = irFnCall(ctx, init);
+                            IrInstr *ir_store = irStore(local, ret);
+                            irBlockAddInstr(ctx, ir_store);
+                        }
                         break;
                     }
 
@@ -2854,10 +2986,22 @@ IrFunction *irLowerFunction(IrCtx *ctx, Ast *ast_func) {
 
     /* Reserve a stack slot for the return value (skipped for void). Allocated
      * in the entry block before any user code so AST_RETURN can store into it
-     * and the exit block can load from it. */
+     * and the exit block can load from it.
+     *
+     * Struct-by-value return: instead of an alloca, we synthesize a
+     * hidden out-pointer parameter (8 bytes, ptr-typed, IR_VAL_PARAM).
+     * The codegen prologue spills %rdi into its slot, the body's
+     * AST_RETURN-of-class memcpys the local into *out_ptr, and the exit
+     * block loads the out_ptr's slot into %rax (per SysV "by memory"
+     * return). */
     AstType *rettype = ast_func->type->rettype;
     IrValue *ir_return_var = NULL;
-    if (rettype && rettype->kind != AST_TYPE_VOID) {
+    if (rettype && irRetTypeIsAggregate(rettype)) {
+        IrValue *out_ptr = irTmp(IR_TYPE_PTR, 8);
+        out_ptr->kind = IR_VAL_PARAM;
+        irAddStackSpace(ctx, 8);
+        ir_return_var = out_ptr;
+    } else if (rettype && rettype->kind != AST_TYPE_VOID) {
         IrInstr *ir_return_alloca = irAlloca(rettype);
         irAddStackSpace(ctx, rettype->size);
         irBlockAddInstr(ctx, ir_return_alloca);

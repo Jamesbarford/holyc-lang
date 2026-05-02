@@ -101,6 +101,17 @@ static void irCgAllocTmp(IrCgCtx *ctx, IrValue *val, int starting_offset) {
  * AST-driven loff. Walk the AST function's params and locals lists; the
  * eligibility predicate guarantees they're plain AST_LVAR ints. */
 static void irCgBindAstLoffs(IrCgCtx *ctx, Ast *ast_func) {
+    /* Hidden out-pointer param for struct-by-value return: the layout
+     * pass stashed its loff on `ast_func->loff` and the IR-side
+     * IR_VAL_PARAM lives on `ctx->func->return_value`. */
+    AstType *rt = ast_func->type ? ast_func->type->rettype : NULL;
+    int has_hidden_out_ptr = rt &&
+        (rt->kind == AST_TYPE_CLASS || rt->kind == AST_TYPE_UNION) &&
+        !rt->is_intrinsic && rt->size > 0;
+    if (has_hidden_out_ptr && ctx->func->return_value) {
+        irCgSetLoff(ctx, ctx->func->return_value->as.var.id,
+                    ast_func->loff);
+    }
     if (ast_func->params) {
         for (u64 i = 0; i < ast_func->params->size; ++i) {
             Ast *p = vecGet(Ast *, ast_func->params, i);
@@ -1540,6 +1551,14 @@ static int irCgComputeAstLayout(Ast *ast_func, IrFunction *ir_func) {
     }
 
     int param_total = 0;
+    AstType *rt = ast_func->type ? ast_func->type->rettype : NULL;
+    int has_hidden_out_ptr = rt &&
+        (rt->kind == AST_TYPE_CLASS || rt->kind == AST_TYPE_UNION) &&
+        !rt->is_intrinsic && rt->size > 0;
+    if (has_hidden_out_ptr) {
+        /* Reserve 8 bytes for the hidden out-pointer (rdi spill). */
+        param_total += 8;
+    }
     if (ast_func->params) {
         for (u64 i = 0; i < ast_func->params->size; ++i) {
             Ast *p = vecGet(Ast *, ast_func->params, i);
@@ -1561,8 +1580,21 @@ static int irCgComputeAstLayout(Ast *ast_func, IrFunction *ir_func) {
 
     /* Params live at the bottom of the locals+params region: first param
      * at the most-negative offset, working upward toward locals. Matches
-     * asmFunctionInit's layout. */
+     * asmFunctionInit's layout. The hidden out-pointer (struct return)
+     * is the very first param - takes the deepest slot, and bind its
+     * loff to the IR-side IrValue (which lives on `ir_func->return_value`
+     * for class-returning functions). */
     int offset = locals_aligned;
+    if (has_hidden_out_ptr) {
+        /* Stash the loff inside the IR_VAL_PARAM's `var.size` upper
+         * bits? No - simpler: store it temporarily in an out-of-band
+         * field. But IrValue has none free. Use the AST function's
+         * `loff` field as a side channel - it's otherwise unused for
+         * AST_FUNC nodes. The codegen prologue + irCgBindAstLoffs
+         * read it back. */
+        ast_func->loff = -offset;
+        offset -= 8;
+    }
     if (ast_func->params) {
         for (u64 i = 0; i < ast_func->params->size; ++i) {
             Ast *p = vecGet(Ast *, ast_func->params, i);
@@ -1609,8 +1641,18 @@ static void irCgEmitParamSpills(AoStr *buf, Ast *func) {
     static const char *kFloatRegs[] = {
         "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7"
     };
-    if (!func->params) return;
     int int_idx = 0, float_idx = 0;
+    /* Struct-by-value return: %rdi holds the caller-provided buffer
+     * pointer; spill it to the hidden slot the layout pass reserved
+     * (loff stashed on `func->loff` for AST_FUNC). User params then
+     * occupy rsi onwards. */
+    AstType *rt = func->type ? func->type->rettype : NULL;
+    if (rt && (rt->kind == AST_TYPE_CLASS || rt->kind == AST_TYPE_UNION)
+        && !rt->is_intrinsic && rt->size > 0) {
+        aoStrCatPrintf(buf, "movq   %%rdi, %d(%%rbp)\n\t", func->loff);
+        int_idx = 1;
+    }
+    if (!func->params) return;
     for (u64 i = 0; i < func->params->size; ++i) {
         Ast *p = vecGet(Ast *, func->params, i);
         if (p->kind == AST_VAR_ARGS) {
