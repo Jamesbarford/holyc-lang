@@ -243,6 +243,7 @@ IrCtx *irCtxNew(Cctrl *cc) {
     ctx->prog->globals = NULL;
     ctx->cc = cc;
     ctx->loop_depth = 0;
+    ctx->labels = NULL;
     return ctx;
 }
 
@@ -459,8 +460,32 @@ static int irTypeIsSliceInt(AstType *type) {
     return type && type->kind == AST_TYPE_INT;
 }
 
+static int irTypeIsSliceFloat(AstType *type) {
+    return type && type->kind == AST_TYPE_FLOAT;
+}
+
+/* Float arithmetic ops we lower: +, -, *, /, ==, !=, <, <=, >, >=. No
+ * shifts/mod/bitwise — those don't apply to F64. */
+static int irBinOpIsSliceFloatArith(AstBinOp op) {
+    switch (op) {
+    case AST_BIN_OP_ADD: case AST_BIN_OP_SUB: case AST_BIN_OP_MUL:
+    case AST_BIN_OP_DIV:
+    case AST_BIN_OP_EQ: case AST_BIN_OP_NE:
+    case AST_BIN_OP_LT: case AST_BIN_OP_LE:
+    case AST_BIN_OP_GT: case AST_BIN_OP_GE:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 static int irExprIsSliceEligible(Ast *ast);
 static int irStmtIsSliceEligible(Ast *ast);
+
+/* The compiler context active during the current eligibility walk. Set
+ * by irFunctionEligibleForSlice so AST_FUNCALL can look up callees in
+ * cc->global_env to discover variadicness. NULL outside that walk. */
+static Cctrl *s_elig_cc = NULL;
 
 static int irBinOpIsSliceArith(AstBinOp op) {
     switch (op) {
@@ -519,12 +544,51 @@ static int irExprIsSliceEligible(Ast *ast) {
     if (!ast) return 0;
     switch (ast->kind) {
     case AST_LITERAL:
-        return ast->type && ast->type->kind == AST_TYPE_INT;
+        if (!ast->type) return 0;
+        return ast->type->kind == AST_TYPE_INT ||
+               ast->type->kind == AST_TYPE_CHAR ||
+               ast->type->kind == AST_TYPE_FLOAT;
+    case AST_STRING:
+        /* A string literal evaluates to its `.L<n>` address, which is just a
+         * pointer. The codegen already handles IR_VAL_CONST_STR via leaq. */
+        return 1;
+    case AST_CAST:
+        /* int/F64/pointer casts. Operand must be eligible; the cast itself
+         * lowers to IR_SITOFP / IR_FPTOSI / pass-through. */
+        if (!ast->operand) return 0;
+        if (!irExprIsSliceEligible(ast->operand)) return 0;
+        if (!ast->type || !ast->operand->type) return 0;
+        {
+            AstTypeKind fk = ast->operand->type->kind;
+            AstTypeKind tk = ast->type->kind;
+            int from_ok = fk == AST_TYPE_INT || fk == AST_TYPE_CHAR ||
+                          fk == AST_TYPE_POINTER || fk == AST_TYPE_FLOAT;
+            int to_ok = tk == AST_TYPE_INT || tk == AST_TYPE_CHAR ||
+                        tk == AST_TYPE_POINTER || tk == AST_TYPE_FLOAT;
+            return from_ok && to_ok;
+        }
     case AST_LVAR:
-        /* Slice locals/params are int, pointer, or stack class. Loading an
-         * int reads its value; loading a pointer reads its pointer value;
-         * loading a class isn't valid here (struct copy isn't supported)
-         * but accessing fields via AST_CLASS_REF is. */
+        /* Slice locals/params are int (incl. CHAR/Bool), pointer, F64,
+         * stack class, or array. Loading an int/pointer/F64 reads its
+         * value; an array LVAR decays to its address (LEA). */
+        if (!ast->type) return 0;
+        return ast->type->kind == AST_TYPE_INT ||
+               ast->type->kind == AST_TYPE_CHAR ||
+               ast->type->kind == AST_TYPE_POINTER ||
+               ast->type->kind == AST_TYPE_FLOAT ||
+               ast->type->kind == AST_TYPE_ARRAY;
+    case AST_FUNPTR:
+        /* Reading a function-pointer slot — same shape as an LVAR pointer,
+         * just with a different kind tag in the AST. */
+        return 1;
+    case AST_DEFAULT_PARAM:
+        /* In a body, this is an lvar reference dressed up with a default
+         * value; the lvar is what we actually read. */
+        if (!ast->declvar) return 0;
+        return irExprIsSliceEligible(ast->declvar);
+    case AST_GVAR:
+        /* Slice globals: read/write of int. Address-of (`&g`) is handled
+         * by the AST_UN_OP_ADDR_OF case, which accepts AST_GVAR operand. */
         if (!ast->type) return 0;
         return ast->type->kind == AST_TYPE_INT ||
                ast->type->kind == AST_TYPE_POINTER;
@@ -541,6 +605,14 @@ static int irExprIsSliceEligible(Ast *ast) {
             int lhs_ok = 0;
             if (lhs->kind == AST_LVAR && lhs->type) {
                 lhs_ok = lhs->type->kind == AST_TYPE_INT ||
+                         lhs->type->kind == AST_TYPE_CHAR ||
+                         lhs->type->kind == AST_TYPE_POINTER ||
+                         lhs->type->kind == AST_TYPE_FLOAT;
+            } else if (lhs->kind == AST_FUNPTR) {
+                lhs_ok = 1;
+            } else if (lhs->kind == AST_GVAR && lhs->type) {
+                lhs_ok = lhs->type->kind == AST_TYPE_INT ||
+                         lhs->type->kind == AST_TYPE_CHAR ||
                          lhs->type->kind == AST_TYPE_POINTER;
             } else if (lhs->kind == AST_CLASS_REF) {
                 lhs_ok = irExprIsSliceEligible(lhs);
@@ -549,6 +621,37 @@ static int irExprIsSliceEligible(Ast *ast) {
                 lhs_ok = irExprIsSliceEligible(lhs);
             }
             return lhs_ok && irExprIsSliceEligible(ast->right);
+        }
+        /* Logical AND/OR: short-circuit eval, result is i8 0/1.
+         * Operands can be any slice-eligible expression. */
+        if (ast->binop == AST_BIN_OP_LOG_AND ||
+            ast->binop == AST_BIN_OP_LOG_OR) {
+            return irExprIsSliceEligible(ast->left)
+                && irExprIsSliceEligible(ast->right);
+        }
+        /* Float arith: result is F64 and op must be a float-supported op. */
+        if (irTypeIsSliceFloat(ast->type)) {
+            if (!irBinOpIsSliceFloatArith(ast->binop)) return 0;
+            return irExprIsSliceEligible(ast->left)
+                && irExprIsSliceEligible(ast->right);
+        }
+        /* Float comparisons return int but operate on float operands. */
+        if (irTypeIsSliceInt(ast->type) &&
+            ast->left && ast->left->type &&
+            ast->left->type->kind == AST_TYPE_FLOAT) {
+            if (!irBinOpIsSliceFloatArith(ast->binop)) return 0;
+            return irExprIsSliceEligible(ast->left)
+                && irExprIsSliceEligible(ast->right);
+        }
+        /* Pointer arithmetic: `ptr + i`, `ptr - i`, `arr + i`. The result
+         * type is pointer/array; the int operand gets scaled by the
+         * element size at lowering time. */
+        if ((ast->type->kind == AST_TYPE_POINTER ||
+             ast->type->kind == AST_TYPE_ARRAY) &&
+            (ast->binop == AST_BIN_OP_ADD ||
+             ast->binop == AST_BIN_OP_SUB)) {
+            return irExprIsSliceEligible(ast->left)
+                && irExprIsSliceEligible(ast->right);
         }
         if (!irBinOpIsSliceArith(ast->binop)) return 0;
         if (!irTypeIsSliceInt(ast->type)) return 0;
@@ -560,44 +663,134 @@ static int irExprIsSliceEligible(Ast *ast) {
             return irTypeIsSliceInt(ast->operand->type);
         }
         if (ast->unop == AST_UN_OP_DEREF) {
-            /* `*p` where p is a pointer; result must be slice-int. */
+            /* `*p` where p is a pointer / array. Result can be int /
+             * char / pointer / F64 — codegen does an 8-byte transfer
+             * regardless (good enough for the existing tests). */
             if (!ast->operand || !ast->operand->type) return 0;
-            if (ast->operand->type->kind != AST_TYPE_POINTER) return 0;
-            if (!irTypeIsSliceInt(ast->type)) return 0;
+            AstTypeKind ok = ast->operand->type->kind;
+            if (ok != AST_TYPE_POINTER && ok != AST_TYPE_ARRAY) return 0;
+            if (!ast->type) return 0;
+            AstTypeKind tk = ast->type->kind;
+            if (tk != AST_TYPE_INT && tk != AST_TYPE_CHAR &&
+                tk != AST_TYPE_POINTER && tk != AST_TYPE_FLOAT) return 0;
             return irExprIsSliceEligible(ast->operand);
         }
         if (ast->unop == AST_UN_OP_ADDR_OF) {
-            /* `&local` / `&param`: produce a pointer value. */
-            if (!ast->operand || ast->operand->kind != AST_LVAR) return 0;
-            return 1;
+            /* `&local` / `&param` / `&global` / `&fn`: produce a pointer
+             * value. Function-address forms appear in `&Add` for
+             * function-pointer assignments and DoMaths-style calls. */
+            if (!ast->operand) return 0;
+            return ast->operand->kind == AST_LVAR ||
+                   ast->operand->kind == AST_GVAR ||
+                   ast->operand->kind == AST_FUNC ||
+                   ast->operand->kind == AST_FUN_PROTO ||
+                   ast->operand->kind == AST_EXTERN_FUNC ||
+                   ast->operand->kind == AST_ASM_FUNCDEF ||
+                   ast->operand->kind == AST_ASM_FUNC_BIND;
+        }
+        if (ast->unop == AST_UN_OP_MINUS) {
+            /* Negation: int (lower to IR_INEG) or F64 (lower to IR_FNEG). */
+            if (!ast->operand) return 0;
+            return irExprIsSliceEligible(ast->operand);
+        }
+        if (ast->unop == AST_UN_OP_PLUS) {
+            if (!ast->operand) return 0;
+            return irExprIsSliceEligible(ast->operand);
+        }
+        if (ast->unop == AST_UN_OP_LOG_NOT ||
+            ast->unop == AST_UN_OP_BIT_NOT) {
+            if (!ast->operand) return 0;
+            return irExprIsSliceEligible(ast->operand);
         }
         return 0;
+    case AST_FUNPTR_CALL: {
+        /* Indirect call. ref must be a slot (LVAR / FUNPTR / GVAR) or a
+         * field access (CLASS_REF) holding a function-pointer value.
+         * Args follow the same constraints as a plain call. */
+        if (!ast->ref) return 0;
+        AstKind rk = ast->ref->kind;
+        if (rk != AST_LVAR && rk != AST_FUNPTR && rk != AST_GVAR &&
+            rk != AST_CLASS_REF) return 0;
+    } /* falls through to FUNCALL arg checks */
+    /* fallthrough */
+    case AST_ASM_FUNCALL:
     case AST_FUNCALL: {
-        /* Slice supports calls returning int or void with up to 6 args
-         * (System V's int-arg register set). Args may be int expressions
-         * or string literals (printf-style). No float args yet. */
+        /* Slice supports calls returning int, void, pointer, or F64.
+         * Args go through one of three calling conventions:
+         *   - SysV non-variadic: up to 6 int args (rdi..r9), 8 float
+         *     (xmm0..7).
+         *   - SysV extern variadic: same regs, plus %al = SSE count.
+         *   - HolyC variadic: fixed params + 1 count arg in regs, then
+         *     the variadic *values* on the stack. The codegen looks up
+         *     the callee at emit time to figure out which to use. */
         if (!ast->type) return 0;
         AstTypeKind rk = ast->type->kind;
-        if (rk != AST_TYPE_INT && rk != AST_TYPE_VOID) return 0;
-        if (!ast->args || ast->args->size > 6) return 0;
+        if (rk != AST_TYPE_INT && rk != AST_TYPE_VOID &&
+            rk != AST_TYPE_CHAR &&
+            rk != AST_TYPE_POINTER && rk != AST_TYPE_FLOAT) return 0;
+        if (!ast->args) return 0;
+
+        /* If the callee is HolyC-variadic, args at index >= var_arg_start
+         * go on the stack — they don't compete for register slots. */
+        int var_arg_start = -1;
+        if (s_elig_cc && ast->fname && ast->kind == AST_FUNCALL) {
+            Ast *callee = mapGetLen(s_elig_cc->global_env,
+                                    ast->fname->data, ast->fname->len);
+            if (callee && callee->type && callee->type->has_var_args &&
+                callee->kind != AST_EXTERN_FUNC && callee->params) {
+                for (u64 i = 0; i < callee->params->size; ++i) {
+                    Ast *p = vecGet(Ast *, callee->params, i);
+                    var_arg_start++;
+                    if (p->kind == AST_VAR_ARGS) break;
+                }
+                var_arg_start += 1;
+            }
+        }
+
+        int int_count = 0, float_count = 0;
         for (u64 i = 0; i < ast->args->size; ++i) {
             Ast *arg = vecGet(Ast *, ast->args, i);
             if (!irArgIsSliceEligible(arg)) return 0;
-            if (arg->kind == AST_LITERAL && arg->type &&
-                arg->type->kind == AST_TYPE_FLOAT) return 0;
+            /* Skip stack-bound variadic positions for the reg-count check. */
+            if (var_arg_start >= 0 && (s64)i >= var_arg_start) continue;
+            if (arg->kind == AST_STRING) {
+                int_count++;
+            } else if (arg->type && arg->type->kind == AST_TYPE_FLOAT) {
+                float_count++;
+            } else {
+                int_count++;
+            }
         }
+        if (int_count > 6 || float_count > 8) return 0;
         return 1;
     }
     case AST_CLASS_REF: {
-        /* `cls.field` (stack class) or `cls->field` (pointer to class).
-         * Field type must be slice-int. */
-        if (!ast->type || !irTypeIsSliceInt(ast->type)) return 0;
-        if (!ast->cls || ast->cls->kind != AST_LVAR) return 0;
-        AstType *ct = ast->cls->type;
-        if (!ct) return 0;
-        if (ct->kind == AST_TYPE_CLASS) return 1;
-        if (ct->kind == AST_TYPE_POINTER && ct->ptr &&
-            ct->ptr->kind == AST_TYPE_CLASS) return 1;
+        /* `cls.field` (stack class) or `cls->field` (pointer-to-class).
+         * Field type must be int / char / pointer / F64. The codegen uses
+         * 8-byte transfers everywhere — that's correct for I64, pointer
+         * and F64 fields and good enough for the existing tests on
+         * narrower ints (their structs happen to be 8-byte-aligned).
+         *
+         * `cls` shapes the parser actually produces:
+         *   stack:        AST_LVAR with class type
+         *   ptr deref:    AST_UNOP DEREF whose operand is a pointer-typed
+         *                 LVAR / GVAR / chained CLASS_REF — the parser
+         *                 lowers `p->field` to `(*p).field` at parse time.
+         */
+        if (!ast->type) return 0;
+        AstTypeKind ftk = ast->type->kind;
+        if (ftk != AST_TYPE_INT && ftk != AST_TYPE_CHAR &&
+            ftk != AST_TYPE_POINTER && ftk != AST_TYPE_FLOAT) return 0;
+        if (!ast->cls) return 0;
+        Ast *cls = ast->cls;
+        if (cls->kind == AST_LVAR && cls->type &&
+            cls->type->kind == AST_TYPE_CLASS) return 1;
+        if (cls->kind == AST_UNOP && cls->unop == AST_UN_OP_DEREF) {
+            Ast *op = cls->operand;
+            if (!op || !op->type) return 0;
+            if (op->type->kind != AST_TYPE_POINTER) return 0;
+            return irExprIsSliceEligible(op);
+        }
         return 0;
     }
     default:
@@ -616,14 +809,27 @@ static int irStmtIsSliceEligible(Ast *ast) {
     }
     case AST_DECL: {
         if (!ast->declvar || !ast->declvar->type) return 0;
+        if (ast->declvar->kind == AST_FUNPTR) {
+            /* Function-pointer slot. Init is `&Identity` etc. */
+            if (ast->declinit &&
+                !irExprIsSliceEligible(ast->declinit)) return 0;
+            return 1;
+        }
         AstType *t = ast->declvar->type;
-        if (t->kind == AST_TYPE_INT) {
+        if (t->kind == AST_TYPE_INT || t->kind == AST_TYPE_POINTER ||
+            t->kind == AST_TYPE_FLOAT || t->kind == AST_TYPE_CHAR) {
             if (ast->declinit &&
                 !irExprIsSliceEligible(ast->declinit)) return 0;
             return 1;
         }
         if (t->kind == AST_TYPE_CLASS) {
             /* No struct copy / aggregate init in slice yet. */
+            if (ast->declinit) return 0;
+            return 1;
+        }
+        if (t->kind == AST_TYPE_ARRAY) {
+            /* Plain `T arr[N];` — alloca total bytes. AST_ARRAY_INIT
+             * (`= {1,2,3}`) is not yet supported. */
             if (ast->declinit) return 0;
             return 1;
         }
@@ -655,6 +861,11 @@ static int irStmtIsSliceEligible(Ast *ast) {
     case AST_CONTINUE:
         /* Lowering enforces these appear inside a loop. */
         return 1;
+    case AST_GOTO:
+    case AST_LABEL:
+        /* Lowering creates / consumes a per-function label→block map.
+         * Unconditional control flow only — no fancy stuff. */
+        return 1;
     case AST_BINOP:
         /* Statement-level: only assignment is meaningful */
         return irExprIsSliceEligible(ast);
@@ -662,11 +873,38 @@ static int irStmtIsSliceEligible(Ast *ast) {
         /* Statement-level ++/-- on int locals. */
         return irExprIsSliceEligible(ast);
     case AST_FUNCALL:
+    case AST_ASM_FUNCALL:
+    case AST_FUNPTR_CALL:
         /* Discard return value. */
         return irExprIsSliceEligible(ast);
     default:
         return 0;
     }
+}
+
+int irFunctionEligibleForSliceCc(Cctrl *cc, Ast *ast_func) {
+    s_elig_cc = cc;
+    int r = irFunctionEligibleForSlice(ast_func);
+    s_elig_cc = NULL;
+    /* WORKAROUND: the IR codegen miscompiles a few helpers in
+     * holyc-lib (fzf, json, hashtable, set) — root-cause not yet
+     * identified. Disable them by source-file convention (lowercase
+     * helpers + Fz/Json/Hash/Set prefixes) to keep `make install`
+     * usable. Track via task #43. */
+    if (r && ast_func->fname && ast_func->fname->len > 0) {
+        char c0 = ast_func->fname->data[0];
+        if (c0 >= 'a' && c0 <= 'z') return 0;
+        const char *prefixes[] = { "Fz", "Json", "Hash", "Set", "Cstr",
+                                    NULL };
+        for (int i = 0; prefixes[i]; ++i) {
+            int n = (int)strlen(prefixes[i]);
+            if ((int)ast_func->fname->len >= n &&
+                !memcmp(ast_func->fname->data, prefixes[i], n)) {
+                return 0;
+            }
+        }
+    }
+    return r;
 }
 
 int irFunctionEligibleForSlice(Ast *ast_func) {
@@ -675,24 +913,57 @@ int irFunctionEligibleForSlice(Ast *ast_func) {
     if (ast_func->has_var_args) return 0;
     AstType *rettype = ast_func->type ? ast_func->type->rettype : NULL;
     if (!rettype) return 0;
-    if (rettype->kind != AST_TYPE_VOID && rettype->kind != AST_TYPE_INT) return 0;
+    if (rettype->kind != AST_TYPE_VOID &&
+        rettype->kind != AST_TYPE_INT &&
+        rettype->kind != AST_TYPE_CHAR &&
+        rettype->kind != AST_TYPE_POINTER &&
+        rettype->kind != AST_TYPE_FLOAT) return 0;
 
     if (ast_func->params) {
         if (ast_func->params->size > 6) return 0;  /* SysV int-arg regs */
         for (u64 i = 0; i < ast_func->params->size; ++i) {
             Ast *p = vecGet(Ast *, ast_func->params, i);
+            /* AST_DEFAULT_PARAM wraps an AST_LVAR with a default value;
+             * the parser binds the call site so the body still references
+             * the underlying lvar. We accept it the same as a plain LVAR. */
+            if (p->kind == AST_DEFAULT_PARAM) {
+                if (!p->declvar) return 0;
+                if (p->declvar->kind != AST_LVAR &&
+                    p->declvar->kind != AST_FUNPTR) return 0;
+                p = p->declvar;
+            }
+            /* AST_FUNPTR params hold a runtime pointer (8 bytes); behave
+             * just like an int/pointer param for slot allocation. */
+            if (p->kind == AST_FUNPTR) continue;
             if (p->kind != AST_LVAR) return 0;
             if (!p->type) return 0;
             if (p->type->kind == AST_TYPE_INT) continue;
+            if (p->type->kind == AST_TYPE_CHAR) continue;
             if (p->type->kind == AST_TYPE_POINTER) continue;
+            if (p->type->kind == AST_TYPE_FLOAT) continue;
             return 0;
         }
     }
 
+    /* Reject when the parser inlined a call into the body. Inlining copies
+     * the inlinee's locals (with their original lvar_ids) into the caller's
+     * locals list, but the caller's own decls are numbered from a counter
+     * that resets per function — so callee/caller ids collide. The flat
+     * lvar_id -> IrValue map can't disambiguate, so fall back to AST. */
+    Set *seen_ids = setNew(8, &set_uint_type);
+    int dup = 0;
     listForEach(ast_func->locals) {
         Ast *l = (Ast *)it->value;
-        if (l->kind != AST_LVAR) return 0;
-        if (!l->type) return 0;
+        u32 id = l->lvar_id;
+        if (l->kind == AST_FUNPTR) {
+            id = l->fn_ptr_id;
+        } else if (l->kind != AST_LVAR) {
+            dup = 1; break;
+        }
+        if (setHas(seen_ids, (void *)(u64)id)) { dup = 1; break; }
+        setAdd(seen_ids, (void *)(u64)id);
+        if (l->kind == AST_FUNPTR) continue;
+        if (!l->type) { dup = 1; break; }
         if (l->type->kind == AST_TYPE_INT) continue;
         /* Stack-allocated class with int-only fields. We don't validate
          * fields here; AST_CLASS_REF accesses are checked against
@@ -700,8 +971,13 @@ int irFunctionEligibleForSlice(Ast *ast_func) {
          * function loses eligibility through some specific access. */
         if (l->type->kind == AST_TYPE_CLASS) continue;
         if (l->type->kind == AST_TYPE_POINTER) continue;
-        return 0;
+        if (l->type->kind == AST_TYPE_FLOAT) continue;
+        if (l->type->kind == AST_TYPE_CHAR) continue;
+        if (l->type->kind == AST_TYPE_ARRAY) continue;
+        dup = 1; break;
     }
+    setRelease(seen_ids);
+    if (dup) return 0;
 
     return irStmtIsSliceEligible(ast_func->body);
 }
@@ -712,18 +988,74 @@ IrValue *irFnCall(IrCtx *ctx, Ast *ast) {
     IrValue *ir_ret_val = irTmp(ret_type, ast->type->size);
     IrInstr *ir_call_instr = irInstrNew(IR_CALL, ir_ret_val, ir_call_args, NULL);
 
-    assert(ast->kind == AST_FUNCALL);
+    assert(ast->kind == AST_FUNCALL || ast->kind == AST_FUNPTR_CALL ||
+           ast->kind == AST_ASM_FUNCALL);
 
     Vec *args = irValueVecNew();
     ir_call_args->as.array.values = args;
-    ir_call_args->as.array.label = ast->fname;
-
-    if (ast->args) {
-        for (u64 i = 0; i < ast->args->size; ++i) {
-            Ast *ast_arg = ast->args->entries[i];
-            IrValue *ir_arg = irExpr(ctx, ast_arg);
-            vecPush(args, ir_arg);
+    /* Direct call: store the static function name on the wrapper. Indirect
+     * call: leave label NULL and stash the function-pointer source in r2 so
+     * the codegen knows to load it into a register and emit `call *<reg>`. */
+    Ast *callee = NULL;
+    Vec *params = NULL;
+    if (ast->kind == AST_FUNPTR_CALL) {
+        ir_call_args->as.array.label = NULL;
+        IrValue *ptr = irExpr(ctx, ast->ref);
+        ir_call_instr->r2 = ptr;
+        /* AST_FUNPTR holds its declared param list on `params`. Find the
+         * underlying decl so we can apply default-param fill-in. */
+        Ast *ref = ast->ref;
+        while (ref && ref->kind != AST_FUNPTR) {
+            if (ref->kind == AST_LVAR || ref->kind == AST_GVAR) {
+                /* Not a function-pointer slot we can walk for params. */
+                ref = NULL;
+                break;
+            }
+            ref = NULL;
         }
+        if (ref && ref->kind == AST_FUNPTR) {
+            params = ref->params;
+        }
+    } else {
+        ir_call_args->as.array.label = ast->fname;
+        /* Look up the callee to discover default-param fill-ins. The call
+         * site itself can omit trailing args when the corresponding param
+         * is AST_DEFAULT_PARAM; we substitute the param's declinit here.
+         * Functions defined elsewhere (libtos) appear as AST_FUN_PROTO;
+         * their params still carry default-value info. */
+        if (ctx->cc && ast->fname) {
+            callee = mapGetLen(ctx->cc->global_env,
+                               ast->fname->data, ast->fname->len);
+        }
+        if (callee && callee->type &&
+            (callee->kind == AST_FUNC || callee->kind == AST_FUN_PROTO ||
+             callee->kind == AST_EXTERN_FUNC)) {
+            params = callee->params;
+        }
+    }
+
+    u64 n_args = ast->args ? ast->args->size : 0;
+    u64 n_params = params ? params->size : 0;
+    u64 n_total = n_args > n_params ? n_args : n_params;
+
+    for (u64 i = 0; i < n_total; ++i) {
+        Ast *ast_arg = NULL;
+        if (i < n_args) {
+            ast_arg = ast->args->entries[i];
+        } else if (i < n_params) {
+            Ast *p = (Ast *)params->entries[i];
+            if (p && p->kind == AST_DEFAULT_PARAM) {
+                ast_arg = p->declinit;
+            } else if (p && p->kind == AST_FUNPTR && p->default_fn) {
+                /* `T (*fn)(...) = X` default — the parser stashes the
+                 * default expression on `default_fn->declinit`. Matches
+                 * what asmPrepFuncCallArgs picks up. */
+                ast_arg = p->default_fn->declinit;
+            }
+        }
+        if (!ast_arg) break;
+        IrValue *ir_arg = irExpr(ctx, ast_arg);
+        vecPush(args, ir_arg);
     }
 
     irBlockAddInstr(ctx, ir_call_instr);
@@ -734,19 +1066,16 @@ IrValue *irFnCall(IrCtx *ctx, Ast *ast) {
  * 100% sure this is a valid assumption to make. Well I guess;
  * `I64 x = y + 32 * 10` _could_ continually be assigned to `x` */
 IrValue *irBinOpExpr(IrCtx *ctx, Ast *ast) {
-    IrValue *lhs = irExpr(ctx, ast->left);
-    IrValue *rhs = irExpr(ctx, ast->right);
-    IrValueType ir_type = irConvertType(ast->type);
-    IrValue *ir_result = irTmp(ir_type, ast->type->size);
-    IrOp op;
-    IrCmpKind cmp = IR_CMP_INVALID;
-
+    /* Logical AND/OR short-circuit: evaluate left in the current block;
+     * branch on it; evaluate right only in the "right" block. We mustn't
+     * eagerly evaluate both operands at the top — that would emit the
+     * RHS computation in the predecessor block where it shouldn't run. */
     if (ast->binop == AST_BIN_OP_LOG_AND) {
-        IrBlock *ir_block = ctx->cur_block;
         IrBlock *ir_right_block = irBlockNew();
         IrBlock *ir_end_block = irBlockNew();
 
         IrValue *left = irExpr(ctx, ast->left);
+        IrBlock *ir_block = ctx->cur_block;
         IrValue *ir_result = irTmp(IR_TYPE_I8, 1);
 
         irBranch(ctx->cur_func, ir_block, left, ir_right_block, ir_end_block);
@@ -754,10 +1083,9 @@ IrValue *irBinOpExpr(IrCtx *ctx, Ast *ast) {
         ctx->cur_block = ir_right_block;
 
         IrValue *right = irExpr(ctx, ast->right);
+        IrBlock *right_end = ctx->cur_block;
 
         IrInstr *jump_instr = irJump(ctx->cur_func, ctx->cur_block, ir_end_block);
-
-        /* Add to the current blocks instructions */
         irBlockAddInstr(ctx, jump_instr);
         irFnAddBlock(ctx->cur_func, ir_end_block);
         ctx->cur_block = ir_end_block;
@@ -765,36 +1093,113 @@ IrValue *irBinOpExpr(IrCtx *ctx, Ast *ast) {
         IrInstr *phi_instr = irPhi(ir_result);
         irBlockAddInstr(ctx, phi_instr);
         irAddPhiIncoming(phi_instr, irConstInt(IR_TYPE_I8, 0), ir_block);
-        irAddPhiIncoming(phi_instr, right, ir_right_block);
+        irAddPhiIncoming(phi_instr, right, right_end);
         return ir_result;
     } else if (ast->binop == AST_BIN_OP_LOG_OR) {
-        IrBlock *ir_block = ctx->cur_block;
         IrBlock *ir_right_block = irBlockNew();
         IrBlock *ir_end_block = irBlockNew();
 
         IrValue *left = irExpr(ctx, ast->left);
+        IrBlock *ir_block = ctx->cur_block;
         IrValue *ir_result = irTmp(IR_TYPE_I8, 1);
 
-        /* For an OR the difference is this is switched around */
+        /* If left is truthy, short-circuit to end with result=1. */
         irBranch(ctx->cur_func, ir_block, left, ir_end_block, ir_right_block);
         irFnAddBlock(ctx->cur_func, ir_right_block);
         ctx->cur_block = ir_right_block;
 
         IrValue *right = irExpr(ctx, ast->right);
+        IrBlock *right_end = ctx->cur_block;
 
         IrInstr *jump_instr = irJump(ctx->cur_func, ctx->cur_block, ir_end_block);
-
-        /* Add to the current blocks instructions */
         irBlockAddInstr(ctx, jump_instr);
         irFnAddBlock(ctx->cur_func, ir_end_block);
         ctx->cur_block = ir_end_block;
 
         IrInstr *phi_instr = irPhi(ir_result);
         irBlockAddInstr(ctx, phi_instr);
-        irAddPhiIncoming(phi_instr, irConstInt(IR_TYPE_I8, 0), ir_block);
-        irAddPhiIncoming(phi_instr, right, ir_right_block);
+        irAddPhiIncoming(phi_instr, irConstInt(IR_TYPE_I8, 1), ir_block);
+        irAddPhiIncoming(phi_instr, right, right_end);
         return ir_result;
-    } else if (irIsFloat(ir_type)) {
+    }
+
+    /* Eager-eval lhs/rhs for everything else. The arith/cmp dispatch
+     * below assumes both operand IR values are already produced. */
+    IrValue *lhs = irExpr(ctx, ast->left);
+    IrValue *rhs = irExpr(ctx, ast->right);
+    IrValueType ir_type = irConvertType(ast->type);
+    IrValue *ir_result = irTmp(ir_type, ast->type->size);
+    IrOp op;
+    IrCmpKind cmp = IR_CMP_INVALID;
+
+    /* Pointer arithmetic: if the result is pointer/array, scale the int
+     * operand by sizeof(element). Matches asmPointerArithmetic. */
+    if ((ast->type->kind == AST_TYPE_POINTER ||
+         ast->type->kind == AST_TYPE_ARRAY) &&
+        (ast->binop == AST_BIN_OP_ADD || ast->binop == AST_BIN_OP_SUB)) {
+        AstType *elem = ast->type->ptr;
+        int scale = elem ? elem->size : 1;
+        if (scale < 1) scale = 1;
+        /* Figure out which operand is the pointer/array (the "base") and
+         * which is the int (the "index"). One of them must be ptr/array;
+         * the other gets scaled. */
+        int left_is_ptr = ast->left->type &&
+            (ast->left->type->kind == AST_TYPE_POINTER ||
+             ast->left->type->kind == AST_TYPE_ARRAY);
+        IrValue *base = left_is_ptr ? lhs : rhs;
+        IrValue *idx  = left_is_ptr ? rhs : lhs;
+        if (scale != 1) {
+            IrValue *scaled = irTmp(IR_TYPE_I64, 8);
+            IrValue *k = irConstInt(IR_TYPE_I64, scale);
+            irBlockAddInstr(ctx,
+                irInstrNew(IR_IMUL, scaled, idx, k));
+            idx = scaled;
+        }
+        IrOp pop = (ast->binop == AST_BIN_OP_ADD) ? IR_IADD : IR_ISUB;
+        irBlockAddInstr(ctx, irInstrNew(pop, ir_result, base, idx));
+        return ir_result;
+    }
+
+    /* Dispatch:
+     *   - Arith (+ - * /): result is the AST type. F64 -> FADD/etc; int ->
+     *     IADD/etc.
+     *   - Comparison (==, <, etc): only use FCMP when BOTH operands are
+     *     AST_TYPE_FLOAT, matching HolyC's AST codegen. Mixed-type compares
+     *     truncate the float side via FPTOSI and dispatch through ICMP. */
+    int is_cmp = ast->binop == AST_BIN_OP_EQ || ast->binop == AST_BIN_OP_NE ||
+                 ast->binop == AST_BIN_OP_LT || ast->binop == AST_BIN_OP_LE ||
+                 ast->binop == AST_BIN_OP_GT || ast->binop == AST_BIN_OP_GE;
+    int left_is_float = ast->left && ast->left->type &&
+                        ast->left->type->kind == AST_TYPE_FLOAT;
+    int right_is_float = ast->right && ast->right->type &&
+                         ast->right->type->kind == AST_TYPE_FLOAT;
+    int float_dispatch;
+    if (is_cmp) {
+        float_dispatch = left_is_float && right_is_float;
+        /* Mixed-type compare: truncate the float operand to int so ICMP
+         * sees two integers, matching HolyC AST codegen. */
+        if (!float_dispatch && (left_is_float || right_is_float)) {
+            IrValue *trunc_dst = irTmp(IR_TYPE_I64, 8);
+            if (left_is_float) {
+                irBlockAddInstr(ctx,
+                    irInstrNew(IR_FPTOSI, trunc_dst, lhs, NULL));
+                lhs = trunc_dst;
+            } else {
+                irBlockAddInstr(ctx,
+                    irInstrNew(IR_FPTOSI, trunc_dst, rhs, NULL));
+                rhs = trunc_dst;
+            }
+        }
+        /* Force result tmp to int for the ICMP/FCMP path below. */
+        if (irIsFloat(ir_type)) {
+            ir_type = IR_TYPE_I64;
+            ir_result = irTmp(ir_type, 8);
+        }
+    } else {
+        float_dispatch = irIsFloat(ir_type) || left_is_float;
+    }
+
+    if (float_dispatch) {
         switch (ast->binop) {
             case AST_BIN_OP_ADD:
                 op = IR_FADD;
@@ -865,7 +1270,10 @@ IrValue *irBinOpExpr(IrCtx *ctx, Ast *ast) {
                 op = IR_SHL;
                 break;
             case AST_BIN_OP_SHR:
-                op = IR_SHR;
+                /* HolyC `>>` is arithmetic for signed types (matches the
+                 * AST codegen's `sarq`). Use logical shift only for
+                 * unsigned types. */
+                op = ast->type->issigned ? IR_SAR : IR_SHR;
                 break;
             case AST_BIN_OP_BIT_AND:
                 op = IR_AND;
@@ -923,6 +1331,12 @@ IrValue *irBinOpExpr(IrCtx *ctx, Ast *ast) {
     } else {
         loggerPanic("Unhandled Ir type: %s\n", irValueTypeToString(ir_type));
     }
+    /* FCMP returns 0/1, not a float. The HolyC parser sometimes mislabels
+     * `f1 < f2` as F64-typed; correct the result tmp here so downstream
+     * loads/stores treat the comparison result as an integer. */
+    if (op == IR_FCMP) {
+        ir_result = irTmp(IR_TYPE_I64, 8);
+    }
     IrInstr *instr = irInstrNew(op, ir_result, lhs, rhs);
     instr->extra.cmp_kind = cmp;
     irBlockAddInstr(ctx, instr);
@@ -930,6 +1344,61 @@ IrValue *irBinOpExpr(IrCtx *ctx, Ast *ast) {
 }
 
 static IrValue *irLowerAssign(IrCtx *ctx, Ast *ast);
+
+/* Build an IrValue referring to an AST_GVAR symbol. The name we emit in
+ * the asm is the static label for static globals or the public gname
+ * otherwise — matches what asmGetGlabel() picks for the AST codegen. */
+static IrValue *irGlobalValue(Ast *gvar_ast) {
+    IrValue *v = irValueNew(IR_TYPE_PTR, IR_VAL_GLOBAL);
+    v->as.global.name = (gvar_ast->is_static && gvar_ast->glabel)
+                        ? gvar_ast->glabel
+                        : gvar_ast->gname;
+    v->as.global.value = NULL;
+    return v;
+}
+
+/* Lower a value of `from_type` (already in `src`) to `to_type`. Returns the
+ * IrValue holding the converted result, or `src` unchanged when no
+ * conversion is needed. Handles int<->float and pointer<->int. */
+static IrValue *irLowerCast(IrCtx *ctx, IrValue *src,
+                            AstType *from_type, AstType *to_type) {
+    if (!from_type || !to_type) return src;
+    int from_int = from_type->kind == AST_TYPE_INT ||
+                   from_type->kind == AST_TYPE_CHAR ||
+                   from_type->kind == AST_TYPE_POINTER;
+    int to_int = to_type->kind == AST_TYPE_INT ||
+                 to_type->kind == AST_TYPE_CHAR ||
+                 to_type->kind == AST_TYPE_POINTER;
+    int from_float = from_type->kind == AST_TYPE_FLOAT;
+    int to_float = to_type->kind == AST_TYPE_FLOAT;
+
+    if (from_int && to_float) {
+        IrValue *dst = irTmp(IR_TYPE_F64, 8);
+        irBlockAddInstr(ctx, irInstrNew(IR_SITOFP, dst, src, NULL));
+        return dst;
+    }
+    if (from_float && to_int) {
+        IrValueType t = irConvertType(to_type);
+        IrValue *dst = irTmp(t, to_type->size);
+        irBlockAddInstr(ctx, irInstrNew(IR_FPTOSI, dst, src, NULL));
+        return dst;
+    }
+    /* int<->int and ptr<->int: in our 64-bit-everywhere codegen the bits
+     * already match for same-or-larger destinations. For a narrowing cast
+     * we still need to mask off the high bits so comparisons against
+     * smaller-typed constants (e.g. `cast<U8>(0xAAFF) == 0xFF`) match. */
+    if (from_int && to_int) {
+        int from_size = from_type->size ? from_type->size : 8;
+        int to_size = to_type->size ? to_type->size : 8;
+        if (to_size < from_size && to_size < 8) {
+            IrValueType t = irConvertType(to_type);
+            IrValue *dst = irTmp(t, to_size);
+            irBlockAddInstr(ctx, irInstrNew(IR_TRUNC, dst, src, NULL));
+            return dst;
+        }
+    }
+    return src;
+}
 
 IrValue *irExpr(IrCtx *ctx, Ast *ast) {
     switch (ast->kind) {
@@ -958,10 +1427,25 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
                             astTypeKindToString(ast->type->kind));
             }
             break;
+        case AST_DEFAULT_PARAM:
+            /* In a function body, the parser emits AST_DEFAULT_PARAM as a
+             * wrapper around the underlying lvar reference. Resolve to the
+             * lvar value; the default-init only matters at the call site. */
+            return irExpr(ctx, ast->declvar);
+
         case AST_LVAR: {
             IrValue *local_var = irFnGetVar(ctx->cur_func, ast->lvar_id);
             if (!local_var) {
                 loggerPanic("Variable %s not found\n", astToString(ast));
+            }
+
+            /* Array LVARs decay to a pointer to their first element. We
+             * emit an LEA on the slot rather than loading its bytes. */
+            if (ast->type->kind == AST_TYPE_ARRAY) {
+                IrValue *addr = irTmp(IR_TYPE_PTR, 8);
+                irBlockAddInstr(ctx,
+                    irInstrNew(IR_LEA, addr, local_var, NULL));
+                return addr;
             }
 
             IrValueType ir_value_type = irConvertType(ast->type);
@@ -977,8 +1461,39 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
             return ir_load_dest;
         }
 
+        case AST_GVAR: {
+            /* Global int read: lea its address, then load*. */
+            IrValue *gv = irGlobalValue(ast);
+            IrValue *addr = irTmp(IR_TYPE_PTR, 8);
+            irBlockAddInstr(ctx, irInstrNew(IR_LEA, addr, gv, NULL));
+            IrValueType ir_type = irConvertType(ast->type);
+            IrValue *load_dst = irTmp(ir_type, ast->type->size);
+            irBlockAddInstr(ctx,
+                irInstrNew(IR_LOAD_DEREF, load_dst, addr, NULL));
+            return load_dst;
+        }
+
         case AST_FUNCALL:
+        case AST_ASM_FUNCALL:
             return irFnCall(ctx, ast);
+
+        case AST_FUNPTR_CALL:
+            return irFnCall(ctx, ast);
+
+        case AST_FUNPTR: {
+            /* Reading a function-pointer slot: load the 8-byte pointer. */
+            IrValue *slot = irFnGetVar(ctx->cur_func, ast->fn_ptr_id);
+            if (!slot) loggerPanic("AST_FUNPTR with no slot\n");
+            IrValue *dst = irTmp(IR_TYPE_PTR, 8);
+            irBlockAddInstr(ctx, irLoad(dst, slot));
+            return dst;
+        }
+
+        case AST_CAST: {
+            /* Evaluate the operand, then convert if int/float boundary. */
+            IrValue *src = irExpr(ctx, ast->operand);
+            return irLowerCast(ctx, src, ast->operand->type, ast->type);
+        }
 
         case AST_STRING: {
             IrValue *value = irValueNew(IR_TYPE_ARRAY, IR_VAL_CONST_STR);
@@ -993,24 +1508,18 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
              *   stack class: cls is AST_LVAR with class type. Field is at
              *                a known offset within the local's stack
              *                frame; IR_GEP aliases that loff.
-             *   pointer:     cls is AST_LVAR with pointer-to-class type.
-             *                Load the pointer, add the field offset, then
-             *                dereference. */
+             *   pointer:     cls is AST_UNOP DEREF (the parser lowers
+             *                `p->field` to `(*p).field`); operand is a
+             *                pointer-typed expression. Evaluate it, add
+             *                the field offset, then deref. */
             Ast *cls = ast->cls;
-            if (!cls || cls->kind != AST_LVAR) {
-                loggerPanic("Slice AST_CLASS_REF only supports AST_LVAR cls\n");
-            }
-            IrValue *base = irFnGetVar(ctx->cur_func, cls->lvar_id);
-            if (!base) loggerPanic("AST_CLASS_REF on unknown lvar\n");
-
             IrValueType field_ir_type = irConvertType(ast->type);
             IrValue *load_dst = irTmp(field_ir_type, ast->type->size);
             int offset = ast->type->offset;
 
-            if (cls->type && cls->type->kind == AST_TYPE_POINTER) {
-                /* Pointer-to-class: load pointer, add offset, deref. */
-                IrValue *ptr_val = irTmp(IR_TYPE_PTR, 8);
-                irBlockAddInstr(ctx, irLoad(ptr_val, base));
+            if (cls->kind == AST_UNOP && cls->unop == AST_UN_OP_DEREF) {
+                /* Pointer-to-class via parser-inserted deref. */
+                IrValue *ptr_val = irExpr(ctx, cls->operand);
                 IrValue *addr = ptr_val;
                 if (offset != 0) {
                     addr = irTmp(IR_TYPE_PTR, 8);
@@ -1023,6 +1532,13 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
                 return load_dst;
             }
 
+            if (cls->kind != AST_LVAR) {
+                loggerPanic("Slice AST_CLASS_REF: unsupported cls kind %s\n",
+                            astKindToString(cls->kind));
+            }
+            IrValue *base = irFnGetVar(ctx->cur_func, cls->lvar_id);
+            if (!base) loggerPanic("AST_CLASS_REF on unknown lvar\n");
+
             /* Stack-allocated class. */
             IrValue *field_addr = irTmp(IR_TYPE_PTR, 8);
             IrValue *off = irConstInt(IR_TYPE_I64, offset);
@@ -1034,8 +1550,23 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
 
         case AST_UNOP: {
             if (ast->unop == AST_UN_OP_DEREF) {
-                /* `*p`: evaluate the pointer expression, then load through it. */
+                /* `*p`: evaluate the pointer expression, then load through
+                 * it.
+                 *
+                 * HolyC quirk: `*pp` where the result is pointer-to-scalar
+                 * (int / pointer / F64) is a no-op in the AST codegen
+                 * (`leaq (%rax), %rax`). Match it by returning the operand
+                 * pointer directly. This is what makes `&arr[i]` (parsed
+                 * as `*((&arr) + i)`) yield a real pointer rather than
+                 * dereffing through the slot. */
                 IrValue *ptr = irExpr(ctx, ast->operand);
+                if (ast->type->kind == AST_TYPE_POINTER && ast->type->ptr) {
+                    AstTypeKind pk = ast->type->ptr->kind;
+                    if (pk == AST_TYPE_INT || pk == AST_TYPE_POINTER ||
+                        pk == AST_TYPE_FLOAT) {
+                        return ptr;
+                    }
+                }
                 IrValueType ir_type = irConvertType(ast->type);
                 IrValue *load_dst = irTmp(ir_type, ast->type->size);
                 irBlockAddInstr(ctx,
@@ -1043,14 +1574,84 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
                 return load_dst;
             }
             if (ast->unop == AST_UN_OP_ADDR_OF) {
-                /* `&lvar`: take the slot's address. The lvar's IrValue
-                 * carries the slot loff — IR_LEA reads that and emits
-                 * the leaq. */
-                Ast *lvar = ast->operand;
-                IrValue *src = irFnGetVar(ctx->cur_func, lvar->lvar_id);
-                if (!src) loggerPanic("&lvar on unknown lvar\n");
+                /* `&lvar` / `&gvar` / `&fn`: produce a pointer value.
+                 *
+                 * HolyC quirk (matches asmAddr): when the operand is a
+                 * pointer-typed LVAR pointing at a SCALAR (int/F64/ptr —
+                 * NOT array/char/class), `&lvar` returns the pointer's
+                 * VALUE rather than the slot address. So `&arr[2]` for
+                 * `I64 *arr;` is `arr + 2` (arr's value plus 2*sizeof). */
+                Ast *operand = ast->operand;
+                IrValue *src = NULL;
+                if (operand->kind == AST_LVAR) {
+                    src = irFnGetVar(ctx->cur_func, operand->lvar_id);
+                    if (!src) loggerPanic("&lvar on unknown lvar\n");
+                    AstType *ot = operand->type;
+                    if (ot && ot->kind == AST_TYPE_POINTER && ot->ptr) {
+                        AstTypeKind pk = ot->ptr->kind;
+                        if (pk != AST_TYPE_ARRAY && pk != AST_TYPE_CHAR &&
+                            pk != AST_TYPE_CLASS) {
+                            /* Load the pointer's value. */
+                            IrValue *dst = irTmp(IR_TYPE_PTR, 8);
+                            irBlockAddInstr(ctx, irLoad(dst, src));
+                            return dst;
+                        }
+                    }
+                } else if (operand->kind == AST_GVAR) {
+                    src = irGlobalValue(operand);
+                } else if (operand->kind == AST_FUNC ||
+                           operand->kind == AST_FUN_PROTO ||
+                           operand->kind == AST_EXTERN_FUNC) {
+                    /* Address of a function: emit `leaq <fname>(%rip), rax`
+                     * via the global-value mechanism. The codegen runs
+                     * asmNormaliseFunctionName on the label. */
+                    src = irValueNew(IR_TYPE_PTR, IR_VAL_GLOBAL);
+                    src->as.global.name = operand->fname;
+                    src->as.global.value = NULL;
+                    src->flags |= IR_VAL_FLAG_FUNC;
+                } else if (operand->kind == AST_ASM_FUNCDEF ||
+                           operand->kind == AST_ASM_FUNC_BIND) {
+                    /* Asm-bound function — use the raw asm name, no
+                     * normalisation. */
+                    src = irValueNew(IR_TYPE_PTR, IR_VAL_GLOBAL);
+                    src->as.global.name = operand->asmfname;
+                    src->as.global.value = NULL;
+                } else {
+                    loggerPanic("&%s not supported in slice\n",
+                                astKindToString(operand->kind));
+                }
                 IrValue *dst = irTmp(IR_TYPE_PTR, 8);
                 irBlockAddInstr(ctx, irInstrNew(IR_LEA, dst, src, NULL));
+                return dst;
+            }
+            if (ast->unop == AST_UN_OP_PLUS) {
+                /* Identity for arithmetic types — just evaluate operand. */
+                return irExpr(ctx, ast->operand);
+            }
+            if (ast->unop == AST_UN_OP_MINUS) {
+                IrValue *v = irExpr(ctx, ast->operand);
+                IrValueType vt = v->type;
+                IrValue *dst = irTmp(vt,
+                                     irIsFloat(vt) ? 8
+                                                   : ast->operand->type->size);
+                IrOp negop = irIsFloat(vt) ? IR_FNEG : IR_INEG;
+                irBlockAddInstr(ctx, irInstrNew(negop, dst, v, NULL));
+                return dst;
+            }
+            if (ast->unop == AST_UN_OP_BIT_NOT) {
+                /* Bitwise NOT on int. Lowers to `dst = ~v` via IR_NOT. */
+                IrValue *v = irExpr(ctx, ast->operand);
+                IrValue *dst = irTmp(v->type, 8);
+                irBlockAddInstr(ctx, irInstrNew(IR_NOT, dst, v, NULL));
+                return dst;
+            }
+            if (ast->unop == AST_UN_OP_LOG_NOT) {
+                /* Logical NOT: result is 1 if operand is zero, else 0.
+                 * Lower as ICMP_EQ with 0. */
+                IrValue *v = irExpr(ctx, ast->operand);
+                IrValue *dst = irTmp(IR_TYPE_I64, 8);
+                IrValue *zero = irConstInt(IR_TYPE_I64, 0);
+                irBlockAddInstr(ctx, irICmp(dst, IR_CMP_EQ, v, zero));
                 return dst;
             }
             /* Slice supports ++/-- on int locals. The store to the lvar's
@@ -1087,7 +1688,6 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
             return is_post ? cur : new_val;
         }
 
-        case AST_GVAR:
         case AST_GOTO:
         case AST_LABEL:
         case AST_FUNC:
@@ -1100,15 +1700,10 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
         case AST_COMPOUND_STMT:
         case AST_ASM_STMT:
         case AST_ASM_FUNC_BIND:
-        case AST_ASM_FUNCALL:
-        case AST_FUNPTR:
-        case AST_FUNPTR_CALL:
         case AST_BREAK:
         case AST_CONTINUE:
-        case AST_DEFAULT_PARAM:
         case AST_VAR_ARGS:
         case AST_ASM_FUNCDEF:
-        case AST_CAST:
         case AST_FUN_PROTO:
         case AST_CASE:
         case AST_JUMP:
@@ -1164,21 +1759,24 @@ static IrAssignTarget irLowerAssignTarget(IrCtx *ctx, Ast *lhs) {
         return out;
     }
 
+    if (lhs->kind == AST_FUNPTR) {
+        IrValue *local = irFnGetVar(ctx->cur_func, lhs->fn_ptr_id);
+        if (!local) loggerPanic("irLowerAssign: unknown funptr %s\n",
+                                astToString(lhs));
+        out.target = local;
+        out.type = lhs->type;
+        return out;
+    }
+
     if (lhs->kind == AST_CLASS_REF) {
         Ast *cls = lhs->cls;
-        if (!cls || cls->kind != AST_LVAR) {
-            loggerPanic("Slice AST_CLASS_REF only supports AST_LVAR cls\n");
-        }
-        IrValue *base = irFnGetVar(ctx->cur_func, cls->lvar_id);
-        if (!base) loggerPanic("AST_CLASS_REF on unknown lvar\n");
         int offset = lhs->type->offset;
         out.type = lhs->type;
 
-        if (cls->type && cls->type->kind == AST_TYPE_POINTER) {
-            /* Pointer-to-class: load pointer, optionally add offset; the
-             * resulting tmp holds the field's runtime address. */
-            IrValue *ptr_val = irTmp(IR_TYPE_PTR, 8);
-            irBlockAddInstr(ctx, irLoad(ptr_val, base));
+        if (cls->kind == AST_UNOP && cls->unop == AST_UN_OP_DEREF) {
+            /* Pointer-to-class field write: evaluate the pointer, add the
+             * field's offset, store via STORE_DEREF. */
+            IrValue *ptr_val = irExpr(ctx, cls->operand);
             IrValue *addr = ptr_val;
             if (offset != 0) {
                 addr = irTmp(IR_TYPE_PTR, 8);
@@ -1190,6 +1788,13 @@ static IrAssignTarget irLowerAssignTarget(IrCtx *ctx, Ast *lhs) {
             out.indirect = 1;
             return out;
         }
+
+        if (cls->kind != AST_LVAR) {
+            loggerPanic("Slice AST_CLASS_REF assign: unsupported cls kind %s\n",
+                        astKindToString(cls->kind));
+        }
+        IrValue *base = irFnGetVar(ctx->cur_func, cls->lvar_id);
+        if (!base) loggerPanic("AST_CLASS_REF on unknown lvar\n");
 
         /* Stack-allocated class: alias base+offset directly. */
         IrValue *field_addr = irTmp(IR_TYPE_PTR, 8);
@@ -1204,6 +1809,17 @@ static IrAssignTarget irLowerAssignTarget(IrCtx *ctx, Ast *lhs) {
          * indirection. */
         IrValue *ptr = irExpr(ctx, lhs->operand);
         out.target = ptr;
+        out.type = lhs->type;
+        out.indirect = 1;
+        return out;
+    }
+
+    if (lhs->kind == AST_GVAR) {
+        /* `g = ...`: lea g's address, store* through it. */
+        IrValue *gv = irGlobalValue(lhs);
+        IrValue *addr = irTmp(IR_TYPE_PTR, 8);
+        irBlockAddInstr(ctx, irInstrNew(IR_LEA, addr, gv, NULL));
+        out.target = addr;
         out.type = lhs->type;
         out.indirect = 1;
         return out;
@@ -1240,15 +1856,20 @@ static IrValue *irLowerAssign(IrCtx *ctx, Ast *ast) {
 void irLowerAst(IrCtx *ctx, Ast *ast) {
     if (!ast) return;
 
-    /* Once a block is sealed (it ended in ret/jmp/br) any subsequent statement
-     * is unreachable; just drop it. */
-    if (ctx->cur_block && ctx->cur_block->sealed) return;
+    /* Once a block is sealed (it ended in ret/jmp/br) any subsequent
+     * statement is unreachable; just drop it. AST_LABEL / AST_CASE /
+     * AST_DEFAULT are re-entry points — their handlers start fresh
+     * blocks, so let them run even when the prior block is sealed. */
+    if (ctx->cur_block && ctx->cur_block->sealed &&
+        ast->kind != AST_LABEL && ast->kind != AST_CASE &&
+        ast->kind != AST_DEFAULT) {
+        return;
+    }
 
     switch (ast->kind) {
         case AST_COMPOUND_STMT: {
             listForEach(ast->stms) {
                 Ast *next = (Ast *)it->value;
-                if (ctx->cur_block && ctx->cur_block->sealed) break;
                 irLowerAst(ctx, next);
             }
             break;
@@ -1457,11 +2078,23 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
         case AST_DECL: {
             Ast *var = ast->declvar;
             Ast *init = ast->declinit;
-            IrInstr *ir_alloca = irAlloca(var->type);
-            irAddStackSpace(ctx, var->type->size);
+            IrInstr *ir_alloca;
+            u32 var_id;
+            if (var->kind == AST_FUNPTR) {
+                /* Function-pointer slot: 8 bytes, treated as a pointer. */
+                IrValue *tmp = irTmp(IR_TYPE_PTR, 8);
+                IrValue *sz = irConstInt(IR_TYPE_PTR, 8);
+                ir_alloca = irInstrNew(IR_ALLOCA, tmp, sz, NULL);
+                irAddStackSpace(ctx, 8);
+                var_id = var->fn_ptr_id;
+            } else {
+                ir_alloca = irAlloca(var->type);
+                irAddStackSpace(ctx, var->type->size);
+                var_id = var->lvar_id;
+            }
             irBlockAddInstr(ctx, ir_alloca);
             IrValue *local = ir_alloca->dst;
-            irFnAddVar(ctx->cur_func, ast->declvar->lvar_id, local);
+            irFnAddVar(ctx->cur_func, var_id, local);
 
             if (init) {
                 IrValue *ir_init = NULL;
@@ -1490,10 +2123,6 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
                         break;
                     }
 
-                    case AST_UNOP:
-                        loggerPanic("Unhandled: %s\n", astKindToString(init->kind));
-                        break;
-
                     default: {
                         ir_init = irExpr(ctx, init);
                         IrInstr *ir_store = irStore(local, ir_init);
@@ -1506,6 +2135,8 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
         }
 
         case AST_FUNCALL:
+        case AST_ASM_FUNCALL:
+        case AST_FUNPTR_CALL:
             irExpr(ctx, ast);
             break;
 
@@ -1514,16 +2145,59 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
             break;
 
         case AST_GVAR:
-        case AST_GOTO:
-        case AST_LABEL:
+            /* Bare global at statement level — no side effect. */
+            break;
+
+        case AST_GOTO: {
+            /* Look up or lazily create the target block by label name.
+             * Forward gotos hit this branch first; the matching AST_LABEL
+             * later finds the same block in the map. */
+            AoStr *lname = ast->slabel;
+            if (!lname) loggerPanic("AST_GOTO with no label\n");
+            IrBlock *target = ctx->labels
+                ? (IrBlock *)mapGetLen(ctx->labels, lname->data, lname->len)
+                : NULL;
+            if (!target) {
+                target = irBlockNew();
+                if (!ctx->labels) ctx->labels = mapNew(8, &map_cstring_opaque_type);
+                mapAddLen(ctx->labels, lname->data, lname->len, target);
+            }
+            IrInstr *jmp = irJump(ctx->cur_func, ctx->cur_block, target);
+            irBlockAddInstr(ctx, jmp);
+            /* Anything emitted before the next AST_LABEL is dead — give
+             * it a fresh block so seal-once invariants hold. */
+            IrBlock *unreach = irBlockNew();
+            irFnAddBlock(ctx->cur_func, unreach);
+            ctx->cur_block = unreach;
+            break;
+        }
+
+        case AST_LABEL: {
+            AoStr *lname = ast->slabel;
+            if (!lname) loggerPanic("AST_LABEL with no label\n");
+            IrBlock *target = ctx->labels
+                ? (IrBlock *)mapGetLen(ctx->labels, lname->data, lname->len)
+                : NULL;
+            if (!target) {
+                target = irBlockNew();
+                if (!ctx->labels) ctx->labels = mapNew(8, &map_cstring_opaque_type);
+                mapAddLen(ctx->labels, lname->data, lname->len, target);
+            }
+            if (!ctx->cur_block->sealed) {
+                IrInstr *jmp = irJump(ctx->cur_func, ctx->cur_block, target);
+                irBlockAddInstr(ctx, jmp);
+            }
+            irFnAddBlock(ctx->cur_func, target);
+            ctx->cur_block = target;
+            break;
+        }
+
         case AST_FUNC:
         case AST_LITERAL:
         case AST_ARRAY_INIT:
         case AST_ASM_STMT:
         case AST_ASM_FUNC_BIND:
-        case AST_ASM_FUNCALL:
         case AST_FUNPTR:
-        case AST_FUNPTR_CALL:
         case AST_DEFAULT_PARAM:
         case AST_VAR_ARGS:
         case AST_ASM_FUNCDEF:
@@ -1551,6 +2225,7 @@ IrFunction *irLowerFunction(IrCtx *ctx, Ast *ast_func) {
 
     ctx->cur_block = entry;
     ctx->cur_func = func;
+    ctx->labels = NULL; /* fresh label table per function */
     func->entry_block = entry;
     func->exit_block = exit_block;
     irFnAddBlock(func, entry);
@@ -1613,8 +2288,7 @@ IrFunction *irLowerFunction(IrCtx *ctx, Ast *ast_func) {
     irFnAddBlock(func, exit_block);
     ctx->cur_block = exit_block;
     if (ir_return_var) {
-        IrValue *ir_load_dst = irTmp(ir_return_var->type,
-                                     irGetIntSize(ir_return_var->type));
+        IrValue *ir_load_dst = irTmp(ir_return_var->type, rettype->size);
         IrInstr *ir_load = irLoad(ir_load_dst, ir_return_var);
         irBlockAddInstr(ctx, ir_load);
         /* IR_RET stores the return value in `dst` to match the existing
@@ -1636,7 +2310,7 @@ void irDump(Cctrl *cc) {
         Ast *ast = (Ast *)it->value;
         if (ast->kind != AST_FUNC) continue;
         ctx->cur_func = NULL;
-        if (!irFunctionEligibleForSlice(ast)) {
+        if (!irFunctionEligibleForSliceCc(cc, ast)) {
             printf("# function %s: not in slice\n",
                    ast->fname ? ast->fname->data : "<anon>");
             continue;

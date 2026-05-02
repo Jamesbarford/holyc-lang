@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "aostr.h"
 #include "ast.h"
@@ -103,14 +104,20 @@ static void irCgBindAstLoffs(IrCgCtx *ctx, Ast *ast_func) {
     if (ast_func->params) {
         for (u64 i = 0; i < ast_func->params->size; ++i) {
             Ast *p = vecGet(Ast *, ast_func->params, i);
-            IrValue *iv = irFnGetVar(ctx->func, p->lvar_id);
+            u32 pid;
+            if (p->kind == AST_DEFAULT_PARAM) pid = p->declvar->lvar_id;
+            else if (p->kind == AST_FUNPTR)   pid = p->fn_ptr_id;
+            else                              pid = p->lvar_id;
+            IrValue *iv = irFnGetVar(ctx->func, pid);
             if (iv) irCgSetLoff(ctx, iv->as.var.id, p->loff);
         }
     }
     listForEach(ast_func->locals) {
         Ast *l = (Ast *)it->value;
-        u32 lid = (l->kind == AST_DEFAULT_PARAM) ? l->declvar->lvar_id
-                                                  : l->lvar_id;
+        u32 lid;
+        if (l->kind == AST_DEFAULT_PARAM) lid = l->declvar->lvar_id;
+        else if (l->kind == AST_FUNPTR)   lid = l->fn_ptr_id;
+        else                              lid = l->lvar_id;
         IrValue *iv = irFnGetVar(ctx->func, lid);
         if (iv) irCgSetLoff(ctx, iv->as.var.id, l->loff);
     }
@@ -177,6 +184,20 @@ static void irCgAllocOperandsForInstr(IrCgCtx *ctx, IrInstr *I, int start) {
         irCgAllocTmp(ctx, I->r2, start);
         return;
 
+    case IR_FADD: case IR_FSUB: case IR_FMUL: case IR_FDIV:
+    case IR_FCMP:
+        /* Float ops always go through xmm0/xmm1 (no fusion path), so
+         * unconditionally allocate slots for dst and operands. */
+        irCgAllocTmp(ctx, I->dst, start);
+        irCgAllocTmp(ctx, I->r1, start);
+        irCgAllocTmp(ctx, I->r2, start);
+        return;
+
+    case IR_FNEG:
+        irCgAllocTmp(ctx, I->dst, start);
+        irCgAllocTmp(ctx, I->r1, start);
+        return;
+
     case IR_BR:
         if (load_r1) irCgAllocTmp(ctx, I->dst, start);
         return;
@@ -197,11 +218,14 @@ static void irCgAllocOperandsForInstr(IrCgCtx *ctx, IrInstr *I, int start) {
         /* dst (return value) gets a slot like any other def, unless fused.
          * r1 is the args wrapper (IR_VAL_UNRESOLVED), not a tmp — no slot.
          * The arg values themselves are loaded directly into argument
-         * registers from their existing slots at emit time. */
+         * registers from their existing slots at emit time.
+         * r2, when set, is the indirect call target — it lives in a slot
+         * just like any other tmp. */
         if (spill_dst && I->dst && I->dst->type != IR_TYPE_VOID &&
             I->dst->kind == IR_VAL_TMP) {
             irCgAllocTmp(ctx, I->dst, start);
         }
+        irCgAllocTmp(ctx, I->r2, start);
         return;
 
     case IR_GEP: {
@@ -245,6 +269,14 @@ static void irCgLoadToReg(IrCgCtx *ctx, IrValue *val, const char *reg) {
         aoStrCatPrintf(ctx->buf, "movq   $%lld, %%%s\n\t",
                        (long long)val->as._i64, reg);
         return;
+    case IR_VAL_CONST_FLOAT:
+        /* The 64 bits of the IEEE-754 representation, loaded as raw int.
+         * This shows up when a float constant flows through a non-arith
+         * path — e.g. `point->x = 3.14;` lowers to IR_STORE_DEREF whose r1
+         * must reach the slot via rax. movabsq accepts a 64-bit immediate. */
+        aoStrCatPrintf(ctx->buf, "movabsq $0x%lX, %%%s\n\t",
+                       (unsigned long)ieee754(val->as._f64), reg);
+        return;
     case IR_VAL_CONST_STR:
         /* String literal address. The data section was emitted earlier in
          * asmGenerate with this label, so we just take its address. */
@@ -265,6 +297,68 @@ static void irCgLoadToReg(IrCgCtx *ctx, IrValue *val, const char *reg) {
 static void irCgStoreReg(IrCgCtx *ctx, IrValue *dst, const char *reg) {
     aoStrCatPrintf(ctx->buf, "movq   %%%s, %d(%%rbp)\n\t",
                    reg, irCgGetLoff(ctx, dst));
+}
+
+/* Emit `.data <label>: .quad <bits> .text` lazily for a float constant.
+ * Returns the label data pointer. We re-emit per occurrence; the linker
+ * doesn't dedup but that's fine — the AST codegen does the same. */
+static char *irCgEmitFloatLiteralData(IrCgCtx *ctx, double f) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), ".LIRF%d_%llu",
+             ctx->func_uid,
+             (unsigned long long)ctx->extra_stack);
+    /* extra_stack changes per allocation; combined with func_uid that gives
+     * us a unique-enough label. The chosen scheme just needs to avoid
+     * collisions inside this translation unit. */
+    static int float_seq = 0;
+    snprintf(buf, sizeof(buf), ".LIRF%d", float_seq++);
+
+    asmRemovePreviousTab(ctx->buf);
+    aoStrCatPrintf(ctx->buf,
+                   ".data\n %s:\n\t"
+                   ".quad 0x%lX #%.9f\n"
+                   ".text\n\t",
+                   buf, (unsigned long)ieee754(f), f);
+
+    /* Caller wants a pointer it can use in the next emit; copy into a
+     * persistent allocation. */
+    int len = (int)strlen(buf);
+    char *out = malloc(len + 1);
+    memcpy(out, buf, len + 1);
+    return out;
+}
+
+/* Load any IR value into the given xmm register. */
+static void irCgLoadToXmm(IrCgCtx *ctx, IrValue *val, const char *xmm) {
+    switch (val->kind) {
+    case IR_VAL_CONST_FLOAT: {
+        char *lbl = irCgEmitFloatLiteralData(ctx, val->as._f64);
+        aoStrCatPrintf(ctx->buf, "movsd  %s(%%rip), %%%s\n\t", lbl, xmm);
+        free(lbl);
+        return;
+    }
+    case IR_VAL_CONST_INT: {
+        /* The HolyC parser sometimes types `0` as int even when the
+         * surrounding context is float. Treat as a float constant. */
+        char *lbl = irCgEmitFloatLiteralData(ctx, (double)val->as._i64);
+        aoStrCatPrintf(ctx->buf, "movsd  %s(%%rip), %%%s\n\t", lbl, xmm);
+        free(lbl);
+        return;
+    }
+    case IR_VAL_TMP:
+    case IR_VAL_LOCAL:
+    case IR_VAL_PARAM:
+        aoStrCatPrintf(ctx->buf, "movsd  %d(%%rbp), %%%s\n\t",
+                       irCgGetLoff(ctx, val), xmm);
+        return;
+    default:
+        loggerPanic("ir-cg: cannot load float of kind %d\n", val->kind);
+    }
+}
+
+static void irCgStoreXmm(IrCgCtx *ctx, IrValue *dst, const char *xmm) {
+    aoStrCatPrintf(ctx->buf, "movsd  %%%s, %d(%%rbp)\n\t",
+                   xmm, irCgGetLoff(ctx, dst));
 }
 
 /* Emit `<setcc> %al; movzbq %al, %rax` for a comparison kind. */
@@ -294,8 +388,12 @@ static void irCgBlockLabel(IrCgCtx *ctx, IrBlock *block, char *out, int n) {
 /* ---- fusion pre-pass --------------------------------------------------- */
 
 /* True if the instruction's natural codegen ends with the result in %rax,
- * i.e. it's a candidate to "leave in rax" rather than spill to a slot. */
+ * i.e. it's a candidate to "leave in rax" rather than spill to a slot.
+ * Float-typed defs land in %xmm0, not %rax — they can't ride the fusion
+ * path (consumers like IR_RET float / IR_FADD load via movsd from a slot,
+ * not rax). Returning 0 keeps the slot-spill in place. */
 static int instrDefsIntoRax(IrInstr *I) {
+    if (I->dst && irIsFloat(I->dst->type)) return 0;
     if (I->op == IR_PHI && (I->flags & IRCG_PHI_IN_RAX)) return 1;
     switch (I->op) {
     case IR_LOAD:
@@ -352,7 +450,10 @@ static void irCgClassifyPhis(IrFunction *func) {
                 BUMP_TMP(I->r1);
             }
             BUMP_TMP(I->r2);
-            if (I->op == IR_BR || I->op == IR_RET) {
+            if (I->op == IR_BR || I->op == IR_RET ||
+                I->op == IR_STORE_DEREF) {
+                /* IR_STORE_DEREF.dst is the runtime pointer (a real source);
+                 * BR/RET treat dst as the condition / return value. */
                 BUMP_TMP(I->dst);
             }
             if (I->op == IR_PHI && I->extra.phi_pairs) {
@@ -396,6 +497,9 @@ static void irCgClassifyPhis(IrFunction *func) {
         if (!all_jmp) continue;
 
         if (!the_phi->dst || the_phi->dst->kind != IR_VAL_TMP) continue;
+        /* Float phis can't ride %rax — the materialisation and consumer go
+         * through xmm0, not rax. Skip. */
+        if (irIsFloat(the_phi->dst->type)) continue;
         u32 dst_id = the_phi->dst->as.var.id;
         int dst_uses = mapHasInt(uses, dst_id)
                        ? (int)(intptr_t)mapGetInt(uses, dst_id) : 0;
@@ -474,7 +578,10 @@ static void irCgAnnotate(IrFunction *func) {
                 bumpUseIfTmp(uses, I->r1);
             }
             bumpUseIfTmp(uses, I->r2);
-            if (I->op == IR_BR || I->op == IR_RET) {
+            if (I->op == IR_BR || I->op == IR_RET ||
+                I->op == IR_STORE_DEREF) {
+                /* IR_STORE_DEREF.dst is the runtime pointer (a real source);
+                 * BR/RET treat dst as the condition / return value. */
                 bumpUseIfTmp(uses, I->dst);
             }
             /* Phi pair values are consumed at predecessor-side
@@ -589,7 +696,27 @@ static void irCgSpillDst(IrCgCtx *ctx, IrInstr *instr, const char *reg) {
  * one whose dst is not read by any still-pending phi (a leaf in the
  * read-dependency graph). Cycles fall back to scratch via %rcx. */
 static void irCgEmitOnePhi(IrCgCtx *ctx, IrInstr *phi, IrPair *match) {
-    irCgLoadToReg(ctx, match->ir_value, "rax");
+    IrValue *v = match->ir_value;
+    /* mem2reg can emit phi pairs whose tmp value flows from a branch
+     * that never wrote anything live (typically the first branch of a
+     * promoted variable initialised inside the if/else). Such tmps have
+     * no slot — treat them as 0/undef. */
+    int v_dangling = v && v->kind == IR_VAL_TMP &&
+                     !mapHasInt(ctx->id_to_loff, v->as.var.id);
+    if (irIsFloat(phi->dst->type)) {
+        if (v_dangling) {
+            aoStrCatPrintf(ctx->buf, "xorpd  %%xmm0, %%xmm0\n\t");
+        } else {
+            irCgLoadToXmm(ctx, v, "xmm0");
+        }
+        irCgStoreXmm(ctx, phi->dst, "xmm0");
+        return;
+    }
+    if (v_dangling) {
+        aoStrCatPrintf(ctx->buf, "xorq   %%rax, %%rax\n\t");
+    } else {
+        irCgLoadToReg(ctx, v, "rax");
+    }
     if (!(phi->flags & IRCG_PHI_IN_RAX)) {
         irCgStoreReg(ctx, phi->dst, "rax");
     }
@@ -798,9 +925,20 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
         break;
 
     case IR_LEA: {
-        /* dst = address of r1's slot. */
-        int loff = irCgGetLoff(ctx, instr->r1);
-        aoStrCatPrintf(ctx->buf, "leaq   %d(%%rbp), %%rax\n\t", loff);
+        /* dst = &r1. r1 is either a stack slot (TMP/LOCAL/PARAM) or a
+         * global symbol (IR_VAL_GLOBAL); pick the right addressing mode.
+         * Function names need asmNormaliseFunctionName(); plain data
+         * labels go in verbatim. */
+        if (instr->r1 && instr->r1->kind == IR_VAL_GLOBAL) {
+            const char *name = instr->r1->as.global.name->data;
+            if (instr->r1->flags & IR_VAL_FLAG_FUNC) {
+                name = asmNormaliseFunctionName((char *)name);
+            }
+            aoStrCatPrintf(ctx->buf, "leaq   %s(%%rip), %%rax\n\t", name);
+        } else {
+            int loff = irCgGetLoff(ctx, instr->r1);
+            aoStrCatPrintf(ctx->buf, "leaq   %d(%%rbp), %%rax\n\t", loff);
+        }
         irCgSpillDst(ctx, instr, "rax");
         break;
     }
@@ -866,6 +1004,110 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
         irCgLoadToReg(ctx, instr->r2, "rcx");
         aoStrCatPrintf(ctx->buf, "cmpq   %%rcx, %%rax\n\t");
         irCgEmitSetCC(ctx, instr->extra.cmp_kind);
+        irCgSpillDst(ctx, instr, "rax");
+        break;
+    }
+
+    case IR_FADD:
+    case IR_FSUB:
+    case IR_FMUL:
+    case IR_FDIV: {
+        const char *op = (instr->op == IR_FADD) ? "addsd"
+                       : (instr->op == IR_FSUB) ? "subsd"
+                       : (instr->op == IR_FMUL) ? "mulsd"
+                                                : "divsd";
+        irCgLoadToXmm(ctx, instr->r1, "xmm0");
+        irCgLoadToXmm(ctx, instr->r2, "xmm1");
+        aoStrCatPrintf(ctx->buf, "%s  %%xmm1, %%xmm0\n\t", op);
+        irCgStoreXmm(ctx, instr->dst, "xmm0");
+        break;
+    }
+
+    case IR_FNEG: {
+        /* Flip the sign bit by XORing with the 64-bit `sign_bit` constant
+         * defined in asmDataSection. */
+        irCgLoadToXmm(ctx, instr->r1, "xmm0");
+        aoStrCatPrintf(ctx->buf,
+                       "movsd  sign_bit(%%rip), %%xmm1\n\t"
+                       "xorpd  %%xmm1, %%xmm0\n\t");
+        irCgStoreXmm(ctx, instr->dst, "xmm0");
+        break;
+    }
+
+    case IR_INEG: {
+        irCgLoadFirstSrc(ctx, instr, instr->r1);
+        aoStrCatPrintf(ctx->buf, "negq   %%rax\n\t");
+        irCgSpillDst(ctx, instr, "rax");
+        break;
+    }
+
+    case IR_NOT: {
+        irCgLoadFirstSrc(ctx, instr, instr->r1);
+        aoStrCatPrintf(ctx->buf, "notq   %%rax\n\t");
+        irCgSpillDst(ctx, instr, "rax");
+        break;
+    }
+
+    case IR_SITOFP: {
+        /* signed int -> F64. Operand is in rax, result lands in xmm0. */
+        irCgLoadToReg(ctx, instr->r1, "rax");
+        aoStrCatPrintf(ctx->buf, "cvtsi2sdq %%rax, %%xmm0\n\t");
+        irCgStoreXmm(ctx, instr->dst, "xmm0");
+        break;
+    }
+
+    case IR_FPTOSI: {
+        /* F64 -> signed int (truncation toward zero). */
+        irCgLoadToXmm(ctx, instr->r1, "xmm0");
+        aoStrCatPrintf(ctx->buf, "cvttsd2siq %%xmm0, %%rax\n\t");
+        irCgSpillDst(ctx, instr, "rax");
+        break;
+    }
+
+    case IR_TRUNC: {
+        /* Narrow an integer to a smaller width by masking the low bits.
+         * Signedness is irrelevant for truncation itself; sign-extension
+         * happens on the next read if the destination type is signed. */
+        irCgLoadFirstSrc(ctx, instr, instr->r1);
+        u32 sz = instr->dst ? instr->dst->as.var.size : 8;
+        switch (sz) {
+        case 1:
+            aoStrCatPrintf(ctx->buf, "andq   $0xFF, %%rax\n\t");
+            break;
+        case 2:
+            aoStrCatPrintf(ctx->buf, "andq   $0xFFFF, %%rax\n\t");
+            break;
+        case 4:
+            aoStrCatPrintf(ctx->buf, "movl   %%eax, %%eax\n\t");
+            break;
+        default:
+            /* No-op for sizes we don't actually narrow. */
+            break;
+        }
+        irCgSpillDst(ctx, instr, "rax");
+        break;
+    }
+
+    case IR_FCMP: {
+        /* ucomisd sets ZF/CF/PF; setcc lowers to {EQ,NE,LT,LE,GT,GE}.
+         * NaN handling is not modeled — the slice doesn't surface OEQ/UNO
+         * etc. and matches the AST codegen's plain set{e,ne,b,be,a,ae}. */
+        irCgLoadToXmm(ctx, instr->r1, "xmm0");
+        irCgLoadToXmm(ctx, instr->r2, "xmm1");
+        aoStrCatPrintf(ctx->buf, "ucomisd %%xmm1, %%xmm0\n\t");
+        const char *cc = NULL;
+        switch (instr->extra.cmp_kind) {
+        case IR_CMP_EQ: cc = "sete";  break;
+        case IR_CMP_NE: cc = "setne"; break;
+        case IR_CMP_LT: cc = "setb";  break;
+        case IR_CMP_LE: cc = "setbe"; break;
+        case IR_CMP_GT: cc = "seta";  break;
+        case IR_CMP_GE: cc = "setae"; break;
+        default:
+            loggerPanic("ir-cg: unsupported FCMP kind %d\n",
+                        instr->extra.cmp_kind);
+        }
+        aoStrCatPrintf(ctx->buf, "%s   %%al\n\tmovzbq %%al, %%rax\n\t", cc);
         irCgSpillDst(ctx, instr, "rax");
         break;
     }
@@ -943,50 +1185,163 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
 
     case IR_RET:
         if (instr->dst) {
-            irCgLoadFirstSrc(ctx, instr, instr->dst);
+            if (irIsFloat(instr->dst->type)) {
+                irCgLoadToXmm(ctx, instr->dst, "xmm0");
+            } else {
+                irCgLoadFirstSrc(ctx, instr, instr->dst);
+            }
         }
         aoStrCatPrintf(ctx->buf, "leave\n\tret\n");
         break;
 
     case IR_CALL: {
         /* r1 is the args wrapper carrying the Vec of arg IrValues plus the
-         * function name as as.array.label. */
-        static const char *kArgRegs[] = {
+         * function name as as.array.label. Three calling conventions:
+         *
+         *   SysV non-variadic: int-class args in rdi/rsi/rdx/rcx/r8/r9,
+         *     float-class in xmm0..xmm7.
+         *
+         *   SysV extern variadic (e.g. printf): same regs, plus %al = the
+         *     number of XMM regs used. We set %al whenever any float args
+         *     were passed (harmless for non-variadic callees).
+         *
+         *   HolyC variadic (e.g. MStrPrint): the parser injects an extra
+         *     I64 count argument right after the fixed params; that goes
+         *     in the next int reg. The variadic *values* go on the stack
+         *     in source order (pushed in reverse). The callee reads them
+         *     via positive offsets from %rbp.
+         *
+         * Indirect call (AST_FUNPTR_CALL): wrap->as.array.label is NULL
+         * and the function-pointer source lives in instr->r2. We load it
+         * into %r11 before the arg loads so arg evaluation can't clobber
+         * it. */
+        static const char *kIntRegs[] = {
             "rdi", "rsi", "rdx", "rcx", "r8", "r9"
+        };
+        static const char *kFloatRegs[] = {
+            "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7"
         };
         IrValue *wrap = instr->r1;
         Vec *args = wrap ? wrap->as.array.values : NULL;
         AoStr *fname = wrap ? wrap->as.array.label : NULL;
-        if (!fname) {
-            loggerPanic("ir-cg: IR_CALL with no function name\n");
-        }
-        u64 n = args ? args->size : 0;
-        if (n > 6) {
-            loggerPanic("ir-cg: IR_CALL with %llu args (slice limit 6)\n",
-                        (unsigned long long)n);
-        }
-        for (u64 i = 0; i < n; ++i) {
-            IrValue *a = vecGet(IrValue *, args, i);
-            irCgLoadToReg(ctx, a, kArgRegs[i]);
+        int indirect = (fname == NULL);
+        if (indirect) {
+            if (!instr->r2) {
+                loggerPanic("ir-cg: indirect IR_CALL without target\n");
+            }
+            irCgLoadToReg(ctx, instr->r2, "r11");
         }
 
-        /* If the callee is variadic, System V says %al holds the number of
-         * SSE registers used. The slice doesn't pass float args yet, so
-         * zero it. We look the function up by name in the global env. */
-        Ast *callee = (Ast *)mapGetLen(ctx->cc->global_env,
+        /* Discover the callee so we can route HolyC-variadic args to the
+         * stack. SysV-extern variadic doesn't need this — args still go
+         * in regs. */
+        Ast *callee = NULL;
+        if (!indirect) {
+            callee = (Ast *)mapGetLen(ctx->cc->global_env,
                                        fname->data, fname->len);
-        int callee_variadic =
-            callee && callee->type && callee->type->has_var_args;
-        if (callee_variadic) {
-            aoStrCatPrintf(ctx->buf, "xorl   %%eax, %%eax\n\t");
+        }
+        int holyc_variadic =
+            callee && callee->type && callee->type->has_var_args &&
+            callee->kind != AST_EXTERN_FUNC;
+
+        /* var_arg_start = number of args that go in registers. The +1 is
+         * the count argument that the parser injects right before the
+         * variadic values. For non-variadic callees, var_arg_start
+         * effectively means "all args go in regs". */
+        int var_arg_start = -1;
+        if (holyc_variadic && callee->params) {
+            for (u64 i = 0; i < callee->params->size; ++i) {
+                Ast *p = vecGet(Ast *, callee->params, i);
+                var_arg_start++;
+                if (p->kind == AST_VAR_ARGS) break;
+            }
+            var_arg_start += 1;  /* matches asmPrepFuncCallArgs */
         }
 
-        aoStrCatPrintf(ctx->buf, "call   %s\n\t",
-                       asmNormaliseFunctionName(fname->data));
+        u64 n = args ? args->size : 0;
+
+        /* Partition args into reg-bound vs stack-bound. */
+        IrValue **stack_args = NULL;
+        int n_stack = 0;
+        if (holyc_variadic && (s64)n > var_arg_start) {
+            stack_args = (IrValue **)alloca(sizeof(IrValue *) *
+                                            (n - var_arg_start));
+        }
+
+        /* If any stack args, ensure %rsp ends up 16-byte-aligned at the
+         * call. Each push is 8 bytes; an odd count needs an 8-byte pad. */
+        int n_stack_total = (holyc_variadic && (s64)n > var_arg_start)
+                            ? (int)(n - var_arg_start) : 0;
+        int needs_pad = (n_stack_total & 1) ? 1 : 0;
+        if (needs_pad) {
+            aoStrCatPrintf(ctx->buf, "subq   $8, %%rsp\n\t");
+        }
+
+        /* Push stack args in reverse order so the first one ends up at
+         * the lowest stack offset (rsp+0 after all pushes). */
+        if (holyc_variadic && n_stack_total > 0) {
+            for (s64 i = (s64)n - 1; i >= var_arg_start; --i) {
+                IrValue *a = vecGet(IrValue *, args, (u64)i);
+                if (irIsFloat(a->type)) {
+                    irCgLoadToXmm(ctx, a, "xmm0");
+                    aoStrCatPrintf(ctx->buf,
+                                   "subq   $8, %%rsp\n\t"
+                                   "movsd  %%xmm0, (%%rsp)\n\t");
+                } else {
+                    irCgLoadToReg(ctx, a, "rax");
+                    aoStrCatPrintf(ctx->buf, "pushq  %%rax\n\t");
+                }
+                n_stack++;
+            }
+        }
+        (void)stack_args; /* unused — we walk the args vec directly */
+
+        /* Reg args. For HolyC variadic, that's positions [0, var_arg_start);
+         * for everything else, all args. */
+        u64 n_reg = holyc_variadic && (s64)n > var_arg_start
+                    ? (u64)var_arg_start : n;
+        int int_idx = 0, float_idx = 0;
+        for (u64 i = 0; i < n_reg; ++i) {
+            IrValue *a = vecGet(IrValue *, args, i);
+            if (irIsFloat(a->type)) {
+                if (float_idx >= 8) {
+                    loggerPanic("ir-cg: too many float args (slice limit 8)\n");
+                }
+                irCgLoadToXmm(ctx, a, kFloatRegs[float_idx++]);
+            } else {
+                if (int_idx >= 6) {
+                    loggerPanic("ir-cg: too many int args (slice limit 6)\n");
+                }
+                irCgLoadToReg(ctx, a, kIntRegs[int_idx++]);
+            }
+        }
+
+        /* SysV variadic ABI: %al holds the count of SSE registers used.
+         * The AST codegen sets it whenever any float args are passed. */
+        if (float_idx > 0) {
+            aoStrCatPrintf(ctx->buf, "movl   $%d, %%eax\n\t", float_idx);
+        }
+
+        if (indirect) {
+            aoStrCatPrintf(ctx->buf, "call   *%%r11\n\t");
+        } else {
+            aoStrCatPrintf(ctx->buf, "call   %s\n\t",
+                           asmNormaliseFunctionName(fname->data));
+        }
+
+        /* Tear down stack args + alignment pad. */
+        int teardown = n_stack * 8 + (needs_pad ? 8 : 0);
+        if (teardown > 0) {
+            aoStrCatPrintf(ctx->buf, "addq   $%d, %%rsp\n\t", teardown);
+        }
 
         if (instr->dst && instr->dst->type != IR_TYPE_VOID &&
             instr->dst->kind == IR_VAL_TMP) {
-            irCgSpillDst(ctx, instr, "rax");
+            if (irIsFloat(instr->dst->type)) {
+                irCgStoreXmm(ctx, instr->dst, "xmm0");
+            } else {
+                irCgSpillDst(ctx, instr, "rax");
+            }
         }
         break;
     }
@@ -1019,8 +1374,18 @@ static int irCgComputeAstLayout(Ast *ast_func, IrFunction *ir_func) {
 
     listForEach(ast_func->locals) {
         Ast *l = (Ast *)it->value;
-        u32 lid = (l->kind == AST_DEFAULT_PARAM)
-                  ? l->declvar->lvar_id : l->lvar_id;
+        u32 lid;
+        int sz;
+        if (l->kind == AST_DEFAULT_PARAM) {
+            lid = l->declvar->lvar_id;
+            sz = l->declvar->type->size;
+        } else if (l->kind == AST_FUNPTR) {
+            lid = l->fn_ptr_id;
+            sz = 8; /* function pointer is always 8 bytes */
+        } else {
+            lid = l->lvar_id;
+            sz = l->type->size;
+        }
         IrValue *iv = irFnGetVar(ir_func, lid);
         int promoted = iv && iv->kind == IR_VAL_TMP &&
                        !setHas(surviving, (void *)(u64)iv->as.var.id);
@@ -1030,8 +1395,8 @@ static int irCgComputeAstLayout(Ast *ast_func, IrFunction *ir_func) {
              * NOP'd) so leaving it 0 is safe. */
             continue;
         }
-        total += align(l->type->size, 8);
-        new_offset -= l->type->size;
+        total += align(sz, 8);
+        new_offset -= sz;
         l->loff = new_offset;
     }
 
@@ -1039,7 +1404,8 @@ static int irCgComputeAstLayout(Ast *ast_func, IrFunction *ir_func) {
     if (ast_func->params) {
         for (u64 i = 0; i < ast_func->params->size; ++i) {
             Ast *p = vecGet(Ast *, ast_func->params, i);
-            param_total += align(p->type->size, 8);
+            int sz = (p->kind == AST_FUNPTR) ? 8 : p->type->size;
+            param_total += align(sz, 8);
         }
     }
     total += param_total;
@@ -1052,8 +1418,9 @@ static int irCgComputeAstLayout(Ast *ast_func, IrFunction *ir_func) {
     if (ast_func->params) {
         for (u64 i = 0; i < ast_func->params->size; ++i) {
             Ast *p = vecGet(Ast *, ast_func->params, i);
+            int sz = (p->kind == AST_FUNPTR) ? 8 : p->type->size;
             p->loff = -offset;
-            offset -= align(p->type->size, 8);
+            offset -= align(sz, 8);
         }
     }
     setRelease(surviving);
@@ -1075,14 +1442,25 @@ static void irCgEmitFunctionPrologue(AoStr *buf, Ast *func, int total_stack) {
 }
 
 static void irCgEmitParamSpills(AoStr *buf, Ast *func) {
-    static const char *kArgRegs[] = {
+    static const char *kIntRegs[] = {
         "rdi", "rsi", "rdx", "rcx", "r8", "r9"
     };
+    static const char *kFloatRegs[] = {
+        "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7"
+    };
     if (!func->params) return;
+    int int_idx = 0, float_idx = 0;
     for (u64 i = 0; i < func->params->size; ++i) {
         Ast *p = vecGet(Ast *, func->params, i);
-        aoStrCatPrintf(buf, "movq   %%%s, %d(%%rbp)\n\t",
-                       kArgRegs[i], p->loff);
+        AstType *ptype = (p->kind == AST_DEFAULT_PARAM)
+                         ? p->declvar->type : p->type;
+        if (ptype && ptype->kind == AST_TYPE_FLOAT) {
+            aoStrCatPrintf(buf, "movsd  %%%s, %d(%%rbp)\n\t",
+                           kFloatRegs[float_idx++], p->loff);
+        } else {
+            aoStrCatPrintf(buf, "movq   %%%s, %d(%%rbp)\n\t",
+                           kIntRegs[int_idx++], p->loff);
+        }
     }
 }
 

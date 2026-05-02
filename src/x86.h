@@ -1,6 +1,8 @@
 #ifndef ASM_H
 #define ASM_H
 
+#include <stdint.h>
+
 #include "aostr.h"
 #include "ast.h"
 #include "cctrl.h"
@@ -14,5 +16,6 @@ void asmFunctionLeave(AoStr *buf);
 int asmHasRet(AoStr *buf);
 void asmRemovePreviousTab(AoStr *buf);
 char *asmNormaliseFunctionName(char *fname);
+uint64_t ieee754(double _f64);
 
 #endif // !ASM_H

@@ -2595,7 +2595,7 @@ AoStr *asmGenerate(Cctrl *cc) {
             if (ast->flags & AST_FLAG_INLINE) {
                 continue;
             }
-            if (irFunctionEligibleForSlice(ast)) {
+            if (irFunctionEligibleForSliceCc(cc, ast)) {
                 asmFunctionFromIr(cc,asmbuf,ast);
             } else {
                 asmFunction(cc,asmbuf,ast);

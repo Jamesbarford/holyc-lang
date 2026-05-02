@@ -173,6 +173,11 @@ typedef struct IrVar {
     u16 size;
 } IrVar;
 
+/* Set on IR_VAL_GLOBAL when the name is a HolyC function (not a data label).
+ * The codegen runs asmNormaliseFunctionName() on it (e.g. Main -> _main /
+ * _MainFn) before emitting the leaq. */
+#define IR_VAL_FLAG_FUNC 0x1
+
 struct IrValue {
     IrValueType type;
     IrValueKind kind;
@@ -295,6 +300,11 @@ typedef struct IrCtx {
     /* Loop-context stack for break/continue. Slice-0 doesn't go deep. */
     IrLoopCtx loop_stack[IR_LOOP_STACK_MAX];
     int loop_depth;
+
+    /* Map<AoStr *label_name -> IrBlock *> for goto/label resolution
+     * within the current function. Forward gotos create the target block
+     * lazily; the matching AST_LABEL then reuses it. */
+    Map *labels;
 } IrCtx;
 
 

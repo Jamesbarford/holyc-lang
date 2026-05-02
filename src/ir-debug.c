@@ -453,12 +453,23 @@ AoStr *irInstrToString(IrInstr *ir_instr) {
                 aoStrCatLen(buf,str_lit("    "));
             }
 
+            AoStr *callee = ir_instr->r1->as.array.label;
+            if (!callee && ir_instr->r2) {
+                /* Indirect call: r2 holds the function-pointer source. */
+                callee = irValueToString(ir_instr->r2);
+            }
             if (ir_instr->dst) {
                 AoStr *ir_ret_var = irValueToString(ir_instr->dst);
-                aoStrCatFmt(buf, "%s %S, %S", op, ir_ret_var, ir_instr->r1->as.array.label);
+                if (callee) {
+                    aoStrCatFmt(buf, "%s %S, %S", op, ir_ret_var, callee);
+                } else {
+                    aoStrCatFmt(buf, "%s %S, <indirect?>", op, ir_ret_var);
+                }
                 aoStrRelease(ir_ret_var);
+            } else if (callee) {
+                aoStrCatFmt(buf, "%s %S", op, callee);
             } else {
-                aoStrCatFmt(buf, "%s %S", op, ir_instr->r1->as.array.label);
+                aoStrCatFmt(buf, "%s <indirect?>", op);
             }
             break;
         }

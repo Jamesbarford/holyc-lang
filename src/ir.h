@@ -16,6 +16,7 @@ IrCtx *irLowerProgram(Cctrl *cc);
  * assignment LHS limited to AST_LVAR). Return type and all locals/params
  * must be int or void (the return type only). */
 int irFunctionEligibleForSlice(Ast *ast_func);
+int irFunctionEligibleForSliceCc(Cctrl *cc, Ast *ast_func);
 
 /* Lower a single AST function to IR. Caller must have verified eligibility. */
 IrFunction *irLowerFunction(IrCtx *ctx, Ast *ast_func);
