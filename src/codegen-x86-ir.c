@@ -385,6 +385,23 @@ static void irCgBlockLabel(IrCgCtx *ctx, IrBlock *block, char *out, int n) {
     snprintf(out, n, ".LIRBB%d_%u", ctx->func_uid, block->id);
 }
 
+/* Width in bytes that the codegen should use when reading/writing an
+ * IrValue. Tmps carry an explicit `var.size`; other kinds fall back to
+ * the IR type tag (pointer/F64/I64 = 8, I32 = 4, I16 = 2, I8/CHAR = 1). */
+static u32 irValueByteSize(IrValue *v) {
+    if (!v) return 8;
+    if (v->kind == IR_VAL_TMP || v->kind == IR_VAL_LOCAL ||
+        v->kind == IR_VAL_PARAM) {
+        if (v->as.var.size > 0) return v->as.var.size;
+    }
+    switch (v->type) {
+    case IR_TYPE_I8:  return 1;
+    case IR_TYPE_I16: return 2;
+    case IR_TYPE_I32: return 4;
+    default:          return 8;
+    }
+}
+
 /* ---- fusion pre-pass --------------------------------------------------- */
 
 /* True if the instruction's natural codegen ends with the result in %rax,
@@ -895,19 +912,55 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
          * loff is already bound to base+offset. Nothing to emit. */
         break;
 
-    case IR_LOAD:
-        /* dst = *r1. r1 is a slot pointer (always addressed by offset, never
-         * read into rax), so R1_IN_RAX never applies here. */
-        irCgLoadToReg(ctx, instr->r1, "rax");
+    case IR_LOAD: {
+        /* dst = *r1. r1 is a slot pointer — most of the time it's an
+         * alloca's 8-byte-aligned slot, but it can also be a GEP-aliased
+         * field within a packed class. Pick the load width from the
+         * destination type so we don't pull in adjacent-field bytes. */
+        int loff = irCgGetLoff(ctx, instr->r1);
+        u32 sz = instr->dst ? instr->dst->as.var.size : 8;
+        switch (sz) {
+        case 1:
+            aoStrCatPrintf(ctx->buf, "movzbq %d(%%rbp), %%rax\n\t", loff);
+            break;
+        case 2:
+            aoStrCatPrintf(ctx->buf, "movzwq %d(%%rbp), %%rax\n\t", loff);
+            break;
+        case 4:
+            aoStrCatPrintf(ctx->buf, "movslq %d(%%rbp), %%rax\n\t", loff);
+            break;
+        default:
+            aoStrCatPrintf(ctx->buf, "movq   %d(%%rbp), %%rax\n\t", loff);
+            break;
+        }
         irCgSpillDst(ctx, instr, "rax");
         break;
+    }
 
-    case IR_STORE:
-        /* *dst = r1. dst is a slot pointer; r1 is the value. The store
-         * always writes memory so spill-skipping doesn't apply. */
+    case IR_STORE: {
+        /* *dst = r1. dst is a slot pointer; r1 is the value. Same width
+         * concern as IR_STORE_DEREF — `p.a = 1` for a `U8 a` field in
+         * a packed class would otherwise overwrite the 7 bytes after
+         * `a`. Pick the store width from r1's value type. */
         irCgLoadFirstSrc(ctx, instr, instr->r1);
-        irCgStoreReg(ctx, instr->dst, "rax");
+        int loff = irCgGetLoff(ctx, instr->dst);
+        u32 sz = irValueByteSize(instr->r1);
+        switch (sz) {
+        case 1:
+            aoStrCatPrintf(ctx->buf, "movb   %%al, %d(%%rbp)\n\t", loff);
+            break;
+        case 2:
+            aoStrCatPrintf(ctx->buf, "movw   %%ax, %d(%%rbp)\n\t", loff);
+            break;
+        case 4:
+            aoStrCatPrintf(ctx->buf, "movl   %%eax, %d(%%rbp)\n\t", loff);
+            break;
+        default:
+            aoStrCatPrintf(ctx->buf, "movq   %%rax, %d(%%rbp)\n\t", loff);
+            break;
+        }
         break;
+    }
 
     case IR_LOAD_DEREF: {
         /* dst = *r1, where r1 is a runtime pointer value (not a slot id).
@@ -927,12 +980,22 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
         break;
     }
 
-    case IR_STORE_DEREF:
-        /* *dst = r1; dst holds a runtime pointer, r1 is the value. */
+    case IR_STORE_DEREF: {
+        /* *dst = r1; dst holds a runtime pointer, r1 is the value.
+         * Pick the store width from r1's value type — writing 8 bytes
+         * through a U8/U16/I32 pointer would trample adjacent struct
+         * fields. Mirrors IR_LOAD_DEREF. */
         irCgLoadFirstSrc(ctx, instr, instr->r1);
         irCgLoadToReg(ctx, instr->dst, "rcx");
-        aoStrCatPrintf(ctx->buf, "movq   %%rax, (%%rcx)\n\t");
+        u32 sz = irValueByteSize(instr->r1);
+        switch (sz) {
+        case 1: aoStrCatPrintf(ctx->buf, "movb   %%al, (%%rcx)\n\t"); break;
+        case 2: aoStrCatPrintf(ctx->buf, "movw   %%ax, (%%rcx)\n\t"); break;
+        case 4: aoStrCatPrintf(ctx->buf, "movl   %%eax, (%%rcx)\n\t"); break;
+        default: aoStrCatPrintf(ctx->buf, "movq   %%rax, (%%rcx)\n\t"); break;
+        }
         break;
+    }
 
     case IR_LEA: {
         /* dst = &r1. r1 is either a stack slot (TMP/LOCAL/PARAM) or a
