@@ -31,6 +31,7 @@ enum CliArgType {
     CLI_VERSION,
     CLI_MEM_STATS,
     CLI_DUMP_IR,
+    CLI_IR_BACKEND,
     CLI_HELP,
     CLI_TERRY,
 };
@@ -63,6 +64,7 @@ typedef struct CliArgs {
     int cfg_create_png;
     int cfg_create_svg;
     int dump_ir;
+    int ir_backend;
     int asm_debug_comments;
     int assemble_only;
     int emit_dylib;

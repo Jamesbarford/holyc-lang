@@ -313,6 +313,10 @@ int main(int argc, char **argv) {
         cctrlSetCommandLineDefines(cc,args.defines_list);
     }
 
+    if (args.ir_backend) {
+        cc->flags |= CCTRL_IR_BACKEND;
+    }
+
     if (args.print_tokens) {
         compileToTokens(cc,&args,lexer_flags);
         goto success;

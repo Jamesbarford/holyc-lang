@@ -16,6 +16,8 @@
 #define CCTRL_SAVE_ANONYMOUS  (1<<1)
 #define CCTRL_PASTE_DEFINES   (1<<2)
 #define CCTRL_PRESERVE_SIZEOF (1<<3)
+/* @TODO - remove this as we should only be using this as the backend */
+#define CCTRL_IR_BACKEND      (1<<4)
 
 /* For messages */
 #define CCTRL_ICE   0

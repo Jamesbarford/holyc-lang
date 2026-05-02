@@ -88,6 +88,7 @@ static CliParser parsers[] = {
     {str_lit("-o-"),        0, CLI_TO_STDOUT, "-o-", "Output assembly to stdout, only for use with -S", &cliParseNop},
     {str_lit("-transpile"), 0, CLI_TRANSPILE, "-transpile", "Transpile the code to C, this is best effort", &cliParseNop},
     {str_lit("-D"),         0, CLI_DEFINES_LIST, "-D<VAR>", "Set a compiler #define (does not accept a value)", &cliParseDefine},
+    {str_lit("--ir-backend"),  0, CLI_IR_BACKEND, "--ir-backend", "Use the beta IR backend for codegen, for `aarch64` this is the only backend" , &cliParseNop},
     {str_lit("--dump-ir"),  0, CLI_DUMP_IR, "--dump-ir", "Dump ir to stdout" , &cliParseNop},
     {str_lit("--mem-stats"),  0, CLI_MEM_STATS, "--mem-stats", "Stats about memory usage when compiling" , &cliParseNop},
     {str_lit("--version"),  0, CLI_VERSION, "--version", "Print the version of the compiler", &cliParseNop},
@@ -404,6 +405,7 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
                 break;
             }
             case CLI_DUMP_IR:   args->dump_ir = 1; break;
+            case CLI_IR_BACKEND: args->ir_backend = 1; break;
             case CLI_MEM_STATS: args->print_mem_stats = 1; break;
             case CLI_HELP:    cliPrintUsage(); break;
             case CLI_VERSION: cliVersionPrint(args); break;
