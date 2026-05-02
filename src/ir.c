@@ -809,7 +809,16 @@ static int irExprIsSliceEligible(Ast *ast) {
         if (ftk != AST_TYPE_INT && ftk != AST_TYPE_CHAR &&
             ftk != AST_TYPE_POINTER && ftk != AST_TYPE_FLOAT) return 0;
         if (!ast->cls) return 0;
+        /* Walk the CLASS_REF chain to its root. Intermediate CLASS_REFs
+         * carry CLASS type (sub-struct view) which would fail the scalar
+         * field-type check above, but they're never loaded as values —
+         * they're addressing steps. So we only check the root, not each
+         * layer. */
         Ast *cls = ast->cls;
+        while (cls && cls->kind == AST_CLASS_REF) {
+            cls = cls->cls;
+        }
+        if (!cls) return 0;
         if (cls->kind == AST_LVAR && cls->type &&
             cls->type->kind == AST_TYPE_CLASS) return 1;
         if (cls->kind == AST_UNOP && cls->unop == AST_UN_OP_DEREF) {
@@ -886,8 +895,31 @@ static int irStmtIsSliceEligible(Ast *ast) {
         return 1;
     case AST_BREAK:
     case AST_CONTINUE:
-        /* Lowering enforces these appear inside a loop. */
+        /* Lowering enforces these appear inside a loop / switch. */
         return 1;
+    case AST_SWITCH: {
+        /* `switch (cond) { case ...: stmts; ... }`. Cond + every case
+         * body must be eligible; AST_CASE / AST_DEFAULT are not exposed
+         * at statement level outside the switch — their case_asts are
+         * iterated directly in lowering. */
+        if (!ast->switch_cond ||
+            !irExprIsSliceEligible(ast->switch_cond)) return 0;
+        if (ast->cases) {
+            for (u64 i = 0; i < ast->cases->size; ++i) {
+                Ast *_case = (Ast *)ast->cases->entries[i];
+                if (!_case || !_case->case_asts) continue;
+                listForEach(_case->case_asts) {
+                    if (!irStmtIsSliceEligible((Ast *)it->value)) return 0;
+                }
+            }
+        }
+        if (ast->case_default && ast->case_default->case_asts) {
+            listForEach(ast->case_default->case_asts) {
+                if (!irStmtIsSliceEligible((Ast *)it->value)) return 0;
+            }
+        }
+        return 1;
+    }
     case AST_GOTO:
     case AST_LABEL:
         /* Lowering creates / consumes a per-function label→block map.
@@ -1566,8 +1598,17 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
             IrValue *load_dst = irTmp(field_ir_type, ast->type->size);
             int offset = ast->type->offset;
 
-            if (cls->kind == AST_UNOP && cls->unop == AST_UN_OP_DEREF) {
-                /* Pointer-to-class via parser-inserted deref. */
+            /* Nested CLASS_REF: walk the chain summing offsets until we
+             * reach the root (an LVAR or a deref). The codegen for
+             * stack-class fields uses IR_GEP+IR_LOAD; for ptr-to-class it
+             * uses IR_IADD+IR_LOAD_DEREF. Both handle a single combined
+             * offset at the leaf. */
+            while (cls && cls->kind == AST_CLASS_REF) {
+                offset += cls->type->offset;
+                cls = cls->cls;
+            }
+
+            if (cls && cls->kind == AST_UNOP && cls->unop == AST_UN_OP_DEREF) {
                 IrValue *ptr_val = irExpr(ctx, cls->operand);
                 IrValue *addr = ptr_val;
                 if (offset != 0) {
@@ -1581,9 +1622,9 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
                 return load_dst;
             }
 
-            if (cls->kind != AST_LVAR) {
+            if (!cls || cls->kind != AST_LVAR) {
                 loggerPanic("Slice AST_CLASS_REF: unsupported cls kind %s\n",
-                            astKindToString(cls->kind));
+                            cls ? astKindToString(cls->kind) : "<null>");
             }
             IrValue *base = irFnGetVar(ctx->cur_func, cls->lvar_id);
             if (!base) loggerPanic("AST_CLASS_REF on unknown lvar\n");
@@ -1840,7 +1881,16 @@ static IrAssignTarget irLowerAssignTarget(IrCtx *ctx, Ast *lhs) {
         int offset = lhs->type->offset;
         out.type = lhs->type;
 
-        if (cls->kind == AST_UNOP && cls->unop == AST_UN_OP_DEREF) {
+        /* Nested ref `a.b.c` / `p->b.c`: walk the chain summing each
+         * layer's intra-parent offset until we reach the root (an LVAR
+         * or a pointer-deref). The leaf addressing then sees a single
+         * combined offset. Mirrors the read-path lowering. */
+        while (cls && cls->kind == AST_CLASS_REF) {
+            offset += cls->type->offset;
+            cls = cls->cls;
+        }
+
+        if (cls && cls->kind == AST_UNOP && cls->unop == AST_UN_OP_DEREF) {
             /* Pointer-to-class field write: evaluate the pointer, add the
              * field's offset, store via STORE_DEREF. */
             IrValue *ptr_val = irExpr(ctx, cls->operand);
@@ -1856,7 +1906,7 @@ static IrAssignTarget irLowerAssignTarget(IrCtx *ctx, Ast *lhs) {
             return out;
         }
 
-        if (cls->kind != AST_LVAR) {
+        if (!cls || cls->kind != AST_LVAR) {
             loggerPanic("Slice AST_CLASS_REF assign: unsupported cls kind %s\n",
                         astKindToString(cls->kind));
         }
@@ -2310,6 +2360,127 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
             break;
         }
 
+        case AST_SWITCH: {
+            /* Lower as an if-else chain: evaluate cond once, then for
+             * each case test the range and branch to that case's body
+             * block; on no-match fall through to the next test. After
+             * all tests, branch to the default body (or end if no
+             * default). Bodies fall through to the next case body
+             * unless they end in break/return/goto. break inside the
+             * switch jumps to end_block (pushed via irPushLoopCtx with
+             * NULL continue, since switch has no continue). */
+            IrValue *cond = irExpr(ctx, ast->switch_cond);
+            int n = ast->cases ? (int)ast->cases->size : 0;
+
+            IrBlock *end_block = irBlockNew();
+            IrBlock *default_block = ast->case_default
+                ? irBlockNew() : end_block;
+
+            IrBlock **body_blocks = NULL;
+            if (n > 0) {
+                body_blocks = (IrBlock **)calloc(n, sizeof(IrBlock *));
+                for (int i = 0; i < n; i++) body_blocks[i] = irBlockNew();
+            }
+
+            irPushLoopCtx(ctx, NULL, end_block);
+
+            /* Test chain. */
+            for (int i = 0; i < n; i++) {
+                Ast *_case = (Ast *)ast->cases->entries[i];
+                IrBlock *body = body_blocks[i];
+                IrBlock *next_test = (i + 1 < n)
+                    ? irBlockNew() : default_block;
+
+                if (_case->case_begin == _case->case_end) {
+                    IrValue *cmp = irTmp(IR_TYPE_I8, 1);
+                    IrValue *k = irConstInt(IR_TYPE_I64,
+                                            _case->case_begin);
+                    IrInstr *cmp_instr = irInstrNew(IR_ICMP, cmp,
+                                                    cond, k);
+                    cmp_instr->extra.cmp_kind = IR_CMP_EQ;
+                    irBlockAddInstr(ctx, cmp_instr);
+                    irBranch(ctx->cur_func, ctx->cur_block, cmp,
+                             body, next_test);
+                } else {
+                    /* Range case `case lo...hi:` -> two compares
+                     * chained with a transient block. */
+                    IrBlock *upper = irBlockNew();
+                    IrValue *ge = irTmp(IR_TYPE_I8, 1);
+                    IrValue *kb = irConstInt(IR_TYPE_I64,
+                                             _case->case_begin);
+                    IrInstr *ge_i = irInstrNew(IR_ICMP, ge, cond, kb);
+                    ge_i->extra.cmp_kind = IR_CMP_GE;
+                    irBlockAddInstr(ctx, ge_i);
+                    irBranch(ctx->cur_func, ctx->cur_block, ge,
+                             upper, next_test);
+                    irFnAddBlock(ctx->cur_func, upper);
+                    ctx->cur_block = upper;
+
+                    IrValue *le = irTmp(IR_TYPE_I8, 1);
+                    IrValue *ke = irConstInt(IR_TYPE_I64,
+                                             _case->case_end);
+                    IrInstr *le_i = irInstrNew(IR_ICMP, le, cond, ke);
+                    le_i->extra.cmp_kind = IR_CMP_LE;
+                    irBlockAddInstr(ctx, le_i);
+                    irBranch(ctx->cur_func, ctx->cur_block, le,
+                             body, next_test);
+                }
+
+                if (i + 1 < n) {
+                    irFnAddBlock(ctx->cur_func, next_test);
+                    ctx->cur_block = next_test;
+                }
+            }
+
+            /* If there were no cases, the cond eval ran but we never
+             * branched — just jump to default/end. */
+            if (n == 0 && !ctx->cur_block->sealed) {
+                IrInstr *j = irJump(ctx->cur_func, ctx->cur_block,
+                                    default_block);
+                irBlockAddInstr(ctx, j);
+            }
+
+            /* Case bodies — each falls through to the next on no break. */
+            for (int i = 0; i < n; i++) {
+                irFnAddBlock(ctx->cur_func, body_blocks[i]);
+                ctx->cur_block = body_blocks[i];
+                Ast *_case = (Ast *)ast->cases->entries[i];
+                if (_case->case_asts) {
+                    listForEach(_case->case_asts) {
+                        irLowerAst(ctx, (Ast *)it->value);
+                    }
+                }
+                if (!ctx->cur_block->sealed) {
+                    IrBlock *next = (i + 1 < n)
+                        ? body_blocks[i + 1] : default_block;
+                    IrInstr *j = irJump(ctx->cur_func, ctx->cur_block,
+                                        next);
+                    irBlockAddInstr(ctx, j);
+                }
+            }
+
+            if (ast->case_default) {
+                irFnAddBlock(ctx->cur_func, default_block);
+                ctx->cur_block = default_block;
+                if (ast->case_default->case_asts) {
+                    listForEach(ast->case_default->case_asts) {
+                        irLowerAst(ctx, (Ast *)it->value);
+                    }
+                }
+                if (!ctx->cur_block->sealed) {
+                    IrInstr *j = irJump(ctx->cur_func, ctx->cur_block,
+                                        end_block);
+                    irBlockAddInstr(ctx, j);
+                }
+            }
+
+            irPopLoopCtx(ctx);
+            irFnAddBlock(ctx->cur_func, end_block);
+            ctx->cur_block = end_block;
+            free(body_blocks);
+            break;
+        }
+
         case AST_FUNC:
         case AST_LITERAL:
         case AST_ARRAY_INIT:
@@ -2325,7 +2496,6 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
         case AST_JUMP:
         case AST_EXTERN_FUNC:
         case AST_PLACEHOLDER:
-        case AST_SWITCH:
         case AST_DEFAULT:
         case AST_SIZEOF:
         case AST_COMMENT:
