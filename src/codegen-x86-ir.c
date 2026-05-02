@@ -489,8 +489,16 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
          * Pick the store width from r1's value type — writing 8 bytes
          * through a U8/U16/I32 pointer would trample adjacent struct
          * fields. Mirrors IR_LOAD_DEREF. */
-        irCgLoadFirstSrc(ctx, instr, instr->r1);
-        irCgLoadToReg(ctx, instr->dst, "rcx");
+        if (instr->flags & IRCG_DST_IN_REG) {
+            /* Peephole-fused with the prior rax-defining instr: its
+             * value is the address we're storing through. Stash %rax
+             * in %rcx before the r1 load clobbers it. */
+            aoStrCatPrintf(ctx->buf, "movq   %%rax, %%rcx\n\t");
+            irCgLoadFirstSrc(ctx, instr, instr->r1);
+        } else {
+            irCgLoadFirstSrc(ctx, instr, instr->r1);
+            irCgLoadToReg(ctx, instr->dst, "rcx");
+        }
         u32 sz = irValueByteSize(instr->r1);
         switch (sz) {
         case 1: aoStrCatPrintf(ctx->buf, "movb   %%al, (%%rcx)\n\t"); break;

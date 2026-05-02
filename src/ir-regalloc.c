@@ -81,8 +81,14 @@ void irCgAllocOperandsForInstr(IrRaCtx *ra, IrInstr *I, int start) {
         return;
 
     case IR_STORE_DEREF:
-        irCgAllocTmp(ra, I->dst, start);
-        irCgAllocTmp(ra, I->r1, start);
+        /* Address slot only matters when STORE_DEREF will load it from
+         * memory; if peephole fused with the prior rax-defining instr
+         * (IRCG_DST_IN_REG), the address arrives via `movq %rax, %rcx`
+         * with no slot involved. */
+        if (!(I->flags & IRCG_DST_IN_REG)) {
+            irCgAllocTmp(ra, I->dst, start);
+        }
+        if (load_r1) irCgAllocTmp(ra, I->r1, start);
         return;
 
     case IR_LEA:

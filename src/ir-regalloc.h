@@ -55,6 +55,15 @@
  * jump. */
 #define IRCG_CMP_FUSED_BR     (1u << 3)
 #define IRCG_BR_USE_PRIOR_CMP (1u << 4)
+/* Set on an IR_STORE_DEREF whose `dst` (address) tmp came from the
+ * immediately-prior rax-defining instruction (single-use). The
+ * producer kept its result in the result register (FUSE_TO_NEXT),
+ * and the STORE_DEREF stashes that into the scratch register
+ * (`movq %rax, %rcx` on x86) before loading r1 into the result
+ * register and emitting the indirect store. Saves the slot spill /
+ * reload that would otherwise sit between IADD and STORE_DEREF for
+ * `*(p + offset) = value` patterns. */
+#define IRCG_DST_IN_REG       (1u << 5)
 
 /* The slot-offset map plus a counter for "extra" stack reserved beyond
  * what the AST layout already covers (used by IR-only allocas, e.g. the

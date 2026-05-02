@@ -174,12 +174,63 @@ static void fuseTailValueToPhi(IrFunction *func, Map *uses) {
     }
 }
 
+/* Pattern: `IR_STORE_DEREF` whose `dst` tmp comes from the
+ * immediately-prior rax-defining instruction (typically IR_IADD that
+ * computed `&p->field`, but works for any rax-def) and is single-use.
+ * Without this fusion the codegen emits:
+ *
+ *     <op>     %dst, ...        ; result in result reg, then spill
+ *     <load>   slot -> rax       ; reload r1 (clobbers reg)
+ *     <load>   slot -> rcx       ; reload dst into scratch
+ *     <store>  rax -> (rcx)
+ *
+ * After fusion: skip the spill (FUSE_TO_NEXT on the def), and have
+ * STORE_DEREF stash the live result reg into the scratch reg before
+ * its r1 load (`movq %rax, %rcx`, then load r1, then store). One
+ * spill + one reload disappear; the address tmp's slot vanishes too. */
+static void fuseAddrIntoStoreDeref(IrFunction *func, Map *uses) {
+    listForEach(func->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        if (listEmpty(bb->instructions)) continue;
+        for (List *node = bb->instructions->next;
+             node != bb->instructions;
+             node = node->next)
+        {
+            IrInstr *cur = (IrInstr *)node->value;
+            if (cur->op != IR_STORE_DEREF) continue;
+            if (!cur->dst || cur->dst->kind != IR_VAL_TMP) continue;
+            if (useCount(uses, cur->dst) != 1) continue;
+            /* If the existing FUSE_TO_NEXT/R1_IN_REG annotator already
+             * paired the prior instr with this STORE_DEREF as r1, leave
+             * it alone - both fusions can't co-exist (they want the
+             * single rax-def's value in different registers). */
+            if (cur->flags & IRCG_R1_IN_REG) continue;
+            /* Walk back to the previous non-NOP, non-PHI instruction
+             * in this block. */
+            List *p = node->prev;
+            while (p != bb->instructions) {
+                IrInstr *cand = (IrInstr *)p->value;
+                if (cand->op != IR_NOP && cand->op != IR_PHI) break;
+                p = p->prev;
+            }
+            if (p == bb->instructions) continue;
+            IrInstr *prev = (IrInstr *)p->value;
+            if (!instrDefsIntoReg(prev)) continue;
+            if (!prev->dst || prev->dst->kind != IR_VAL_TMP) continue;
+            if (prev->dst->as.var.id != cur->dst->as.var.id) continue;
+            prev->flags |= IRCG_FUSE_TO_NEXT;
+            cur->flags  |= IRCG_DST_IN_REG;
+        }
+    }
+}
+
 void irPeephole(IrFunction *func) {
     if (!func) return;
     Map *uses = mapNew(64, &map_uint_to_uint_type);
     collectUses(func, uses);
     fuseCmpBr(func, uses);
     fuseTailValueToPhi(func, uses);
+    fuseAddrIntoStoreDeref(func, uses);
     mapRelease(uses);
 }
 
