@@ -455,6 +455,15 @@ IrInstr *irStore(IrValue *ir_dest, IrValue *ir_value) {
 
 IrValue *irExpr(IrCtx *ctx, Ast *ast);
 
+/* Forward decl for inc/dec lowering on AST_CLASS_REF — defined below
+ * alongside the assignment lowering. */
+typedef struct IrAssignTarget {
+    IrValue *target;
+    AstType *type;
+    int indirect;
+} IrAssignTarget;
+static IrAssignTarget irLowerAssignTarget(IrCtx *ctx, Ast *lhs);
+
 /* Slice-0 eligibility: walk an AST and reject anything we don't yet lower. */
 static int irTypeIsSliceInt(AstType *type) {
     return type && type->kind == AST_TYPE_INT;
@@ -659,7 +668,18 @@ static int irExprIsSliceEligible(Ast *ast) {
             && irExprIsSliceEligible(ast->right);
     case AST_UNOP:
         if (irUnOpIsSliceIncDec(ast->unop)) {
-            if (!ast->operand || ast->operand->kind != AST_LVAR) return 0;
+            if (!ast->operand) return 0;
+            int operand_ok = 0;
+            if (ast->operand->kind == AST_LVAR) {
+                operand_ok = 1;
+            } else if (ast->operand->kind == AST_CLASS_REF) {
+                /* `v->field++` / `cls.field++`: same shape as a compound
+                 * assign on the field — irLowerAssign already knows how
+                 * to address it. We just need the field type to be a
+                 * scalar we can load+add+store. */
+                operand_ok = irExprIsSliceEligible(ast->operand);
+            }
+            if (!operand_ok) return 0;
             if (irTypeIsSliceInt(ast->operand->type)) return 1;
             /* Pointer ++/-- scales by sizeof(*ptr). */
             if (ast->operand->type &&
@@ -1683,9 +1703,10 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
                 irBlockAddInstr(ctx, irICmp(dst, IR_CMP_EQ, v, zero));
                 return dst;
             }
-            /* Slice supports ++/-- on int locals. The store to the lvar's
-             * slot is the side effect; we return either the original value
-             * (POST) or the incremented one (PRE). */
+            /* Slice supports ++/-- on int / pointer locals and on int /
+             * pointer class fields. The store back is the side effect; we
+             * return either the original value (POST) or the incremented
+             * one (PRE). */
             if (ast->unop != AST_UN_OP_PRE_INC &&
                 ast->unop != AST_UN_OP_PRE_DEC &&
                 ast->unop != AST_UN_OP_POST_INC &&
@@ -1693,22 +1714,40 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
                 loggerPanic("Slice unop only supports ++/-- and *, got %s\n",
                             astUnOpKindToString(ast->unop));
             }
-            Ast *lvar = ast->operand;
-            IrValue *slot = irFnGetVar(ctx->cur_func, lvar->lvar_id);
-            if (!slot) loggerPanic("inc/dec on unknown lvar\n");
+            Ast *operand = ast->operand;
+            AstType *val_type = operand->type;
+            IrValueType ir_type = irConvertType(val_type);
+            int size = val_type->size;
 
-            IrValueType ir_type = irConvertType(lvar->type);
-            int size = lvar->type->size;
+            /* Resolve the slot/address-and-load shape: for an lvar we
+             * load/store through the slot; for a class field we reuse
+             * irLowerAssignTarget so the addressing logic (LEA+offset for
+             * stack class, ptr+offset for ptr-to-class) is shared with
+             * compound assign. */
+            IrValue *target = NULL;
+            int indirect = 0;
+            if (operand->kind == AST_LVAR) {
+                target = irFnGetVar(ctx->cur_func, operand->lvar_id);
+                if (!target) loggerPanic("inc/dec on unknown lvar\n");
+            } else if (operand->kind == AST_CLASS_REF) {
+                IrAssignTarget tgt = irLowerAssignTarget(ctx, operand);
+                target = tgt.target;
+                indirect = tgt.indirect;
+            } else {
+                loggerPanic("inc/dec unhandled operand kind %s\n",
+                            astKindToString(operand->kind));
+            }
 
             IrValue *cur = irTmp(ir_type, size);
-            irBlockAddInstr(ctx, irLoad(cur, slot));
+            IrOp load_op = indirect ? IR_LOAD_DEREF : IR_LOAD;
+            irBlockAddInstr(ctx, irInstrNew(load_op, cur, target, NULL));
 
             int is_inc = (ast->unop == AST_UN_OP_PRE_INC ||
                           ast->unop == AST_UN_OP_POST_INC);
             /* Pointer ++/--: step by sizeof(*ptr). */
             int step = 1;
-            if (lvar->type->kind == AST_TYPE_POINTER && lvar->type->ptr) {
-                step = lvar->type->ptr->size;
+            if (val_type->kind == AST_TYPE_POINTER && val_type->ptr) {
+                step = val_type->ptr->size;
                 if (step < 1) step = 1;
             }
             IrValue *delta = irConstInt(ir_type, step);
@@ -1716,7 +1755,8 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
             IrInstr *op = irInstrNew(is_inc ? IR_IADD : IR_ISUB,
                                      new_val, cur, delta);
             irBlockAddInstr(ctx, op);
-            irBlockAddInstr(ctx, irStore(slot, new_val));
+            IrOp store_op = indirect ? IR_STORE_DEREF : IR_STORE;
+            irBlockAddInstr(ctx, irInstrNew(store_op, target, new_val, NULL));
 
             int is_post = (ast->unop == AST_UN_OP_POST_INC ||
                            ast->unop == AST_UN_OP_POST_DEC);
@@ -1773,14 +1813,6 @@ static IrOp irCompoundAssignToIrOp(AstBinOp op, int issigned) {
         loggerPanic("Not a compound assign: %s\n", astBinOpKindToString(op));
     }
 }
-
-/* Address-mode info for an assignment LHS. `target` is the IrValue used
- * by the IR_STORE / IR_STORE_DEREF; `indirect` says which one to use. */
-typedef struct {
-    IrValue *target;
-    AstType *type;
-    int indirect;   /* 1 -> IR_STORE_DEREF, 0 -> IR_STORE. */
-} IrAssignTarget;
 
 static IrAssignTarget irLowerAssignTarget(IrCtx *ctx, Ast *lhs) {
     IrAssignTarget out = { NULL, NULL, 0 };
