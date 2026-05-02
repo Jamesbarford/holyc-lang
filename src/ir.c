@@ -593,14 +593,6 @@ static int irExprIsSliceEligible(Ast *ast) {
         return ast->type->kind == AST_TYPE_INT ||
                ast->type->kind == AST_TYPE_POINTER;
     case AST_BINOP:
-        /* HolyC chained range ops `a <= b <= c` (LE/LT/GE/GT whose lhs is
-         * itself an LE/LT/GE/GT) need special lowering — see
-         * asmRangeOperation. Reject from slice until IR supports them. */
-        if (astIsRangeOperator(ast->binop) && ast->left &&
-            ast->left->kind == AST_BINOP &&
-            astIsRangeOperator(ast->left->binop)) {
-            return 0;
-        }
         if (ast->binop == AST_BIN_OP_ASSIGN ||
             irBinOpIsCompoundAssign(ast->binop)) {
             /* LHS may be:
@@ -1063,6 +1055,46 @@ IrValue *irFnCall(IrCtx *ctx, Ast *ast) {
  * 100% sure this is a valid assumption to make. Well I guess;
  * `I64 x = y + 32 * 10` _could_ continually be assigned to `x` */
 IrValue *irBinOpExpr(IrCtx *ctx, Ast *ast) {
+    /* HolyC range comparison: `a OP1 b OP2 c` parses as
+     * `binop=OP2, left=(binop=OP1, a, b), right=c`. Semantics:
+     * `(a OP1 b) && (b OP2 c)`. Lower as a short-circuit AND of two
+     * regular comparisons. b is re-evaluated for OP2 — matches AST
+     * codegen (asmRangeOperation), and matters when b has side effects. */
+    if (astIsRangeOperator(ast->binop) && ast->left &&
+        ast->left->kind == AST_BINOP &&
+        astIsRangeOperator(ast->left->binop)) {
+        IrBlock *ir_right_block = irBlockNew();
+        IrBlock *ir_end_block = irBlockNew();
+
+        IrValue *left = irExpr(ctx, ast->left);   /* a OP1 b */
+        IrBlock *ir_block = ctx->cur_block;
+        IrValue *ir_result = irTmp(IR_TYPE_I8, 1);
+
+        irBranch(ctx->cur_func, ir_block, left, ir_right_block, ir_end_block);
+        irFnAddBlock(ctx->cur_func, ir_right_block);
+        ctx->cur_block = ir_right_block;
+
+        /* Second comparison: synthesize `b OP2 c` and lower normally so
+         * the existing int/float/signed-vs-unsigned dispatch kicks in. */
+        int is_err = 0;
+        Ast *rhs_cmp = astBinaryOp(ast->binop, ast->left->right,
+                                   ast->right, &is_err);
+        IrValue *right = irExpr(ctx, rhs_cmp);
+        IrBlock *right_end = ctx->cur_block;
+
+        IrInstr *jump_instr = irJump(ctx->cur_func, ctx->cur_block,
+                                     ir_end_block);
+        irBlockAddInstr(ctx, jump_instr);
+        irFnAddBlock(ctx->cur_func, ir_end_block);
+        ctx->cur_block = ir_end_block;
+
+        IrInstr *phi_instr = irPhi(ir_result);
+        irBlockAddInstr(ctx, phi_instr);
+        irAddPhiIncoming(phi_instr, irConstInt(IR_TYPE_I8, 0), ir_block);
+        irAddPhiIncoming(phi_instr, right, right_end);
+        return ir_result;
+    }
+
     /* Logical AND/OR short-circuit: evaluate left in the current block;
      * branch on it; evaluate right only in the "right" block. We mustn't
      * eagerly evaluate both operands at the top — that would emit the
