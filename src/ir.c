@@ -566,6 +566,11 @@ static int irExprIsSliceEligible(Ast *ast) {
             if (!irTypeIsSliceInt(ast->type)) return 0;
             return irExprIsSliceEligible(ast->operand);
         }
+        if (ast->unop == AST_UN_OP_ADDR_OF) {
+            /* `&local` / `&param`: produce a pointer value. */
+            if (!ast->operand || ast->operand->kind != AST_LVAR) return 0;
+            return 1;
+        }
         return 0;
     case AST_FUNCALL: {
         /* Slice supports calls returning int or void with up to 6 args
@@ -1036,6 +1041,17 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
                 irBlockAddInstr(ctx,
                     irInstrNew(IR_LOAD_DEREF, load_dst, ptr, NULL));
                 return load_dst;
+            }
+            if (ast->unop == AST_UN_OP_ADDR_OF) {
+                /* `&lvar`: take the slot's address. The lvar's IrValue
+                 * carries the slot loff — IR_LEA reads that and emits
+                 * the leaq. */
+                Ast *lvar = ast->operand;
+                IrValue *src = irFnGetVar(ctx->cur_func, lvar->lvar_id);
+                if (!src) loggerPanic("&lvar on unknown lvar\n");
+                IrValue *dst = irTmp(IR_TYPE_PTR, 8);
+                irBlockAddInstr(ctx, irInstrNew(IR_LEA, dst, src, NULL));
+                return dst;
             }
             /* Slice supports ++/-- on int locals. The store to the lvar's
              * slot is the side effect; we return either the original value

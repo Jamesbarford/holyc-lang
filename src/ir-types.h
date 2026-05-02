@@ -20,6 +20,7 @@ typedef enum IrOp {
     IR_STORE,       /* Store to memory */
     IR_LOAD_DEREF,  /* dst = *r1 (r1 is a pointer value, not a slot id) */
     IR_STORE_DEREF, /* *dst = r1 (dst is a pointer value) */
+    IR_LEA,         /* dst = &r1 (address of a stack slot, as a pointer) */
     IR_GEP,         /* Get element pointer (array/struct indexing) */
 
     /* Integer Arithmetic operations */

@@ -160,6 +160,13 @@ static void irCgAllocOperandsForInstr(IrCgCtx *ctx, IrInstr *I, int start) {
         irCgAllocTmp(ctx, I->r1, start);
         return;
 
+    case IR_LEA:
+        /* dst = &r1's slot. dst gets a slot to hold the pointer value;
+         * r1 is the slot we're taking the address of (already bound
+         * to its loff via param-spill or alloca). */
+        if (spill_dst) irCgAllocTmp(ctx, I->dst, start);
+        return;
+
     case IR_IADD: case IR_ISUB: case IR_IMUL:
     case IR_AND:  case IR_OR:   case IR_XOR:
     case IR_IDIV: case IR_UDIV: case IR_IREM: case IR_UREM:
@@ -292,6 +299,8 @@ static int instrDefsIntoRax(IrInstr *I) {
     if (I->op == IR_PHI && (I->flags & IRCG_PHI_IN_RAX)) return 1;
     switch (I->op) {
     case IR_LOAD:
+    case IR_LOAD_DEREF:
+    case IR_LEA:
     case IR_IADD: case IR_ISUB: case IR_IMUL:
     case IR_AND:  case IR_OR:   case IR_XOR:
     case IR_IDIV: case IR_UDIV: case IR_IREM: case IR_UREM:
@@ -787,6 +796,14 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
         irCgLoadToReg(ctx, instr->dst, "rcx");
         aoStrCatPrintf(ctx->buf, "movq   %%rax, (%%rcx)\n\t");
         break;
+
+    case IR_LEA: {
+        /* dst = address of r1's slot. */
+        int loff = irCgGetLoff(ctx, instr->r1);
+        aoStrCatPrintf(ctx->buf, "leaq   %d(%%rbp), %%rax\n\t", loff);
+        irCgSpillDst(ctx, instr, "rax");
+        break;
+    }
 
     case IR_IADD:
     case IR_ISUB:

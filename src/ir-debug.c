@@ -355,6 +355,7 @@ const char *irOpcodeToString(IrInstr *ir_instr) {
         case IR_STORE:    ir_op_str = "store"; break;
         case IR_LOAD_DEREF:  ir_op_str = "load*";  break;
         case IR_STORE_DEREF: ir_op_str = "store*"; break;
+        case IR_LEA:      ir_op_str = "lea"; break;
         case IR_GEP:      ir_op_str = "gep"; break;
 
         case IR_IADD:      ir_op_str = "iadd"; break;
