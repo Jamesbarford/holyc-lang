@@ -611,6 +611,13 @@ static int irExprIsSliceEligible(Ast *ast) {
              *  - a deref of a pointer (`*p`). */
             if (!ast->left) return 0;
             Ast *lhs = ast->left;
+            /* `len = ...` where `len` is a default-param parameter: the
+             * parser wraps each body-side reference in AST_DEFAULT_PARAM.
+             * Unwrap to the underlying lvar so the LHS shape checks
+             * below see a plain AST_LVAR. */
+            if (lhs->kind == AST_DEFAULT_PARAM && lhs->declvar) {
+                lhs = lhs->declvar;
+            }
             int lhs_ok = 0;
             if (lhs->kind == AST_LVAR && lhs->type) {
                 lhs_ok = lhs->type->kind == AST_TYPE_INT ||
@@ -663,7 +670,23 @@ static int irExprIsSliceEligible(Ast *ast) {
                 && irExprIsSliceEligible(ast->right);
         }
         if (!irBinOpIsSliceArith(ast->binop)) return 0;
-        if (!irTypeIsSliceInt(ast->type)) return 0;
+        /* The parser sometimes types `fp1 == fp2` as AST_TYPE_FUNC (the
+         * lhs's type) rather than int. Comparison-shaped binops always
+         * produce a 0/1 value at runtime, so accept FUNC/POINTER result
+         * types for cmp ops. */
+        int is_cmp = ast->binop == AST_BIN_OP_EQ ||
+                     ast->binop == AST_BIN_OP_NE ||
+                     ast->binop == AST_BIN_OP_LT ||
+                     ast->binop == AST_BIN_OP_LE ||
+                     ast->binop == AST_BIN_OP_GT ||
+                     ast->binop == AST_BIN_OP_GE;
+        if (!irTypeIsSliceInt(ast->type)) {
+            if (!(is_cmp && ast->type &&
+                  (ast->type->kind == AST_TYPE_POINTER ||
+                   ast->type->kind == AST_TYPE_FUNC))) {
+                return 0;
+            }
+        }
         return irExprIsSliceEligible(ast->left)
             && irExprIsSliceEligible(ast->right);
     case AST_UNOP:
@@ -705,10 +728,15 @@ static int irExprIsSliceEligible(Ast *ast) {
         if (ast->unop == AST_UN_OP_ADDR_OF) {
             /* `&local` / `&param` / `&global` / `&fn`: produce a pointer
              * value. Function-address forms appear in `&Add` for
-             * function-pointer assignments and DoMaths-style calls. */
+             * function-pointer assignments and DoMaths-style calls.
+             * `&v->field` / `&cls.field` / `&v->a.b` produces the address
+             * of a class field — used as a `Bool *` / `I64 *` out-param
+             * (e.g. `CatLenPrint(buf, &js->len, ...)`); fold via the
+             * existing AST_CLASS_REF eligibility chain. */
             if (!ast->operand) return 0;
             return ast->operand->kind == AST_LVAR ||
                    ast->operand->kind == AST_GVAR ||
+                   ast->operand->kind == AST_CLASS_REF ||
                    ast->operand->kind == AST_FUNC ||
                    ast->operand->kind == AST_FUN_PROTO ||
                    ast->operand->kind == AST_EXTERN_FUNC ||
@@ -806,8 +834,11 @@ static int irExprIsSliceEligible(Ast *ast) {
          */
         if (!ast->type) return 0;
         AstTypeKind ftk = ast->type->kind;
+        /* AST_TYPE_FUNC: a function-pointer field (`t->fn` in fzf.HC).
+         * Holds an 8-byte pointer at runtime; treat the same as POINTER. */
         if (ftk != AST_TYPE_INT && ftk != AST_TYPE_CHAR &&
-            ftk != AST_TYPE_POINTER && ftk != AST_TYPE_FLOAT) return 0;
+            ftk != AST_TYPE_POINTER && ftk != AST_TYPE_FLOAT &&
+            ftk != AST_TYPE_FUNC) return 0;
         if (!ast->cls) return 0;
         /* Walk the CLASS_REF chain to its root. Intermediate CLASS_REFs
          * carry CLASS type (sub-struct view) which would fail the scalar
@@ -995,6 +1026,12 @@ int irFunctionEligibleForSlice(Ast *ast_func) {
     int dup = 0;
     listForEach(ast_func->locals) {
         Ast *l = (Ast *)it->value;
+        /* AST_DEFAULT_PARAM in locals: unwrap to the underlying lvar/funptr.
+         * The parser puts default-param wrappers in locals so the body can
+         * reference them by id, but lvar_id lives on the inner decl. */
+        if (l && l->kind == AST_DEFAULT_PARAM && l->declvar) {
+            l = l->declvar;
+        }
         u32 id = l->lvar_id;
         if (l->kind == AST_FUNPTR) {
             id = l->fn_ptr_id;
@@ -1271,8 +1308,11 @@ IrValue *irBinOpExpr(IrCtx *ctx, Ast *ast) {
                 rhs = trunc_dst;
             }
         }
-        /* Force result tmp to int for the ICMP/FCMP path below. */
-        if (irIsFloat(ir_type)) {
+        /* Force result tmp to int for the ICMP/FCMP path below. The
+         * parser may type a comparison as float (mislabel) or as a
+         * pointer / function-pointer kind (`fp1 == fp2`); the runtime
+         * result is always 0/1. */
+        if (ir_type != IR_TYPE_I64) {
             ir_type = IR_TYPE_I64;
             ir_result = irTmp(ir_type, 8);
         }
@@ -1706,6 +1746,25 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
                     src = irValueNew(IR_TYPE_PTR, IR_VAL_GLOBAL);
                     src->as.global.name = operand->asmfname;
                     src->as.global.value = NULL;
+                } else if (operand->kind == AST_CLASS_REF) {
+                    /* `&v->field` / `&cls.field` / `&v->a.b`: same
+                     * address calculation as a write target — reuse
+                     * irLowerAssignTarget. The result is the field's
+                     * pointer, no LEA needed (target.target is already
+                     * a pointer when indirect, or a slot-aliased tmp
+                     * via IR_GEP when direct). */
+                    IrAssignTarget tgt = irLowerAssignTarget(ctx, operand);
+                    if (tgt.indirect) {
+                        return tgt.target;
+                    }
+                    /* Direct (stack class field): tgt.target is a tmp
+                     * aliased to base+offset via IR_GEP, used as a slot
+                     * elsewhere — but here we want its value (the
+                     * pointer to that slot) so emit an IR_LEA over it. */
+                    IrValue *dst = irTmp(IR_TYPE_PTR, 8);
+                    irBlockAddInstr(ctx,
+                        irInstrNew(IR_LEA, dst, tgt.target, NULL));
+                    return dst;
                 } else {
                     loggerPanic("&%s not supported in slice\n",
                                 astKindToString(operand->kind));
@@ -1857,6 +1916,13 @@ static IrOp irCompoundAssignToIrOp(AstBinOp op, int issigned) {
 
 static IrAssignTarget irLowerAssignTarget(IrCtx *ctx, Ast *lhs) {
     IrAssignTarget out = { NULL, NULL, 0 };
+
+    /* `len = ...` for a default-param parameter: the body refers to the
+     * lvar via an AST_DEFAULT_PARAM wrapper. The default expression only
+     * matters at the call site; here we want the underlying slot. */
+    if (lhs->kind == AST_DEFAULT_PARAM && lhs->declvar) {
+        lhs = lhs->declvar;
+    }
 
     if (lhs->kind == AST_LVAR) {
         IrValue *local = irFnGetVar(ctx->cur_func, lhs->lvar_id);
