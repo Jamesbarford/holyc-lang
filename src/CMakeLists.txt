@@ -55,6 +55,8 @@ set(SOURCES
     ir-debug.c
     ir-fold.c
     ir-mem2reg.c
+    ir-peephole.c
+    ir-regalloc.c
     ir-types.c
     lexer.c
     list.c
@@ -86,6 +88,8 @@ set(HEADERS
     ir-debug.h
     ir-fold.h
     ir-mem2reg.h
+    ir-peephole.h
+    ir-regalloc.h
     ir-types.h
     lexer.h
     list.h
