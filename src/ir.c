@@ -368,12 +368,32 @@ IrInstr *irBranch(IrFunction *func,
         loggerPanic("irBranch: NULL parameter provided\n");
     }
 
+    /* Normalize non-bool conditions by widening through cmp_ne 0. The
+     * codegen of IR_BR tests-and-jumps on its operand; whatever value
+     * we hand it must be 0/1 at runtime.
+     *
+     * Skip the wrap when `cond` was just produced by an IR_ICMP /
+     * IR_FCMP: those already yield 0 or 1 (just typed as i64 because
+     * the AST tagged the comparison result with the operands' int
+     * type), so the extra `cmp_ne, 0` would just re-normalize the
+     * already-normalized value. Saves one cmp/setcc/movzbq triple
+     * around every loop and `if` test. */
     if (cond->type != IR_TYPE_I8) {
-        IrValue *zero = irConstInt(IR_TYPE_I8, 0);
-        IrValue *bool_cond = irTmp(IR_TYPE_I8, 1);
-        IrInstr *cmp = irICmp(bool_cond, IR_CMP_NE, cond, zero);
-        listAppend(block->instructions, cmp);
-        cond = bool_cond;
+        int already_bool = 0;
+        if (!listEmpty(block->instructions)) {
+            IrInstr *last = (IrInstr *)block->instructions->prev->value;
+            if ((last->op == IR_ICMP || last->op == IR_FCMP) &&
+                last->dst == cond) {
+                already_bool = 1;
+            }
+        }
+        if (!already_bool) {
+            IrValue *zero = irConstInt(IR_TYPE_I8, 0);
+            IrValue *bool_cond = irTmp(IR_TYPE_I8, 1);
+            IrInstr *cmp = irICmp(bool_cond, IR_CMP_NE, cond, zero);
+            listAppend(block->instructions, cmp);
+            cond = bool_cond;
+        }
     }
 
     IrInstr *instr = irInstrNew(IR_BR, cond, NULL, NULL);
