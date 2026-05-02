@@ -1341,9 +1341,23 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
             callee = (Ast *)mapGetLen(ctx->cc->global_env,
                                        fname->data, fname->len);
         }
+        /* The parser drops has_var_args on extern decls; fall back to
+         * checking for a trailing AST_VAR_ARGS in the params list. */
+        int callee_va = 0;
+        if (callee) {
+            if ((callee->type && callee->type->has_var_args) ||
+                callee->has_var_args) {
+                callee_va = 1;
+            } else if (callee->params && callee->params->size > 0) {
+                Ast *last = vecGet(Ast *, callee->params,
+                                   callee->params->size - 1);
+                if (last && last->kind == AST_VAR_ARGS) callee_va = 1;
+            }
+        }
         int holyc_variadic =
-            callee && callee->type && callee->type->has_var_args &&
-            callee->kind != AST_EXTERN_FUNC;
+            callee_va && callee->kind != AST_EXTERN_FUNC;
+        int extern_variadic =
+            callee_va && callee->kind == AST_EXTERN_FUNC;
 
         /* var_arg_start = number of args that go in registers. The +1 is
          * the count argument that the parser injects right before the
@@ -1361,18 +1375,45 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
 
         u64 n = args ? args->size : 0;
 
-        /* Partition args into reg-bound vs stack-bound. */
-        IrValue **stack_args = NULL;
-        int n_stack = 0;
+        /* Partition args into reg-bound vs stack-bound.
+         *
+         * HolyC-variadic: first var_arg_start args in regs, rest on
+         * stack regardless of type.
+         *
+         * SysV extern-variadic (printf etc.): walk left-to-right; an arg
+         * goes in regs while there's a slot of the right kind (int_idx<6
+         * for ints, float_idx<8 for floats); overflow into the stack
+         * preserves source order at the call site (see push-in-reverse
+         * below).
+         *
+         * Non-variadic: every arg is reg-bound (eligibility caps total
+         * to 6 int / 8 float). */
+        u8 *is_stack = (n > 0)
+            ? (u8 *)alloca(sizeof(u8) * n) : NULL;
+        if (is_stack) memset(is_stack, 0, n);
+        int n_stack_total = 0;
         if (holyc_variadic && (s64)n > var_arg_start) {
-            stack_args = (IrValue **)alloca(sizeof(IrValue *) *
-                                            (n - var_arg_start));
+            for (u64 i = (u64)var_arg_start; i < n; ++i) {
+                is_stack[i] = 1;
+                n_stack_total++;
+            }
+        } else if (extern_variadic) {
+            int probe_int = 0, probe_float = 0;
+            for (u64 i = 0; i < n; ++i) {
+                IrValue *a = vecGet(IrValue *, args, i);
+                int is_f = irIsFloat(a->type);
+                if (is_f) {
+                    if (probe_float >= 8) { is_stack[i] = 1; n_stack_total++; }
+                    else probe_float++;
+                } else {
+                    if (probe_int >= 6) { is_stack[i] = 1; n_stack_total++; }
+                    else probe_int++;
+                }
+            }
         }
 
         /* If any stack args, ensure %rsp ends up 16-byte-aligned at the
          * call. Each push is 8 bytes; an odd count needs an 8-byte pad. */
-        int n_stack_total = (holyc_variadic && (s64)n > var_arg_start)
-                            ? (int)(n - var_arg_start) : 0;
         int needs_pad = (n_stack_total & 1) ? 1 : 0;
         if (needs_pad) {
             aoStrCatPrintf(ctx->buf, "subq   $8, %%rsp\n\t");
@@ -1380,29 +1421,26 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
 
         /* Push stack args in reverse order so the first one ends up at
          * the lowest stack offset (rsp+0 after all pushes). */
-        if (holyc_variadic && n_stack_total > 0) {
-            for (s64 i = (s64)n - 1; i >= var_arg_start; --i) {
-                IrValue *a = vecGet(IrValue *, args, (u64)i);
-                if (irIsFloat(a->type)) {
-                    irCgLoadToXmm(ctx, a, "xmm0");
-                    aoStrCatPrintf(ctx->buf,
-                                   "subq   $8, %%rsp\n\t"
-                                   "movsd  %%xmm0, (%%rsp)\n\t");
-                } else {
-                    irCgLoadToReg(ctx, a, "rax");
-                    aoStrCatPrintf(ctx->buf, "pushq  %%rax\n\t");
-                }
-                n_stack++;
+        int n_stack = 0;
+        for (s64 i = (s64)n - 1; i >= 0; --i) {
+            if (!is_stack[i]) continue;
+            IrValue *a = vecGet(IrValue *, args, (u64)i);
+            if (irIsFloat(a->type)) {
+                irCgLoadToXmm(ctx, a, "xmm0");
+                aoStrCatPrintf(ctx->buf,
+                               "subq   $8, %%rsp\n\t"
+                               "movsd  %%xmm0, (%%rsp)\n\t");
+            } else {
+                irCgLoadToReg(ctx, a, "rax");
+                aoStrCatPrintf(ctx->buf, "pushq  %%rax\n\t");
             }
+            n_stack++;
         }
-        (void)stack_args; /* unused — we walk the args vec directly */
 
-        /* Reg args. For HolyC variadic, that's positions [0, var_arg_start);
-         * for everything else, all args. */
-        u64 n_reg = holyc_variadic && (s64)n > var_arg_start
-                    ? (u64)var_arg_start : n;
+        /* Reg args: every arg not flagged for the stack. */
         int int_idx = 0, float_idx = 0;
-        for (u64 i = 0; i < n_reg; ++i) {
+        for (u64 i = 0; i < n; ++i) {
+            if (is_stack[i]) continue;
             IrValue *a = vecGet(IrValue *, args, i);
             if (irIsFloat(a->type)) {
                 if (float_idx >= 8) {

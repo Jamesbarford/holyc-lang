@@ -2595,10 +2595,11 @@ AoStr *asmGenerate(Cctrl *cc) {
             if (ast->flags & AST_FLAG_INLINE) {
                 continue;
             }
+            asmFunctionFromIr(cc,asmbuf,ast);
             // if (irFunctionEligibleForSliceCc(cc, ast)) {
-                asmFunctionFromIr(cc,asmbuf,ast);
             // } else {
-                asmFunction(cc,asmbuf,ast);
+            //     printf("Unhandled Func: %s\n", ast->fname->data);
+            //     asmFunction(cc,asmbuf,ast);
             // }
         } else if (ast->kind == AST_DECL || ast->kind == AST_GVAR) {
             asmGlobalVar(seen_globals,asmbuf,ast);
