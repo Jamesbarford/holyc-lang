@@ -215,6 +215,7 @@ int instrDefsIntoReg(IrInstr *I) {
 IrValue *firstFusableSource(IrInstr *I) {
     switch (I->op) {
     case IR_STORE:
+    case IR_STORE_DEREF:
     case IR_IADD: case IR_ISUB: case IR_IMUL:
     case IR_AND:  case IR_OR:   case IR_XOR:
     case IR_IDIV: case IR_UDIV: case IR_IREM: case IR_UREM:

@@ -90,10 +90,29 @@ static void irCgLoadToReg(IrCgCtx *ctx, IrValue *val, const char *reg) {
         return;
     case IR_VAL_TMP:
     case IR_VAL_LOCAL:
-    case IR_VAL_PARAM:
-        aoStrCatPrintf(ctx->buf, "movq   %d(%%rbp), %%%s\n\t",
-                       irCgGetLoff(&ctx->ra, val), reg);
+    case IR_VAL_PARAM: {
+        /* Width-aware: the matching spill (param prologue, IR_LOAD,
+         * etc.) writes only the live bytes, so reading 8 unconditionally
+         * would pull in the unused gap above the slot. Zero-extend
+         * sub-word values, sign-extend i32 (HolyC's native integer is
+         * I64 so a narrowed signed value should preserve sign). */
+        u32 sz = irValueByteSize(val);
+        int loff = irCgGetLoff(&ctx->ra, val);
+        if (sz == 1) {
+            aoStrCatPrintf(ctx->buf, "movzbq %d(%%rbp), %%%s\n\t",
+                           loff, reg);
+        } else if (sz == 2) {
+            aoStrCatPrintf(ctx->buf, "movzwq %d(%%rbp), %%%s\n\t",
+                           loff, reg);
+        } else if (sz == 4) {
+            aoStrCatPrintf(ctx->buf, "movslq %d(%%rbp), %%%s\n\t",
+                           loff, reg);
+        } else {
+            aoStrCatPrintf(ctx->buf, "movq   %d(%%rbp), %%%s\n\t",
+                           loff, reg);
+        }
         return;
+    }
     default:
         loggerPanic("ir-cg: cannot load value of kind %d\n", val->kind);
     }
@@ -1032,6 +1051,27 @@ static void irCgEmitFunctionPrologue(AoStr *buf, Ast *func, int total_stack) {
     }
 }
 
+/* Narrow sub-register names for the System V int-arg registers,
+ * indexed `[width][reg]`. Width 1 = byte, 2 = word, 4 = dword,
+ * 8 = qword. Used to spill a U8/U16/I32/U32 param with the matching
+ * mov mnemonic instead of always going through the full %r* register. */
+static const char *kIntRegByWidth[4][6] = {
+    /* 1 byte */ {"dil",  "sil",  "dl",   "cl",   "r8b",  "r9b"  },
+    /* 2 byte */ {"di",   "si",   "dx",   "cx",   "r8w",  "r9w"  },
+    /* 4 byte */ {"edi",  "esi",  "edx",  "ecx",  "r8d",  "r9d"  },
+    /* 8 byte */ {"rdi",  "rsi",  "rdx",  "rcx",  "r8",   "r9"   },
+};
+static const char *kIntMovByWidth[4] = {"movb", "movw", "movl", "movq"};
+
+static const char *intRegName(int width, int idx) {
+    int w = (width == 1) ? 0 : (width == 2) ? 1 : (width == 4) ? 2 : 3;
+    return kIntRegByWidth[w][idx];
+}
+static const char *intMovMnemonic(int width) {
+    int w = (width == 1) ? 0 : (width == 2) ? 1 : (width == 4) ? 2 : 3;
+    return kIntMovByWidth[w];
+}
+
 static void irCgEmitParamSpills(AoStr *buf, Ast *func) {
     static const char *kIntRegs[] = {
         "rdi", "rsi", "rdx", "rcx", "r8", "r9"
@@ -1072,8 +1112,20 @@ static void irCgEmitParamSpills(AoStr *buf, Ast *func) {
             aoStrCatPrintf(buf, "movsd  %%%s, %d(%%rbp)\n\t",
                            kFloatRegs[float_idx++], p->loff);
         } else {
-            aoStrCatPrintf(buf, "movq   %%%s, %d(%%rbp)\n\t",
-                           kIntRegs[int_idx++], p->loff);
+            /* Narrow params (Bool, U8, U16, I32...) get a width-matching
+             * mov + sub-register so the spill writes only the live bytes;
+             * the gap above the slot stays whatever the caller left. The
+             * matching `irCgLoadToReg` reads back through `mov{zb,zw,sl}q`,
+             * zero/sign-extending into %rax. Pointers, I64 and FUNPTR
+             * use plain movq. */
+            int sz = (p->kind == AST_FUNPTR) ? 8 :
+                     (ptype ? ptype->size : 8);
+            if (sz != 1 && sz != 2 && sz != 4) sz = 8;
+            aoStrCatPrintf(buf, "%s   %%%s, %d(%%rbp)\n\t",
+                           intMovMnemonic(sz),
+                           intRegName(sz, int_idx),
+                           p->loff);
+            int_idx++;
         }
     }
 }
