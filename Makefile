@@ -31,7 +31,13 @@ install:
 	$(MAKE) -C ./build install
 
 unit-test:
-	$(MAKE) -C ./build unit-test
+	cd ./src/tests && ../../hcc ./run.HC -o test-runner && ./test-runner && cd ../../
+	#$(MAKE) -C ./build unit-test
+
+lib-tos:
+	cd ./src/holyc-lib \
+		&& ../../hcc -lib tos ./all.HC \
+		&& cd ../../
 
 clean:
 	rm -rf ./build ./hcc
