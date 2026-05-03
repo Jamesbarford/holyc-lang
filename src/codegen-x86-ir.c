@@ -469,16 +469,28 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
     case IR_LOAD_DEREF: {
         /* dst = *r1, where r1 is a runtime pointer value (not a slot id).
          * Load the pointer into rcx, then dereference using a width
-         * appropriate for the destination type — `movq` over a 1- or
+         * appropriate for the destination type - `movq` over a 1- or
          * 2-byte value reads adjacent bytes as garbage, which broke
-         * U8/U16 deref of array elements (e.g. `pattern[i]`). */
-        irCgLoadToReg(ctx, instr->r1, "rcx");
+         * U8/U16 deref of array elements (e.g. `pattern[i]`).
+         *
+         * Fusion: when the producer of the address is the immediately
+         * prior rax-defining instruction (peephole / annotator marked
+         * IRCG_R1_IN_REG), the address is already in %rax. Deref
+         * straight from %rax into %rax - no scratch register needed,
+         * no slot for the address tmp. */
+        const char *addr_reg;
+        if (instr->flags & IRCG_R1_IN_REG) {
+            addr_reg = "rax";
+        } else {
+            irCgLoadToReg(ctx, instr->r1, "rcx");
+            addr_reg = "rcx";
+        }
         u32 sz = instr->dst ? instr->dst->as.var.size : 8;
         switch (sz) {
-        case 1: aoStrCatPrintf(ctx->buf, "movzbq (%%rcx), %%rax\n\t"); break;
-        case 2: aoStrCatPrintf(ctx->buf, "movzwq (%%rcx), %%rax\n\t"); break;
-        case 4: aoStrCatPrintf(ctx->buf, "movslq (%%rcx), %%rax\n\t"); break;
-        default: aoStrCatPrintf(ctx->buf, "movq   (%%rcx), %%rax\n\t"); break;
+        case 1: aoStrCatPrintf(ctx->buf, "movzbq (%%%s), %%rax\n\t", addr_reg); break;
+        case 2: aoStrCatPrintf(ctx->buf, "movzwq (%%%s), %%rax\n\t", addr_reg); break;
+        case 4: aoStrCatPrintf(ctx->buf, "movslq (%%%s), %%rax\n\t", addr_reg); break;
+        default: aoStrCatPrintf(ctx->buf, "movq   (%%%s), %%rax\n\t", addr_reg); break;
         }
         irCgSpillDst(ctx, instr, "rax");
         break;

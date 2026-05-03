@@ -77,7 +77,7 @@ void irCgAllocOperandsForInstr(IrRaCtx *ra, IrInstr *I, int start) {
 
     case IR_LOAD_DEREF:
         if (spill_dst) irCgAllocTmp(ra, I->dst, start);
-        irCgAllocTmp(ra, I->r1, start);
+        if (load_r1)   irCgAllocTmp(ra, I->r1, start);
         return;
 
     case IR_STORE_DEREF:
@@ -222,6 +222,7 @@ IrValue *firstFusableSource(IrInstr *I) {
     switch (I->op) {
     case IR_STORE:
     case IR_STORE_DEREF:
+    case IR_LOAD_DEREF:
     case IR_IADD: case IR_ISUB: case IR_IMUL:
     case IR_AND:  case IR_OR:   case IR_XOR:
     case IR_IDIV: case IR_UDIV: case IR_IREM: case IR_UREM:
