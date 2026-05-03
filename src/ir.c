@@ -5,6 +5,7 @@
 
 #include "ast.h"
 #include "ir.h"
+#include "ir-mem2reg.h"
 #include "ir-types.h"
 #include "ir-debug.h"
 #include "util.h"
@@ -135,67 +136,6 @@ IrInstr *irBranch(IrFunction *func,
     irFunctionAddMapping(func, block, false_block);
 
     return instr;
-}
-
-IrInstr *irJumpInternal(IrFunction *func,
-                        IrBlock *block,
-                        IrBlock *target,
-                        IrOp opcode)
-{
-    if (!block || !target) {
-        loggerPanic("NULL param\n");
-    }
-    /* For a do-while we need this */
-    if (block->sealed) {
-        loggerWarning("Tried to add a jump to a sealed block: %d\n",
-                block->id);
-    }
-
-    IrInstr *instr = irInstrNew(opcode, NULL, NULL, NULL);
-    instr->extra.blocks.target_block = target;
-    instr->extra.blocks.fallthrough_block = NULL;
-
-    /* This block is done */
-    block->sealed = 1;
-
-    /* Now update the control flow graph */
-    irFunctionAddMapping(func, block, target);
-
-    return instr;
-}
-
-IrInstr *irJump(IrFunction *func, IrBlock *block, IrBlock *target) {
-    return irJumpInternal(func, block,target,IR_JMP);
-}
-
-IrInstr *irLoop(IrFunction *func, IrBlock *block, IrBlock *target) {
-    return irJumpInternal(func, block,target,IR_LOOP);
-}
-
-IrPair *irPairNew(IrBlock *ir_block, IrValue *ir_value) {
-    IrPair *ir_phi_pair = (IrPair *)irAlloc(sizeof(IrPair));
-    ir_phi_pair->ir_value = ir_value;
-    ir_phi_pair->ir_block = ir_block;
-    return ir_phi_pair;
-}
-
-IrInstr *irPhi(IrValue *result) {
-    IrInstr *ir_phi_instr = irInstrNew(IR_PHI, result, NULL, NULL);
-    ir_phi_instr->extra.phi_pairs = irPairVecNew();
-    return ir_phi_instr;
-}
-
-void irAddPhiIncoming(IrInstr *ir_phi_instr,
-                      IrValue *ir_value, 
-                      IrBlock *ir_block)
-{
-    IrPair *ir_phi_pair = irPairNew(ir_block, ir_value);
-    vecPush(ir_phi_instr->extra.phi_pairs, ir_phi_pair);
-}
-
-
-IrInstr *irLoad(IrValue *ir_dest, IrValue *ir_value) {
-    return irInstrNew(IR_LOAD, ir_dest, ir_value, NULL);
 }
 
 /* result is where we are storing something and op1 is the thing we are storing 
@@ -2017,6 +1957,9 @@ void irDump(Cctrl *cc) {
         if (ast->kind == AST_FUNC) {
             ctx->cur_func = NULL;
             irLowerFunction(ctx, ast);
+            irPrintFunction(ctx->cur_func);
+            irMem2Reg(ctx->cur_func);
+            printf("===== After mem2reg ===== \n");
             irPrintFunction(ctx->cur_func);
         }
     }

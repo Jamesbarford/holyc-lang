@@ -321,6 +321,7 @@ u8 irIsInt(IrValueType ir_value_type);
 u8 irTypeIsScalar(IrValueType ir_value_type);
 u8 irIsConst(IrValueKind ir_value_kind);
 u8 irIsPtr(IrValueType ir_value_type);
+u8 irIsTmp(IrValue *val);
 u8 irIsStore(IrOp opcode);
 u8 irIsLoad(IrOp opcode);
 u8 irIsStruct(IrValueType ir_value_type);
@@ -338,18 +339,26 @@ int irBlockIsStartOrEnd(IrFunction *func, IrBlock *block);
 
 /* Constructors */
 Vec *irFunctionVecNew(void);
-
 Vec *irPairVecNew(void);
 Vec *irValueVecNew(void);
+
 Map *irBlockMapNew(void);
 Map *irBlockMappingMapNew(void);
-IrBlockMapping *irBlockMappingNew(int id);
+Map *irInstrMapNew(void) ;
 Map *irVarValueMapNew(void);
+
+IrBlockMapping *irBlockMappingNew(int id);
 IrBlock *irBlockNew(void);
 IrValue *irTmp(IrValueType type, u16 size);
 IrInstr *irInstrNew(IrOp op, IrValue *dst, IrValue *r1, IrValue *r2);
 IrFunction *irFunctionNew(AoStr *fname);
 IrValue *irValueNew(IrValueType type, IrValueKind kind);
+IrInstr *irLoop(IrFunction *func, IrBlock *block, IrBlock *target);
+IrPair *irPairNew(IrBlock *ir_block, IrValue *ir_value);
+IrInstr *irPhi(IrValue *result);
+IrInstr *irLoad(IrValue *ir_dest, IrValue *ir_value);
+IrInstr *irJump(IrFunction *func, IrBlock *block, IrBlock *target);
+
 
 void irFunctionAddMapping(IrFunction *func, IrBlock *src, IrBlock *dest);
 void irFunctionAddSuccessor(IrFunction *func, IrBlock *src, IrBlock *dest);
@@ -366,6 +375,9 @@ void irFunctionRelease(IrFunction *func);
 
 
 
+void irAddPhiIncoming(IrInstr *ir_phi_instr,
+                      IrValue *ir_value, 
+                      IrBlock *ir_block);
 
 
 void irFnAddVar(IrFunction *func, u32 lvar_id, IrValue *var);
