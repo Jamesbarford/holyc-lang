@@ -9,11 +9,7 @@
 #include "cctrl.h"
 #include "codegen-x86-ir.h"
 #include "containers.h"
-#include "ir.h"
 #include "ir-codegen.h"
-#include "ir-fold.h"
-#include "ir-mem2reg.h"
-#include "ir-peephole.h"
 #include "ir-regalloc.h"
 #include "ir-types.h"
 #include "list.h"
@@ -22,26 +18,21 @@
 #include "x86.h"
 
 /*
- * IR -> x86_64 codegen for slice-0.
+ * IR -> x86_64 emitter.
  *
- * Baseline strategy: every IR temp gets its own stack slot. Each instruction
- * loads its sources into rax/rcx, performs the op, and writes the result to
- * its tmp's slot.
- *
- * On top of that we run a tiny "fusion" pre-pass that sets two flag bits on
- * each IrInstr (IRCG_FUSE_TO_NEXT, IRCG_R1_IN_REG) when a single-use def is
- * immediately consumed as the next instruction's first %rax source. The
- * emitter then skips the spill on the def and the reload on the use, and
- * the slot allocator drops the (unused) stack slot. This collapses the bulk
- * of the bloat - straight-line code keeps values in %rax exactly the way
- * the AST -> x86 codegen does.
- *
- * Locals and parameters re-use the offsets that asmFunctionInit assigned
- * to AST nodes, so the prologue (and any future fix-ups to it) stays in
- * one place. */
+ * Per IR instruction: load sources from their slots into %rax / %rcx (or
+ * xmm0 / xmm1 for floats), emit the matching x86_64 op, and write the
+ * result back to the dst's slot. The slot offsets, fusion flags, and
+ * use-count analysis all come from ir-regalloc.{h,c}; the additional
+ * peephole flags (cmp+br, addr-into-store, lea-into-call, ...) come
+ * from ir-peephole.c. This file owns nothing beyond the asm strings -
+ * see ir-regalloc.h for the slot-allocation strategy and the meaning
+ * of every IRCG_* flag bit. */
 
-static int ircg_func_seq = 0;
-
+static const char *kIntRegs[] = { "rdi", "rsi", "rdx", "rcx", "r8", "r9" };
+static const char *kFloatRegs[] = {
+    "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7"
+};
 /* If `val` is a deferred IR_LEA result (peephole-marked
  * IRCG_LEA_INLINE_AT_CALL), emit `leaq <lea-source>, %<reg>` directly
  * and return 1. Otherwise return 0 - caller falls back to the normal
@@ -822,12 +813,6 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
          * and the function-pointer source lives in instr->r2. We load it
          * into %r11 before the arg loads so arg evaluation can't clobber
          * it. */
-        static const char *kIntRegs[] = {
-            "rdi", "rsi", "rdx", "rcx", "r8", "r9"
-        };
-        static const char *kFloatRegs[] = {
-            "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7"
-        };
         IrValue *wrap = instr->r1;
         Vec *args = wrap ? wrap->as.array.values : NULL;
         AoStr *fname = wrap ? wrap->as.array.label : NULL;
@@ -1055,12 +1040,6 @@ static const char *intMovMnemonic(int width) {
 }
 
 static void irCgEmitParamSpills(AoStr *buf, Ast *func) {
-    static const char *kIntRegs[] = {
-        "rdi", "rsi", "rdx", "rcx", "r8", "r9"
-    };
-    static const char *kFloatRegs[] = {
-        "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7"
-    };
     int int_idx = 0, float_idx = 0;
     /* Struct-by-value return: %rdi holds the caller-provided buffer
      * pointer; spill it to the hidden slot the layout pass reserved
@@ -1113,77 +1092,26 @@ static void irCgEmitParamSpills(AoStr *buf, Ast *func) {
 }
 
 void asmFunctionFromIr(Cctrl *cc, AoStr *buf, Ast *ast_func) {
-    assert(ast_func->kind == AST_FUNC);
-
-    /* 1. Lower to IR. */
-    IrCtx *ir_ctx = irCtxNew(cc);
-    IrFunction *func = irLowerFunction(ir_ctx, ast_func);
-
-    /* 2. Run analyses. mem2reg promotes allocas away; the layout pass
-     *    below uses that info to skip slots for promoted locals. */
-    irMem2Reg(func);
-    irFoldFunction(func);
-    irCgClassifyPhis(func);
-    irCgAnnotate(func);
-    /* Peephole runs *after* annotation: the annotation pass clears
-     * IRCG_FUSE_TO_NEXT / IRCG_R1_IN_REG before its own re-marking,
-     * so any flag the peephole sets earlier would be wiped. */
-    irPeephole(cc, func);
-
-    /* 3. Compute AST-side layout *after* mem2reg so promoted locals
-     *    don't reserve dead slots. */
-    int locals_params_space = irCgComputeAstLayout(ast_func, func);
-
-    /* 4. Bind IR values to the loffs we just computed. */
+    /* Target-agnostic prep: lowering, optimisation passes, AST layout,
+     * slot allocation, ctx initialisation. See ir-codegen.c. */
     IrCgCtx ctx;
-    ctx.cc = cc;
-    ctx.buf = buf;
-    ctx.ra.func = func;
-    ctx.ra.id_to_loff = mapNew(32, &map_uint_to_uint_type);
-    ctx.ra.extra_stack = 0;
-    ctx.func_uid = ircg_func_seq++;
-    ctx.cur_block = NULL;
-    ctx.next_block = NULL;
-    /* Index every peephole-deferred LEA by its dst tmp id, so the
-     * IR_CALL emit can re-create the leaq into the arg register. */
-    ctx.lea_inline_map = mapNew(8, &map_uint_to_uint_type);
-    for (List *bn = func->blocks->next;
-         bn != func->blocks;
-         bn = bn->next) {
-        IrBlock *b = (IrBlock *)bn->value;
-        for (List *in = b->instructions->next;
-             in != b->instructions;
-             in = in->next) {
-            IrInstr *I = (IrInstr *)in->value;
-            if (I->op != IR_LEA) continue;
-            if (!(I->flags & IRCG_LEA_INLINE_AT_CALL)) continue;
-            if (!I->dst || I->dst->kind != IR_VAL_TMP) continue;
-            mapAdd(ctx.lea_inline_map,
-                   (void *)(u64)I->dst->as.var.id, (void *)I);
-        }
-    }
-    irCgBindAstLoffs(&ctx.ra, ast_func);
+    IrCgPrepared prep = irCgPrepareFunction(cc, ast_func, buf, &ctx);
 
-    /* 5. Allocate slots for IR tmps starting just below the params area. */
-    irCgAllocAllTmps(&ctx.ra, locals_params_space);
-
-    /* 6. Emit prologue with one subq covering params + locals + tmps. */
-    int total_stack = locals_params_space + ctx.ra.extra_stack;
-    if (total_stack > 0) total_stack = align(total_stack, 16);
-    irCgEmitFunctionPrologue(buf, ast_func, total_stack);
+    /* x86_64 prologue + param spills. */
+    irCgEmitFunctionPrologue(buf, ast_func, prep.total_stack);
     irCgEmitParamSpills(buf, ast_func);
 
-    /* 7. Walk blocks in order, emit label (if referenced) + instructions.
-     *    `referenced` mirrors the BR/JMP layout decisions so we know which
-     *    block labels actually appear as jump targets in the asm output. */
-    Set *referenced = irCgComputeReferencedBlocks(func);
-    for (List *bn = func->blocks->next;
-         bn != func->blocks;
+    /* Walk blocks in order, emit label (if referenced) + instructions.
+     * `referenced` mirrors the BR/JMP layout decisions so we know which
+     * block labels actually appear as jump targets in the asm output. */
+    Set *referenced = irCgComputeReferencedBlocks(prep.func);
+    for (List *bn = prep.func->blocks->next;
+         bn != prep.func->blocks;
          bn = bn->next)
     {
         IrBlock *block = (IrBlock *)bn->value;
         ctx.cur_block = block;
-        ctx.next_block = (bn->next != func->blocks)
+        ctx.next_block = (bn->next != prep.func->blocks)
                          ? (IrBlock *)bn->next->value
                          : NULL;
         if (setHas(referenced, (void *)(u64)block->id)) {
@@ -1199,15 +1127,12 @@ void asmFunctionFromIr(Cctrl *cc, AoStr *buf, Ast *ast_func) {
     }
     setRelease(referenced);
 
-    /* 7. Safety net: if the exit block didn't already terminate with `ret`,
-     *    emit one. The exit block always ends in IR_RET, so this is a
-     *    belt-and-braces match for asmFunction(). */
+    /* Safety net: if the exit block didn't already terminate with `ret`,
+     * emit one. The exit block always ends in IR_RET, so this is a
+     * belt-and-braces match for asmFunction(). */
     if (!asmHasRet(buf)) {
         asmFunctionLeave(buf);
     }
 
-    mapRelease(ctx.ra.id_to_loff);
-    if (ctx.lea_inline_map) mapRelease(ctx.lea_inline_map);
-    free(ir_ctx->prog);
-    free(ir_ctx);
+    irCgFinishFunction(&prep, &ctx);
 }

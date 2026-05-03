@@ -38,4 +38,25 @@ void irCgEmitPhiMaterialize(IrCgCtx *ctx, IrBlock *from, IrBlock *to,
 int phiPairValueLiveInRax(IrBlock *from, IrValue *v);
 int irCgIsImm32(IrValue *val, s64 *out);
 
+/* Bundle returned by `irCgPrepareFunction`. Owns the IR-side resources
+ * (the lowering ctx and the lowered function); release with
+ * `irCgFinishFunction`. `total_stack` is already aligned to 16. */
+typedef struct IrCgPrepared {
+    IrCtx *ir_ctx;
+    IrFunction *func;
+    int total_stack;
+} IrCgPrepared;
+
+/* Run the target-agnostic front of the IR backend: lower `ast_func`,
+ * apply mem2reg / constant fold / phi classify / fusion annotate /
+ * peephole, compute the AST-driven layout, bind AST loffs, and
+ * allocate slots for IR temps. Populates `*ctx` (incl. its `ra` and
+ * `lea_inline_map`) so the architecture-specific emitter can walk
+ * blocks and emit asm against a fully-prepared register/slot map. */
+IrCgPrepared irCgPrepareFunction(Cctrl *cc, Ast *ast_func, AoStr *buf,
+                                  IrCgCtx *ctx);
+
+/* Release everything `irCgPrepareFunction` allocated. */
+void irCgFinishFunction(IrCgPrepared *prep, IrCgCtx *ctx);
+
 #endif

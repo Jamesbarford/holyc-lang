@@ -1,9 +1,18 @@
+#include <assert.h>
 #include <math.h>
+#include <stdlib.h>
 
+#include "ast.h"
 #include "containers.h"
+#include "ir.h"
 #include "ir-codegen.h"
+#include "ir-fold.h"
+#include "ir-mem2reg.h"
+#include "ir-peephole.h"
+#include "ir-regalloc.h"
 #include "ir-types.h"
 #include "list.h"
+#include "prsutil.h"
 #include "util.h"
 
 void irCgEmitPhiMaterialize(IrCgCtx *ctx, IrBlock *from, IrBlock *to,
@@ -148,4 +157,85 @@ uint64_t ieee754(double _f64) {
     return (sign << 63) |
            ((exponent & 0x7FF) << 52) |
            (fraction & ~(1ULL << 52));
+}
+
+/* Per-translation-unit counter so block labels in two functions
+ * compiled together can't collide. */
+static int ircg_func_seq = 0;
+
+IrCgPrepared irCgPrepareFunction(Cctrl *cc, Ast *ast_func, AoStr *buf,
+                                  IrCgCtx *ctx) {
+    assert(ast_func->kind == AST_FUNC);
+
+    /* 1. Lower to IR. */
+    IrCtx *ir_ctx = irCtxNew(cc);
+    IrFunction *func = irLowerFunction(ir_ctx, ast_func);
+
+    /* 2. Run analyses. mem2reg promotes allocas away; the layout pass
+     *    below uses that info to skip slots for promoted locals.
+     *    Peephole runs *after* the annotation pass, since the
+     *    annotation pass clears IRCG_FUSE_TO_NEXT / IRCG_R1_IN_REG
+     *    before its own re-marking - any flag the peephole set
+     *    earlier would be wiped. */
+    irMem2Reg(func);
+    irFoldFunction(func);
+    irCgClassifyPhis(func);
+    irCgAnnotate(func);
+    irPeephole(cc, func);
+
+    /* 3. AST-driven layout (after mem2reg so promoted locals don't
+     *    reserve dead slots). */
+    int locals_params_space = irCgComputeAstLayout(ast_func, func);
+
+    /* 4. Initialise the codegen context. */
+    ctx->cc = cc;
+    ctx->buf = buf;
+    ctx->ra.func = func;
+    ctx->ra.id_to_loff = mapNew(32, &map_uint_to_uint_type);
+    ctx->ra.extra_stack = 0;
+    ctx->func_uid = ircg_func_seq++;
+    ctx->cur_block = NULL;
+    ctx->next_block = NULL;
+    /* Index every peephole-deferred LEA by its dst tmp id, so the
+     * IR_CALL emit can re-create the leaq into the arg register. */
+    ctx->lea_inline_map = mapNew(8, &map_uint_to_uint_type);
+    for (List *bn = func->blocks->next;
+         bn != func->blocks;
+         bn = bn->next) {
+        IrBlock *b = (IrBlock *)bn->value;
+        for (List *in = b->instructions->next;
+             in != b->instructions;
+             in = in->next) {
+            IrInstr *I = (IrInstr *)in->value;
+            if (I->op != IR_LEA) continue;
+            if (!(I->flags & IRCG_LEA_INLINE_AT_CALL)) continue;
+            if (!I->dst || I->dst->kind != IR_VAL_TMP) continue;
+            mapAdd(ctx->lea_inline_map,
+                   (void *)(u64)I->dst->as.var.id, (void *)I);
+        }
+    }
+    irCgBindAstLoffs(&ctx->ra, ast_func);
+
+    /* 5. Allocate slots for IR tmps just below the params area. */
+    irCgAllocAllTmps(&ctx->ra, locals_params_space);
+
+    /* 6. Compute total stack reservation (params + locals + tmps),
+     *    aligned to 16. The architecture-specific emitter feeds this
+     *    into its prologue. */
+    int total_stack = locals_params_space + ctx->ra.extra_stack;
+    if (total_stack > 0) total_stack = align(total_stack, 16);
+
+    IrCgPrepared prep = { ir_ctx, func, total_stack };
+    return prep;
+}
+
+void irCgFinishFunction(IrCgPrepared *prep, IrCgCtx *ctx) {
+    if (ctx) {
+        if (ctx->ra.id_to_loff) mapRelease(ctx->ra.id_to_loff);
+        if (ctx->lea_inline_map) mapRelease(ctx->lea_inline_map);
+    }
+    if (prep && prep->ir_ctx) {
+        free(prep->ir_ctx->prog);
+        free(prep->ir_ctx);
+    }
 }

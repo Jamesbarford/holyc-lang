@@ -117,7 +117,7 @@ void irCgAllocAllTmps(IrRaCtx *ra, int starting_offset);
  *     mem2reg-promoted locals dropping their reservation;
  *   - `ast_func->loff` carries the hidden out-pointer slot for
  *     class-returning functions (consumed by the prologue). */
-int  irCgComputeAstLayout(Ast *ast_func, IrFunction *ir_func);
+int irCgComputeAstLayout(Ast *ast_func, IrFunction *ir_func);
 
 /* Bind every AST-side loff into the regalloc map so the codegen can
  * look up an IR value's slot via `irCgGetLoff`. */
@@ -128,17 +128,17 @@ void irCgClassifyPhis(IrFunction *func);
 void irCgAnnotate(IrFunction *func);
 
 /* Analysis helpers used by codegen and the peephole pass. */
-int      blockHasPhi(IrBlock *bb);
+int blockHasPhi(IrBlock *bb);
 /* Does this op produce its result naturally into the architecture's
  * canonical result register (i.e. is it a candidate for the
  * "leave in register" fusion path)? Float-typed defs and ops that
  * don't compute a value return 0. */
-int      instrDefsIntoReg(IrInstr *I);
+int instrDefsIntoReg(IrInstr *I);
 /* The single source operand the instruction loads into the result
  * register first. NULL when the op doesn't have one (alloca,
  * unconditional jmp, nop, ...). */
 IrValue *firstFusableSource(IrInstr *I);
-Set     *irCgComputeReferencedBlocks(IrFunction *func);
-u32      irValueByteSize(IrValue *v);
+Set *irCgComputeReferencedBlocks(IrFunction *func);
+u32 irValueByteSize(IrValue *v);
 
 #endif
