@@ -384,18 +384,27 @@ void irMem2Reg(IrFunction *func) {
                 for (u64 i = 0; i < phi->extra.phi_pairs->size; ++i) {
                     IrPair *pair = vecGet(IrPair *, phi->extra.phi_pairs, i);
                     IrValue *v = chase(rename, pair->ir_value);
-                    /* A self-reference (phi -> its own dst) is no information
-                     * — skip it for the unique check. */
+                    /* Self-references (phi -> its own dst) and undef pairs
+                     * (NULL value) carry no constraint - skip both. A phi
+                     * whose pairs are all self/undef is fully degenerate
+                     * (its value is purely undef); we drop it without a
+                     * rename, since nothing real should be reading it. */
                     if (v == phi->dst) continue;
-                    if (!v) { ok = 0; break; }
+                    if (!v) continue;
                     if (!unique) unique = v;
                     else if (unique != v) { ok = 0; break; }
                 }
-                if (!ok || !unique) continue;
+                if (!ok) continue;
 
-                /* All non-self pairs agree on `unique`. Replace and NOP. */
-                mapAdd(rename, (void *)(u64)phi->dst->as.var.id,
-                       (void *)unique);
+                if (unique) {
+                    /* All non-self/undef pairs agree on `unique`. Replace
+                     * and NOP. */
+                    mapAdd(rename, (void *)(u64)phi->dst->as.var.id,
+                           (void *)unique);
+                } else {
+                    /* Pairs were all self-refs / undef. The phi is dead;
+                     * NOP it without adding a rename. */
+                }
                 phi->op = IR_NOP;
                 phi->dst = NULL;
                 dropped_any = 1;
