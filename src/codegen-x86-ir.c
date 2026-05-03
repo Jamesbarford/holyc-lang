@@ -981,8 +981,16 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
         }
 
         /* Push stack args in reverse order so the first one ends up at
-         * the lowest stack offset (rsp+0 after all pushes). */
+         * the lowest stack offset (rsp+0 after all pushes).
+         *
+         * Tail-arg fusion: when the peephole set IRCG_CALL_TAIL_ARG_IN_REG
+         * and the FIRST iteration here is for args[n-1] (the tail), the
+         * producer left its value in %rax. Skip the reload-into-rax;
+         * `pushq %rax` is enough. The flag is only set when the tail
+         * arg is non-float and stack-bound, but defend with a check
+         * anyway. */
         int n_stack = 0;
+        int tail_in_rax = (instr->flags & IRCG_CALL_TAIL_ARG_IN_REG) != 0;
         for (s64 i = (s64)n - 1; i >= 0; --i) {
             if (!is_stack[i]) continue;
             IrValue *a = vecGet(IrValue *, args, (u64)i);
@@ -992,7 +1000,9 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                                "subq   $8, %%rsp\n\t"
                                "movsd  %%xmm0, (%%rsp)\n\t");
             } else {
-                irCgLoadToReg(ctx, a, "rax");
+                int skip_load = (tail_in_rax && n_stack == 0 &&
+                                 i == (s64)n - 1);
+                if (!skip_load) irCgLoadToReg(ctx, a, "rax");
                 aoStrCatPrintf(ctx->buf, "pushq  %%rax\n\t");
             }
             n_stack++;
@@ -1166,7 +1176,7 @@ void asmFunctionFromIr(Cctrl *cc, AoStr *buf, Ast *ast_func) {
     /* Peephole runs *after* annotation: the annotation pass clears
      * IRCG_FUSE_TO_NEXT / IRCG_R1_IN_REG before its own re-marking,
      * so any flag the peephole sets earlier would be wiped. */
-    irPeephole(func);
+    irPeephole(cc, func);
 
     /* 3. Compute AST-side layout *after* mem2reg so promoted locals
      *    don't reserve dead slots. */

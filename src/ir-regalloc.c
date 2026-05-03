@@ -298,7 +298,14 @@ void irCgAnnotate(IrFunction *func) {
                 cur->flags |= IRCG_FUSE_TO_NEXT;
                 continue;
             }
-            if (use_count != 1) continue;
+            /* use_count >= 1: don't bail out for use_count > 1. The producer
+             * still has to spill so the non-immediate uses can reload from
+             * the slot, but the IMMEDIATE consumer can still skip its
+             * reload-into-rax: the spill (movq %rax, slot) doesn't clobber
+             * rax, and the inter-instruction NOP/JMP skip below also
+             * preserves it. So we set FUSE_TO_NEXT (suppress spill) only
+             * when use_count == 1, but always set R1_IN_REG on the matched
+             * consumer regardless. */
 
             /* Find the next instruction that actually emits something.
              * Skip IR_NOPs left by mem2reg / fold. If we hit an IR_JMP
@@ -337,7 +344,7 @@ void irCgAnnotate(IrFunction *func) {
             if (!next_src || next_src->kind != IR_VAL_TMP) continue;
             if (next_src->as.var.id != cur->dst->as.var.id) continue;
 
-            cur->flags |= IRCG_FUSE_TO_NEXT;
+            if (use_count == 1) cur->flags |= IRCG_FUSE_TO_NEXT;
             next->flags |= IRCG_R1_IN_REG;
         }
     }

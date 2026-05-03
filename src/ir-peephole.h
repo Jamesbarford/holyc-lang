@@ -3,10 +3,13 @@
 
 #include "ir-types.h"
 
+/* Forward decl - full def in cctrl.h, only the pointer is needed here. */
+typedef struct Cctrl Cctrl;
+
 /* Run codegen-targeted peephole rewrites over `func`. Sets per-instr
  * codegen flags (IRCG_FUSE_TO_NEXT, IRCG_CMP_FUSED_BR,
- * IRCG_BR_USE_PRIOR_CMP) that the architecture-specific emitter
- * consumes:
+ * IRCG_BR_USE_PRIOR_CMP, IRCG_DST_IN_REG, IRCG_CALL_TAIL_ARG_IN_REG)
+ * that the architecture-specific emitter consumes:
  *
  *   - cmp + br fusion: a single-use IR_ICMP / IR_FCMP feeding an
  *     immediately-following IR_BR collapses to one compare + one
@@ -17,7 +20,17 @@
  *     is single-use and consumed by a phi at the JMP target, the
  *     spill to the def's slot is suppressed; the phi-materialiser
  *     reads the value straight out of the result register instead of
- *     reloading from the slot. */
-void irPeephole(IrFunction *func);
+ *     reloading from the slot.
+ *
+ *   - addr-into-store-deref: an IADD / LOAD whose dst is the address
+ *     operand of an immediately-following IR_STORE_DEREF stays in the
+ *     result register; the store stashes it before loading the value.
+ *
+ *   - tail-arg-into-call-push: a single-use rax-def whose dst is the
+ *     last source-order argument of an immediately-following HolyC
+ *     variadic call stays in the result register; the call emits
+ *     `pushq %rax` for that first push without a reload. Needs
+ *     callee lookup (`cc`) to determine variadic-ness. */
+void irPeephole(Cctrl *cc, IrFunction *func);
 
 #endif

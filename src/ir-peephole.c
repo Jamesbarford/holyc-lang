@@ -1,3 +1,5 @@
+#include "ast.h"
+#include "cctrl.h"
 #include "containers.h"
 #include "ir-peephole.h"
 #include "ir-regalloc.h"
@@ -224,13 +226,105 @@ static void fuseAddrIntoStoreDeref(IrFunction *func, Map *uses) {
     }
 }
 
-void irPeephole(IrFunction *func) {
+/* Pattern: an IR_CALL whose last source-order argument is a single-use
+ * tmp produced by the immediately-prior rax-defining instruction, AND
+ * the callee is HolyC variadic so that arg lands on the stack and is
+ * pushed FIRST (variadic args push in reverse). Without this fusion
+ * we emit:
+ *
+ *     <op>     %dst, ...        ; result in rax, spill to slot
+ *     subq     $8, %rsp           ; alignment pad (if needed)
+ *     movq     <slot>, %rax       ; reload (this pair is the waste)
+ *     pushq    %rax
+ *
+ * After: producer keeps rax (FUSE_TO_NEXT), the call emits the alignment
+ * pad and `pushq %rax` directly. SysV-extern variadic (printf etc.) is
+ * skipped here: arg-to-stack overflow only happens when the int / float
+ * register pools are full, which depends on the arg sequence in
+ * complicated ways - the existing arg-load loop handles those, but we
+ * don't try to fuse them. */
+static void fuseTailArgIntoCall(Cctrl *cc, IrFunction *func, Map *uses) {
+    if (!cc) return;
+    listForEach(func->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        if (listEmpty(bb->instructions)) continue;
+        for (List *node = bb->instructions->next;
+             node != bb->instructions;
+             node = node->next)
+        {
+            IrInstr *call = (IrInstr *)node->value;
+            if (call->op != IR_CALL) continue;
+            if (!call->r1 || !call->r1->as.array.values) continue;
+
+            AoStr *fname = call->r1->as.array.label;
+            if (!fname) continue;  /* indirect call - no callee info */
+
+            Ast *callee = (Ast *)mapGetLen(cc->global_env,
+                                            fname->data, fname->len);
+            if (!callee) continue;
+            /* SysV-extern variadic: arg-to-stack rules depend on the
+             * full arg sequence; skip. */
+            if (callee->kind == AST_EXTERN_FUNC) continue;
+
+            int callee_va = 0;
+            if ((callee->type && callee->type->has_var_args) ||
+                callee->has_var_args) {
+                callee_va = 1;
+            } else if (callee->params && callee->params->size > 0) {
+                Ast *last_p = vecGet(Ast *, callee->params,
+                                     callee->params->size - 1);
+                if (last_p && last_p->kind == AST_VAR_ARGS) callee_va = 1;
+            }
+            if (!callee_va) continue;
+
+            /* Mirror codegen-x86-ir.c's var_arg_start computation: the
+             * count of fixed params + 1 (for the injected count arg). */
+            int var_arg_start = -1;
+            if (callee->params) {
+                for (u64 i = 0; i < callee->params->size; ++i) {
+                    Ast *p = vecGet(Ast *, callee->params, i);
+                    var_arg_start++;
+                    if (p->kind == AST_VAR_ARGS) break;
+                }
+                var_arg_start += 1;
+            }
+
+            Vec *args = call->r1->as.array.values;
+            if ((s64)args->size <= var_arg_start) continue;
+
+            IrValue *tail = vecGet(IrValue *, args, args->size - 1);
+            if (!tail || tail->kind != IR_VAL_TMP) continue;
+            /* Float variadic uses xmm0 + movsd; the rax-fusion path
+             * doesn't apply. */
+            if (irIsFloat(tail->type)) continue;
+            if (useCount(uses, tail) != 1) continue;
+
+            List *p = node->prev;
+            while (p != bb->instructions) {
+                IrInstr *cand = (IrInstr *)p->value;
+                if (cand->op != IR_NOP && cand->op != IR_PHI) break;
+                p = p->prev;
+            }
+            if (p == bb->instructions) continue;
+            IrInstr *prev = (IrInstr *)p->value;
+            if (!instrDefsIntoReg(prev)) continue;
+            if (!prev->dst || prev->dst->kind != IR_VAL_TMP) continue;
+            if (prev->dst->as.var.id != tail->as.var.id) continue;
+
+            prev->flags |= IRCG_FUSE_TO_NEXT;
+            call->flags |= IRCG_CALL_TAIL_ARG_IN_REG;
+        }
+    }
+}
+
+void irPeephole(Cctrl *cc, IrFunction *func) {
     if (!func) return;
     Map *uses = mapNew(64, &map_uint_to_uint_type);
     collectUses(func, uses);
     fuseCmpBr(func, uses);
     fuseTailValueToPhi(func, uses);
     fuseAddrIntoStoreDeref(func, uses);
+    fuseTailArgIntoCall(cc, func, uses);
     mapRelease(uses);
 }
 

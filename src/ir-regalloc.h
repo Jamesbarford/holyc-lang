@@ -64,6 +64,14 @@
  * reload that would otherwise sit between IADD and STORE_DEREF for
  * `*(p + offset) = value` patterns. */
 #define IRCG_DST_IN_REG       (1u << 5)
+/* Set on an IR_CALL whose last source-order argument is a single-use
+ * tmp produced by the immediately-prior rax-defining instruction, AND
+ * the callee is HolyC-variadic so that argument is the FIRST one
+ * pushed onto the stack (variadic args push in reverse). The producer
+ * keeps its result in the result register (FUSE_TO_NEXT); the call
+ * emit skips the reload-into-rax for that first push and goes
+ * straight to `pushq %rax`. */
+#define IRCG_CALL_TAIL_ARG_IN_REG (1u << 6)
 
 /* The slot-offset map plus a counter for "extra" stack reserved beyond
  * what the AST layout already covers (used by IR-only allocas, e.g. the
