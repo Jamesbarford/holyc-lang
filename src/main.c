@@ -313,9 +313,6 @@ int main(int argc, char **argv) {
         cctrlSetCommandLineDefines(cc,args.defines_list);
     }
 
- //   if (args.ir_backend) {
-        cc->flags |= CCTRL_IR_BACKEND;
- //   }
 
     if (args.print_tokens) {
         compileToTokens(cc,&args,lexer_flags);
@@ -332,6 +329,10 @@ int main(int argc, char **argv) {
     }
 
     compileToAst(cc,&args,lexer_flags);
+
+    if (args.ir_backend) {
+        cc->flags |= CCTRL_IR_BACKEND;
+    }
 
     /* Direct-recursion check: any inline function that calls itself
      * loses the inline flag (with a warning) so the rest of the
