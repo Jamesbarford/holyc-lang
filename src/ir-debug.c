@@ -235,7 +235,12 @@ void irArrayInitToString(AoStr *buf, IrValue *ir_value) {
 AoStr *irValueToString(IrValue *ir_value) {
     AoStr *buf = aoStrNew();
     AoStr *flags_str = NULL;
-    
+
+    if (!ir_value) {
+        aoStrCatLen(buf, str_lit("<undef>"));
+        return buf;
+    }
+
     if (ir_value->flags != 0) {
         flags_str = aoStrPrintf(ESC_BLUE"0b"ESC_RESET);
         for (int i = 4; i >= 0; --i) {
@@ -283,12 +288,14 @@ AoStr *irValueToString(IrValue *ir_value) {
                 }
                 break;
             }
-            /* @TODO: I am not sure these are correct */
-            case IR_VAL_PARAM:       aoStrCatFmt(buf, "%S", ir_value->as.name); break;
-            case IR_VAL_LOCAL:       aoStrCatFmt(buf, "%S", ir_value->as.name); break;
-            case IR_VAL_LABEL:       aoStrCatFmt(buf, "%S", ir_value->as.name); break;
+            case IR_VAL_PARAM:       aoStrCatFmt(buf, "%%p%u", ir_value->as.var.id); break;
+            case IR_VAL_LOCAL:       aoStrCatFmt(buf, "%%l%u", ir_value->as.var.id); break;
+            case IR_VAL_LABEL:
+                if (ir_value->as.name) aoStrCatFmt(buf, "%S", ir_value->as.name);
+                else                   aoStrCatFmt(buf, "<label>");
+                break;
 
-            case IR_VAL_TMP:         aoStrCatFmt(buf, "%%t%u", ir_value->as.var); break;
+            case IR_VAL_TMP:         aoStrCatFmt(buf, "%%t%u", ir_value->as.var.id); break;
             case IR_VAL_PHI:         aoStrCatFmt(buf, "phi"); break;
             case IR_VAL_UNDEFINED:   aoStrCatFmt(buf, "undefined"); break;
             case IR_VAL_UNRESOLVED:  aoStrCatFmt(buf, "unresolved"); break;
@@ -346,6 +353,9 @@ const char *irOpcodeToString(IrInstr *ir_instr) {
         case IR_ALLOCA:   ir_op_str = "alloca"; break;
         case IR_LOAD:     ir_op_str = "load"; break;
         case IR_STORE:    ir_op_str = "store"; break;
+        case IR_LOAD_DEREF:  ir_op_str = "load*";  break;
+        case IR_STORE_DEREF: ir_op_str = "store*"; break;
+        case IR_LEA:      ir_op_str = "lea"; break;
         case IR_GEP:      ir_op_str = "gep"; break;
 
         case IR_IADD:      ir_op_str = "iadd"; break;
@@ -443,12 +453,23 @@ AoStr *irInstrToString(IrInstr *ir_instr) {
                 aoStrCatLen(buf,str_lit("    "));
             }
 
+            AoStr *callee = ir_instr->r1->as.array.label;
+            if (!callee && ir_instr->r2) {
+                /* Indirect call: r2 holds the function-pointer source. */
+                callee = irValueToString(ir_instr->r2);
+            }
             if (ir_instr->dst) {
                 AoStr *ir_ret_var = irValueToString(ir_instr->dst);
-                aoStrCatFmt(buf, "%s %S, %S", op, ir_ret_var, ir_instr->r1->as.array.label);
+                if (callee) {
+                    aoStrCatFmt(buf, "%s %S, %S", op, ir_ret_var, callee);
+                } else {
+                    aoStrCatFmt(buf, "%s %S, <indirect?>", op, ir_ret_var);
+                }
                 aoStrRelease(ir_ret_var);
+            } else if (callee) {
+                aoStrCatFmt(buf, "%s %S", op, callee);
             } else {
-                aoStrCatFmt(buf, "%s %S", op, ir_instr->r1->as.array.label);
+                aoStrCatFmt(buf, "%s <indirect?>", op);
             }
             break;
         }
@@ -485,7 +506,13 @@ AoStr *irInstrToString(IrInstr *ir_instr) {
                     aoStrPutChar(phi_pairs_str, ' ');;
                 }
             }
-            aoStrCatFmt(buf,"%s %S",op, phi_pairs_str);
+            if (ir_instr->dst) {
+                AoStr *dst_str = irValueToString(ir_instr->dst);
+                aoStrCatFmt(buf, "%s %S, %S", op, dst_str, phi_pairs_str);
+                aoStrRelease(dst_str);
+            } else {
+                aoStrCatFmt(buf, "%s %S", op, phi_pairs_str);
+            }
             aoStrRelease(phi_pairs_str);
             break;
         }
@@ -605,7 +632,9 @@ AoStr *irParamsToString(Vec *ir_value_vector) {
 AoStr *irFunctionToString(IrFunction *ir_func) {
     AoStr *buf = aoStrNew();
     /* This is not as high fidelity as LLVM's ir */
-    const char *ir_return_type_str = irValueTypeToString(ir_func->return_value->type);
+    const char *ir_return_type_str = ir_func->return_value
+        ? irValueTypeToString(ir_func->return_value->type)
+        : "void";
     aoStrCatFmt(buf, "%s %S(", ir_return_type_str, ir_func->name);
     AoStr *params_str = irParamsToString(ir_func->params);
     aoStrCatFmt(buf, "%S) {\n", params_str);

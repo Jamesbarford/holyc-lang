@@ -481,6 +481,7 @@ int astIsIntType(AstType *type);
 int astIsFloatType(AstType *type);
 int astTypeIsPtr(AstType *type);
 int astTypeIsArray(AstType *type);
+int astIsIntrinsicClass(AstType *ty);
 int astIsVarArg(Ast *ast);
 int astIsRangeOperator(AstBinOp op);
 int astIsBinCmp(s64 op);
@@ -489,8 +490,14 @@ int astIsLabelMatch(Ast *ast, AoStr *goto_label);
 int astIsAddr(Ast *ast);
 int astIsDeref(Ast *ast);
 int astIsUnOp(Ast *ast);
-int astIsBinOp(Ast *ast);
+/* Check if the ast exists, if it is a unary operator and what op it is */
+int astIsUnOpKind(Ast *ast, AstUnOp op);
 
+int astIsBinOp(Ast *ast);
+/* Check if the ast exists, if it is a binary operator and what op it is */
+int astIsBinOpKind(Ast *ast, AstBinOp op);
+
+int astIsBinOpCmp(Ast *ast);
 
 AoStr *astMakeLabel(void);
 AoStr *astMakeTmpName(void);
