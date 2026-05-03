@@ -11,9 +11,6 @@
 #include "prsutil.h"
 #include "util.h"
 
-/* ir.c internals not in ir.h. */
-extern IrValue *irFnGetVar(IrFunction *func, u32 lvar_id);
-
 /* ---------- slot offset map -------------------------------------------- */
 
 void irCgSetLoff(IrRaCtx *ra, u32 var_id, int loff) {

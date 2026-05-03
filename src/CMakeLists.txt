@@ -52,6 +52,7 @@ set(SOURCES
     containers.c
     compile.c
     ir.c
+    ir-codegen.c
     ir-debug.c
     ir-fold.c
     ir-mem2reg.c
@@ -85,6 +86,7 @@ set(HEADERS
     config.h
     containers.h
     ir.h
+    ir-codegen.h
     ir-debug.h
     ir-fold.h
     ir-mem2reg.h

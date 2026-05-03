@@ -13,6 +13,7 @@
 #include "config.h"
 #include "containers.h"
 #include "ir.h"
+#include "ir-codegen.h"
 #include "ir-debug.h"
 #include "list.h"
 #include "prsutil.h"
@@ -56,35 +57,6 @@ void asmExpression(Cctrl *cc, AoStr *buf, Ast *ast);
 #define asmGetGlabel(gvar) \
     gvar->is_static ? gvar->glabel : gvar->gname
 
-uint64_t ieee754(double _f64) {
-    if (_f64 == 0.0) return 0;  // Handle zero value explicitly
-
-    // Calculate exponent and adjust fraction
-    double base2_exp = floorl(log2l(fabs(_f64)));
-    double exponet2_removed = ldexpl(_f64, -base2_exp - 1);
-
-    // Initialize fraction and calculate it bit by bit
-    uint64_t fraction = 0;
-    double digit = 0.5;  // Start with 1/2
-    for (s64 i = 0; i != 53; i++) {
-        if (exponet2_removed >= digit) {
-            exponet2_removed -= digit;
-            fraction |= 1ULL << (52 - i);
-        }
-        digit *= 0.5;  // Move to the next digit (1/4, 1/8, ...)
-    }
-
-    // Calculate exponent representation
-    uint64_t exponent = ((1 << 10) - 1) + base2_exp;
-
-    // Handle sign bit
-    uint64_t sign = (_f64 < 0.0) ? 1 : 0;
-
-    // Assemble the IEEE 754 representation
-    return (sign << 63) |
-           ((exponent & 0x7FF) << 52) |
-           (fraction & ~(1ULL << 52));
-}
 
 /* This is a hacky, but seemingly functional way of me being able
  * to run this on Macos and Linux */

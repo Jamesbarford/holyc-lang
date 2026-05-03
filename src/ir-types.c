@@ -85,3 +85,38 @@ Map *irFunctionGetPredecessors(IrFunction *func, IrBlock *ir_block) {
     IrBlockMapping *m = irFunctionGetBlockMapping(func, ir_block);
     return m ? m->predecessors : NULL;
 }
+
+void irFunctionVecToString(AoStr *buf, void *_ir_func) {
+    IrFunction *ir_func = _ir_func;
+    aoStrCatPrintf(buf, "%s", ir_func->name->data);
+}
+
+/* `Vec<IrFunction *>`*/
+VecType vec_ir_function_type = {
+    .stringify = irFunctionVecToString,
+    .match     = NULL,
+    .release   = NULL,
+    .type_str  = "IrFunction *",
+};
+
+Vec *irFunctionVecNew(void) {
+    return vecNew(&vec_ir_function_type);
+}
+
+IrCtx *irCtxNew(Cctrl *cc) {
+    IrCtx *ctx = malloc(sizeof(IrCtx));
+    ctx->prog = malloc(sizeof(IrProgram));
+    ctx->prog->functions = irFunctionVecNew();
+    ctx->prog->globals = NULL;
+    ctx->cc = cc;
+    ctx->loop_depth = 0;
+    ctx->labels = NULL;
+    return ctx;
+}
+
+/* Get a variable from the functions variable map. Returns `NULL` if it does 
+ * not exist. This function is here so we don't need to `#include "ir.h"` in
+ * `codegen-x86-ir.h`*/
+IrValue *irFnGetVar(IrFunction *func, u32 lvar_id) {
+    return mapGetInt(func->variables, lvar_id);
+}

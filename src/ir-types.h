@@ -307,6 +307,9 @@ typedef struct IrCtx {
     Map *labels;
 } IrCtx;
 
+IrCtx *irCtxNew(Cctrl *cc);
+
+IrValue *irFnGetVar(IrFunction *func, u32 lvar_id);
 
 Map *irFunctionGetSuccessors(IrFunction *func, IrBlock *ir_block);
 Map *irFunctionGetPredecessors(IrFunction *func, IrBlock *ir_block);
@@ -317,6 +320,9 @@ u8 irIsInt(IrValueType ir_value_type);
 u8 irIsStruct(IrValueType ir_value_type);
 u8 irIsConstInt(IrValue *val);
 int irGetIntSize(IrValueType ir_value_type);
+
+void irFunctionVecToString(AoStr *buf, void *_ir_func);
+Vec *irFunctionVecNew(void);
 
 IrValueType irConvertType(AstType *type);
 

@@ -39,23 +39,6 @@ void irMemoryStats(void) {
     arenaPrintStats(&ir_arena);
 }
 
-void vecIrFunctionToString(AoStr *buf, void *_ir_func) {
-    IrFunction *ir_func = _ir_func;
-    aoStrCatPrintf(buf, "%s", ir_func->name->data);
-}
-
-/* `Vec<IrFunction *>`*/
-VecType vec_ir_function_type = {
-    .stringify = vecIrFunctionToString,
-    .match     = NULL,
-    .release   = NULL,
-    .type_str  = "IrFunction *",
-};
-
-Vec *irFunctionVecNew(void) {
-    return vecNew(&vec_ir_function_type);
-}
-
 void vecIrPairToString(AoStr *buf, void *_ir_pair) {
     irPairToString(buf, _ir_pair);
 }
@@ -236,17 +219,6 @@ IrValue *irTmp(IrValueType type, u16 size) {
     return val;
 }
 
-IrCtx *irCtxNew(Cctrl *cc) {
-    IrCtx *ctx = malloc(sizeof(IrCtx));
-    ctx->prog = malloc(sizeof(IrProgram));
-    ctx->prog->functions = irFunctionVecNew();
-    ctx->prog->globals = NULL;
-    ctx->cc = cc;
-    ctx->loop_depth = 0;
-    ctx->labels = NULL;
-    return ctx;
-}
-
 static void irPushLoopCtx(IrCtx *ctx, IrBlock *cont, IrBlock *brk) {
     if (ctx->loop_depth >= IR_LOOP_STACK_MAX) {
         loggerPanic("Loop nesting > %d not supported in slice\n",
@@ -307,10 +279,6 @@ void irFnAddVar(IrFunction *func, u32 lvar_id, IrValue *var) {
 
 void irFnAddBlock(IrFunction *fn, IrBlock *block) {
     listAppend(fn->blocks, block);
-}
-
-IrValue *irFnGetVar(IrFunction *func, u32 lvar_id) {
-    return mapGetInt(func->variables, lvar_id);
 }
 
 void irAddStackSpace(IrCtx *ctx, int size) {
@@ -638,11 +606,6 @@ static int irRetTypeIsAggregate(AstType *rettype) {
         return 0;
     if (rettype->is_intrinsic) return 0;
     return rettype->size > 0;
-}
-
-static int irFuncReturnsAggregate(Ast *ast_func) {
-    if (!ast_func || !ast_func->type) return 0;
-    return irRetTypeIsAggregate(ast_func->type->rettype);
 }
 
 /* Emit a struct copy of `n_bytes` from `src` to `dst` (both pointer

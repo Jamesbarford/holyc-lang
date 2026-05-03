@@ -10,6 +10,7 @@
 #include "codegen-x86-ir.h"
 #include "containers.h"
 #include "ir.h"
+#include "ir-codegen.h"
 #include "ir-fold.h"
 #include "ir-mem2reg.h"
 #include "ir-peephole.h"
@@ -19,10 +20,6 @@
 #include "prsutil.h"
 #include "util.h"
 #include "x86.h"
-
-/* These ir.c internals aren't otherwise exposed; declare them locally. */
-extern IrCtx *irCtxNew(Cctrl *cc);
-extern IrValue *irFnGetVar(IrFunction *func, u32 lvar_id);
 
 /*
  * IR -> x86_64 codegen for slice-0.
@@ -36,55 +33,14 @@ extern IrValue *irFnGetVar(IrFunction *func, u32 lvar_id);
  * immediately consumed as the next instruction's first %rax source. The
  * emitter then skips the spill on the def and the reload on the use, and
  * the slot allocator drops the (unused) stack slot. This collapses the bulk
- * of the bloat — straight-line code keeps values in %rax exactly the way
+ * of the bloat - straight-line code keeps values in %rax exactly the way
  * the AST -> x86 codegen does.
  *
  * Locals and parameters re-use the offsets that asmFunctionInit assigned
  * to AST nodes, so the prologue (and any future fix-ups to it) stays in
- * one place.
- */
-
-/* IRCG_* flag macros and the IrRaCtx live in ir-regalloc.h - they're
- * shared with the peephole pass which sets the same bits the codegen
- * here reads. */
-
-typedef struct IrCgCtx {
-    Cctrl *cc;
-    AoStr *buf;
-    /* Slot offset map + extra-stack counter + IR function. The
-     * regalloc helpers in ir-regalloc.c take an IrRaCtx*; the codegen
-     * passes `&ctx->ra` when calling into them. */
-    IrRaCtx ra;
-    /* Unique block-label prefix per function so multiple slice
-     * functions compiled in the same translation unit don't collide. */
-    int func_uid;
-    /* Set during the per-block emission loop so terminator codegen
-     * knows who's emitting and which block (if any) follows in layout
-     * order. */
-    IrBlock *cur_block;
-    IrBlock *next_block;
-    /* Map<u32 IrValue.var.id -> IrInstr* (IR_LEA)>. Populated once per
-     * function from peephole-marked LEAs. The IR_CALL emit consults
-     * this to re-create `leaq <source>, <target_reg>` directly at the
-     * call site instead of going through the slot. NULL when no
-     * LEA-into-call fusion fired. */
-    Map *lea_inline_map;
-} IrCgCtx;
+ * one place. */
 
 static int ircg_func_seq = 0;
-
-
-/* True when `val` is a constant integer whose value fits in a sign-
- * extended 32-bit immediate - the largest immediate form x86_64
- * arithmetic / compare instructions accept. Larger 64-bit constants
- * have no immediate encoding and must go through a register. */
-static int irCgIsImm32(IrValue *val, s64 *out) {
-    if (!val || val->kind != IR_VAL_CONST_INT) return 0;
-    s64 n = val->as._i64;
-    if (n < INT32_MIN || n > INT32_MAX) return 0;
-    *out = n;
-    return 1;
-}
 
 /* If `val` is a deferred IR_LEA result (peephole-marked
  * IRCG_LEA_INLINE_AT_CALL), emit `leaq <lea-source>, %<reg>` directly
@@ -164,6 +120,11 @@ static void irCgLoadToReg(IrCgCtx *ctx, IrValue *val, const char *reg) {
 static void irCgStoreReg(IrCgCtx *ctx, IrValue *dst, const char *reg) {
     aoStrCatPrintf(ctx->buf, "movq   %%%s, %d(%%rbp)\n\t",
                    reg, irCgGetLoff(&ctx->ra, dst));
+}
+
+static void irCgSpillDst(IrCgCtx *ctx, IrInstr *instr, const char *reg) {
+    if (instr->flags & IRCG_FUSE_TO_NEXT) return;
+    irCgStoreReg(ctx, instr->dst, reg);
 }
 
 /* Emit `.data <label>: .quad <bits> .text` lazily for a float constant.
@@ -299,43 +260,6 @@ static void irCgLoadFirstSrc(IrCgCtx *ctx, IrInstr *instr, IrValue *src) {
     irCgLoadToReg(ctx, src, "rax");
 }
 
-static void irCgSpillDst(IrCgCtx *ctx, IrInstr *instr, const char *reg) {
-    if (instr->flags & IRCG_FUSE_TO_NEXT) return;
-    irCgStoreReg(ctx, instr->dst, reg);
-}
-
-/* Emit, for each phi at the head of `to`, the move(s) that put the value
- * coming from `from` into either %rax (rax-resident phi) or the phi's
- * stack slot. Caller has already arranged that we're at the end of `from`'s
- * block, just before its terminator.
- *
- * Order matters: when phi A's pair value reads phi B's dst at this same
- * block, A must materialise before B — otherwise B's write clobbers the
- * slot A is about to read. We collect all phis here, then repeatedly pick
- * one whose dst is not read by any still-pending phi (a leaf in the
- * read-dependency graph). Cycles fall back to scratch via %rcx. */
-/* True when the predecessor block (`from`) ended with a value-producing
- * instruction whose dst is `v` and which the peephole pass marked
- * IRCG_FUSE_TO_NEXT (suppressed-spill, "value is in %rax going into
- * the JMP"). Lets the phi-mat skip the otherwise-redundant slot
- * reload. */
-static int phiPairValueLiveInRax(IrBlock *from, IrValue *v) {
-    if (!from || !v || v->kind != IR_VAL_TMP) return 0;
-    if (listEmpty(from->instructions)) return 0;
-    for (List *node = from->instructions->prev;
-         node != from->instructions;
-         node = node->prev) {
-        IrInstr *I = (IrInstr *)node->value;
-        if (I->op == IR_NOP) continue;
-        if (I->op == IR_JMP || I->op == IR_BR ||
-            I->op == IR_LOOP || I->op == IR_RET) continue;
-        if (!I->dst || I->dst->kind != IR_VAL_TMP) return 0;
-        if (I->dst->as.var.id != v->as.var.id) return 0;
-        return (I->flags & IRCG_FUSE_TO_NEXT) != 0;
-    }
-    return 0;
-}
-
 static void irCgEmitOnePhi(IrCgCtx *ctx, IrInstr *phi, IrPair *match) {
     IrValue *v = match->ir_value;
     /* If the predecessor's last def was peephole-tail-fused, %rax (for
@@ -368,73 +292,9 @@ static void irCgEmitOnePhi(IrCgCtx *ctx, IrInstr *phi, IrPair *match) {
     }
 }
 
-static void irCgEmitPhiMaterialize(IrCgCtx *ctx, IrBlock *from, IrBlock *to) {
-    if (!to || !from) return;
 
-    /* Gather (phi, pair-from-`from`) pairs and a `done` flag. */
-    enum { kMaxPhis = 32 };
-    IrInstr *phis[kMaxPhis];
-    IrPair  *pairs[kMaxPhis];
-    int     done[kMaxPhis];
-    int n = 0;
-
-    listForEach(to->instructions) {
-        IrInstr *I = (IrInstr *)it->value;
-        if (I->op == IR_NOP) continue;
-        if (I->op != IR_PHI) break;
-        if (n >= kMaxPhis) {
-            loggerPanic("ir-cg: too many phis at one block (>%d)\n", kMaxPhis);
-        }
-        IrPair *match = NULL;
-        if (I->extra.phi_pairs) {
-            for (u64 i = 0; i < I->extra.phi_pairs->size; ++i) {
-                IrPair *p = vecGet(IrPair *, I->extra.phi_pairs, i);
-                if (p->ir_block == from) { match = p; break; }
-            }
-        }
-        if (!match || !match->ir_value) continue;
-        phis[n] = I;
-        pairs[n] = match;
-        done[n] = 0;
-        n++;
-    }
-    if (n == 0) return;
-
-    /* Repeatedly pick a phi whose dst isn't read by any still-pending
-     * phi's pair. That's a leaf in the read-dependency graph: emitting
-     * it can't break any later read. */
-    int emitted = 0;
-    while (emitted < n) {
-        int progress = 0;
-        for (int i = 0; i < n; ++i) {
-            if (done[i]) continue;
-            int read_by_pending = 0;
-            for (int j = 0; j < n; ++j) {
-                if (i == j || done[j]) continue;
-                IrValue *v = pairs[j]->ir_value;
-                if (v && v->kind == IR_VAL_TMP &&
-                    phis[i]->dst &&
-                    phis[i]->dst->kind == IR_VAL_TMP &&
-                    v->as.var.id == phis[i]->dst->as.var.id) {
-                    read_by_pending = 1;
-                    break;
-                }
-            }
-            if (!read_by_pending) {
-                irCgEmitOnePhi(ctx, phis[i], pairs[i]);
-                done[i] = 1;
-                emitted++;
-                progress = 1;
-            }
-        }
-        if (!progress) {
-            /* Cycle (every remaining phi's dst is read by another). Stash
-             * the next pending phi's source value in a scratch slot via
-             * %rcx, then break the cycle. For slice-0 with structured
-             * loops, cycles are rare — panic for now so we notice. */
-            loggerPanic("ir-cg: phi materialisation cycle (NYI)\n");
-        }
-    }
+static void X86EmitPhiMaterialize(IrCgCtx *ctx, IrBlock *from, IrBlock *to) {
+    irCgEmitPhiMaterialize(ctx, from, to, &irCgEmitOnePhi);
 }
 
 static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
@@ -903,11 +763,11 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                                "je     %s\n\t",
                                else_lbl);
             }
-            irCgEmitPhiMaterialize(ctx, ctx->cur_block, t);
+            X86EmitPhiMaterialize(ctx, ctx->cur_block, t);
             aoStrCatPrintf(ctx->buf, "jmp    %s\n", tlbl);
             asmRemovePreviousTab(ctx->buf);
             aoStrCatPrintf(ctx->buf, "%s:\n\t", else_lbl);
-            irCgEmitPhiMaterialize(ctx, ctx->cur_block, f);
+            X86EmitPhiMaterialize(ctx, ctx->cur_block, f);
             if (ctx->next_block != f) {
                 aoStrCatPrintf(ctx->buf, "jmp    %s\n\t", flbl);
             }
@@ -918,7 +778,7 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
     case IR_JMP:
     case IR_LOOP: {
         IrBlock *target = instr->extra.blocks.target_block;
-        irCgEmitPhiMaterialize(ctx, ctx->cur_block, target);
+        X86EmitPhiMaterialize(ctx, ctx->cur_block, target);
         /* JMP elision: if we're about to fall straight into the target
          * label, the unconditional jump is dead weight. Phi materialisation
          * still has to run (the values must be in place). */
