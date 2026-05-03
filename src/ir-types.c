@@ -417,3 +417,33 @@ Map *irFunctionGetPredecessors(IrFunction *func, IrBlock *ir_block) {
     }
     return NULL;
 }
+
+void irFunctionVecToString(AoStr *buf, void *_ir_func) {
+    IrFunction *ir_func = _ir_func;
+    aoStrCatPrintf(buf, "%s", ir_func->name->data);
+}
+
+/* `Vec<IrFunction *>`*/
+VecType vec_ir_function_type = {
+    .stringify = irFunctionVecToString,
+    .match     = NULL,
+    .release   = NULL,
+    .type_str  = "IrFunction *",
+};
+
+Vec *irFunctionVecNew(void) {
+    return vecNew(&vec_ir_function_type);
+}
+
+IrCtx *irCtxNew(Cctrl *cc) {
+    IrCtx *ctx = malloc(sizeof(IrCtx));
+    ctx->prog = malloc(sizeof(IrProgram));
+    ctx->prog->functions = irFunctionVecNew();
+    ctx->prog->globals = NULL;
+    ctx->cc = cc;
+    return ctx;
+}
+
+IrValue *irFnGetVar(IrFunction *func, u32 lvar_id) {
+    return mapGetInt(func->variables, lvar_id);
+}
