@@ -7,6 +7,7 @@
 #include "ir.h"
 #include "ir-codegen.h"
 #include "ir-fold.h"
+#include "ir-inline.h"
 #include "ir-mem2reg.h"
 #include "ir-peephole.h"
 #include "ir-regalloc.h"
@@ -171,7 +172,12 @@ IrCgPrepared irCgPrepareFunction(Cctrl *cc, Ast *ast_func, AoStr *buf,
     IrCtx *ir_ctx = irCtxNew(cc);
     IrFunction *func = irLowerFunction(ir_ctx, ast_func);
 
-    /* 2. Run analyses. mem2reg promotes allocas away; the layout pass
+    /* 2. Splice in any IR_CALL whose callee is an inline-flagged
+     *    function. Runs before mem2reg / fold so the inlined body's
+     *    allocas can be promoted alongside the caller's. */
+    irInlineSplice(func);
+
+    /* 3. Run analyses. mem2reg promotes allocas away; the layout pass
      *    below uses that info to skip slots for promoted locals.
      *    Peephole runs *after* the annotation pass, since the
      *    annotation pass clears IRCG_FUSE_TO_NEXT / IRCG_R1_IN_REG

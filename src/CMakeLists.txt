@@ -55,6 +55,7 @@ set(SOURCES
     ir-codegen.c
     ir-debug.c
     ir-fold.c
+    ir-inline.c
     ir-mem2reg.c
     ir-peephole.c
     ir-regalloc.c
@@ -89,6 +90,7 @@ set(HEADERS
     ir-codegen.h
     ir-debug.h
     ir-fold.h
+    ir-inline.h
     ir-mem2reg.h
     ir-peephole.h
     ir-regalloc.h

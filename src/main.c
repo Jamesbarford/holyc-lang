@@ -9,6 +9,7 @@
 #include "aostr.h"
 #include "ast.h"
 #include "cctrl.h"
+#include "ir-inline.h"
 #include "cfg-print.h"
 #include "cfg.h"
 #include "cli.h"
@@ -313,9 +314,9 @@ int main(int argc, char **argv) {
         cctrlSetCommandLineDefines(cc,args.defines_list);
     }
 
-    if (args.ir_backend) {
+ //   if (args.ir_backend) {
         cc->flags |= CCTRL_IR_BACKEND;
-    }
+ //   }
 
     if (args.print_tokens) {
         compileToTokens(cc,&args,lexer_flags);
@@ -332,6 +333,14 @@ int main(int argc, char **argv) {
     }
 
     compileToAst(cc,&args,lexer_flags);
+
+    /* Direct-recursion check: any inline function that calls itself
+     * loses the inline flag (with a warning) so the rest of the
+     * pipeline treats it as an ordinary call. */
+    irClearRecursiveInline(cc);
+    /* Pre-lower inline-flagged functions to IR and stash them in the
+     * inline cache so the per-function splice pass can read them. */
+    irInlineCacheBuild(cc);
 
     if (args.print_ast) {
         compilePrintAst(cc);

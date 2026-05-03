@@ -514,32 +514,6 @@ Vec *parseArgv(Cctrl *cc, Ast *decl, s64 terminator, char *fname, int len) {
     return argv_vec;
 }
 
-Ast *parseInlineFunctionCall(Cctrl *cc, Ast *fn, Vec *argv) {
-    List *stmts = listNew();
-    List *fn_body = listCopy(fn->body->stms);
-    if (fn->params->size == argv->size) {
-        int size = fn->params->size;
-        for (int i = 0; i < size; ++i) {
-            Ast *param = fn->params->entries[i];
-            Ast *arg = argv->entries[i];
-            Ast *var_decl = astDecl(param,arg);
-            listAppend(cc->tmp_func->locals, param);
-            listAppend(stmts, var_decl);
-        }
-    } else {
-        cctrlRaiseException(cc,"Cannot presently inline a function with default arguments or where the number of parameters does not match the number of arguments");
-    }
-    listMergeAppend(stmts, fn_body);
-    if (!listEmpty(fn->locals)) {
-        List *fn_locals = listCopy(fn->locals);
-        listMergeAppend(cc->tmp_func->locals, fn_locals);
-    }
-    Ast *inlined = astCompountStatement(stmts);
-    inlined->inline_ret = fn->inline_ret;
-    inlined->type = fn->type->rettype;
-    return inlined;
-}
-
 /* Read function arguments for a function being called */
 Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, s64 terminator) {
     AstType *rettype = NULL;
@@ -548,16 +522,6 @@ Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, s64 terminator) {
 
     if (maybe_fn) {
         rettype = maybe_fn->type->rettype;
-        if (maybe_fn->flags & AST_FLAG_INLINE && !(cc->flags & CCTRL_TRANSPILING)) {
-            if (maybe_fn->kind == AST_ASM_FUNC_BIND || maybe_fn->kind == AST_ASM_FUNCDEF) {
-                Ast *call = astAsmFunctionCall(rettype,
-                                               aoStrDup(maybe_fn->asmfname),
-                                               astVecNew());
-                call->flags |= maybe_fn->flags;
-                return call;
-            }
-            return parseInlineFunctionCall(cc, maybe_fn, argv);
-        }
     }
 
     if (!maybe_fn) {
@@ -635,15 +599,6 @@ static Ast *parseIdentifierOrFunction(Cctrl *cc,
             if ((tokenPunctIs(tok,';') || tokenPunctIs(tok,',') || 
                 tokenPunctIs(tok,')'))  
                     && parseIsFunction(ast)) {
-                if (ast->flags & AST_FLAG_INLINE && !(cc->flags & CCTRL_TRANSPILING)) {
-                    if (ast->kind == AST_ASM_FUNC_BIND || ast->kind == AST_ASM_FUNCDEF) {
-                        Ast *call = astAsmFunctionCall(ast->type->rettype,
-                                aoStrDup(ast->asmfname),astVecNew());
-                        call->flags |= ast->flags;
-                        return call;
-                    }
-                    return parseInlineFunctionCall(cc,ast,astVecNew());
-                }
                 if (ast->kind == AST_ASM_FUNC_BIND || ast->kind == AST_ASM_FUNCDEF) {
                     return astAsmFunctionCall(ast->type->rettype,
                             aoStrDup(ast->asmfname),astVecNew());

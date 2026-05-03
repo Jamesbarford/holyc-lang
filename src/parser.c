@@ -585,16 +585,6 @@ Ast *parseVariableAssignment(Cctrl *cc, Ast *var, s64 terminator_flags) {
         typeCheckWarn(cc,'=',var,init);
     }
 
-    /* This is for when we have parsed a call to an inline function that is 
-     * being assigned to a variable */
-    if (init->kind == AST_COMPOUND_STMT) {
-        /* Attach the Ast to the current function that is being called */
-        if (cc->tmp_func) {
-            listAppend(cc->tmp_func->body->stms,init);
-        }
-        return astDecl(var,init->inline_ret);
-    }
-
     return astDecl(var,init);
 }
 
@@ -1084,9 +1074,6 @@ Ast *parseReturnStatement(Cctrl *cc) {
     else        check = ast_void_type;
 
     if (check->kind == AST_TYPE_VOID && maybe_fn->type->rettype->kind == AST_TYPE_VOID) {
-        if (maybe_fn->flags & AST_FLAG_INLINE && !(cc->flags & CCTRL_TRANSPILING)) {
-            return astDecl(maybe_fn->inline_ret,NULL);
-        }
         return astReturn(retval,cc->tmp_rettype);
     }
 
@@ -1094,9 +1081,6 @@ Ast *parseReturnStatement(Cctrl *cc) {
     if (!ok) {
         Ast *func = mapGet(cc->global_env, cc->tmp_fname->data);
         typeCheckReturnTypeWarn(cc,func,check,retval);
-    }
-    if (maybe_fn->flags & AST_FLAG_INLINE && !(cc->flags & CCTRL_TRANSPILING)) {
-        return astDecl(maybe_fn->inline_ret,retval);
     }
     return astReturn(retval,cc->tmp_rettype);
 }

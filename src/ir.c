@@ -1157,7 +1157,6 @@ int irFunctionEligibleForSliceCc(Cctrl *cc, Ast *ast_func) {
 
 int irFunctionEligibleForSlice(Ast *ast_func) {
     if (!ast_func || ast_func->kind != AST_FUNC) return 0;
-    if (ast_func->flags & AST_FLAG_INLINE) return 0;
     AstType *rettype = ast_func->type ? ast_func->type->rettype : NULL;
     if (!rettype) return 0;
     if (rettype->kind != AST_TYPE_VOID &&

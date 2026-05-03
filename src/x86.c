@@ -2563,11 +2563,6 @@ AoStr *asmGenerate(Cctrl *cc) {
     listForEach(cc->ast_list) {
         ast = (Ast *)it->value;
         if (ast->kind == AST_FUNC) {
-            /* We do not emit inline functions */
-            if (ast->flags & AST_FLAG_INLINE) {
-                continue;
-            }
-
             if (cc->flags & CCTRL_IR_BACKEND) {
                 asmFunctionFromIr(cc,asmbuf,ast);
             } else {
