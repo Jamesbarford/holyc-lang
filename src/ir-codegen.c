@@ -98,10 +98,11 @@ void irCgEmitPhiMaterialize(IrCgCtx *ctx, IrBlock *from, IrBlock *to,
  * read-dependency graph). Cycles fall back to scratch via %rcx. */
 /* True when the predecessor block (`from`) ended with a value-producing
  * instruction whose dst is `v` and which the peephole pass marked
- * IRCG_FUSE_TO_NEXT (suppressed-spill, "value is in %rax going into
- * the JMP"). Lets the phi-mat skip the otherwise-redundant slot
- * reload. */
-int phiPairValueLiveInRax(IrBlock *from, IrValue *v) {
+ * IRCG_FUSE_TO_NEXT (suppressed-spill, "value is in the result reg
+ * going into the JMP"). Lets the phi-mat skip the otherwise-redundant
+ * slot reload. Target-agnostic: per-arch emit decides which register
+ * the result actually lives in (%rax on x86, x0/d0 on aarch64). */
+int phiPairValueLiveInResultReg(IrBlock *from, IrValue *v) {
     if (!from || !v || v->kind != IR_VAL_TMP) return 0;
     if (listEmpty(from->instructions)) return 0;
     for (List *node = from->instructions->prev;

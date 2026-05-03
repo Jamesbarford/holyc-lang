@@ -47,7 +47,6 @@ set(SOURCES
     cfg-print.c
     cfg.c
     cli.c
-    codegen-aarch64.c
     codegen-x86-ir.c
     containers.c
     compile.c
@@ -81,7 +80,6 @@ set(HEADERS
     cfg-print.h
     cfg.h
     cli.h
-    codegen-aarch64.h
     codegen-x86-ir.h
     compile.h
     config.h

@@ -257,7 +257,7 @@ static void irCgEmitOnePhi(IrCgCtx *ctx, IrInstr *phi, IrPair *match) {
      * int phis) already holds `v` going into this materialise step;
      * skip both the slot reload and the dangling check below. */
     int in_rax = !irIsFloat(phi->dst->type)
-                  && phiPairValueLiveInRax(match->ir_block, v);
+                  && phiPairValueLiveInResultReg(match->ir_block, v);
     /* mem2reg can emit phi pairs whose tmp value flows from a branch
      * that never wrote anything live (typically the first branch of a
      * promoted variable initialised inside the if/else). Such tmps have

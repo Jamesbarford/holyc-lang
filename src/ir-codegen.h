@@ -35,7 +35,7 @@ typedef void ir_cg_emit_one_phi(IrCgCtx *ctx, IrInstr *phi, IrPair *match);
 uint64_t ieee754(double _f64);
 void irCgEmitPhiMaterialize(IrCgCtx *ctx, IrBlock *from, IrBlock *to,
                             ir_cg_emit_one_phi *emit_one_phi);
-int phiPairValueLiveInRax(IrBlock *from, IrValue *v);
+int phiPairValueLiveInResultReg(IrBlock *from, IrValue *v);
 int irCgIsImm32(IrValue *val, s64 *out);
 
 /* Bundle returned by `irCgPrepareFunction`. Owns the IR-side resources
