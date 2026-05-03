@@ -1,8 +1,38 @@
 #include <assert.h>
 #include <math.h>
+#include <string.h>
 
+#include "arena.h"
 #include "ir-types.h"
+#include "ir-debug.h"
 #include "util.h"
+
+static Arena ir_arena;
+static int ir_arena_init = 0;
+
+void irMemoryInit(void) {
+    if (!ir_arena_init) {
+        /* @TODO; correct the size of the arena */
+        arenaInit(&ir_arena, 512);
+        ir_arena_init = 1;
+    }
+}
+
+void irMemoryRelease(void) {
+    if (ir_arena_init) {
+        ir_arena_init = 0;
+        arenaClear(&ir_arena);
+    }
+}
+
+void *irAlloc(u32 size) {
+    return arenaAlloc(&ir_arena, size);
+}
+
+void irMemoryStats(void) {
+    printf("ir Arena:\n");
+    arenaPrintStats(&ir_arena);
+}
 
 u8 irOpIsCmp(IrOp opcode) {
     if (opcode == IR_ICMP || opcode == IR_FCMP) {
@@ -446,4 +476,256 @@ IrCtx *irCtxNew(Cctrl *cc) {
 
 IrValue *irFnGetVar(IrFunction *func, u32 lvar_id) {
     return mapGetInt(func->variables, lvar_id);
+}
+
+void vecIrPairToString(AoStr *buf, void *_ir_pair) {
+    irPairToString(buf, _ir_pair);
+}
+
+/* `Vec<IrPair *>`*/
+VecType vec_ir_pair_type = {
+    .stringify = vecIrPairToString,
+    .match     = NULL,
+    .release   = NULL,
+    .type_str  = "IrPair *",
+};
+
+Vec *irPairVecNew(void) {
+    return vecNew(&vec_ir_pair_type);
+}
+
+void vecIrValueToString(AoStr *buf, void *_ir_value) {
+    AoStr *ir_value_str = irValueToString(_ir_value);
+    aoStrCatAoStr(buf, ir_value_str);
+    aoStrRelease(ir_value_str);
+}
+
+/* `Vec<IrValue *>`*/
+VecType vec_ir_value_type = {
+    .stringify = vecIrValueToString,
+    .match     = NULL,
+    .release   = NULL,
+    .type_str  = "IrValue *",
+};
+
+Vec *irValueVecNew(void) {
+    return vecNew(&vec_ir_value_type);
+}
+
+AoStr *mapIrBlockToString(void *_ir_block) {
+    IrBlock *ir_block = (IrBlock *)_ir_block;
+    return aoStrPrintf("block %u", ir_block->id);
+}
+
+MapType map_u32_to_ir_block_type = {
+    .match           = mapIntKeyMatch,
+    .hash            = mapIntKeyHash,
+    .get_key_len     = mapIntKeyLen,
+    .key_to_string   = mapIntToString,
+    .key_release     = NULL,
+    .value_to_string = mapIrBlockToString,
+    .value_release   = NULL,
+    .key_type        = "u32",
+    .value_type      = "IrBlock *",
+};
+
+Map *irBlockMapNew(void) {
+    return mapNew(8, &map_u32_to_ir_block_type);
+}
+
+AoStr *mapIrBlockMappingToString(void *_ir_block_mapping) {
+    IrBlockMapping *mapping = _ir_block_mapping;
+    AoStr *str = aoStrNew();
+    AoStr *preds = mapKeysToString(mapping->predecessors);
+    AoStr *succ = mapKeysToString(mapping->successors);
+    aoStrCatFmt(str, "predecessors: %S, successors: %S", preds, succ);
+    aoStrRelease(preds);
+    aoStrRelease(succ);
+    return str;
+}
+
+void irBlockMappingRelease(void *_mapping) {
+    IrBlockMapping *mapping = _mapping;
+    mapRelease(mapping->predecessors);
+    mapRelease(mapping->successors);
+    
+}
+
+AoStr *mapIrValueToString(void *ir_value) {
+    return irValueToString((IrValue *)ir_value);
+}
+
+/* `Map<u32, IrValue *>`*/
+MapType map_u32_to_ir_var_value_type = {
+    .match           = mapIntKeyMatch,
+    .hash            = mapIntKeyHash,
+    .get_key_len     = mapIntKeyLen,
+    .key_to_string   = mapIntToString,
+    .key_release     = NULL,
+    .value_to_string = mapIrValueToString,
+    .value_release   = NULL,
+    .key_type        = "u32",
+    .value_type      = "IrValue *",
+};
+
+/* `Map<u32, IrBlockMapping *>`*/
+MapType map_u32_to_ir_block_mapping_type = {
+    .match           = mapIntKeyMatch,
+    .hash            = mapIntKeyHash,
+    .get_key_len     = mapIntKeyLen,
+    .key_to_string   = mapIntToString,
+    .key_release     = NULL,
+    .value_to_string = mapIrBlockMappingToString,
+    .value_release   = NULL,
+    .key_type        = "u32",
+    .value_type      = "IrBlockMapping *",
+};
+
+Map *irBlockMappingMapNew(void) {
+    return mapNew(32, &map_u32_to_ir_block_mapping_type);
+}
+
+
+IrBlockMapping *irBlockMappingNew(int id) {
+    IrBlockMapping *mapping = (IrBlockMapping *)irAlloc(sizeof(IrBlockMapping));
+    mapping->id = id;
+    mapping->successors = irBlockMappingMapNew();
+    mapping->predecessors = irBlockMappingMapNew();
+    return mapping;
+}
+
+Map *irVarValueMap(void) {
+    return mapNew(8, &map_u32_to_ir_var_value_type);
+}
+
+/* Pass in the whole block to abstract away that we area using an interal 
+ * datastructure to keep track of things. I'm trying a few different ones out */
+void irFunctionAddSuccessor(IrFunction *func, IrBlock *src, IrBlock *dest) {
+    IrBlockMapping *ir_block_mapping = (IrBlockMapping *)mapGetInt(func->cfg, src->id);
+    if (!ir_block_mapping) {
+        ir_block_mapping = irBlockMappingNew(src->id);
+        mapAddIntOrErr(func->cfg, src->id, ir_block_mapping);
+    }
+    mapAddIntOrErr(ir_block_mapping->successors, dest->id, dest);
+}
+
+void irFunctionAddPredecessor(IrFunction *func, IrBlock *src, IrBlock *prev) {
+    IrBlockMapping *ir_block_mapping = (IrBlockMapping *)mapGetInt(func->cfg, src->id);
+    if (!ir_block_mapping) {
+        ir_block_mapping = irBlockMappingNew(src->id);
+        mapAddIntOrErr(func->cfg, src->id, ir_block_mapping);
+    }
+    mapAddIntOrErr(ir_block_mapping->predecessors, prev->id, prev);
+}
+
+void irFunctionRemoveSuccessor(IrFunction *func, IrBlock *src, IrBlock *dest) {
+    IrBlockMapping *ir_block_mapping = (IrBlockMapping *)mapGetInt(func->cfg, src->id);
+    if (ir_block_mapping) {
+        mapRemoveInt(ir_block_mapping->successors, dest->id);
+    }
+}
+
+void irFunctionRemovePredecessor(IrFunction *func, IrBlock *src, IrBlock *prev) {
+    IrBlockMapping *ir_block_mapping = (IrBlockMapping *)mapGetInt(func->cfg, src->id);
+    if (ir_block_mapping) {
+        mapRemoveInt(ir_block_mapping->predecessors, prev->id);
+    }
+}
+
+void irFunctionAddMapping(IrFunction *func, IrBlock *src, IrBlock *dest) {
+    irFunctionAddSuccessor(func, src, dest);
+    irFunctionAddPredecessor(func, dest, src);
+}
+
+static u32 ir_block_id = 1;
+
+void irResetBlockId(void) {
+    ir_block_id = 1;
+}
+
+IrBlock *irBlockNew(void) {
+    IrBlock *block = irAlloc(sizeof(IrBlock));
+    block->instructions = listNew();
+    block->removed = 0;
+    block->sealed = 0;
+    block->id = ir_block_id++;
+    return block;
+}
+
+void irBlockRelease(IrBlock *block) {
+    listRelease(block->instructions, NULL);
+}
+
+IrValue *irValueNew(IrValueType type, IrValueKind kind) {
+    IrValue *val = irAlloc(sizeof(IrValue));
+    memset(val, 0, sizeof(IrValue));
+    val->kind = kind;
+    val->type = type;
+    return val;
+}
+
+static u32 ir_tmp_var_id = 1;
+void irTmpVariableCountReset(void) {
+    ir_tmp_var_id = 1;
+}
+
+IrValue *irTmp(IrValueType type, u16 size) {
+    IrValue *val = irValueNew(type, IR_VAL_TMP);
+    val->as.var.id = ir_tmp_var_id++;
+    val->as.var.size = size;
+    return val;
+}
+
+
+void irCtxAddFunction(IrCtx *ctx, IrFunction *func) {
+    vecPush(ctx->prog->functions, func);
+}
+
+IrInstr *irInstrNew(IrOp op, IrValue *dst, IrValue *r1, IrValue *r2) {
+    IrInstr *instr = irAlloc(sizeof(IrInstr));
+    memset(instr, 0, sizeof(IrInstr));
+    instr->flags = 0;
+    instr->op = op;
+    instr->dst = dst;
+    instr->r1 = r1;
+    instr->r2 = r2;
+    return instr;
+}
+
+IrFunction *irFunctionNew(AoStr *fname) {
+    IrFunction *func = irAlloc(sizeof(IrFunction));
+    func->name = fname;
+    func->blocks = listNew();
+    func->cfg = irBlockMappingMapNew();
+    func->variables = irVarValueMap();
+    func->stack_space = 0;
+    func->params = irValueVecNew();
+    return func;
+}
+
+/* Map an ast id to an ir variable */
+void irFnAddVar(IrFunction *func, u32 lvar_id, IrValue *var) {
+    int ok = mapAddIntOrErr(func->variables, lvar_id, var);
+    if (!ok) {
+        AoStr *ir_value_str = irValueToString(var);
+        loggerPanic("Mapping exists for %u -> %s", lvar_id, ir_value_str->data);
+        free(ir_value_str);
+    }
+}
+
+void irFnAddBlock(IrFunction *fn, IrBlock *block) {
+    listAppend(fn->blocks, block);
+}
+
+int irSetVariable(IrFunction *func, u32 var_id, IrValue *var) {
+    return mapAddIntOrErr(func->variables, var_id, var);
+}
+
+void irFunctionRelease(IrFunction *func) {
+    listRelease(func->blocks, (void (*)(void *))&irBlockRelease);
+    mapRelease(func->cfg);
+}
+
+void irAddStackSpace(IrCtx *ctx, int size) {
+    ctx->cur_func->stack_space += size;
 }
