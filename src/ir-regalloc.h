@@ -72,6 +72,14 @@
  * emit skips the reload-into-rax for that first push and goes
  * straight to `pushq %rax`. */
 #define IRCG_CALL_TAIL_ARG_IN_REG (1u << 6)
+/* Set on an IR_LEA whose dst is a single-use tmp consumed only as one
+ * argument of an IR_CALL. Address values from LEA are pure functions
+ * of rbp (locals) or RIP (globals), so we can re-emit the leaq at the
+ * call site directly into the target arg register, bypassing the
+ * slot round-trip (`leaq -16(%rbp), %rax; movq %rax, slot;
+ * movq slot, %rsi` becomes `leaq -16(%rbp), %rsi`). The original LEA
+ * emits nothing and reserves no slot. */
+#define IRCG_LEA_INLINE_AT_CALL (1u << 7)
 
 /* The slot-offset map plus a counter for "extra" stack reserved beyond
  * what the AST layout already covers (used by IR-only allocas, e.g. the

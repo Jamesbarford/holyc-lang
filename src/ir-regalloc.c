@@ -92,6 +92,9 @@ void irCgAllocOperandsForInstr(IrRaCtx *ra, IrInstr *I, int start) {
         return;
 
     case IR_LEA:
+        /* Inlined-at-call LEAs emit nothing here; the call site
+         * re-creates the leaq into the target arg register. No slot. */
+        if (I->flags & IRCG_LEA_INLINE_AT_CALL) return;
         if (spill_dst) irCgAllocTmp(ra, I->dst, start);
         return;
 

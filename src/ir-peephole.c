@@ -317,6 +317,76 @@ static void fuseTailArgIntoCall(Cctrl *cc, IrFunction *func, Map *uses) {
     }
 }
 
+/* Pattern: `IR_LEA` whose dst tmp is single-use and whose only use is
+ * one argument of an `IR_CALL`. LEA values are pure (`rbp + const`
+ * for locals or `RIP-relative const` for globals), so we can move the
+ * leaq emit from the LEA's lexical position to the call site, with
+ * the target arg register as the destination. Eliminates the slot
+ * round-trip:
+ *
+ *     leaq   -16(%rbp), %rax    ; LEA emit
+ *     movq   %rax, slot          ; spill
+ *     ...
+ *     movq   slot, %rsi          ; reload into arg reg
+ *
+ * After: the call's arg-load loop emits `leaq -16(%rbp), %rsi`, the
+ * LEA emits nothing and reserves no slot.
+ *
+ * Skipped when the LEA is the tail arg of a HolyC-variadic call that
+ * already has IRCG_CALL_TAIL_ARG_IN_REG: that fusion expects the
+ * value in %rax going into the push and would conflict. The outcomes
+ * are equivalent (3 instr / 0 slots either way) so first-fusion-wins
+ * is fine. */
+static void fuseLeaIntoCallArg(IrFunction *func, Map *uses) {
+    listForEach(func->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        for (List *node = bb->instructions->next;
+             node != bb->instructions;
+             node = node->next)
+        {
+            IrInstr *call = (IrInstr *)node->value;
+            if (call->op != IR_CALL) continue;
+            if (!call->r1 || !call->r1->as.array.values) continue;
+            Vec *args = call->r1->as.array.values;
+
+            int tail_already_fused =
+                (call->flags & IRCG_CALL_TAIL_ARG_IN_REG) != 0;
+
+            for (u64 i = 0; i < args->size; ++i) {
+                IrValue *a = (IrValue *)args->entries[i];
+                if (!a || a->kind != IR_VAL_TMP) continue;
+                if (useCount(uses, a) != 1) continue;
+                if (tail_already_fused && i == args->size - 1) continue;
+
+                /* Find the LEA producing this tmp. We don't constrain to
+                 * the same block: LEA semantics are position-independent
+                 * (rbp + const or RIP + const), and the slot allocator
+                 * only reserves a slot if FUSE_TO_NEXT is unset, which
+                 * we'll override with INLINE_AT_CALL anyway. */
+                IrInstr *lea = NULL;
+                for (List *bn = func->blocks->next;
+                     bn != func->blocks && !lea;
+                     bn = bn->next) {
+                    IrBlock *b2 = (IrBlock *)bn->value;
+                    for (List *in = b2->instructions->next;
+                         in != b2->instructions;
+                         in = in->next) {
+                        IrInstr *I = (IrInstr *)in->value;
+                        if (I->op != IR_LEA) continue;
+                        if (!I->dst || I->dst->kind != IR_VAL_TMP) continue;
+                        if (I->dst->as.var.id == a->as.var.id) {
+                            lea = I;
+                            break;
+                        }
+                    }
+                }
+                if (!lea) continue;
+                lea->flags |= IRCG_LEA_INLINE_AT_CALL;
+            }
+        }
+    }
+}
+
 void irPeephole(Cctrl *cc, IrFunction *func) {
     if (!func) return;
     Map *uses = mapNew(64, &map_uint_to_uint_type);
@@ -325,6 +395,7 @@ void irPeephole(Cctrl *cc, IrFunction *func) {
     fuseTailValueToPhi(func, uses);
     fuseAddrIntoStoreDeref(func, uses);
     fuseTailArgIntoCall(cc, func, uses);
+    fuseLeaIntoCallArg(func, uses);
     mapRelease(uses);
 }
 

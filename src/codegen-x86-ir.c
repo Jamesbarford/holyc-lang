@@ -62,10 +62,40 @@ typedef struct IrCgCtx {
      * order. */
     IrBlock *cur_block;
     IrBlock *next_block;
+    /* Map<u32 IrValue.var.id -> IrInstr* (IR_LEA)>. Populated once per
+     * function from peephole-marked LEAs. The IR_CALL emit consults
+     * this to re-create `leaq <source>, <target_reg>` directly at the
+     * call site instead of going through the slot. NULL when no
+     * LEA-into-call fusion fired. */
+    Map *lea_inline_map;
 } IrCgCtx;
 
 static int ircg_func_seq = 0;
 
+
+/* If `val` is a deferred IR_LEA result (peephole-marked
+ * IRCG_LEA_INLINE_AT_CALL), emit `leaq <lea-source>, %<reg>` directly
+ * and return 1. Otherwise return 0 - caller falls back to the normal
+ * slot reload. */
+static int irCgEmitInlinedLea(IrCgCtx *ctx, IrValue *val, const char *reg) {
+    if (!ctx->lea_inline_map) return 0;
+    if (!val || val->kind != IR_VAL_TMP) return 0;
+    if (!mapHasInt(ctx->lea_inline_map, val->as.var.id)) return 0;
+    IrInstr *lea = (IrInstr *)mapGetInt(ctx->lea_inline_map,
+                                         val->as.var.id);
+    if (!lea || lea->op != IR_LEA || !lea->r1) return 0;
+    if (lea->r1->kind == IR_VAL_GLOBAL) {
+        const char *name = lea->r1->as.global.name->data;
+        if (lea->r1->flags & IR_VAL_FLAG_FUNC) {
+            name = asmNormaliseFunctionName((char *)name);
+        }
+        aoStrCatPrintf(ctx->buf, "leaq   %s(%%rip), %%%s\n\t", name, reg);
+    } else {
+        int loff = irCgGetLoff(&ctx->ra, lea->r1);
+        aoStrCatPrintf(ctx->buf, "leaq   %d(%%rbp), %%%s\n\t", loff, reg);
+    }
+    return 1;
+}
 
 /* Load any IR value into the given 64-bit register (rax or rcx). */
 static void irCgLoadToReg(IrCgCtx *ctx, IrValue *val, const char *reg) {
@@ -526,6 +556,11 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
          * global symbol (IR_VAL_GLOBAL); pick the right addressing mode.
          * Function names need asmNormaliseFunctionName(); plain data
          * labels go in verbatim. */
+        /* Inlined-at-call LEAs: the call site re-creates the leaq into
+         * the destination arg register, bypassing the slot. We have
+         * nothing to emit here, and the slot allocator already skipped
+         * our dst slot. */
+        if (instr->flags & IRCG_LEA_INLINE_AT_CALL) break;
         if (instr->r1 && instr->r1->kind == IR_VAL_GLOBAL) {
             const char *name = instr->r1->as.global.name->data;
             if (instr->r1->flags & IR_VAL_FLAG_FUNC) {
@@ -1002,7 +1037,11 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
             } else {
                 int skip_load = (tail_in_rax && n_stack == 0 &&
                                  i == (s64)n - 1);
-                if (!skip_load) irCgLoadToReg(ctx, a, "rax");
+                if (!skip_load) {
+                    if (!irCgEmitInlinedLea(ctx, a, "rax")) {
+                        irCgLoadToReg(ctx, a, "rax");
+                    }
+                }
                 aoStrCatPrintf(ctx->buf, "pushq  %%rax\n\t");
             }
             n_stack++;
@@ -1022,7 +1061,10 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                 if (int_idx >= 6) {
                     loggerPanic("ir-cg: too many int args (slice limit 6)\n");
                 }
-                irCgLoadToReg(ctx, a, kIntRegs[int_idx++]);
+                const char *target = kIntRegs[int_idx++];
+                if (!irCgEmitInlinedLea(ctx, a, target)) {
+                    irCgLoadToReg(ctx, a, target);
+                }
             }
         }
 
@@ -1192,6 +1234,24 @@ void asmFunctionFromIr(Cctrl *cc, AoStr *buf, Ast *ast_func) {
     ctx.func_uid = ircg_func_seq++;
     ctx.cur_block = NULL;
     ctx.next_block = NULL;
+    /* Index every peephole-deferred LEA by its dst tmp id, so the
+     * IR_CALL emit can re-create the leaq into the arg register. */
+    ctx.lea_inline_map = mapNew(8, &map_uint_to_uint_type);
+    for (List *bn = func->blocks->next;
+         bn != func->blocks;
+         bn = bn->next) {
+        IrBlock *b = (IrBlock *)bn->value;
+        for (List *in = b->instructions->next;
+             in != b->instructions;
+             in = in->next) {
+            IrInstr *I = (IrInstr *)in->value;
+            if (I->op != IR_LEA) continue;
+            if (!(I->flags & IRCG_LEA_INLINE_AT_CALL)) continue;
+            if (!I->dst || I->dst->kind != IR_VAL_TMP) continue;
+            mapAdd(ctx.lea_inline_map,
+                   (void *)(u64)I->dst->as.var.id, (void *)I);
+        }
+    }
     irCgBindAstLoffs(&ctx.ra, ast_func);
 
     /* 5. Allocate slots for IR tmps starting just below the params area. */
@@ -1237,6 +1297,7 @@ void asmFunctionFromIr(Cctrl *cc, AoStr *buf, Ast *ast_func) {
     }
 
     mapRelease(ctx.ra.id_to_loff);
+    if (ctx.lea_inline_map) mapRelease(ctx.lea_inline_map);
     free(ir_ctx->prog);
     free(ir_ctx);
 }
