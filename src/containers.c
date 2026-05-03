@@ -401,7 +401,7 @@ static int setResize(Set *set) {
                                            old->key_len,
                                            &is_free);
             } else {
-                new_idx = setGetNextIdx(set, old, &is_free);
+                new_idx = setGetNextIdx(set, old->key, &is_free);
             }
             assert(is_free);
             SetNode *new_node = &new_entries[new_idx];
