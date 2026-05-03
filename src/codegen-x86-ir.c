@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -72,6 +73,18 @@ typedef struct IrCgCtx {
 
 static int ircg_func_seq = 0;
 
+
+/* True when `val` is a constant integer whose value fits in a sign-
+ * extended 32-bit immediate - the largest immediate form x86_64
+ * arithmetic / compare instructions accept. Larger 64-bit constants
+ * have no immediate encoding and must go through a register. */
+static int irCgIsImm32(IrValue *val, s64 *out) {
+    if (!val || val->kind != IR_VAL_CONST_INT) return 0;
+    s64 n = val->as._i64;
+    if (n < INT32_MIN || n > INT32_MAX) return 0;
+    *out = n;
+    return 1;
+}
 
 /* If `val` is a deferred IR_LEA result (peephole-marked
  * IRCG_LEA_INLINE_AT_CALL), emit `leaq <lea-source>, %<reg>` directly
@@ -592,8 +605,24 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
         default: assert(0);
         }
         irCgLoadFirstSrc(ctx, instr, instr->r1);
-        irCgLoadToReg(ctx, instr->r2, "rcx");
-        aoStrCatPrintf(ctx->buf, "%s   %%rcx, %%rax\n\t", op);
+        /* Imm32 rhs goes straight into the op. `imulq` only has a
+         * 3-operand immediate form (`imulq $imm, src, dst`), so write
+         * it explicitly; the others all accept the 2-operand
+         * `<op>q $imm, %rax`. */
+        s64 imm;
+        if (irCgIsImm32(instr->r2, &imm)) {
+            if (instr->op == IR_IMUL) {
+                aoStrCatPrintf(ctx->buf,
+                               "imulq  $%lld, %%rax, %%rax\n\t",
+                               (long long)imm);
+            } else {
+                aoStrCatPrintf(ctx->buf, "%s   $%lld, %%rax\n\t",
+                               op, (long long)imm);
+            }
+        } else {
+            irCgLoadToReg(ctx, instr->r2, "rcx");
+            aoStrCatPrintf(ctx->buf, "%s   %%rcx, %%rax\n\t", op);
+        }
         irCgSpillDst(ctx, instr, "rax");
         break;
     }
@@ -625,16 +654,37 @@ static void irCgEmitInstr(IrCgCtx *ctx, IrInstr *instr) {
         const char *op = (instr->op == IR_SHL) ? "shlq"
                        : (instr->op == IR_SAR) ? "sarq" : "shrq";
         irCgLoadFirstSrc(ctx, instr, instr->r1);
-        irCgLoadToReg(ctx, instr->r2, "rcx");
-        aoStrCatPrintf(ctx->buf, "%s   %%cl, %%rax\n\t", op);
+        /* Constant shift counts get an imm8 form: `shlq $n, %rax`.
+         * Hardware masks the count to 6 bits for 64-bit ops, so only
+         * counts in [0, 63] are well-defined - leave anything else to
+         * the %cl path. */
+        if (instr->r2 && instr->r2->kind == IR_VAL_CONST_INT &&
+            instr->r2->as._i64 >= 0 && instr->r2->as._i64 <= 63) {
+            aoStrCatPrintf(ctx->buf, "%s   $%lld, %%rax\n\t",
+                           op, (long long)instr->r2->as._i64);
+        } else {
+            irCgLoadToReg(ctx, instr->r2, "rcx");
+            aoStrCatPrintf(ctx->buf, "%s   %%cl, %%rax\n\t", op);
+        }
         irCgSpillDst(ctx, instr, "rax");
         break;
     }
 
     case IR_ICMP: {
         irCgLoadFirstSrc(ctx, instr, instr->r1);
-        irCgLoadToReg(ctx, instr->r2, "rcx");
-        aoStrCatPrintf(ctx->buf, "cmpq   %%rcx, %%rax\n\t");
+        /* Constant rhs that fits in a sign-extended imm32 goes straight
+         * into `cmpq $imm, %rax` - no scratch reg needed. Larger 64-bit
+         * constants don't have an immediate cmpq encoding so they still
+         * route through %rcx. AT&T order: `cmpq src, dst` computes
+         * `dst - src`, same flag semantics as the rcx-form below. */
+        s64 imm;
+        if (irCgIsImm32(instr->r2, &imm)) {
+            aoStrCatPrintf(ctx->buf, "cmpq   $%lld, %%rax\n\t",
+                           (long long)imm);
+        } else {
+            irCgLoadToReg(ctx, instr->r2, "rcx");
+            aoStrCatPrintf(ctx->buf, "cmpq   %%rcx, %%rax\n\t");
+        }
         /* Peephole-fused with the next IR_BR: skip setcc + movzbq +
          * spill and let the BR turn the flags into a direct j[cc]. */
         if (instr->flags & IRCG_CMP_FUSED_BR) break;
