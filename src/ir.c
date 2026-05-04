@@ -1530,8 +1530,7 @@ void irLowerDecl(IrCtx *ctx, Ast *ast) {
                  * slot as usual. */
                 if (init->type && irRetTypeIsAggregate(init->type)) {
                     IrValue *out = irTmp(IR_TYPE_PTR, 8);
-                    irBlockAddInstr(ctx,
-                            irInstrNew(IR_LEA, out, local, NULL));
+                    irBlockAddInstr(ctx, irInstrNew(IR_LEA, out, local, NULL));
                     irFnCallTo(ctx, init, out);
                 } else {
                     IrValue *ret = irLowerFnCall(ctx, init);
@@ -2092,7 +2091,6 @@ void irDump(Cctrl *cc) {
             irBasicOptimisations(ctx->cur_func);
             printf("===== After basic optimisations ===== \n");
             irPrintFunction(ctx->cur_func);
-
         }
     }
 }
