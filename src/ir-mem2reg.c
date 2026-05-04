@@ -8,26 +8,26 @@
 #include "ir-types.h"
 #include "list.h"
 
-static Arena ir_arena;
-static int ir_arena_init = 0;
+static Arena mem2reg_arena;
+static int mem2reg_arena_init = 0;
 
 void irMem2RegMemoryInit(void) {
-    if (!ir_arena_init) {
+    if (!mem2reg_arena_init) {
         /* @TODO; correct the size of the arena */
-        arenaInit(&ir_arena, 512);
-        ir_arena_init = 1;
+        arenaInit(&mem2reg_arena, 512);
+        mem2reg_arena_init = 1;
     }
 }
 
 void irMem2RegMemoryRelease(void) {
-    if (ir_arena_init) {
-        ir_arena_init = 0;
-        arenaClear(&ir_arena);
+    if (mem2reg_arena_init) {
+        mem2reg_arena_init = 0;
+        arenaClear(&mem2reg_arena);
     }
 }
 
 void *irMem2RegAlloc(u32 size) {
-    return arenaAlloc(&ir_arena, size);
+    return arenaAlloc(&mem2reg_arena, size);
 }
 
 typedef struct IrAllocaInfo {
@@ -430,7 +430,6 @@ static void irRewriteOperands(IrFunction *fn, Map *rename) {
     }
 }
 
-
 void irDropRedundantPhis(Map *block_phis, Map *rename) {
     MapIter bp_it, phi_iter;
     int dropped_any;
@@ -485,6 +484,7 @@ void irDropRedundantPhis(Map *block_phis, Map *rename) {
 }
 
 void irMem2Reg(IrFunction *fn) {
+    irMem2RegMemoryInit();
     Map *info, *block_phis, *block_outs, *rename;
 
     /* Pass 1 */
