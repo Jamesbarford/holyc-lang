@@ -69,6 +69,27 @@ Vec *irValueVecNew(void) {
     return vecNew(&vec_ir_value_type);
 }
 
+int irBlockVecMatch(void *_bb1, void *_bb2) {
+    IrBlock *bb1 = (IrBlock *)_bb1;
+    IrBlock *bb2 = (IrBlock *)_bb2;
+    return bb1->id == bb2->id;
+}
+
+void irBlockVecToString(AoStr *buf, void *_bb) {
+    IrBlock *bb = (IrBlock *)_bb;
+    AoStr *bb_str = irBlockToStringSimplified(bb);
+    aoStrCatAoStr(buf, bb_str);
+    aoStrRelease(bb_str);
+}
+
+/* `Vec<IrBlock *>`*/
+VecType vec_ir_block_type = {
+    .stringify = irBlockVecToString,
+    .match     = irBlockVecMatch,
+    .release   = NULL,
+    .type_str  = "IrBlock *",
+};
+
 AoStr *mapIrBlockToString(void *_ir_block) {
     IrBlock *ir_block = (IrBlock *)_ir_block;
     return aoStrPrintf("block %u", ir_block->id);
@@ -314,11 +335,16 @@ IrInstr *irBlockLastInstr(IrBlock *block) {
     return listValue(IrInstr *, tail);
 }
 
+IrInstr *irBlockFirstInstr(IrBlock *block) {
+    List *head = listHead(block->instructions);
+    if (!head) return NULL;
+    return listValue(IrInstr *, head);
+}
+
 int irLastInstructionIsJumpLike(IrBlock *block) {
     IrInstr *ir_instr = irBlockLastInstr(block);
     if (!ir_instr) return 0;
-    return ir_instr->op == IR_LOOP ||
-           ir_instr->op == IR_JMP  ||
+    return ir_instr->op == IR_JMP  ||
            ir_instr->op == IR_BR;
 }
 
@@ -403,7 +429,7 @@ int irBlockIsOnlyJump(IrFunction *func, IrBlock *block) {
     assert(ir_last_instr);
     if (ir_last_instr->op == IR_JMP && listIsOne(block->instructions)) {
         Map *successors = irBlockGetSuccessors(func, block);
-        Map *predecessors = irBlockGetSuccessors(func, block);
+        Map *predecessors = irBlockGetPredecessors(func, block);
         if (successors && predecessors) {
             return successors->size == 1 && predecessors->size == 1;
         } else {
@@ -418,10 +444,10 @@ int irBlockIsOnlyJump(IrFunction *func, IrBlock *block) {
  * has one predecessor?
  */
 int irBlockIsRedundantJump(IrFunction *func, IrBlock *block) {
-    IrInstr *ir_last_instr = irBlockLastInstr(block);
-    assert(ir_last_instr);
-    if (ir_last_instr->op == IR_JMP) {
-        IrBlock *next_block = irInstrGetTargetBlock(ir_last_instr);
+    IrInstr *jmp = irBlockLastInstr(block);
+    assert(jmp);
+    if (jmp->op == IR_JMP) {
+        IrBlock *next_block = irInstrGetTargetBlock(jmp);
         Map *cur_successors = irBlockGetSuccessors(func, block);
         Map *next_predecessors = irBlockGetPredecessors(func, next_block);
 
@@ -614,6 +640,8 @@ IrCtx *irCtxNew(Cctrl *cc) {
     ctx->prog->functions = irFunctionVecNew();
     ctx->prog->globals = NULL;
     ctx->cc = cc;
+    ctx->loop_depth = 0;
+    memset(ctx->loop_stack, 0, sizeof(ctx->loop_stack));
     return ctx;
 }
 
@@ -790,11 +818,6 @@ static IrInstr *irJumpInternal(IrFunction *func,
 
 IrInstr *irJump(IrFunction *func, IrBlock *block, IrBlock *target) {
     return irJumpInternal(func, block,target,IR_JMP);
-}
-
-
-IrInstr *irLoop(IrFunction *func, IrBlock *block, IrBlock *target) {
-    return irJumpInternal(func, block,target,IR_LOOP);
 }
 
 IrPair *irPairNew(IrBlock *ir_block, IrValue *ir_value) {

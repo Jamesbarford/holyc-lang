@@ -1950,6 +1950,134 @@ IrFunction *irLowerFunction(IrCtx *ctx, Ast *ast_func) {
     return func;
 }
 
+static void irRemoveAllNops(IrFunction *fn) {
+    listForEach(fn->blocks) {
+        IrBlock *bb = it->value;
+        List *l = bb->instructions;
+        List *it = l->next;
+
+        while (it != l) {
+            List *next = it->next;
+            List *prev = it->prev;
+            IrInstr *I = listValue(IrInstr *, it);
+            if (I->op == IR_NOP) {
+                prev->next = next;
+                next->prev = prev;
+                free(it);
+            }
+            it = next;
+        }
+    }
+}
+
+/* If a blocks instructions match the `removal_id` then we swap it
+ * for `target` */
+static void irRemapInstrBlockIds(IrBlock *bb, u64 removal_id, IrBlock *target) {
+    listForEach(bb->instructions) {
+        IrInstr *I = it->value;
+        switch (I->op) {
+            case IR_PHI: {
+                Vec *pairs = I->extra.phi_pairs;
+                for (u64 i = 0; i < pairs->size; ++i) {
+                    IrPair *p = pairs->entries[i];
+                    if (p->ir_block->id == removal_id) {
+                        p->ir_block = target;
+                    }
+                }
+                break;
+            }
+            case IR_BR: {
+                IrBlockPair *blk_pair = &I->extra.blocks;
+                if (blk_pair->target_block->id == removal_id) {
+                    blk_pair->target_block = target;
+                }
+                if (blk_pair->fallthrough_block->id == removal_id) {
+                    blk_pair->fallthrough_block = target;
+                }
+                break;
+            }
+            case IR_JMP: {
+                IrBlockPair *blk_pair = &I->extra.blocks;
+                if (blk_pair->target_block->id == removal_id) {
+                    blk_pair->target_block = target;
+                }
+                break;
+            }
+            default:
+                break;
+        }
+    }
+}
+
+static void irRemoveRedundantBlocks(IrFunction *fn) {
+    Vec *removal = vecNew(&vec_ir_block_type);
+    Map *from_to = mapNew(16, &map_u32_to_ir_block_type);
+
+    listForEach(fn->blocks) {
+        IrBlock *bb = it->value;
+        IrInstr *jmp = irBlockLastInstr(bb);
+
+        if (jmp && jmp->op == IR_JMP) {
+            if (irBlockIsRedundantJump(fn, bb)) {
+                if (jmp->op == IR_JMP) {
+                    IrBlock *R = jmp->extra.blocks.target_block;
+                    IrInstr *first = irBlockFirstInstr(R);
+                    /* We can't remove phis */
+                    if (first && first->op == IR_PHI) {
+                        continue;
+                    }
+
+                    mapAdd(from_to, (void *)(u64)R->id, bb);
+                    vecPush(removal, R);
+                    /* Remove redundant jump */
+                    listPop(bb->instructions);
+                    /* Merge instructions.
+                     * This is destructive and leads R->instructions pointing
+                     * to garbage as it gets freed */
+                    listMergeAppend(bb->instructions, R->instructions);
+                    /* Make the instructions NULL, otherwise if we see this
+                     * block again we could touch invalid memory */
+                    R->instructions = NULL;
+                }
+            }
+        }
+    }
+
+    for (u64 i = 0; i < removal->size; ++i) {
+        IrBlock *R = removal->entries[i];
+        IrBlock *target = mapGet(from_to, (void *)(u64)R->id);
+        listRemoveValue(fn->blocks,removal->entries[i]);
+
+        listForEach(fn->blocks) {
+            IrBlock *bb = it->value;
+            Map *successors = irBlockGetSuccessors(fn, bb);
+            Map *predecessors = irBlockGetPredecessors(fn, bb);
+
+            /* Remap sucessors */
+            if (successors && mapHasInt(successors, R->id)) {
+                irRemapInstrBlockIds(bb, R->id, target);
+                mapRemoveInt(successors, R->id);
+                mapAdd(successors, (void *)(u64)target->id, target);
+            }
+
+            /* Remap predecessors */
+            if (predecessors && mapHasInt(predecessors, R->id)) {
+                irRemapInstrBlockIds(bb, R->id, target);
+                mapRemoveInt(predecessors, R->id);
+                mapAdd(predecessors, (void *)(u64)target->id, target);
+            }
+        }
+    }
+
+    vecRelease(removal);
+    mapRelease(from_to);
+}
+
+void irBasicOptimisations(IrFunction *fn) {
+    irRemoveAllNops(fn);
+    irRemoveRedundantBlocks(fn);
+}
+
 void irDump(Cctrl *cc) {
     IrCtx *ctx = irCtxNew(cc);
     listForEach(cc->ast_list) {
@@ -1961,6 +2089,10 @@ void irDump(Cctrl *cc) {
             irMem2Reg(ctx->cur_func);
             printf("===== After mem2reg ===== \n");
             irPrintFunction(ctx->cur_func);
+            irBasicOptimisations(ctx->cur_func);
+            printf("===== After basic optimisations ===== \n");
+            irPrintFunction(ctx->cur_func);
+
         }
     }
 }

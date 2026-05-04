@@ -398,7 +398,6 @@ const char *irOpcodeToString(IrInstr *ir_instr) {
         case IR_RET:      ir_op_str = "ret"; break;
         case IR_BR:       ir_op_str = "br"; break;
         case IR_JMP:      ir_op_str = "jmp"; break;
-        case IR_LOOP:     ir_op_str = "loop"; break;
         case IR_SWITCH:   ir_op_str = "switch"; break;
         case IR_CALL:     ir_op_str = "call"; break;
         case IR_PHI:      ir_op_str = "phi"; break;
@@ -485,7 +484,6 @@ AoStr *irInstrToString(IrInstr *ir_instr) {
             break;
         }
 
-        case IR_LOOP:
         case IR_JMP: {
             /* This is for unresolved gotos */
             if (ir_instr->extra.blocks.target_block == NULL) {
@@ -572,16 +570,17 @@ AoStr *irInstrToString(IrInstr *ir_instr) {
  * <block_name>:
  *   <instructions...>
  * */
-AoStr *irBlockToString(IrFunction *func, IrBlock *ir_block) {
+AoStr *irBlockToString(IrFunction *func, IrBlock *bb) {
     AoStr *buf = aoStrNew();
+    if (bb->removed) return buf;
 
-    Map *successors = irFunctionGetSuccessors(func, ir_block);
-    Map *predecessors = irFunctionGetPredecessors(func, ir_block);
+    Map *successors = irFunctionGetSuccessors(func, bb);
+    Map *predecessors = irFunctionGetPredecessors(func, bb);
 
     if (is_terminal) {
-        aoStrCatFmt(buf, ESC_BOLD"  bb%i"ESC_CLEAR_BOLD" -> ", ir_block->id);
+        aoStrCatFmt(buf, ESC_BOLD"  bb%i"ESC_CLEAR_BOLD" -> ", bb->id);
     } else {
-        aoStrCatFmt(buf, "  bb%i -> ", ir_block->id);
+        aoStrCatFmt(buf, "  bb%i -> ", bb->id);
     }
 
     if (predecessors) {
@@ -601,8 +600,8 @@ AoStr *irBlockToString(IrFunction *func, IrBlock *ir_block) {
     }
 
     aoStrPutChar(buf, '\n');
-    if (!listEmpty(ir_block->instructions)) {
-        listForEach(ir_block->instructions) {
+    if (!listEmpty(bb->instructions)) {
+        listForEach(bb->instructions) {
             IrInstr *ir_instr = (IrInstr *)it->value;
             AoStr *ir_instr_str = irInstrToString(ir_instr);
             aoStrCatFmt(buf, "    %S\n", ir_instr_str);
@@ -641,8 +640,8 @@ AoStr *irFunctionToString(IrFunction *ir_func) {
     aoStrRelease(params_str);
 
     listForEach(ir_func->blocks) {
-        IrBlock *ir_block = (IrBlock *)it->value;
-        AoStr *ir_block_str = irBlockToString(ir_func, ir_block);
+        IrBlock *bb = (IrBlock *)it->value;
+        AoStr *ir_block_str = irBlockToString(ir_func, bb);
         aoStrCatFmt(buf, "%S\n", ir_block_str);
         aoStrRelease(ir_block_str);
     }

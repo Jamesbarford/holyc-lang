@@ -232,7 +232,6 @@ void aarch64GenInstr(AArch64Ctx *ctx, IrInstr *instr, IrInstr *next_instr) {
         case IR_RET:
         case IR_BR:
         case IR_JMP:
-        case IR_LOOP:
         case IR_SWITCH:
         case IR_PHI:
         case IR_LABEL:

@@ -72,8 +72,9 @@ void listInsertValueBefore(List *ll, void *value) {
     listInsertBefore(ll,prev);
 }
 
-void *listHead(List *ll) {
-    return ll->prev->value;
+List *listHead(List *ll) {
+    if (listEmpty(ll)) return NULL;
+    return ll->next;
 }
 
 List *listTail(List *ll) {
@@ -107,6 +108,22 @@ void listClear(List *ll, void (*freeValue)(void *)) {
         node = next;
     }
     ll->next = ll->prev = ll;
+}
+
+void listRemoveValue(List *ll, void *value) {
+    List *it = ll->next;
+
+    while (it != ll) {
+        List *next = it->next;
+        List *prev = it->prev;
+        if (it->value == value) {
+            prev->next = next;
+            next->prev = prev;
+            free(it);
+            break;
+        }
+        it = next;
+    }
 }
 
 void listRelease(List *ll, void (*freeValue)(void *)) {
