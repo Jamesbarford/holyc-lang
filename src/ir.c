@@ -5,6 +5,7 @@
 
 #include "ast.h"
 #include "ir.h"
+#include "ir-mem2reg.h"
 #include "ir-types.h"
 #include "ir-debug.h"
 #include "util.h"
@@ -135,67 +136,6 @@ IrInstr *irBranch(IrFunction *func,
     irFunctionAddMapping(func, block, false_block);
 
     return instr;
-}
-
-IrInstr *irJumpInternal(IrFunction *func,
-                        IrBlock *block,
-                        IrBlock *target,
-                        IrOp opcode)
-{
-    if (!block || !target) {
-        loggerPanic("NULL param\n");
-    }
-    /* For a do-while we need this */
-    if (block->sealed) {
-        loggerWarning("Tried to add a jump to a sealed block: %d\n",
-                block->id);
-    }
-
-    IrInstr *instr = irInstrNew(opcode, NULL, NULL, NULL);
-    instr->extra.blocks.target_block = target;
-    instr->extra.blocks.fallthrough_block = NULL;
-
-    /* This block is done */
-    block->sealed = 1;
-
-    /* Now update the control flow graph */
-    irFunctionAddMapping(func, block, target);
-
-    return instr;
-}
-
-IrInstr *irJump(IrFunction *func, IrBlock *block, IrBlock *target) {
-    return irJumpInternal(func, block,target,IR_JMP);
-}
-
-IrInstr *irLoop(IrFunction *func, IrBlock *block, IrBlock *target) {
-    return irJumpInternal(func, block,target,IR_LOOP);
-}
-
-IrPair *irPairNew(IrBlock *ir_block, IrValue *ir_value) {
-    IrPair *ir_phi_pair = (IrPair *)irAlloc(sizeof(IrPair));
-    ir_phi_pair->ir_value = ir_value;
-    ir_phi_pair->ir_block = ir_block;
-    return ir_phi_pair;
-}
-
-IrInstr *irPhi(IrValue *result) {
-    IrInstr *ir_phi_instr = irInstrNew(IR_PHI, result, NULL, NULL);
-    ir_phi_instr->extra.phi_pairs = irPairVecNew();
-    return ir_phi_instr;
-}
-
-void irAddPhiIncoming(IrInstr *ir_phi_instr,
-                      IrValue *ir_value, 
-                      IrBlock *ir_block)
-{
-    IrPair *ir_phi_pair = irPairNew(ir_block, ir_value);
-    vecPush(ir_phi_instr->extra.phi_pairs, ir_phi_pair);
-}
-
-
-IrInstr *irLoad(IrValue *ir_dest, IrValue *ir_value) {
-    return irInstrNew(IR_LOAD, ir_dest, ir_value, NULL);
 }
 
 /* result is where we are storing something and op1 is the thing we are storing 
@@ -1590,8 +1530,7 @@ void irLowerDecl(IrCtx *ctx, Ast *ast) {
                  * slot as usual. */
                 if (init->type && irRetTypeIsAggregate(init->type)) {
                     IrValue *out = irTmp(IR_TYPE_PTR, 8);
-                    irBlockAddInstr(ctx,
-                            irInstrNew(IR_LEA, out, local, NULL));
+                    irBlockAddInstr(ctx, irInstrNew(IR_LEA, out, local, NULL));
                     irFnCallTo(ctx, init, out);
                 } else {
                     IrValue *ret = irLowerFnCall(ctx, init);
@@ -2010,6 +1949,134 @@ IrFunction *irLowerFunction(IrCtx *ctx, Ast *ast_func) {
     return func;
 }
 
+static void irRemoveAllNops(IrFunction *fn) {
+    listForEach(fn->blocks) {
+        IrBlock *bb = it->value;
+        List *l = bb->instructions;
+        List *it = l->next;
+
+        while (it != l) {
+            List *next = it->next;
+            List *prev = it->prev;
+            IrInstr *I = listValue(IrInstr *, it);
+            if (I->op == IR_NOP) {
+                prev->next = next;
+                next->prev = prev;
+                free(it);
+            }
+            it = next;
+        }
+    }
+}
+
+/* If a blocks instructions match the `removal_id` then we swap it
+ * for `target` */
+static void irRemapInstrBlockIds(IrBlock *bb, u64 removal_id, IrBlock *target) {
+    listForEach(bb->instructions) {
+        IrInstr *I = it->value;
+        switch (I->op) {
+            case IR_PHI: {
+                Vec *pairs = I->extra.phi_pairs;
+                for (u64 i = 0; i < pairs->size; ++i) {
+                    IrPair *p = pairs->entries[i];
+                    if (p->ir_block->id == removal_id) {
+                        p->ir_block = target;
+                    }
+                }
+                break;
+            }
+            case IR_BR: {
+                IrBlockPair *blk_pair = &I->extra.blocks;
+                if (blk_pair->target_block->id == removal_id) {
+                    blk_pair->target_block = target;
+                }
+                if (blk_pair->fallthrough_block->id == removal_id) {
+                    blk_pair->fallthrough_block = target;
+                }
+                break;
+            }
+            case IR_JMP: {
+                IrBlockPair *blk_pair = &I->extra.blocks;
+                if (blk_pair->target_block->id == removal_id) {
+                    blk_pair->target_block = target;
+                }
+                break;
+            }
+            default:
+                break;
+        }
+    }
+}
+
+static void irRemoveRedundantBlocks(IrFunction *fn) {
+    Vec *removal = vecNew(&vec_ir_block_type);
+    Map *from_to = mapNew(16, &map_u32_to_ir_block_type);
+
+    listForEach(fn->blocks) {
+        IrBlock *bb = it->value;
+        IrInstr *jmp = irBlockLastInstr(bb);
+
+        if (jmp && jmp->op == IR_JMP) {
+            if (irBlockIsRedundantJump(fn, bb)) {
+                if (jmp->op == IR_JMP) {
+                    IrBlock *R = jmp->extra.blocks.target_block;
+                    IrInstr *first = irBlockFirstInstr(R);
+                    /* We can't remove phis */
+                    if (first && first->op == IR_PHI) {
+                        continue;
+                    }
+
+                    mapAdd(from_to, (void *)(u64)R->id, bb);
+                    vecPush(removal, R);
+                    /* Remove redundant jump */
+                    listPop(bb->instructions);
+                    /* Merge instructions.
+                     * This is destructive and leads R->instructions pointing
+                     * to garbage as it gets freed */
+                    listMergeAppend(bb->instructions, R->instructions);
+                    /* Make the instructions NULL, otherwise if we see this
+                     * block again we could touch invalid memory */
+                    R->instructions = NULL;
+                }
+            }
+        }
+    }
+
+    for (u64 i = 0; i < removal->size; ++i) {
+        IrBlock *R = removal->entries[i];
+        IrBlock *target = mapGet(from_to, (void *)(u64)R->id);
+        listRemoveValue(fn->blocks,removal->entries[i]);
+
+        listForEach(fn->blocks) {
+            IrBlock *bb = it->value;
+            Map *successors = irBlockGetSuccessors(fn, bb);
+            Map *predecessors = irBlockGetPredecessors(fn, bb);
+
+            /* Remap sucessors */
+            if (successors && mapHasInt(successors, R->id)) {
+                irRemapInstrBlockIds(bb, R->id, target);
+                mapRemoveInt(successors, R->id);
+                mapAdd(successors, (void *)(u64)target->id, target);
+            }
+
+            /* Remap predecessors */
+            if (predecessors && mapHasInt(predecessors, R->id)) {
+                irRemapInstrBlockIds(bb, R->id, target);
+                mapRemoveInt(predecessors, R->id);
+                mapAdd(predecessors, (void *)(u64)target->id, target);
+            }
+        }
+    }
+
+    vecRelease(removal);
+    mapRelease(from_to);
+}
+
+void irBasicOptimisations(IrFunction *fn) {
+    irRemoveAllNops(fn);
+    irRemoveRedundantBlocks(fn);
+}
+
 void irDump(Cctrl *cc) {
     IrCtx *ctx = irCtxNew(cc);
     listForEach(cc->ast_list) {
@@ -2017,6 +2084,12 @@ void irDump(Cctrl *cc) {
         if (ast->kind == AST_FUNC) {
             ctx->cur_func = NULL;
             irLowerFunction(ctx, ast);
+            irPrintFunction(ctx->cur_func);
+            irMem2Reg(ctx->cur_func);
+            printf("===== After mem2reg ===== \n");
+            irPrintFunction(ctx->cur_func);
+            irBasicOptimisations(ctx->cur_func);
+            printf("===== After basic optimisations ===== \n");
             irPrintFunction(ctx->cur_func);
         }
     }

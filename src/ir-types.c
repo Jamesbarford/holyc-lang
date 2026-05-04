@@ -34,6 +34,166 @@ void irMemoryStats(void) {
     arenaPrintStats(&ir_arena);
 }
 
+/* Container specialisation ==================================================*/
+void vecIrPairToString(AoStr *buf, void *_ir_pair) {
+    irPairToString(buf, _ir_pair);
+}
+
+/* `Vec<IrPair *>`*/
+VecType vec_ir_pair_type = {
+    .stringify = vecIrPairToString,
+    .match     = NULL,
+    .release   = NULL,
+    .type_str  = "IrPair *",
+};
+
+Vec *irPairVecNew(void) {
+    return vecNew(&vec_ir_pair_type);
+}
+
+void vecIrValueToString(AoStr *buf, void *_ir_value) {
+    AoStr *ir_value_str = irValueToString(_ir_value);
+    aoStrCatAoStr(buf, ir_value_str);
+    aoStrRelease(ir_value_str);
+}
+
+/* `Vec<IrValue *>`*/
+VecType vec_ir_value_type = {
+    .stringify = vecIrValueToString,
+    .match     = NULL,
+    .release   = NULL,
+    .type_str  = "IrValue *",
+};
+
+Vec *irValueVecNew(void) {
+    return vecNew(&vec_ir_value_type);
+}
+
+int irBlockVecMatch(void *_bb1, void *_bb2) {
+    IrBlock *bb1 = (IrBlock *)_bb1;
+    IrBlock *bb2 = (IrBlock *)_bb2;
+    return bb1->id == bb2->id;
+}
+
+void irBlockVecToString(AoStr *buf, void *_bb) {
+    IrBlock *bb = (IrBlock *)_bb;
+    AoStr *bb_str = irBlockToStringSimplified(bb);
+    aoStrCatAoStr(buf, bb_str);
+    aoStrRelease(bb_str);
+}
+
+/* `Vec<IrBlock *>`*/
+VecType vec_ir_block_type = {
+    .stringify = irBlockVecToString,
+    .match     = irBlockVecMatch,
+    .release   = NULL,
+    .type_str  = "IrBlock *",
+};
+
+AoStr *mapIrBlockToString(void *_ir_block) {
+    IrBlock *ir_block = (IrBlock *)_ir_block;
+    return aoStrPrintf("block %u", ir_block->id);
+}
+
+AoStr *mapIrBlockMappingToString(void *_ir_block_mapping) {
+    IrBlockMapping *mapping = _ir_block_mapping;
+    AoStr *str = aoStrNew();
+    AoStr *preds = mapKeysToString(mapping->predecessors);
+    AoStr *succ = mapKeysToString(mapping->successors);
+    aoStrCatFmt(str, "predecessors: %S, successors: %S", preds, succ);
+    aoStrRelease(preds);
+    aoStrRelease(succ);
+    return str;
+}
+
+/* `Map<u32, IrBlock *>` */
+MapType map_u32_to_ir_block_type = {
+    .match           = mapIntKeyMatch,
+    .hash            = mapIntKeyHash,
+    .get_key_len     = mapIntKeyLen,
+    .key_to_string   = mapIntToString,
+    .key_release     = NULL,
+    .value_to_string = mapIrBlockToString,
+    .value_release   = NULL,
+    .key_type        = "u32",
+    .value_type      = "IrBlock *",
+};
+
+/* `Map<u32, IrValue *>`*/
+MapType map_u32_to_ir_value_type = {
+    .match           = mapIntKeyMatch,
+    .hash            = mapIntKeyHash,
+    .get_key_len     = mapIntKeyLen,
+    .key_to_string   = mapIntToString,
+    .key_release     = NULL,
+    .value_to_string = (AoStr *(*)(void *))irValueToString,
+    .value_release   = NULL,
+    .key_type        = "u32",
+    .value_type      = "IrValue *",
+};
+
+/* `Map<u32, IrBlockMapping *>`*/
+MapType map_u32_to_ir_block_mapping_type = {
+    .match           = mapIntKeyMatch,
+    .hash            = mapIntKeyHash,
+    .get_key_len     = mapIntKeyLen,
+    .key_to_string   = mapIntToString,
+    .key_release     = NULL,
+    .value_to_string = mapIrBlockMappingToString,
+    .value_release   = NULL,
+    .key_type        = "u32",
+    .value_type      = "IrBlockMapping *",
+};
+
+/* `Map<u64, IrInstr *>` */
+MapType map_uint_to_ir_instr_type = {
+    .match           = mapIntKeyMatch,
+    .hash            = mapIntKeyHash,
+    .get_key_len     = mapIntKeyLen,
+    .key_to_string   = mapIntToString,
+    .key_release     = NULL,
+    .value_to_string = (AoStr *(*)(void *value))irInstrToString,
+    .value_release   = NULL,
+    .key_type        = "u64",
+    .value_type      = "IrInstr *",
+};
+
+Map *irBlockMapNew(void) {
+    return mapNew(8, &map_u32_to_ir_block_type);
+}
+
+Map *irBlockMappingMapNew(void) {
+    return mapNew(32, &map_u32_to_ir_block_mapping_type);
+}
+
+Map *irVarValueMapNew(void) {
+    return mapNew(16, &map_u32_to_ir_value_type);
+}
+
+Map *irInstrMapNew(void) {
+    return mapNew(8, &map_uint_to_ir_instr_type);
+}
+
+void irBlockMappingRelease(void *_mapping) {
+    IrBlockMapping *mapping = _mapping;
+    mapRelease(mapping->predecessors);
+    mapRelease(mapping->successors);
+    
+}
+
+AoStr *mapIrValueToString(void *ir_value) {
+    return irValueToString((IrValue *)ir_value);
+}
+
+IrBlockMapping *irBlockMappingNew(int id) {
+    IrBlockMapping *mapping = (IrBlockMapping *)irAlloc(sizeof(IrBlockMapping));
+    mapping->id = id;
+    mapping->successors = irBlockMappingMapNew();
+    mapping->predecessors = irBlockMappingMapNew();
+    return mapping;
+}
+/* Container specialisation END ==============================================*/
+
 u8 irOpIsCmp(IrOp opcode) {
     if (opcode == IR_ICMP || opcode == IR_FCMP) {
         return 1;
@@ -63,6 +223,10 @@ u8 irIsStruct(IrValueType ir_value_type) {
 
 u8 irIsPtr(IrValueType ir_value_type) {
     return ir_value_type == IR_TYPE_PTR;
+}
+
+u8 irIsTmp(IrValue *val) {
+    return val && val->kind == IR_VAL_TMP;
 }
 
 u8 irIsStore(IrOp opcode) {
@@ -171,11 +335,16 @@ IrInstr *irBlockLastInstr(IrBlock *block) {
     return listValue(IrInstr *, tail);
 }
 
+IrInstr *irBlockFirstInstr(IrBlock *block) {
+    List *head = listHead(block->instructions);
+    if (!head) return NULL;
+    return listValue(IrInstr *, head);
+}
+
 int irLastInstructionIsJumpLike(IrBlock *block) {
     IrInstr *ir_instr = irBlockLastInstr(block);
     if (!ir_instr) return 0;
-    return ir_instr->op == IR_LOOP ||
-           ir_instr->op == IR_JMP  ||
+    return ir_instr->op == IR_JMP  ||
            ir_instr->op == IR_BR;
 }
 
@@ -260,7 +429,7 @@ int irBlockIsOnlyJump(IrFunction *func, IrBlock *block) {
     assert(ir_last_instr);
     if (ir_last_instr->op == IR_JMP && listIsOne(block->instructions)) {
         Map *successors = irBlockGetSuccessors(func, block);
-        Map *predecessors = irBlockGetSuccessors(func, block);
+        Map *predecessors = irBlockGetPredecessors(func, block);
         if (successors && predecessors) {
             return successors->size == 1 && predecessors->size == 1;
         } else {
@@ -275,10 +444,10 @@ int irBlockIsOnlyJump(IrFunction *func, IrBlock *block) {
  * has one predecessor?
  */
 int irBlockIsRedundantJump(IrFunction *func, IrBlock *block) {
-    IrInstr *ir_last_instr = irBlockLastInstr(block);
-    assert(ir_last_instr);
-    if (ir_last_instr->op == IR_JMP) {
-        IrBlock *next_block = irInstrGetTargetBlock(ir_last_instr);
+    IrInstr *jmp = irBlockLastInstr(block);
+    assert(jmp);
+    if (jmp->op == IR_JMP) {
+        IrBlock *next_block = irInstrGetTargetBlock(jmp);
         Map *cur_successors = irBlockGetSuccessors(func, block);
         Map *next_predecessors = irBlockGetPredecessors(func, next_block);
 
@@ -471,131 +640,13 @@ IrCtx *irCtxNew(Cctrl *cc) {
     ctx->prog->functions = irFunctionVecNew();
     ctx->prog->globals = NULL;
     ctx->cc = cc;
+    ctx->loop_depth = 0;
+    memset(ctx->loop_stack, 0, sizeof(ctx->loop_stack));
     return ctx;
 }
 
 IrValue *irFnGetVar(IrFunction *func, u32 lvar_id) {
     return mapGetInt(func->variables, lvar_id);
-}
-
-void vecIrPairToString(AoStr *buf, void *_ir_pair) {
-    irPairToString(buf, _ir_pair);
-}
-
-/* `Vec<IrPair *>`*/
-VecType vec_ir_pair_type = {
-    .stringify = vecIrPairToString,
-    .match     = NULL,
-    .release   = NULL,
-    .type_str  = "IrPair *",
-};
-
-Vec *irPairVecNew(void) {
-    return vecNew(&vec_ir_pair_type);
-}
-
-void vecIrValueToString(AoStr *buf, void *_ir_value) {
-    AoStr *ir_value_str = irValueToString(_ir_value);
-    aoStrCatAoStr(buf, ir_value_str);
-    aoStrRelease(ir_value_str);
-}
-
-/* `Vec<IrValue *>`*/
-VecType vec_ir_value_type = {
-    .stringify = vecIrValueToString,
-    .match     = NULL,
-    .release   = NULL,
-    .type_str  = "IrValue *",
-};
-
-Vec *irValueVecNew(void) {
-    return vecNew(&vec_ir_value_type);
-}
-
-AoStr *mapIrBlockToString(void *_ir_block) {
-    IrBlock *ir_block = (IrBlock *)_ir_block;
-    return aoStrPrintf("block %u", ir_block->id);
-}
-
-MapType map_u32_to_ir_block_type = {
-    .match           = mapIntKeyMatch,
-    .hash            = mapIntKeyHash,
-    .get_key_len     = mapIntKeyLen,
-    .key_to_string   = mapIntToString,
-    .key_release     = NULL,
-    .value_to_string = mapIrBlockToString,
-    .value_release   = NULL,
-    .key_type        = "u32",
-    .value_type      = "IrBlock *",
-};
-
-Map *irBlockMapNew(void) {
-    return mapNew(8, &map_u32_to_ir_block_type);
-}
-
-AoStr *mapIrBlockMappingToString(void *_ir_block_mapping) {
-    IrBlockMapping *mapping = _ir_block_mapping;
-    AoStr *str = aoStrNew();
-    AoStr *preds = mapKeysToString(mapping->predecessors);
-    AoStr *succ = mapKeysToString(mapping->successors);
-    aoStrCatFmt(str, "predecessors: %S, successors: %S", preds, succ);
-    aoStrRelease(preds);
-    aoStrRelease(succ);
-    return str;
-}
-
-void irBlockMappingRelease(void *_mapping) {
-    IrBlockMapping *mapping = _mapping;
-    mapRelease(mapping->predecessors);
-    mapRelease(mapping->successors);
-    
-}
-
-AoStr *mapIrValueToString(void *ir_value) {
-    return irValueToString((IrValue *)ir_value);
-}
-
-/* `Map<u32, IrValue *>`*/
-MapType map_u32_to_ir_var_value_type = {
-    .match           = mapIntKeyMatch,
-    .hash            = mapIntKeyHash,
-    .get_key_len     = mapIntKeyLen,
-    .key_to_string   = mapIntToString,
-    .key_release     = NULL,
-    .value_to_string = mapIrValueToString,
-    .value_release   = NULL,
-    .key_type        = "u32",
-    .value_type      = "IrValue *",
-};
-
-/* `Map<u32, IrBlockMapping *>`*/
-MapType map_u32_to_ir_block_mapping_type = {
-    .match           = mapIntKeyMatch,
-    .hash            = mapIntKeyHash,
-    .get_key_len     = mapIntKeyLen,
-    .key_to_string   = mapIntToString,
-    .key_release     = NULL,
-    .value_to_string = mapIrBlockMappingToString,
-    .value_release   = NULL,
-    .key_type        = "u32",
-    .value_type      = "IrBlockMapping *",
-};
-
-Map *irBlockMappingMapNew(void) {
-    return mapNew(32, &map_u32_to_ir_block_mapping_type);
-}
-
-
-IrBlockMapping *irBlockMappingNew(int id) {
-    IrBlockMapping *mapping = (IrBlockMapping *)irAlloc(sizeof(IrBlockMapping));
-    mapping->id = id;
-    mapping->successors = irBlockMappingMapNew();
-    mapping->predecessors = irBlockMappingMapNew();
-    return mapping;
-}
-
-Map *irVarValueMap(void) {
-    return mapNew(8, &map_u32_to_ir_var_value_type);
 }
 
 /* Pass in the whole block to abstract away that we area using an interal 
@@ -697,7 +748,7 @@ IrFunction *irFunctionNew(AoStr *fname) {
     func->name = fname;
     func->blocks = listNew();
     func->cfg = irBlockMappingMapNew();
-    func->variables = irVarValueMap();
+    func->variables = irVarValueMapNew();
     func->stack_space = 0;
     func->params = irValueVecNew();
     return func;
@@ -728,4 +779,60 @@ void irFunctionRelease(IrFunction *func) {
 
 void irAddStackSpace(IrCtx *ctx, int size) {
     ctx->cur_func->stack_space += size;
+}
+
+void irAddPhiIncoming(IrInstr *ir_phi_instr,
+                      IrValue *ir_value, 
+                      IrBlock *ir_block)
+{
+    IrPair *ir_phi_pair = irPairNew(ir_block, ir_value);
+    vecPush(ir_phi_instr->extra.phi_pairs, ir_phi_pair);
+}
+
+static IrInstr *irJumpInternal(IrFunction *func,
+                        IrBlock *block,
+                        IrBlock *target,
+                        IrOp opcode)
+{
+    if (!block || !target) {
+        loggerPanic("NULL param\n");
+    }
+    /* For a do-while we need this */
+    if (block->sealed) {
+        loggerWarning("Tried to add a jump to a sealed block: %d\n",
+                block->id);
+    }
+
+    IrInstr *instr = irInstrNew(opcode, NULL, NULL, NULL);
+    instr->extra.blocks.target_block = target;
+    instr->extra.blocks.fallthrough_block = NULL;
+
+    /* This block is done */
+    block->sealed = 1;
+
+    /* Now update the control flow graph */
+    irFunctionAddMapping(func, block, target);
+
+    return instr;
+}
+
+IrInstr *irJump(IrFunction *func, IrBlock *block, IrBlock *target) {
+    return irJumpInternal(func, block,target,IR_JMP);
+}
+
+IrPair *irPairNew(IrBlock *ir_block, IrValue *ir_value) {
+    IrPair *ir_phi_pair = (IrPair *)irAlloc(sizeof(IrPair));
+    ir_phi_pair->ir_value = ir_value;
+    ir_phi_pair->ir_block = ir_block;
+    return ir_phi_pair;
+}
+
+IrInstr *irPhi(IrValue *result) {
+    IrInstr *ir_phi_instr = irInstrNew(IR_PHI, result, NULL, NULL);
+    ir_phi_instr->extra.phi_pairs = irPairVecNew();
+    return ir_phi_instr;
+}
+
+IrInstr *irLoad(IrValue *ir_dest, IrValue *ir_value) {
+    return irInstrNew(IR_LOAD, ir_dest, ir_value, NULL);
 }

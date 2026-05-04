@@ -71,7 +71,6 @@ typedef enum IrOp {
     IR_RET,         /* Return from function */
     IR_BR,          /* Conditional branch */
     IR_JMP,         /* Unconditional jump */
-    IR_LOOP,        /* Unconditional jump, but identified as a loop for ease */
     IR_SWITCH,      /* Switch statement */
     IR_CALL,        /* Function call */
     IR_PHI,         /* SSA phi node */
@@ -300,6 +299,9 @@ typedef struct IrCtx {
     Map *labels;
 } IrCtx;
 
+extern VecType vec_ir_block_type;
+extern MapType map_u32_to_ir_block_type;
+
 /* Memory management */
 void irMemoryInit(void);
 void irMemoryRelease(void);
@@ -313,6 +315,7 @@ IrValue *irFnGetVar(IrFunction *func, u32 lvar_id);
 IrBlockMapping *irFunctionGetBlockMapping(IrFunction *func, IrBlock *ir_block);
 Map *irFunctionGetSuccessors(IrFunction *func, IrBlock *ir_block);
 Map *irFunctionGetPredecessors(IrFunction *func, IrBlock *ir_block);
+Map *irBlockGetPredecessors(IrFunction *func, IrBlock *block);
 Map *irBlockGetSuccessors(IrFunction *func, IrBlock *block);
 
 u8 irOpIsCmp(IrOp opcode);
@@ -321,6 +324,7 @@ u8 irIsInt(IrValueType ir_value_type);
 u8 irTypeIsScalar(IrValueType ir_value_type);
 u8 irIsConst(IrValueKind ir_value_kind);
 u8 irIsPtr(IrValueType ir_value_type);
+u8 irIsTmp(IrValue *val);
 u8 irIsStore(IrOp opcode);
 u8 irIsLoad(IrOp opcode);
 u8 irIsStruct(IrValueType ir_value_type);
@@ -333,23 +337,34 @@ IrValueType irConvertType(AstType *type);
 
 IrBlock *irInstrGetTargetBlock(IrInstr *instr);
 IrBlock *irInstrGetFallthroughBlock(IrInstr *instr);
-Map *irBlockGetSuccessors(IrFunction *func, IrBlock *block);
 int irBlockIsStartOrEnd(IrFunction *func, IrBlock *block);
+int irBlockIsRedundantJump(IrFunction *func, IrBlock *block);
+IrInstr *irBlockLastInstr(IrBlock *block);
+IrInstr *irBlockFirstInstr(IrBlock *block);
 
 /* Constructors */
 Vec *irFunctionVecNew(void);
-
 Vec *irPairVecNew(void);
 Vec *irValueVecNew(void);
+Vec *irBlockVecNew(void);
+
 Map *irBlockMapNew(void);
 Map *irBlockMappingMapNew(void);
-IrBlockMapping *irBlockMappingNew(int id);
+Map *irInstrMapNew(void) ;
 Map *irVarValueMapNew(void);
+
+IrBlockMapping *irBlockMappingNew(int id);
 IrBlock *irBlockNew(void);
 IrValue *irTmp(IrValueType type, u16 size);
 IrInstr *irInstrNew(IrOp op, IrValue *dst, IrValue *r1, IrValue *r2);
 IrFunction *irFunctionNew(AoStr *fname);
 IrValue *irValueNew(IrValueType type, IrValueKind kind);
+IrPair *irPairNew(IrBlock *ir_block, IrValue *ir_value);
+IrInstr *irPhi(IrValue *result);
+IrInstr *irLoad(IrValue *ir_dest, IrValue *ir_value);
+IrInstr *irJump(IrFunction *func, IrBlock *block, IrBlock *target);
+
+int irBlockIsOnlyJump(IrFunction *func, IrBlock *block);
 
 void irFunctionAddMapping(IrFunction *func, IrBlock *src, IrBlock *dest);
 void irFunctionAddSuccessor(IrFunction *func, IrBlock *src, IrBlock *dest);
@@ -366,13 +381,14 @@ void irFunctionRelease(IrFunction *func);
 
 
 
+void irAddPhiIncoming(IrInstr *ir_phi_instr,
+                      IrValue *ir_value, 
+                      IrBlock *ir_block);
 
 
 void irFnAddVar(IrFunction *func, u32 lvar_id, IrValue *var);
 void irFnAddBlock(IrFunction *fn, IrBlock *block);
 int irSetVariable(IrFunction *func, u32 var_id, IrValue *var);
 void irAddStackSpace(IrCtx *ctx, int size);
-
-
 
 #endif
