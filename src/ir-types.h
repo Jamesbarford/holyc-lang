@@ -244,7 +244,19 @@ struct IrBlockMapping {
     Map *predecessors; /* `Map<u32, IrBlock *>` */
 };
 
+typedef struct IrRaCtx {
+    struct IrFunction *func;
+    /* `Map<u32 IrValue.var.id -> int loff>`. loff is sign-extended on read;
+     * never zero for a real param/local (those start below the frame base). */
+    Map *id_to_loff;
+    /* Bytes added to the stack pointer beyond the AST locals/params region
+     * (for IR tmps and anything alloca'd at lowering time). The layout pass
+     * reserves this in the function prologue. */
+    int extra_stack;
+} IrRaCtx;
+
 typedef struct IrFunction {
+    u32 uuid;
     /* Name of the function as defined */
     AoStr *name;
     /* Space needed on the stack for allocating variables */
@@ -266,13 +278,33 @@ typedef struct IrFunction {
     List *blocks;
     /* `Map<u32, IrBlockMapping *>`*/
     Map *cfg;
+    /* Slot offset map + extra-stack counter + IR function. The
+     * regalloc helpers in ir-regalloc.c take an IrRaCtx*; the codegen
+     * passes `&ctx->ra` when calling into them. */
+    IrRaCtx ra;
 } IrFunction;
+
+typedef struct IrCgCtx {
+    Cctrl *cc;
+    AoStr *buf;
+    IrFunction *fn;
+    /* Set during the per-block emission loop so terminator codegen
+     * knows who's emitting and which block (if any) follows in layout
+     * order. */
+    IrBlock *cur_block;
+    IrBlock *next_block;
+    /* Map<u32 IrValue.var.id -> IrInstr* (IR_LEA)>. Populated once per
+     * function from peephole-marked LEAs. The IR_CALL emit consults
+     * this to re-create `leaq <source>, <target_reg>` directly at the
+     * call site instead of going through the slot. NULL when no
+     * LEA-into-call fusion fired. */
+    Map *lea_inline_map;
+} IrCgCtx;
 
 typedef struct IrProgram {
     Vec *functions;
     Vec *globals;
 } IrProgram;
-
 
 #define IR_LOOP_STACK_MAX 32
 
@@ -363,6 +395,9 @@ IrPair *irPairNew(IrBlock *ir_block, IrValue *ir_value);
 IrInstr *irPhi(IrValue *result);
 IrInstr *irLoad(IrValue *ir_dest, IrValue *ir_value);
 IrInstr *irJump(IrFunction *func, IrBlock *block, IrBlock *target);
+IrValue *irConstInt(IrValueType type, s64 num);
+
+u32 irValueByteSize(IrValue *v);
 
 int irBlockIsOnlyJump(IrFunction *func, IrBlock *block);
 

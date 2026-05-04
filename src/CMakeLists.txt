@@ -52,7 +52,9 @@ set(SOURCES
     compile.c
     ir.c
     ir-debug.c
+    ir-eval.c
     ir-mem2reg.c
+    ir-regalloc.c
     ir-types.c
     lexer.c
     list.c
@@ -81,7 +83,9 @@ set(HEADERS
     containers.h
     ir.h
     ir-debug.h
+    ir-eval.h
     ir-mem2reg.h
+    ir-regalloc.h
     ir-types.h
     lexer.h
     list.h

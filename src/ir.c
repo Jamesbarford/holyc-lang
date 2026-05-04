@@ -5,9 +5,12 @@
 
 #include "ast.h"
 #include "ir.h"
+#include "ir-eval.h"
 #include "ir-mem2reg.h"
+#include "ir-regalloc.h"
 #include "ir-types.h"
 #include "ir-debug.h"
+#include "prsutil.h"
 #include "util.h"
 
 /* Forward decl for inc/dec lowering on AST_CLASS_REF, defined below
@@ -58,12 +61,6 @@ static void irCollapseClassRefChain(Ast **cls, int *offset) {
 
 void irBlockAddInstr(IrCtx *ctx, IrInstr *instr) {
     listAppend(ctx->cur_block->instructions, instr);
-}
-
-IrValue *irConstInt(IrValueType type, s64 i64) {
-    IrValue *ir_value = irValueNew(type, IR_VAL_CONST_INT);
-    ir_value->as._i64 = i64;
-    return ir_value;
 }
 
 IrValue *irConstFloat(IrValueType type, f64 _f64) {
@@ -2072,9 +2069,75 @@ static void irRemoveRedundantBlocks(IrFunction *fn) {
     mapRelease(from_to);
 }
 
-void irBasicOptimisations(IrFunction *fn) {
+void irBasicFunctionOptimisations(IrFunction *fn) {
     irRemoveAllNops(fn);
     irRemoveRedundantBlocks(fn);
+    irEvalConstantExpressions(fn);
+    // remove unused functions?
+    // create a callgraph?
+    irRemoveAllNops(fn);
+}
+
+/* Per-translation-unit counter so block labels in two functions
+ * compiled together can't collide. */
+static u32 ircg_func_seq = 0;
+
+void irFunctionPrepForCodeGen(IrCgCtx *ctx, IrFunction *fn, Ast *ast_fn) {
+    (void)ast_fn;
+    irCgClassifyPhis(fn);
+    irCgAnnotate(fn);
+ 
+    int locals_params_space = irCgComputeAstLayout(ast_fn, fn);
+
+    fn->uuid = ircg_func_seq++;
+    fn->ra.func = fn;
+    fn->ra.id_to_loff = mapNew(32, &map_uint_to_uint_type);
+    fn->ra.extra_stack = 0;
+
+    ctx->fn = fn;
+    ctx->cur_block = NULL;
+    ctx->next_block = NULL;
+    /* Index every peephole-deferred LEA by its dst tmp id, so the
+     * IR_CALL emit can re-create the leaq into the arg register. */
+    ctx->lea_inline_map = mapNew(8, &map_uint_to_uint_type);
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (I->op != IR_LEA)
+                continue;
+            if (!(I->flags & IRCG_LEA_INLINE_AT_CALL))
+                continue;
+            if (!I->dst || I->dst->kind != IR_VAL_TMP)
+                continue;
+            mapAdd(ctx->lea_inline_map,
+                   (void *)(u64)I->dst->as.var.id,
+                   (void *)I);
+        }
+    }
+    /* Allocate slots for IR tmps just below the params area. */
+    irCgAllocAllTmps(&fn->ra, locals_params_space);
+
+    /* Compute total stack reservation (params + locals + tmps),
+     * aligned to 16. The architecture-specific emitter feeds this
+     * into its prologue. */
+    int total_stack = locals_params_space + fn->ra.extra_stack;
+    if (total_stack > 0) total_stack = align(total_stack, 16);
+
+    /* Stack required for the function */
+    fn->stack_space = (u16)total_stack;
+
+    irCgBindAstLoffs(&fn->ra, ast_fn);
+}
+
+void irCgFinishFunction(IrCgCtx *ctx) {
+    if (ctx) {
+        IrFunction *fn = ctx->fn;
+        if (fn->ra.id_to_loff)
+            mapRelease(fn->ra.id_to_loff);
+        if (ctx->lea_inline_map)
+            mapRelease(ctx->lea_inline_map);
+    }
 }
 
 void irDump(Cctrl *cc) {
@@ -2083,14 +2146,16 @@ void irDump(Cctrl *cc) {
         Ast *ast = (Ast *)it->value;
         if (ast->kind == AST_FUNC) {
             ctx->cur_func = NULL;
-            irLowerFunction(ctx, ast);
-            irPrintFunction(ctx->cur_func);
-            irMem2Reg(ctx->cur_func);
+            IrFunction *fn = irLowerFunction(ctx, ast);
+            irPrintFunction(fn);
+ 
+            irMem2Reg(fn);
             printf("===== After mem2reg ===== \n");
-            irPrintFunction(ctx->cur_func);
-            irBasicOptimisations(ctx->cur_func);
+            irPrintFunction(fn);
+
+            irBasicFunctionOptimisations(fn);
             printf("===== After basic optimisations ===== \n");
-            irPrintFunction(ctx->cur_func);
+            irPrintFunction(fn);
         }
     }
 }
@@ -2101,8 +2166,9 @@ IrCtx *irLowerProgram(Cctrl *cc) {
         Ast *ast = (Ast *)it->value;
         if (ast->kind == AST_FUNC) {
             ctx->cur_func = NULL;
-            irLowerFunction(ctx, ast);
-            irCtxAddFunction(ctx, ctx->cur_func);
+            IrFunction *fn = irLowerFunction(ctx, ast);
+            irBasicFunctionOptimisations(fn);
+            irCtxAddFunction(ctx, fn);
         }
     }
     return ctx;
