@@ -54,6 +54,7 @@ set(SOURCES
     ir-debug.c
     ir-eval.c
     ir-mem2reg.c
+    ir-peephole.c
     ir-regalloc.c
     ir-types.c
     lexer.c
@@ -85,6 +86,7 @@ set(HEADERS
     ir-debug.h
     ir-eval.h
     ir-mem2reg.h
+    ir-peephole.h
     ir-regalloc.h
     ir-types.h
     lexer.h

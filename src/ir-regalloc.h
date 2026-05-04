@@ -96,7 +96,7 @@ int blockHasPhi(IrBlock *bb);
  * canonical result register (i.e. is it a candidate for the
  * "leave in register" fusion path)? Float-typed defs and ops that
  * don't compute a value return 0. */
-int instrDefsIntoReg(IrInstr *I);
+int irInstrDefsIntoReg(IrInstr *I);
 /* The single source operand the instruction loads into the result
  * register first. NULL when the op doesn't have one (alloca,
  * unconditional jmp, nop, ...). */

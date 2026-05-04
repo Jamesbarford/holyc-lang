@@ -7,6 +7,7 @@
 #include "ir.h"
 #include "ir-eval.h"
 #include "ir-mem2reg.h"
+#include "ir-peephole.h"
 #include "ir-regalloc.h"
 #include "ir-types.h"
 #include "ir-debug.h"
@@ -2083,10 +2084,10 @@ void irBasicFunctionOptimisations(IrFunction *fn) {
 static u32 ircg_func_seq = 0;
 
 void irFunctionPrepForCodeGen(IrCgCtx *ctx, IrFunction *fn, Ast *ast_fn) {
-    (void)ast_fn;
     irCgClassifyPhis(fn);
     irCgAnnotate(fn);
- 
+    irPeephole(ctx->cc, fn);
+
     int locals_params_space = irCgComputeAstLayout(ast_fn, fn);
 
     fn->uuid = ircg_func_seq++;
