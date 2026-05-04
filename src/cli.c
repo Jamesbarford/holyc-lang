@@ -73,6 +73,29 @@ int cliParseBoolean(CliValue *value, char *rawarg) {
     return retval;
 }
 
+static char *target_map[] = {
+    [TARGET_DEFAULT] = "default",
+    [TARGET_AARCH64_APPLE_DARWIN] = "aarch64-apple-darwin",
+    [TARGET_AARCH64_UNKNOWN_LINUX_GNU] = "aarch64-unknown-linux-gnu",
+    [TARGET_X86_64_APPLE_DARWIN] = "x86_64-apple-darwin" ,
+    [TARGET_X86_64_UNKNOWN_LINUX_GNU] = "x86_64-unknown-linux-gnu" ,
+};
+
+const char *cliTargetToString(enum CliTarget target) {
+    switch (target) {
+        case TARGET_DEFAULT:
+            return target_map[TARGET_DEFAULT];
+        case TARGET_AARCH64_APPLE_DARWIN: 
+            return target_map[TARGET_AARCH64_APPLE_DARWIN];
+        case TARGET_AARCH64_UNKNOWN_LINUX_GNU:
+            return target_map[TARGET_AARCH64_UNKNOWN_LINUX_GNU];
+        case TARGET_X86_64_APPLE_DARWIN: 
+            return target_map[TARGET_X86_64_APPLE_DARWIN];
+        case TARGET_X86_64_UNKNOWN_LINUX_GNU:
+            return target_map[TARGET_X86_64_UNKNOWN_LINUX_GNU];
+    }
+}
+
 static CliParser parsers[] = {
     {str_lit("-ast"),       0, CLI_PRINT_AST, "-ast", "Print the ast and exit", &cliParseNop},
     {str_lit("-cfg"),       0, CLI_CFG_CREATE, "-cfg", "Create graphviz control flow graph", &cliParseNop},
@@ -87,6 +110,7 @@ static CliParser parsers[] = {
     {str_lit("-o"),         1, CLI_OUTPUT_FILENAME, "-o <binary_name>", "Output filename: `-o <name> ./<file>.HC`", &cliParseString},
     {str_lit("-o-"),        0, CLI_TO_STDOUT, "-o-", "Output assembly to stdout, only for use with -S", &cliParseNop},
     {str_lit("-transpile"), 0, CLI_TRANSPILE, "-transpile", "Transpile the code to C, this is best effort", &cliParseNop},
+    {str_lit("--target"),   0, CLI_TARGET, "--target", "Select the target, `x86_64-apple-darwin`, `aarch64-apple-darwin`, `x86_64-unknown-linux-gnu` this follows llvm style target triples", &cliParseString},
     {str_lit("-D"),         0, CLI_DEFINES_LIST, "-D<VAR>", "Set a compiler #define (does not accept a value)", &cliParseDefine},
     {str_lit("--dump-ir"),  0, CLI_DUMP_IR, "--dump-ir", "Dump ir to stdout" , &cliParseNop},
     {str_lit("--mem-stats"),  0, CLI_MEM_STATS, "--mem-stats", "Stats about memory usage when compiling" , &cliParseNop},
@@ -403,6 +427,32 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
                 listAppend(args->defines_list, mprintf("%s", value.str));
                 break;
             }
+            case CLI_TARGET: {
+                u64 target_map_len = sizeof(target_map) / sizeof(target_map[0]);
+
+                AoStr *valid_targets = aoStrNew();
+                for (u64 i = 0; i < target_map_len; ++i) {
+                    char *str_target = target_map[i];
+                    if (i + 1 != target_map_len) {
+                        aoStrCatFmt(valid_targets, "`%s`, ", str_target);
+                    } else {
+                        aoStrCatFmt(valid_targets, "`%s`", str_target);
+                    }
+                }
+                if (!strncmp(value.str, str_lit("aarch64-apple-darwin"))) {
+                    args->target = TARGET_AARCH64_APPLE_DARWIN;
+                } else if (!strncmp(value.str, str_lit("aarch64-unknown-linux-gnu"))) {
+                    args->target = TARGET_AARCH64_UNKNOWN_LINUX_GNU;
+                } else if (!strncmp(value.str, str_lit("x86_64-apple-darwin"))) {
+                    args->target = TARGET_X86_64_APPLE_DARWIN;
+                } else if (!strncmp(value.str, str_lit("x86_64-unknown-linux-gnu"))) {
+                    args->target = TARGET_X86_64_UNKNOWN_LINUX_GNU;
+                } else {
+                    loggerPanic("Invalid target: `%s` valid targets are: %s\n",
+                            value.str, valid_targets->data);
+                }
+                break;
+            }
             case CLI_DUMP_IR:   args->dump_ir = 1; break;
             case CLI_MEM_STATS: args->print_mem_stats = 1; break;
             case CLI_HELP:    cliPrintUsage(); break;
@@ -426,4 +476,5 @@ void cliArgsInit(CliArgs *args) {
     memset(args,0,sizeof(CliArgs));
     args->clibs = "";
     args->defines_list = NULL;
+    args->target = TARGET_DEFAULT;
 }

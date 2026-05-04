@@ -12,7 +12,6 @@
 #include "cfg-print.h"
 #include "cfg.h"
 #include "cli.h"
-#include "codegen-aarch64.h"
 #include "compile.h"
 #include "config.h"
 #include "ir.h"
@@ -27,9 +26,11 @@
 int is_terminal;
 
 #if defined(__aarch64__) || defined(__arm64ec__)
-    #define _CC "clang --target=x86_64-apple-darwin"
+    #define _CC "clang"
+    #define CC_TARGET "--target=x86_64-apple-darwin"
 #else
     #define _CC "gcc"
+    #define CC_TARGET ""
 #endif
 
 #define ASM_TMP_FILE "/tmp/holyc-asm.s"
@@ -102,7 +103,8 @@ int hccLibInit(hccLib *lib, CliArgs *args, char *name) {
     snprintf(lib->dylib_name,LIB_BUFSIZ,"%s.so",name);
     snprintf(lib->dylib_version_name,LIB_BUFSIZ,"%s.so.0.0.1",name);
     aoStrCatPrintf(dylib_cmd,
-            _CC" -fPIC -shared -Wl,-soname,"INSTALL_PREFIX"/lib/%s -o %s "CLIBS,
+            "%s -fPIC -shared -Wl,-soname,"INSTALL_PREFIX"/lib/%s -o %s "CLIBS,
+            cc->CC,
             name,
             lib->dylib_name,
             lib->dylib_name);
@@ -153,12 +155,13 @@ int writeAsmToTmp(AoStr *asmbuf) {
     return 1;
 } 
 
-void emitFile(AoStr *asmbuf, CliArgs *args) {
+void emitFile(Cctrl *cc, AoStr *asmbuf, CliArgs *args) {
     AoStr *cmd = aoStrNew();
     hccLib lib;
     if (args->emit_object) {
         writeAsmToTmp(asmbuf);
-        aoStrCatPrintf(cmd, _CC" -c %s "CLIBS" %s -o ./%s",
+        aoStrCatPrintf(cmd, "%s -c %s "CLIBS" %s -o ./%s",
+                cc->CC,
                 ASM_TMP_FILE,args->clibs,args->obj_outfile);
         safeSystem(cmd->data);
     } else if (args->asm_outfile && args->assemble_only) {
@@ -185,7 +188,8 @@ void emitFile(AoStr *asmbuf, CliArgs *args) {
     } else if (args->emit_dylib) {
         writeAsmToTmp(asmbuf);
         hccLibInit(&lib,args,args->lib_name);
-        aoStrCatPrintf(cmd, _CC" -fPIC -c %s -o ./%s",
+        aoStrCatPrintf(cmd, "%s -fPIC -c %s -o ./%s",
+                cc->CC,
                 ASM_TMP_FILE,args->obj_outfile);
         fprintf(stderr,"%s\n",cmd->data);
         safeSystem(cmd->data);
@@ -203,7 +207,8 @@ void emitFile(AoStr *asmbuf, CliArgs *args) {
         if (args->run) {
             AoStr *run_cmd = aoStrNew();
             writeAsmToTmp(asmbuf);
-            aoStrCatPrintf(run_cmd,_CC" -L"INSTALL_PREFIX"/lib %s "CLIBS" && ./a.out && rm ./a.out",
+            aoStrCatPrintf(run_cmd,"%s -L"INSTALL_PREFIX"/lib %s "CLIBS" && ./a.out && rm ./a.out",
+                    cc->CC,
                     ASM_TMP_FILE);
             /* Don't use 'safeSystem' else anything other than a '0' exit 
              * code will cause a panic which is incorrect... This is a bit of a
@@ -221,10 +226,12 @@ void emitFile(AoStr *asmbuf, CliArgs *args) {
         }
 
         if (args->clibs) {
-            aoStrCatPrintf(cmd, _CC" -L"INSTALL_PREFIX"/lib %s %s "CLIBS" -o %s", 
+            aoStrCatPrintf(cmd, "%s -L"INSTALL_PREFIX"/lib %s %s "CLIBS" -o %s", 
+                    cc->CC,
                     ASM_TMP_FILE,args->clibs,args->output_filename);
         } else {
-            aoStrCatPrintf(cmd, _CC" -L"INSTALL_PREFIX"/lib %s "CLIBS" -o %s", 
+            aoStrCatPrintf(cmd, "%s -L"INSTALL_PREFIX"/lib %s "CLIBS" -o %s", 
+                    cc->CC,
                     ASM_TMP_FILE, args->output_filename);
         }
         safeSystem(cmd->data);
@@ -234,7 +241,7 @@ void emitFile(AoStr *asmbuf, CliArgs *args) {
     aoStrRelease(asmbuf);
 }
 
-void assemble(CliArgs *args) {
+void assemble(Cctrl *cc, CliArgs *args) {
     AoStr *run_cmd = aoStrNew();
 
     if (args->run) {
@@ -246,13 +253,14 @@ void assemble(CliArgs *args) {
             .capacity = len,
         };
         writeAsmToTmp(&asm_buf);
-        aoStrCatPrintf(run_cmd,_CC" -L"INSTALL_PREFIX"/lib %s "CLIBS" && ./a.out && rm ./a.out",
+        aoStrCatPrintf(run_cmd,"%s -L"INSTALL_PREFIX"/lib %s "CLIBS" && ./a.out && rm ./a.out",
+                cc->CC,
                 ASM_TMP_FILE);
         free(buffer);
         int ret = system(run_cmd->data);
         (void)ret;
     } else {
-        aoStrCatPrintf(run_cmd, _CC" %s -L"INSTALL_PREFIX"/lib "CLIBS, args->infile);
+        aoStrCatPrintf(run_cmd, "%s %s -L"INSTALL_PREFIX"/lib "CLIBS, cc->CC, args->infile);
         safeSystem(run_cmd->data);
     }
     aoStrRelease(run_cmd);
@@ -303,15 +311,42 @@ int main(int argc, char **argv) {
     args.install_dir = INSTALL_PREFIX;
     cliParseArgs(&args,argc,argv);
 
+    cc = cctrlNew();
+
+    /* Plumb in support for cross compiling... currently does nothing :)*/
+    cc->target = (char *)cliTargetToString(args.target);
+    switch (args.target) {
+        case TARGET_DEFAULT:
+            cc->CC = mprintf("%s %s", _CC, CC_TARGET);
+            break;
+        case TARGET_AARCH64_APPLE_DARWIN:
+            cc->CC = mprintf("clang --target=%s", cc->target);
+            break;
+        case TARGET_AARCH64_UNKNOWN_LINUX_GNU:
+            cc->CC = mprintf("clang --target=%s", cc->target);
+            break;
+        case TARGET_X86_64_APPLE_DARWIN:
+            cc->CC = mprintf("clang --target=%s", cc->target);
+            break;
+        case TARGET_X86_64_UNKNOWN_LINUX_GNU:
+            cc->CC = mprintf("clang --target=%s", cc->target);
+            break;
+    }
+
+    if (args.target != TARGET_DEFAULT) {
+        loggerPanic("This is an unfinished feature :(, please do not set the `-`-target=` cli flag\n");
+    }
+
     if (args.assemble) {
-        assemble(&args);
+        assemble(cc, &args);
         goto success;
     }
 
-    cc = cctrlNew();
+
     if (!listEmpty(args.defines_list)) {
         cctrlSetCommandLineDefines(cc,args.defines_list);
     }
+
 
     if (args.print_tokens) {
         compileToTokens(cc,&args,lexer_flags);
@@ -354,14 +389,9 @@ int main(int argc, char **argv) {
         goto success;
     }
 
-#if IS_ARM_64 && defined(__USE_NEW_BACKEND__)
-    IrCtx *ir_ctx = irLowerProgram(cc);
-    asmbuf = aarch64GenCode(ir_ctx);
-    printf("%s\n", asmbuf->data);
-#else
     asmbuf = compileToAsm(cc);
-    emitFile(asmbuf, &args);
-#endif // IS_ARM_64
+    emitFile(cc, asmbuf, &args);
+
     if (args.defines_list) {
         listRelease(args.defines_list,NULL);
     }

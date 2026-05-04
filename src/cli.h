@@ -5,6 +5,14 @@
 
 #include "list.h"
 
+enum CliTarget {
+    TARGET_DEFAULT,
+    TARGET_AARCH64_APPLE_DARWIN,
+    TARGET_AARCH64_UNKNOWN_LINUX_GNU,
+    TARGET_X86_64_APPLE_DARWIN,
+    TARGET_X86_64_UNKNOWN_LINUX_GNU,
+};
+
 enum CliType {
     CLI_STRING,
     CLI_INT,
@@ -12,27 +20,28 @@ enum CliType {
 };
 
 enum CliArgType {
-    CLI_PRINT_AST,
-    CLI_PRINT_TOKENS,
+    CLI_ASM_DEBUG_COMMENTS,
+    CLI_ASSEMBLE,
+    CLI_ASSEMBLE_ONLY,
     CLI_CFG_CREATE,
     CLI_CFG_CREATE_PNG,
     CLI_CFG_CREATE_SVG,
-    CLI_ASM_DEBUG_COMMENTS,
-    CLI_ASSEMBLE_ONLY,
-    CLI_EMIT_DYLIB,
-    CLI_EMIT_OBJECT,
-    CLI_RUN,
-    CLI_ASSEMBLE,
-    CLI_TRANSPILE,
-    CLI_TO_STDOUT,
-    CLI_OUTPUT_FILENAME,
     CLI_CLIBS,
     CLI_DEFINES_LIST,
-    CLI_VERSION,
-    CLI_MEM_STATS,
     CLI_DUMP_IR,
+    CLI_EMIT_DYLIB,
+    CLI_EMIT_OBJECT,
     CLI_HELP,
+    CLI_MEM_STATS,
+    CLI_OUTPUT_FILENAME,
+    CLI_PRINT_AST,
+    CLI_PRINT_TOKENS,
+    CLI_RUN,
+    CLI_TARGET,
     CLI_TERRY,
+    CLI_TO_STDOUT,
+    CLI_TRANSPILE,
+    CLI_VERSION,
 };
 
 typedef struct CliValue {
@@ -79,11 +88,14 @@ typedef struct CliArgs {
     char *output_filename;
     char *clibs;
     char *install_dir;
+    enum CliTarget target;
     List *defines_list;
 } CliArgs;
 
 void cliArgsInit(CliArgs *args);
 int cliParseArgs(struct CliArgs *cli_args, int argc, char **argv);
 __noreturn void cliPanicGeneric(const char *const_msg, const char *fmt, va_list ap);
+
+const char *cliTargetToString(enum CliTarget target);
 
 #endif
