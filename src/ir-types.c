@@ -213,8 +213,7 @@ u8 irIsInt(IrValueType type) {
 }
 
 u8 irIsConstInt(IrValue *val) {
-    return irIsInt(val->type) &&
-           val->kind == IR_VAL_CONST_INT;
+    return val && val->kind == IR_VAL_CONST_INT;
 }
 
 u8 irIsStruct(IrValueType ir_value_type) {
@@ -727,6 +726,11 @@ IrValue *irTmp(IrValueType type, u16 size) {
     return val;
 }
 
+IrValue *irConstInt(IrValueType type, s64 num) {
+    IrValue *ir_value = irValueNew(type, IR_VAL_CONST_INT);
+    ir_value->as._i64 = num;
+    return ir_value;
+}
 
 void irCtxAddFunction(IrCtx *ctx, IrFunction *func) {
     vecPush(ctx->prog->functions, func);
@@ -835,4 +839,20 @@ IrInstr *irPhi(IrValue *result) {
 
 IrInstr *irLoad(IrValue *ir_dest, IrValue *ir_value) {
     return irInstrNew(IR_LOAD, ir_dest, ir_value, NULL);
+}
+
+u32 irValueByteSize(IrValue *v) {
+    if (!v) return 8;
+    if (v->kind == IR_VAL_TMP ||
+        v->kind == IR_VAL_LOCAL ||
+        v->kind == IR_VAL_PARAM)
+    {
+        if (v->as.var.size > 0) return v->as.var.size;
+    }
+    switch (v->type) {
+        case IR_TYPE_I8:  return 1;
+        case IR_TYPE_I16: return 2;
+        case IR_TYPE_I32: return 4;
+        default:          return 8;
+    }
 }
