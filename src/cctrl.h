@@ -130,6 +130,13 @@ typedef struct Cctrl {
     int is_static;
     TokenRingBuffer *token_buffer;
     Lexer *lexer_;
+
+    /* Externl compiler command e.g `clang --target=x86_64-apple-darwin`.
+     * This will default to clang on mac and gcc on x86_64 linux */
+    char *CC;
+    
+    /* Target triple */
+    char *target;
 } Cctrl;
 
 /* Instantiate a new compiler control struct */
