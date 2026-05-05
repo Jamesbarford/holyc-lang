@@ -1,6 +1,5 @@
 #include <assert.h>
 #include <ctype.h>
-#include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <stdarg.h>
@@ -93,6 +92,8 @@ const char *cliTargetToString(enum CliTarget target) {
             return target_map[TARGET_X86_64_APPLE_DARWIN];
         case TARGET_X86_64_UNKNOWN_LINUX_GNU:
             return target_map[TARGET_X86_64_UNKNOWN_LINUX_GNU];
+        default:
+            loggerPanic("Unknown target: %d\n", (int)target);
     }
 }
 

@@ -1634,6 +1634,7 @@ void asmPrepFuncCallArgs(Cctrl *cc, AoStr *buf, Ast *funcall) {
 
     funarg = NULL;
     s64 i = 0;
+    tmp = NULL;
     while (1) {
         /* Handling the case for either more arguments than parameters or
          * more parameters than arguments */
