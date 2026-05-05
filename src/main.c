@@ -69,7 +69,7 @@ typedef struct hccLib {
     char *install_cmd;
 } hccLib;
 
-int hccLibInit(hccLib *lib, CliArgs *args, char *name) { 
+int hccLibInit(Cctrl *cc, hccLib *lib, CliArgs *args, char *name) { 
     AoStr *dylib_cmd = aoStrNew();
     AoStr *stylib_cmd = aoStrNew();
     AoStr *installcmd = aoStrNew();
@@ -181,13 +181,13 @@ void emitFile(Cctrl *cc, AoStr *asmbuf, CliArgs *args) {
         }
         s64 written = write(fd,asmbuf->data,asmbuf->len);
         if (written != (s64)asmbuf->len) {
-            loggerPanic("Failed to write data expected %lld got %lld\n",
+            loggerPanic("Failed to write data expected %ld got %ld\n",
                     (s64)asmbuf->len, written);
         }
         close(fd);
     } else if (args->emit_dylib) {
         writeAsmToTmp(asmbuf);
-        hccLibInit(&lib,args,args->lib_name);
+        hccLibInit(cc, &lib,args,args->lib_name);
         aoStrCatPrintf(cmd, "%s -fPIC -c %s -o ./%s",
                 cc->CC,
                 ASM_TMP_FILE,args->obj_outfile);
