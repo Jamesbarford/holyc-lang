@@ -367,9 +367,9 @@ char *transpileKeyWordHighlight(TranspileCtx *ctx, int ast_kind) {
 char *transpileHighlightInt(TranspileCtx *ctx, s64 integer) {
     static char buf[64];
     if (ctx->flags & TRANSPILE_FLAG_ISATTY) {
-        snprintf(buf,sizeof(buf),ESC_WHITE"%lld"ESC_RESET,integer);
+        snprintf(buf,sizeof(buf),ESC_WHITE"%ld"ESC_RESET,integer);
     } else {
-        snprintf(buf,sizeof(buf),"%lld",integer);
+        snprintf(buf,sizeof(buf),"%ld",integer);
     }
     return buf;
 }

@@ -662,7 +662,7 @@ static void cfgGraphVizAddMappings(CfgGraphVizBuilder *builder, CFG *cfg) {
                 break;
 
             default:
-                loggerWarning("Unhandled! loopidx=%llu: bb%d %s\n",
+                loggerWarning("Unhandled! loopidx=%lu: bb%d %s\n",
                     it.idx,cur->block_no,bbToString(cur));
         }
     }

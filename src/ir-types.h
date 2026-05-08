@@ -18,6 +18,9 @@ typedef enum IrOp {
     IR_ALLOCA,      /* Allocate stack memory */
     IR_LOAD,        /* Load from memory */
     IR_STORE,       /* Store to memory */
+    IR_LOAD_DEREF,  /* dst = *r1 (r1 is a pointer value, not a slot id) */
+    IR_STORE_DEREF, /* *dst = r1 (dst is a pointer value) */
+    IR_LEA,         /* dst = &r1 (address of a stack slot, as a pointer) */
     IR_GEP,         /* Get element pointer (array/struct indexing) */
 
     /* Integer Arithmetic operations */
@@ -68,7 +71,6 @@ typedef enum IrOp {
     IR_RET,         /* Return from function */
     IR_BR,          /* Conditional branch */
     IR_JMP,         /* Unconditional jump */
-    IR_LOOP,        /* Unconditional jump, but identified as a loop for ease */
     IR_SWITCH,      /* Switch statement */
     IR_CALL,        /* Function call */
     IR_PHI,         /* SSA phi node */
@@ -170,6 +172,8 @@ typedef struct IrVar {
     u16 size;
 } IrVar;
 
+#define IR_VAL_FLAG_FUNC 0x1
+
 struct IrValue {
     IrValueType type;
     IrValueKind kind;
@@ -240,7 +244,19 @@ struct IrBlockMapping {
     Map *predecessors; /* `Map<u32, IrBlock *>` */
 };
 
+typedef struct IrRaCtx {
+    struct IrFunction *func;
+    /* `Map<u32 IrValue.var.id -> int loff>`. loff is sign-extended on read;
+     * never zero for a real param/local (those start below the frame base). */
+    Map *id_to_loff;
+    /* Bytes added to the stack pointer beyond the AST locals/params region
+     * (for IR tmps and anything alloca'd at lowering time). The layout pass
+     * reserves this in the function prologue. */
+    int extra_stack;
+} IrRaCtx;
+
 typedef struct IrFunction {
+    u32 uuid;
     /* Name of the function as defined */
     AoStr *name;
     /* Space needed on the stack for allocating variables */
@@ -262,12 +278,41 @@ typedef struct IrFunction {
     List *blocks;
     /* `Map<u32, IrBlockMapping *>`*/
     Map *cfg;
+    /* Slot offset map + extra-stack counter + IR function. The
+     * regalloc helpers in ir-regalloc.c take an IrRaCtx*; the codegen
+     * passes `&ctx->ra` when calling into them. */
+    IrRaCtx ra;
 } IrFunction;
+
+typedef struct IrCgCtx {
+    Cctrl *cc;
+    AoStr *buf;
+    IrFunction *fn;
+    /* Set during the per-block emission loop so terminator codegen
+     * knows who's emitting and which block (if any) follows in layout
+     * order. */
+    IrBlock *cur_block;
+    IrBlock *next_block;
+    /* Map<u32 IrValue.var.id -> IrInstr* (IR_LEA)>. Populated once per
+     * function from peephole-marked LEAs. The IR_CALL emit consults
+     * this to re-create `leaq <source>, <target_reg>` directly at the
+     * call site instead of going through the slot. NULL when no
+     * LEA-into-call fusion fired. */
+    Map *lea_inline_map;
+} IrCgCtx;
 
 typedef struct IrProgram {
     Vec *functions;
     Vec *globals;
 } IrProgram;
+
+#define IR_LOOP_STACK_MAX 32
+
+/* Keep track of breaks and continues */
+typedef struct IrLoopCtx {
+    IrBlock *continue_block;  /* target of `continue` */
+    IrBlock *break_block;     /* target of `break` */
+} IrLoopCtx;
 
 typedef struct IrCtx {
     /* Current function being converted to IR */
@@ -278,12 +323,32 @@ typedef struct IrCtx {
     IrProgram *prog;
     /* The main compiler struct */
     Cctrl *cc;
+
+    IrLoopCtx loop_stack[IR_LOOP_STACK_MAX];
+    u16 loop_depth;
+    /*`Map<AoStr *label_name, IrBlock *>` for goto and labels within the current
+     * function. */
+    Map *labels;
 } IrCtx;
 
+extern VecType vec_ir_block_type;
+extern MapType map_u32_to_ir_block_type;
+
+/* Memory management */
+void irMemoryInit(void);
+void irMemoryRelease(void);
+void *irAlloc(u32 size);
+void irMemoryStats(void);
+
+IrCtx *irCtxNew(Cctrl *cc);
+void irCtxAddFunction(IrCtx *ctx, IrFunction *func);
+IrValue *irFnGetVar(IrFunction *func, u32 lvar_id);
 
 IrBlockMapping *irFunctionGetBlockMapping(IrFunction *func, IrBlock *ir_block);
 Map *irFunctionGetSuccessors(IrFunction *func, IrBlock *ir_block);
 Map *irFunctionGetPredecessors(IrFunction *func, IrBlock *ir_block);
+Map *irBlockGetPredecessors(IrFunction *func, IrBlock *block);
+Map *irBlockGetSuccessors(IrFunction *func, IrBlock *block);
 
 u8 irOpIsCmp(IrOp opcode);
 u8 irIsFloat(IrValueType ir_value_type);
@@ -291,6 +356,7 @@ u8 irIsInt(IrValueType ir_value_type);
 u8 irTypeIsScalar(IrValueType ir_value_type);
 u8 irIsConst(IrValueKind ir_value_kind);
 u8 irIsPtr(IrValueType ir_value_type);
+u8 irIsTmp(IrValue *val);
 u8 irIsStore(IrOp opcode);
 u8 irIsLoad(IrOp opcode);
 u8 irIsStruct(IrValueType ir_value_type);
@@ -303,7 +369,61 @@ IrValueType irConvertType(AstType *type);
 
 IrBlock *irInstrGetTargetBlock(IrInstr *instr);
 IrBlock *irInstrGetFallthroughBlock(IrInstr *instr);
-Map *irBlockGetSuccessors(IrFunction *func, IrBlock *block);
 int irBlockIsStartOrEnd(IrFunction *func, IrBlock *block);
+int irBlockIsRedundantJump(IrFunction *func, IrBlock *block);
+IrInstr *irBlockLastInstr(IrBlock *block);
+IrInstr *irBlockFirstInstr(IrBlock *block);
+
+/* Constructors */
+Vec *irFunctionVecNew(void);
+Vec *irPairVecNew(void);
+Vec *irValueVecNew(void);
+Vec *irBlockVecNew(void);
+
+Map *irBlockMapNew(void);
+Map *irBlockMappingMapNew(void);
+Map *irInstrMapNew(void) ;
+Map *irVarValueMapNew(void);
+
+IrBlockMapping *irBlockMappingNew(int id);
+IrBlock *irBlockNew(void);
+IrValue *irTmp(IrValueType type, u16 size);
+IrInstr *irInstrNew(IrOp op, IrValue *dst, IrValue *r1, IrValue *r2);
+IrFunction *irFunctionNew(AoStr *fname);
+IrValue *irValueNew(IrValueType type, IrValueKind kind);
+IrPair *irPairNew(IrBlock *ir_block, IrValue *ir_value);
+IrInstr *irPhi(IrValue *result);
+IrInstr *irLoad(IrValue *ir_dest, IrValue *ir_value);
+IrInstr *irJump(IrFunction *func, IrBlock *block, IrBlock *target);
+IrValue *irConstInt(IrValueType type, s64 num);
+
+u32 irValueByteSize(IrValue *v);
+
+int irBlockIsOnlyJump(IrFunction *func, IrBlock *block);
+
+void irFunctionAddMapping(IrFunction *func, IrBlock *src, IrBlock *dest);
+void irFunctionAddSuccessor(IrFunction *func, IrBlock *src, IrBlock *dest);
+void irFunctionAddPredecessor(IrFunction *func, IrBlock *src, IrBlock *prev);
+void irFunctionRemoveSuccessor(IrFunction *func, IrBlock *src, IrBlock *dest);
+void irFunctionRemovePredecessor(IrFunction *func, IrBlock *src, IrBlock *prev);
+
+void irResetBlockId(void);
+void irTmpVariableCountReset(void);
+
+void irBlockMappingRelease(void *_mapping);
+void irBlockRelease(IrBlock *block);
+void irFunctionRelease(IrFunction *func);
+
+
+
+void irAddPhiIncoming(IrInstr *ir_phi_instr,
+                      IrValue *ir_value, 
+                      IrBlock *ir_block);
+
+
+void irFnAddVar(IrFunction *func, u32 lvar_id, IrValue *var);
+void irFnAddBlock(IrFunction *fn, IrBlock *block);
+int irSetVariable(IrFunction *func, u32 var_id, IrValue *var);
+void irAddStackSpace(IrCtx *ctx, int size);
 
 #endif

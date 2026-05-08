@@ -874,16 +874,34 @@ int astIsUnOp(Ast *ast) {
     return ast && ast->kind == AST_UNOP;
 }
 
+int astIsUnOpKind(Ast *ast, AstUnOp op) {
+    return astIsUnOp(ast) && ast->unop == op;
+}
+
 int astIsBinOp(Ast *ast) {
     return ast && ast->kind == AST_BINOP;
 }
 
+int astIsBinOpKind(Ast *ast, AstBinOp op) {
+    return astIsBinOp(ast) && ast->binop == op;
+}
+
+int astIsBinOpCmp(Ast *ast) {
+    return ast->binop == AST_BIN_OP_EQ || ast->binop == AST_BIN_OP_NE ||
+           ast->binop == AST_BIN_OP_LT || ast->binop == AST_BIN_OP_LE ||
+           ast->binop == AST_BIN_OP_GT || ast->binop == AST_BIN_OP_GE;
+}
+
 int astIsAddr(Ast *ast) {
-    return astIsUnOp(ast) && ast->unop == AST_UN_OP_ADDR_OF;
+    return astIsUnOpKind(ast, AST_UN_OP_ADDR_OF);
 }
 
 int astIsDeref(Ast *ast) {
-    return astIsUnOp(ast) && ast->unop == AST_UN_OP_DEREF;
+    return astIsUnOpKind(ast, AST_UN_OP_DEREF);
+}
+
+int astIsIntrinsicClass(AstType *ty) {
+    return ty && ty->kind == AST_TYPE_CLASS && ty->is_intrinsic;
 }
 
 /* This is pretty gross to look at but, eliminated recursion */
@@ -1075,16 +1093,19 @@ out:
 }
 
 int astIsFloatType(AstType *type) {
-    return type->kind == AST_TYPE_FLOAT;
+    return type && type->kind == AST_TYPE_FLOAT;
 }
 
 int astIsIntType(AstType *type) {
-    switch (type->kind) {
-    case AST_TYPE_INT:
-    case AST_TYPE_CHAR:
-        return 1;
-    default: return 0;
+    if (type) {
+        switch (type->kind) {
+            case AST_TYPE_INT:
+            case AST_TYPE_CHAR:
+                return 1;
+            default: return 0;
+        }
     }
+    return 0;
 }
 
 void astStringEndStmt(AoStr *str) {
