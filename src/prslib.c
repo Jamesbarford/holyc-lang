@@ -556,11 +556,11 @@ Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, s64 terminator) {
         * function->has_var_args appears broken and never set correctly to me
         * Also guard for FUNPTR and LVAR cos not sure if we can statically verify argument counts
         * for funptr calls at parse time, maybe at runtime with an assembly func */
-        if (maybe_fn->kind != AST_FUNPTR && maybe_fn->kind != AST_LVAR &&!astFuncHasVarArgs(maybe_fn) && !astFuncHasDefaultArgs(maybe_fn)) {
-            int expected = maybe_fn->params ? (int)maybe_fn->params->size : 0;
+        if (maybe_fn->kind != AST_FUNPTR && maybe_fn->kind != AST_LVAR &&!astFuncHasVarArgs(maybe_fn)) {
+            int expected = (maybe_fn->params ? (int)maybe_fn->params->size : 0) - astFuncCountDefaultArgs(maybe_fn);
             int given = (int)argv->size;
 
-            if (given != expected) {
+            if (given < expected) {
                 cctrlRaiseExceptionFromTo(cc, NULL, '(', ')', "Unexpected number of arguments %d in call to %.*s(), expected %d", given, len, fname, expected);
             }
         }

@@ -726,13 +726,14 @@ int astFuncHasVarArgs(Ast *ast) {
     return 0;
 }
 
-int astFuncHasDefaultArgs(Ast *ast) {
+int astFuncCountDefaultArgs(Ast *ast) {
     if (!ast->params) return 0;
+    int count = 0;
     for (int i = 0; i < (int)ast->params->size; i++) {
         Ast *p = ast->params->entries[i];
-        if (p->kind == AST_DEFAULT_PARAM) return 1;
+        if (p->kind == AST_DEFAULT_PARAM) count++;
     }
-    return 0;
+    return count;
 }
 
 int astIsVarArg(Ast *ast) {
