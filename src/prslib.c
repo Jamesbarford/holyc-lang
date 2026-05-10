@@ -557,11 +557,15 @@ Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, s64 terminator) {
         * Also guard for FUNPTR and LVAR cos not sure if we can statically verify argument counts
         * for funptr calls at parse time, maybe at runtime with an assembly func */
         if (maybe_fn->kind != AST_FUNPTR && maybe_fn->kind != AST_LVAR &&!astFuncHasVarArgs(maybe_fn)) {
-            int expected = (maybe_fn->params ? (int)maybe_fn->params->size : 0) - astFuncCountDefaultArgs(maybe_fn);
+            int d_args = astFuncCountDefaultArgs(maybe_fn);
+            int max_args = (maybe_fn->params ? (int)maybe_fn->params->size : 0);
+            int min_args = max_args - d_args;
             int given = (int)argv->size;
 
-            if (given < expected) {
-                cctrlRaiseExceptionFromTo(cc, NULL, '(', ')', "Unexpected number of arguments %d in call to %.*s(), expected %d", given, len, fname, expected);
+            if (!d_args && given != max_args) {
+                cctrlRaiseExceptionFromTo(cc, NULL, '(', ')', "Unexpected number of arguments %d in call to %.*s(), expected %d args", given, len, fname, max_args);
+            } else if (d_args && (given < min_args || given > max_args)) {
+                cctrlRaiseExceptionFromTo(cc, NULL, '(', ')', "Unexpected number of arguments %d in call to %.*s(), expected args in range %d to %d", given, len, fname, min_args, max_args);
             }
         }
 
