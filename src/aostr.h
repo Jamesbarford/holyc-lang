@@ -23,6 +23,9 @@ AoStr *aoStrAlloc(u64 capacity);
 AoStr *aoStrNew(void);
 void aoStrRelease(AoStr *buf);
 
+void aoStrPoolReset(void);
+void aoStrPoolPrintStats(void);
+
 int aoStrExtendBuffer(AoStr *buf, u64 additional);
 void aoStrToLowerCase(AoStr *buf);
 void aoStrToUpperCase(AoStr *buf);
