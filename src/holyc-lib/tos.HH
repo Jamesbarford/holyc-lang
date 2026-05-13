@@ -180,7 +180,7 @@ public U0 *PtrVecGet(PtrVec *vec, I64 idx);
 public I64 PtrVecClear(PtrVec *vec);
 public I64 PtrVecRelease(PtrVec *vec, U0 (*_free_value)(U0 *_val) = NULL);
 public U0 PtrVecSort(PtrVec *vec,
-                     I64 (*_compare_fn)(U0 *_arg1, U0 *_arg2))
+                     I64 (*_compare_fn)(U0 *_arg1, U0 *_arg2));
 
 public class IntMapNode
 {
@@ -859,7 +859,7 @@ public extern "c" I32 rmdir(U8 *dirname);
 #define RM_FORCE    0x4  /* Force removal, ignore nonexistent files and arguments */
 
 public I32 RmDir(U8 *path, Bool flags=0);
-public I32 Rm(U8 *path, Bool flags=0)
+public I32 Rm(U8 *path, Bool flags=0);
 public Bool MkDir(U8 *path, I32 mode=MKDIR_DEFAULT, Bool recurse=FALSE);
 
 #define FZF_CASE_SMART   0

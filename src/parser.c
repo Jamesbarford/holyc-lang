@@ -1689,7 +1689,7 @@ Ast *parseFunctionOrDef(Cctrl *cc, AstType *rettype, char *fname, int len, int i
     Lexeme *tok = cctrlTokenGet(cc);
     if (tokenPunctIs(tok, '{')) {
         return parseFunctionDef(cc,rettype,fname,len,params,has_var_args,is_inline);
-    } else {
+    } else if (tokenPunctIs(tok, ';')) {
         if (rettype->kind == AST_TYPE_AUTO) {
             cctrlRaiseException(cc,"auto cannot be used with a function prototype %.*s() at this time",
                     len,fname);
@@ -1699,6 +1699,22 @@ Ast *parseFunctionOrDef(Cctrl *cc, AstType *rettype, char *fname, int len, int i
         fn->kind = AST_FUN_PROTO;
         mapAdd(cc->global_env,fn->fname->data,fn);
         return fn;
+    } else {
+        /* Neither `{ ... }` (definition) nor `;` (prototype). Almost
+         * always a missing brace - call it out specifically so the
+         * user doesn't get a downstream "TK_KEYWORD X can only prefix
+         * a class" from the rest of the function body being parsed as
+         * top-level declarations. */
+        if (!tok) {
+            cctrlRaiseException(cc,
+                "Expected `{` to open the body of `%.*s()` or `;` for a "
+                "prototype, got end of input",
+                len, fname);
+        }
+        cctrlRaiseException(cc,
+            "Expected `{` to open the body of `%.*s()` or `;` for a "
+            "prototype, got `%.*s`",
+            len, fname, tok->len, tok->start);
     }
 }
 
