@@ -657,13 +657,17 @@ void cctrlCreateColoredLine(Cctrl *cc,
 }
 
 AoStr *cctrlCreateErrorLine(Cctrl *cc,
-                            s64 lineno, 
+                            s64 lineno,
                             char *msg,
                             int severity,
                             char *suggestion)
 {
     char *color = severity == CCTRL_ERROR || CCTRL_ICE ? ESC_BOLD_RED : CCTRL_WARN ? ESC_BOLD_YELLOW : ESC_CYAN;
-    if (!cc->lexer_) {
+    Lexeme *eof_peek = cctrlTokenPeek(cc);
+    if (!cc->lexer_ || !eof_peek) {
+        /* No current token (EOF) or no lexer state: fall back to the
+         * simple message format - the column-pointer rendering below
+         * assumes a live token. */
         AoStr *buf = aoStrNew();
         cctrlFileAndLine(cc,buf,lineno,-1,msg,severity);
         if (is_terminal) {
@@ -675,7 +679,7 @@ AoStr *cctrlCreateErrorLine(Cctrl *cc,
     }
 
     const char *line_buffer = lexerReportLine(cc->lexer_,lineno);
-    Lexeme *cur_tok = cctrlTokenPeek(cc);
+    Lexeme *cur_tok = eof_peek;
     AoStr *buf = aoStrNew();
     s64 char_pos = cctrlGetCharErrorIdx(cc,cur_tok, line_buffer);
 
@@ -733,7 +737,11 @@ AoStr *cctrlMessagVnsPrintF(Cctrl *cc, char *fmt, va_list ap, int severity) {
         aoStrCatFmt(bold_msg, "%s", msg);
     }
     Lexeme *cur_tok = cctrlTokenPeek(cc);
-    AoStr *buf = cctrlCreateErrorLine(cc,cur_tok->line,bold_msg->data,severity,NULL);
+    /* At EOF the peek returns NULL; use the last known line so the
+     * error message still has useful location info instead of
+     * crashing on the field-dereference below. */
+    s64 line = cur_tok ? cur_tok->line : cc->lineno;
+    AoStr *buf = cctrlCreateErrorLine(cc,line,bold_msg->data,severity,NULL);
     aoStrRelease(bold_msg);
     return buf;
 }
@@ -749,7 +757,8 @@ AoStr *cctrlMessagVnsPrintFWithSuggestion(Cctrl *cc, char *fmt, va_list ap,
         aoStrCatFmt(bold_msg, "%s", msg);
     }
     Lexeme *cur_tok = cctrlTokenPeek(cc);
-    AoStr *buf = cctrlCreateErrorLine(cc,cur_tok->line,bold_msg->data,severity,suggestion);
+    s64 line = cur_tok ? cur_tok->line : cc->lineno;
+    AoStr *buf = cctrlCreateErrorLine(cc,line,bold_msg->data,severity,suggestion);
     aoStrRelease(bold_msg);
     return buf;
 }
@@ -842,7 +851,22 @@ void cctrlTokenExpect(Cctrl *cc, s64 expected) {
     Lexeme *tok = cctrlTokenGet(cc);
     if (!tokenPunctIs(tok, expected)) {
         if (!tok) {
-            loggerPanic("line %ld: Ran out of tokens\n",cc->lineno);
+            /* End of input while we still wanted `expected`. This is
+             * almost always an unbalanced bracket / missing terminator
+             * - point at the line we were last consuming so the user
+             * sees the actual region the parse fell off at. */
+            const char *hint = (expected == '}')
+                ? " (unterminated `{ ... }` block?)"
+              : (expected == ')')
+                ? " (unterminated `( ... )`?)"
+              : (expected == ']')
+                ? " (unterminated `[ ... ]`?)"
+              : (expected == ';')
+                ? " (missing terminator?)"
+              : "";
+            cctrlRaiseException(cc,
+                "Unexpected end of input, expected `%c`%s",
+                (char)expected, hint);
         } else {
             cctrlRewindUntilStrMatch(cc,tok->start,tok->len,NULL);
             cctrlTokenRewind(cc);
