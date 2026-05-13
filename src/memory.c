@@ -40,6 +40,9 @@ void *globalArenaAllocate(u32 size) {
 
 void globalArenaRelease(void) {
     if (global_memory_arena_init) {
+        /* Pool entries point into arena blocksm clear the pool first so we
+         * don't leave dangling next pointers behind. */
+        aoStrPoolReset();
         arenaClear(&global_memory_arena);
         global_memory_arena_init = 0;
     }

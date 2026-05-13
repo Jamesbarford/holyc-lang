@@ -12,20 +12,128 @@
 #include "lexer.h"
 #include "memory.h"
 
+/* Power-of-2 size-class freelist sitting in front of the global arena for
+ * AoStr character buffers. Buckets recycle buffers freed via aoStrRelease and
+ * buffers abandoned by aoStrExtendBuffer when a string outgrows itself. */
+#define AOSTR_POOL_MIN_LOG2 5  /* 32 bytes minimum bucket */
+#define AOSTR_POOL_MAX_LOG2 16 /* 64KB maximum bucket; anything larger bypasses */
+#define AOSTR_POOL_BUCKETS  (AOSTR_POOL_MAX_LOG2 - AOSTR_POOL_MIN_LOG2 + 1)
+#define AOSTR_POOL_MIN_SIZE (1u << AOSTR_POOL_MIN_LOG2)
+#define AOSTR_POOL_MAX_SIZE (1u << AOSTR_POOL_MAX_LOG2)
+
+typedef struct AoStrPoolNode {
+    struct AoStrPoolNode *next;
+} AoStrPoolNode;
+
+static AoStrPoolNode *aostr_pool_buckets[AOSTR_POOL_BUCKETS];
+static u64 aostr_pool_hits[AOSTR_POOL_BUCKETS];
+static u64 aostr_pool_misses[AOSTR_POOL_BUCKETS];
+static u64 aostr_pool_releases[AOSTR_POOL_BUCKETS];
+static u64 aostr_pool_bypass_allocs;
+
+/* Round up to the next power-of-2 bucket size (>= AOSTR_POOL_MIN_SIZE). */
+static u32 aoStrPoolBucketSize(u32 size) {
+    if (size <= AOSTR_POOL_MIN_SIZE) return AOSTR_POOL_MIN_SIZE;
+    u32 v = size - 1;
+    v |= v >> 1;
+    v |= v >> 2;
+    v |= v >> 4;
+    v |= v >> 8;
+    v |= v >> 16;
+    return v + 1;
+}
+
+/* Bucket index for an exact power of 2 size. */
+static int aoStrPoolBucketIdx(u32 bucket_size) {
+    return __builtin_ctz(bucket_size) - AOSTR_POOL_MIN_LOG2;
+}
+
+/* Allocate a buffer of at least `requested` bytes. The actual allocated
+ * size (always a bucket size when <= AOSTR_POOL_MAX_SIZE) is written to
+ * `_actual` so the caller can record it on `AoStr`. */
+static char *aoStrPoolAlloc(u32 requested, u32 *_actual) {
+    if (requested > AOSTR_POOL_MAX_SIZE) {
+        aostr_pool_bypass_allocs++;
+        *_actual = requested;
+        return (char *)globalArenaAllocate(requested);
+    }
+    u32 bucket = aoStrPoolBucketSize(requested);
+    int idx = aoStrPoolBucketIdx(bucket);
+    AoStrPoolNode *node = aostr_pool_buckets[idx];
+    if (node) {
+        aostr_pool_buckets[idx] = node->next;
+        aostr_pool_hits[idx]++;
+        *_actual = bucket;
+        return (char *)node;
+    }
+    aostr_pool_misses[idx]++;
+    *_actual = bucket;
+    return (char *)globalArenaAllocate(bucket);
+}
+
+/* Push a buffer back onto its size-class bucket. Do nothing for `NULL`, for
+ * buffers larger than `AOSTR_POOL_MAX_SIZE`, and for any capacity that
+ * doesn't match a bucket size exactly (defensive guard). */
+static void aoStrPoolFree(char *buf, u32 capacity) {
+    if (buf == NULL)
+        return;
+    if (capacity < AOSTR_POOL_MIN_SIZE || capacity > AOSTR_POOL_MAX_SIZE)
+        return;
+    if (capacity != aoStrPoolBucketSize(capacity))
+        return;
+    int idx = aoStrPoolBucketIdx(capacity);
+    AoStrPoolNode *node = (AoStrPoolNode *)buf;
+    node->next = aostr_pool_buckets[idx];
+    aostr_pool_buckets[idx] = node;
+    aostr_pool_releases[idx]++;
+}
+
+void aoStrPoolReset(void) {
+    for (int i = 0; i < AOSTR_POOL_BUCKETS; i++) {
+        aostr_pool_buckets[i] = NULL;
+        aostr_pool_hits[i] = 0;
+        aostr_pool_misses[i] = 0;
+        aostr_pool_releases[i] = 0;
+    }
+    aostr_pool_bypass_allocs = 0;
+}
+
+void aoStrPoolPrintStats(void) {
+    u64 total_hits = 0, total_misses = 0, total_releases = 0;
+    printf("String Pool Stats\n");
+    for (int i = 0; i < AOSTR_POOL_BUCKETS; i++) {
+        u32 bucket = 1u << (i + AOSTR_POOL_MIN_LOG2);
+        AoStr *bucket_str = aoStrIntToHumanReadableBytes((s64)bucket);
+        printf("  %-6s  hits=%-6llu  misses=%-6llu  releases=%-6llu\n",
+               bucket_str->data,
+               (unsigned long long)aostr_pool_hits[i],
+               (unsigned long long)aostr_pool_misses[i],
+               (unsigned long long)aostr_pool_releases[i]);
+        total_hits += aostr_pool_hits[i];
+        total_misses += aostr_pool_misses[i];
+        total_releases += aostr_pool_releases[i];
+    }
+    printf("  totals: hits=%llu misses=%llu releases=%llu bypass=%llu\n",
+           (unsigned long long)total_hits,
+           (unsigned long long)total_misses,
+           (unsigned long long)total_releases,
+           (unsigned long long)aostr_pool_bypass_allocs);
+}
+
 static AoStr *_aoStrAlloc(void) {
     return (AoStr *)globalArenaAllocate(sizeof(AoStr));
 }
 
-static char *aoStrBufferAlloc(u64 capacity) {
-    return (char *)globalArenaAllocate((unsigned int)capacity);
+static char *aoStrBufferAlloc(u64 requested, u32 *_actual) {
+    return aoStrPoolAlloc((u32)requested, _actual);
 }
 
 AoStr *aoStrAlloc(u64 capacity) {
     AoStr *buf = _aoStrAlloc();
-    capacity += 10;
-    buf->capacity = capacity;
+    u32 actual = 0;
+    buf->data = aoStrBufferAlloc(capacity, &actual);
+    buf->capacity = actual;
     buf->len = 0;
-    buf->data = aoStrBufferAlloc(sizeof(char) * capacity);
     return buf;
 }
 
@@ -34,33 +142,43 @@ AoStr *aoStrNew(void) {
 }
 
 void aoStrRelease(AoStr *buf) {
-    (void)buf;
-    return;
+    if (buf == NULL) return;
+    aoStrPoolFree(buf->data, (u32)buf->capacity);
+    buf->data = NULL;
+    buf->capacity = 0;
+    buf->len = 0;
 }
 
-/* Get the underlying string, we do not free the `aoStr`... it will get 
- * collected later. This means we don't need to manually keep track of this 
+/* Get the underlying string, we do not free the `aoStr`... it will get
+ * collected later. This means we don't need to manually keep track of this
  * buffer */
 char *aoStrMove(AoStr *buf) {
     char *buffer = buf->data;
     return buffer;
 }
 
-/* Grow the capacity of the string buffer by `additional` space */
+/* Grow the capacity of the string buffer by `additional` space. The old
+ * buffer is pushed back onto the pool so a later allocation can reuse it. */
 int aoStrExtendBuffer(AoStr *buf, u64 additional) {
-    u64 new_capacity = (buf->capacity*2) + additional;
-    assert(new_capacity > buf->capacity);
-    if (new_capacity <= buf->capacity) {
+    u64 desired = (buf->capacity * 2) + additional;
+    assert(desired > buf->capacity);
+    if (desired <= buf->capacity) {
         return -1;
     }
 
-    char *tmp = aoStrBufferAlloc(new_capacity);
+    u32 actual = 0;
+    char *tmp = aoStrBufferAlloc(desired, &actual);
     if (tmp == NULL) {
         return 0;
     }
-    memcpy(tmp,buf->data,buf->capacity);
+    /* Copy only the live bytes; the tail past `len` is unused. */
+    memcpy(tmp, buf->data, buf->len);
+
+    char *old = buf->data;
+    u32 old_capacity = (u32)buf->capacity;
     buf->data = tmp;
-    buf->capacity = new_capacity;
+    buf->capacity = actual;
+    aoStrPoolFree(old, old_capacity);
     return 1;
 }
 
@@ -104,21 +222,19 @@ int aoStrCmp(AoStr *b1, AoStr *b2) {
 }
 
 AoStr *aoStrDupRaw(char *s, u64 len) {
-    u64 capacity = len+10;
-    AoStr *dupe = aoStrAlloc(capacity);
+    /* aoStrAlloc rounds to a bucket; don't clobber the resulting capacity */
+    AoStr *dupe = aoStrAlloc(len + 1);
     memcpy(dupe->data, s, len);
     dupe->len = len;
     dupe->data[len] = '\0';
-    dupe->capacity = capacity;
     return dupe;
 }
 
 AoStr *aoStrDup(AoStr *buf) {
-    AoStr *dupe = aoStrAlloc(buf->len);
+    AoStr *dupe = aoStrAlloc(buf->len + 1);
     memcpy(dupe->data, buf->data, buf->len);
     dupe->len = buf->len;
     dupe->data[dupe->len] = '\0';
-    dupe->capacity = buf->len;
     return dupe;
 }
 
@@ -356,7 +472,9 @@ static char *mprintVaImpl(const char *fmt, va_list ap, u64 *_len, u64 *_allocate
         bufferlen = fmt_len;
     }
     int len = 0;
-    char *buf = aoStrBufferAlloc(sizeof(char) * bufferlen+1);
+    u32 actual = 0;
+    char *buf = aoStrBufferAlloc(bufferlen + 1, &actual);
+    bufferlen = actual;
 
     while (1) {
         va_copy(copy, ap);
@@ -368,8 +486,11 @@ static char *mprintVaImpl(const char *fmt, va_list ap, u64 *_len, u64 *_allocate
         }
 
         if (((size_t)len) >= bufferlen) {
-            bufferlen = ((size_t)len) + 2;
-            buf = aoStrBufferAlloc(bufferlen);
+            /* The current buffer is too small. Recycle it back to the pool
+             * before allocating a larger one. */
+            aoStrPoolFree(buf, (u32)bufferlen);
+            buf = aoStrBufferAlloc(((u64)len) + 2, &actual);
+            bufferlen = actual;
             if (buf == NULL) {
                 return NULL;
             }
@@ -421,7 +542,9 @@ void aoStrCatPrintf(AoStr *b, const char *fmt, ...) {
 }
 
 char *mprintFmtVa(const char *fmt, va_list ap, u64 *_len, u64 *_allocated) {
-    AoStr _buf = { .data = aoStrBufferAlloc(256), .len = 0, .capacity = 256 };
+    u32 actual = 0;
+    char *initial = aoStrBufferAlloc(256, &actual);
+    AoStr _buf = { .data = initial, .len = 0, .capacity = actual };
     AoStr *buf = &_buf;
     const char *ptr = fmt;
 

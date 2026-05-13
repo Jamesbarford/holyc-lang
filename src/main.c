@@ -290,6 +290,8 @@ void memoryPrintStats(void) {
     irMemoryStats();
     printf("\n\n");
     globalArenaPrintStats();
+    printf("\n\n");
+    aoStrPoolPrintStats();
     printf("=========== Arena Stats End ==========\n");
 }
 
