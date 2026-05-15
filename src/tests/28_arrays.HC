@@ -9,6 +9,12 @@ Bool StringArray()
   return correct == tests;
 }
 
+Bool StringArray2()
+{ /* https://github.com/Jamesbarford/holyc-lang/issues/158 */
+  U8 s[][8] = {"hello", "world"};
+  return !StrNCmp(s[0],"hello",5) && !StrNCmp(s[1],"world",5);
+}
+
 Bool Vector3D()
 {
   I32 v3d[4][4][3] = {
@@ -100,12 +106,13 @@ Bool SingleDimensionArray()
 I32 Main()
 {
   "Test - Arrays & multi dimensional: ";
-  I32 correct = 0, tests = 4;
+  I32 correct = 0, tests = 5;
 
   if (SingleDimensionArray) correct++;
   if (Matrix) correct++;
   if (Vector3D) correct++;
   if (StringArray) correct++;
+  if (StringArray2) correct++;
 
   PrintResult(correct,tests);
   "====\n";
