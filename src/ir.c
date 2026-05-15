@@ -217,7 +217,8 @@ static void irEmitMemcpy(IrCtx *ctx,
                          int n_bytes)
 {
     IrValue *args_wrap = irValueNew(IR_TYPE_ARRAY, IR_VAL_UNRESOLVED);
-    args_wrap->as.array.label = aoStrPrintf("MemCpy");
+    /* This MEMCPY refers to the Assembly name for the function */
+    args_wrap->as.array.label = aoStrPrintf("MEMCPY");
     Vec *args = irValueVecNew();
     args_wrap->as.array.values = args;
     vecPush(args, dst);
@@ -924,8 +925,8 @@ static int irLowerArrayInitWalk(IrCtx *ctx,
     if (!init || init->kind != AST_ARRAY_INIT) return offset_bytes;
     if (!init->arrayinit) return offset_bytes;
     AstType *elem_ty = target_ty ? target_ty->ptr : NULL;
-    int parent_is_array = target_ty &&
-                          target_ty->kind == AST_TYPE_ARRAY;
+    int parent_is_array = astTypeIsArray(target_ty);
+
     listForEach(init->arrayinit) {
         Ast *item = (Ast *)it->value;
         if (item->kind == AST_ARRAY_INIT) {
@@ -934,6 +935,50 @@ static int irLowerArrayInitWalk(IrCtx *ctx,
             if (parent_is_array && elem_ty) {
                 offset_bytes += elem_ty->size;
             }
+            continue;
+        }
+
+        /* String literal targeting an inline array slot; for example
+         * `U8 s[][N] = {"hello", ...}`: copy the bytes into the
+         * slot rather than the literal's address. Slots typed as
+         * `U8*` still take the pointer via the regular path.
+         *
+         * Pack the string bytes (zero-padded past the null
+         * terminator) into the widest power-of-two immediates that
+         * fit and emit them as inline GEP+STOREs. Clang produces
+         * the same shape via a `__const` blob; for small fixed
+         * slots, materialising the bytes as movabsq immediates is
+         * just as compact and avoids a runtime memcpy. */
+        if (item->kind == AST_STRING &&
+            parent_is_array &&
+            astTypeIsArray(elem_ty))
+        {
+            int slot_size = elem_ty->size;
+            int str_len = item->sval ? (int)item->sval->len : 0;
+            const char *str_data = item->sval ? item->sval->data : NULL;
+            int pos = 0;
+            while (pos < slot_size) {
+                int remaining = slot_size - pos;
+                int chunk;
+                IrValueType chunk_ty;
+                if      (remaining >= 8) { chunk = 8; chunk_ty = IR_TYPE_I64; }
+                else if (remaining >= 4) { chunk = 4; chunk_ty = IR_TYPE_I32; }
+                else if (remaining >= 2) { chunk = 2; chunk_ty = IR_TYPE_I16; }
+                else                     { chunk = 1; chunk_ty = IR_TYPE_I8;  }
+                u64 packed = 0;
+                for (int i = 0; i < chunk; i++) {
+                    int idx = pos + i;
+                    u8 b = (idx < str_len) ? (u8)str_data[idx] : 0;
+                    packed |= (u64)b << (i * 8);
+                }
+                IrValue *field = irTmp(IR_TYPE_PTR, 8);
+                IrValue *off = irConstInt(IR_TYPE_I64, offset_bytes + pos);
+                irBlockAddInstr(ctx, irInstrNew(IR_GEP, field, base, off));
+                IrValue *val = irConstInt(chunk_ty, (s64)packed);
+                irBlockAddInstr(ctx, irInstrNew(IR_STORE, field, val, NULL));
+                pos += chunk;
+            }
+            offset_bytes += slot_size;
             continue;
         }
         IrValue *val = irExpr(ctx, item);
