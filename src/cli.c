@@ -73,7 +73,6 @@ int cliParseBoolean(CliValue *value, char *rawarg) {
 }
 
 static char *target_map[] = {
-    [TARGET_DEFAULT] = "default",
     [TARGET_AARCH64_APPLE_DARWIN] = "aarch64-apple-darwin",
     [TARGET_AARCH64_UNKNOWN_LINUX_GNU] = "aarch64-unknown-linux-gnu",
     [TARGET_X86_64_APPLE_DARWIN] = "x86_64-apple-darwin" ,
@@ -82,8 +81,6 @@ static char *target_map[] = {
 
 const char *cliTargetToString(enum CliTarget target) {
     switch (target) {
-        case TARGET_DEFAULT:
-            return target_map[TARGET_DEFAULT];
         case TARGET_AARCH64_APPLE_DARWIN: 
             return target_map[TARGET_AARCH64_APPLE_DARWIN];
         case TARGET_AARCH64_UNKNOWN_LINUX_GNU:
@@ -112,12 +109,14 @@ static CliParser parsers[] = {
     {str_lit("-o-"),        0, CLI_TO_STDOUT, "-o-", "Output assembly to stdout, only for use with -S", &cliParseNop},
     {str_lit("-transpile"), 0, CLI_TRANSPILE, "-transpile", "Transpile the code to C, this is best effort", &cliParseNop},
     {str_lit("--target"),   0, CLI_TARGET, "--target", "Select the target, `x86_64-apple-darwin`, `aarch64-apple-darwin`, `x86_64-unknown-linux-gnu` this follows llvm style target triples", &cliParseString},
+    {str_lit("--install-dir"), 0, CLI_INSTALL_DIR, "--install-dir <path>", "Override the install prefix (header dir = <path>/include, lib dir = <path>/lib). Defaults to /usr/local.", &cliParseString},
     {str_lit("-D"),         0, CLI_DEFINES_LIST, "-D<VAR>", "Set a compiler #define (does not accept a value)", &cliParseDefine},
     {str_lit("--dump-ir"),  0, CLI_DUMP_IR, "--dump-ir", "Dump ir to stdout" , &cliParseNop},
     {str_lit("--mem-stats"),  0, CLI_MEM_STATS, "--mem-stats", "Stats about memory usage when compiling" , &cliParseNop},
     {str_lit("--version"),  0, CLI_VERSION, "--version", "Print the version of the compiler", &cliParseNop},
     {str_lit("--help"),     0, CLI_HELP, "--help", "Print this message", &cliParseNop},
     {str_lit("--terry"),    0, CLI_TERRY, "--terry", "Information about Terry A. Davis", &cliParseNop},
+    {str_lit("--use-legacy-x86"), 0, CLI_USE_LEGACY_X86, "--use-legacy-x86", "Fall back to the legacy AST-based x86_64 codegen (src/x86.c) instead of the default IR-based src/x86_64.c. Kept as a debugging escape hatch while the IR backend matures.", &cliParseNop},
 };
 
 static u64 longestCommand(void) {
@@ -183,12 +182,11 @@ __noreturn void cliVersionPrint(CliArgs *args) {
     aoStrCatFmt(buffer,
             "binary: %s/hcc\n"
             "commit-hash: %s\n"
-            "arch: %s %s\n"
+            "arch: %s\n"
             "build: %s\n",
             args->install_dir,
             git_hash->data,
-            OS_STR,
-            ARCH_STR,
+            cliTargetToString(args->target),
             getBuildModeStr());
 
     printf("%s",buffer->data);
@@ -454,11 +452,13 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
                 }
                 break;
             }
+            case CLI_INSTALL_DIR: args->install_dir = value.str; break;
             case CLI_DUMP_IR:   args->dump_ir = 1; break;
             case CLI_MEM_STATS: args->print_mem_stats = 1; break;
             case CLI_HELP:    cliPrintUsage(); break;
             case CLI_VERSION: cliVersionPrint(args); break;
             case CLI_TERRY:   cliTerryInfo(); break;
+            case CLI_USE_LEGACY_X86: args->use_legacy_x86 = 1; break;
         }
     }
 
@@ -477,5 +477,19 @@ void cliArgsInit(CliArgs *args) {
     memset(args,0,sizeof(CliArgs));
     args->clibs = "";
     args->defines_list = NULL;
-    args->target = TARGET_DEFAULT;
+
+    /* We make a stab at trying to guess the target from what we have
+     * discovered in the config file */
+#if IS_ARM_64 && IS_LINUX
+    args->target = TARGET_AARCH64_UNKNOWN_LINUX_GNU;
+#elif IS_ARM_64 && IS_BSD
+    /* Let rosetta work its magic */
+    args->target = TARGET_X86_64_APPLE_DARWIN;
+#elif IS_X86_64 && IS_LINUX
+    args->target = TARGET_X86_64_UNKNOWN_LINUX_GNU;
+#elif IS_X86_64 && IS_BSD
+    args->target = TARGET_X86_64_APPLE_DARWIN;
+#else
+#error "Could not determine system architecture"
+#endif
 }

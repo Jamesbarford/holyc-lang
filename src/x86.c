@@ -7,6 +7,8 @@
 
 #include "aostr.h"
 #include "ast.h"
+#include "asm.h"
+#include "cli.h"
 #include "cctrl.h"
 #include "config.h"
 #include "containers.h"
@@ -37,7 +39,6 @@ static char *FLOAT_REGISTERS[] = {"xmm0", "xmm1", "xmm2", "xmm3",
     "xmm12", "xmm13", "xmm14", "xmm15"};
 
 static int stack_pointer = 0;
-static int has_initialisers = 0;
 
 #define REG_RAX "rax"
 #define REG_RDX "rdx"
@@ -51,50 +52,6 @@ void asmExpression(Cctrl *cc, AoStr *buf, Ast *ast);
 
 #define asmGetGlabel(gvar) \
     gvar->is_static ? gvar->glabel : gvar->gname
-
-uint64_t ieee754(double _f64) {
-    if (_f64 == 0.0) return 0;  // Handle zero value explicitly
-
-    // Calculate exponent and adjust fraction
-    double base2_exp = floorl(log2l(fabs(_f64)));
-    double exponet2_removed = ldexpl(_f64, -base2_exp - 1);
-
-    // Initialize fraction and calculate it bit by bit
-    uint64_t fraction = 0;
-    double digit = 0.5;  // Start with 1/2
-    for (s64 i = 0; i != 53; i++) {
-        if (exponet2_removed >= digit) {
-            exponet2_removed -= digit;
-            fraction |= 1ULL << (52 - i);
-        }
-        digit *= 0.5;  // Move to the next digit (1/4, 1/8, ...)
-    }
-
-    // Calculate exponent representation
-    uint64_t exponent = ((1 << 10) - 1) + base2_exp;
-
-    // Handle sign bit
-    uint64_t sign = (_f64 < 0.0) ? 1 : 0;
-
-    // Assemble the IEEE 754 representation
-    return (sign << 63) |
-           ((exponent & 0x7FF) << 52) |
-           (fraction & ~(1ULL << 52));
-}
-
-/* This is a hacky, but seemingly functional way of me being able
- * to run this on Macos and Linux */
-char *asmNormaliseFunctionName(char *fname) {
-    AoStr *newfn = astNormaliseFunctionName(fname);
-    if (!strncasecmp(fname, "Main", 4)) {
-        if (has_initialisers) {
-            aoStrCatPrintf(newfn,"Fn");
-        } else {
-            aoStrToLowerCase(newfn);
-        }
-    }
-    return aoStrMove(newfn);
-}
 
 void asmRemovePreviousTab(AoStr *buf) {
     if (buf->data[buf->len-1] == '\t') {
@@ -246,8 +203,8 @@ void asmPop(AoStr *buf, char *reg) {
     }
 }
 
-void asmCall(AoStr *buf, char *fname) {
-    char *_fname = asmNormaliseFunctionName(fname);
+void asmCall(Cctrl *cc, AoStr *buf, AoStr *fname) {
+    char *_fname = asmNormaliseFunctionName(cc, fname);
     aoStrCatPrintf(buf,"call   %s\n\t", _fname);
 }
 
@@ -842,7 +799,7 @@ void asmAddr(Cctrl *cc, AoStr *buf, Ast *ast) {
         }
 
         case AST_FUNC: {
-            char *normalised = asmNormaliseFunctionName(ast->operand->fname->data);
+            char *normalised = asmNormaliseFunctionName(cc, ast->operand->fname);
             aoStrCatPrintf(buf, "leaq   %s(%%rip), %%rax\n\t", normalised);
             break;
         }
@@ -1134,7 +1091,7 @@ void asmBinOpFunctionAssign(Cctrl *cc, AoStr *buf, Ast *fnptr, Ast *fn) {
     (void)cc;
     switch (fn->kind) {
         case AST_FUNC: {
-            char *normalised = asmNormaliseFunctionName(fn->fname->data);
+            char *normalised = asmNormaliseFunctionName(cc, fn->fname);
             aoStrCatPrintf(buf,
                     "leaq   %s(%%rip), %%rax\n\t"
                     "movq    %%rax, %d(%%rbp)\n\t",
@@ -1758,7 +1715,7 @@ void asmPrepFuncCallArgs(Cctrl *cc, AoStr *buf, Ast *funcall) {
     if (funcall->kind == AST_FUNPTR_CALL) {
         aoStrCatPrintf(buf, "call    *%%r11\n\t");
     } else {
-        asmCall(buf, funcall->fname->data);
+        asmCall(cc, buf, funcall->fname);
     }
 
     if (float_cnt) {
@@ -2249,6 +2206,11 @@ void asmGlobalVar(Set *seen_globals, AoStr *buf, Ast* ast) {
     AoStr *varname = declvar->gname;
     AoStr *label = asmGetGlabel(declvar);
 
+    /* `extern Type name;` is a forward declaration; the storage lives
+     * in another TU. Register-only - no emission. */
+    if (ast->flags & AST_FLAG_EXTERN) return;
+    if (declvar->flags & AST_FLAG_EXTERN) return;
+
     if (setHasLen(seen_globals,varname->data,varname->len)) {
         return;
     }
@@ -2371,7 +2333,7 @@ int asmFunctionInit(Cctrl *cc, AoStr *buf, Ast *func) {
     int ireg = 0, freg = 0, locals = 0, arg = 2;
     Ast *ast_tmp = NULL;
 
-    char *fname = asmNormaliseFunctionName(func->fname->data);
+    char *fname = asmNormaliseFunctionName(cc, func->fname);
 
     aoStrCatPrintf(buf, ".text"            "\n\t"
                         ".global %s\n"
@@ -2523,14 +2485,20 @@ void asmPasteAsmBlocks(AoStr *buf, Cctrl *cc) {
 
 void asmInitaliser(Cctrl *cc, AoStr *buf) {
     if (listEmpty(cc->initalisers)) return;
-    char *fname = NULL;
+    char *fname = "main";
+    switch (cc->target) {
+        case TARGET_AARCH64_APPLE_DARWIN:
+        case TARGET_X86_64_APPLE_DARWIN:
+            fname = "_main";
+            break;
+        case TARGET_AARCH64_UNKNOWN_LINUX_GNU:
+        case TARGET_X86_64_UNKNOWN_LINUX_GNU:
+            break;
+        default:
+            break;
+    }
     int locals = 0, stack_space;
 
-#if IS_BSD
-    fname = "_main";
-#else
-    fname = "main";
-#endif
     aoStrCatPrintf(buf, ".text"            "\n\t"
                         ".global %s\n"
                         "%s:\n\t"
@@ -2572,18 +2540,17 @@ void asmInitaliser(Cctrl *cc, AoStr *buf) {
 }
 
 /* Create assembly */
-AoStr *asmGenerate(Cctrl *cc) {
+AoStr *x86AsmGenerate(Cctrl *cc) {
     Ast *ast;
     Set *seen_globals = setNew(32, &set_cstring_type);
     AoStr *asmbuf = aoStrAlloc(1<<10);
  
     if (!listEmpty(cc->initalisers)) {
-        has_initialisers = 1;
+        cc->flags |= CCTRL_ASM_HAS_INITIALISERS;
     }
 
     asmPasteAsmBlocks(asmbuf,cc);
     asmDataSection(cc,asmbuf);
-
 
     listForEach(cc->ast_list) {
         ast = (Ast *)it->value;
@@ -2613,6 +2580,6 @@ AoStr *asmGenerate(Cctrl *cc) {
     aoStrCatFmt(asmbuf, ".section    .note.GNU-stack,\"\",@progbits\n\t");
 #endif
     aoStrCatFmt(asmbuf,".ident      \"hcc: %s %s %s\"\n",
-            OS_STR, ARCH_STR, cctrlGetVersion());
+                                     OS_STR, cliTargetToString(cc->target), cctrlGetVersion());
     return asmbuf;
 }

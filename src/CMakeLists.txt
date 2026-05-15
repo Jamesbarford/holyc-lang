@@ -27,7 +27,7 @@ if (HCC_LINK_SQLITE3)
 endif()
 
 execute_process(
-  COMMAND git rev-parse main
+  COMMAND git rev-parse HEAD
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   OUTPUT_VARIABLE HCC_GIT_HASH
   OUTPUT_STRIP_TRAILING_WHITESPACE
@@ -40,6 +40,7 @@ add_compile_definitions(HCC_GIT_HASH="${HCC_GIT_HASH}")
 set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O2")
 
 set(SOURCES
+    asm.c
     aostr.c
     arena.c
     ast.c
@@ -67,11 +68,13 @@ set(SOURCES
     prsutil.c
     transpiler.c
     x86.c
+    x86_64.c
 )
 
 set(HEADERS 
     aostr.h
     arena.h
+    asm.h
     ast.h
     cctrl.h
     cfg-print.h
@@ -99,6 +102,7 @@ set(HEADERS
     transpiler.h
     version.h
     x86.h
+    x86_64.h
 )
 
 add_executable(hcc ${SOURCES} ${HEADERS})

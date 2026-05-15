@@ -35,6 +35,19 @@ void irCgAllocTmp(IrRaCtx *ra, IrValue *val, int starting_offset) {
     irCgSetLoff(ra, val->as.var.id, -(starting_offset + ra->extra_stack));
 }
 
+/* Reserve a fresh stack slot of a specific size (rounded up to 8-byte
+ * alignment). Used by IR_ALLOCA so that a 256-byte alloca actually
+ * gets 256 bytes of stack, not a default 8. */
+static void irCgAllocTmpSized(IrRaCtx *ra, IrValue *val,
+                               int starting_offset, int size_bytes) {
+    if (!val || val->kind != IR_VAL_TMP) return;
+    if (mapHasInt(ra->id_to_loff, val->as.var.id)) return;
+    int aligned = (size_bytes + 7) & ~7;
+    if (aligned < 8) aligned = 8;
+    ra->extra_stack += aligned;
+    irCgSetLoff(ra, val->as.var.id, -(starting_offset + ra->extra_stack));
+}
+
 void irCgAllocOperandsForInstr(IrRaCtx *ra, IrInstr *I, int start) {
     int spill_dst = !(I->flags & IRCG_FUSE_TO_NEXT);
     int load_r1 = !(I->flags & IRCG_R1_IN_REG);
@@ -44,9 +57,18 @@ void irCgAllocOperandsForInstr(IrRaCtx *ra, IrInstr *I, int start) {
     case IR_JMP:
         return;
 
-    case IR_ALLOCA:
-        irCgAllocTmp(ra, I->dst, start);
+    case IR_ALLOCA: {
+        /* The alloca's r1 operand carries the byte size as a constant.
+         * Honour it so multi-byte allocations (struct buffers,
+         * CatchFrame storage, etc.) get the right amount of stack
+         * rather than a default 8 bytes. */
+        int alloca_bytes = 8;
+        if (I->r1 && I->r1->kind == IR_VAL_CONST_INT) {
+            alloca_bytes = (int)I->r1->as._i64;
+        }
+        irCgAllocTmpSized(ra, I->dst, start, alloca_bytes);
         return;
+    }
 
     case IR_LOAD:
         if (spill_dst) irCgAllocTmp(ra, I->dst, start);
@@ -202,7 +224,9 @@ IrValue *irFirstFusableSource(IrInstr *I) {
 
 static void irBumpUseIfTmp(Map *uses, IrValue *v) {
     if (!v || v->kind != IR_VAL_TMP) return;
-    int n = (int)(u64)mapGetInt(uses, v->as.var.id) || 0;
+    int n = mapHasInt(uses, v->as.var.id)
+            ? (int)(u64)mapGetInt(uses, v->as.var.id)
+            : 0;
     mapAdd(uses, (void *)(u64)v->as.var.id, (void *)(u64)(n + 1));
 }
 
@@ -235,10 +259,106 @@ void irCgAnnotate(IrFunction *fn) {
         }
     }
 
+    /* Dead-code elimination: drop instructions whose dst tmp is
+     * never read AND which have no observable side effects. Iterate
+     * to a fixed point - dropping op A may make op B (which fed A)
+     * itself unused. Each iteration recomputes the use-count map.
+     *
+     * Safely droppable ops (pure value producers):
+     *   IR_LEA, IR_IADD, IR_ISUB, IR_IMUL,
+     *   IR_AND, IR_OR, IR_XOR,
+     *   IR_SHL, IR_SHR, IR_SAR,
+     *   IR_INEG, IR_NOT,
+     *   IR_ICMP, IR_FCMP,
+     *   IR_FADD, IR_FSUB, IR_FMUL, IR_FDIV, IR_FNEG,
+     *   IR_TRUNC, IR_ZEXT, IR_SEXT,
+     *   IR_FPTRUNC, IR_FPEXT, IR_FPTOSI, IR_FPTOUI,
+     *   IR_SITOFP, IR_UITOFP,
+     *   IR_PTRTOINT, IR_INTTOPTR, IR_BITCAST
+     *
+     * Kept (side-effecting / control flow / storage):
+     *   IR_STORE, IR_STORE_DEREF, IR_CALL, IR_BR/JMP/RET/SWITCH/LOOP,
+     *   IR_PHI, IR_ALLOCA, IR_LOAD, IR_LOAD_DEREF (may fault),
+     *   IR_IDIV/IR_UDIV/IR_IREM/IR_UREM (may divide by zero),
+     *   IR_ASM, IR_VA_* */
+    int changed = 1;
+    while (changed) {
+        changed = 0;
+        listForEach(fn->blocks) {
+            IrBlock *bb = (IrBlock *)it->value;
+            listForEach(bb->instructions) {
+                IrInstr *I = (IrInstr *)it->value;
+                int safe;
+                switch (I->op) {
+                case IR_LEA:
+                case IR_IADD: case IR_ISUB: case IR_IMUL:
+                case IR_AND:  case IR_OR:   case IR_XOR:
+                case IR_SHL:  case IR_SHR:  case IR_SAR:
+                case IR_INEG: case IR_NOT:
+                case IR_ICMP: case IR_FCMP:
+                case IR_FADD: case IR_FSUB: case IR_FMUL:
+                case IR_FDIV: case IR_FNEG:
+                case IR_TRUNC: case IR_ZEXT: case IR_SEXT:
+                case IR_FPTRUNC: case IR_FPEXT:
+                case IR_FPTOSI: case IR_FPTOUI:
+                case IR_SITOFP: case IR_UITOFP:
+                case IR_PTRTOINT: case IR_INTTOPTR:
+                case IR_BITCAST:
+                    safe = 1; break;
+                default:
+                    safe = 0;
+                }
+                if (!safe) continue;
+                if (!I->dst || I->dst->kind != IR_VAL_TMP) continue;
+                int n = mapHasInt(uses, I->dst->as.var.id)
+                        ? (int)(intptr_t)mapGetInt(uses,
+                                                    I->dst->as.var.id)
+                        : 0;
+                if (n != 0) continue;
+                I->op = IR_NOP;
+                I->dst = NULL;
+                I->r1 = NULL;
+                I->r2 = NULL;
+                changed = 1;
+            }
+        }
+        if (!changed) break;
+        /* Re-tally uses for the next iteration. */
+        mapRelease(uses);
+        uses = mapNew(64, &map_uint_to_uint_type);
+        listForEach(fn->blocks) {
+            IrBlock *bb = (IrBlock *)it->value;
+            listForEach(bb->instructions) {
+                IrInstr *I = (IrInstr *)it->value;
+                if (I->op == IR_NOP) continue;
+                if (I->op == IR_CALL && I->r1 && I->r1->as.array.values) {
+                    Vec *args = I->r1->as.array.values;
+                    for (u64 i = 0; i < args->size; ++i) {
+                        irBumpUseIfTmp(uses, (IrValue *)args->entries[i]);
+                    }
+                } else {
+                    irBumpUseIfTmp(uses, I->r1);
+                }
+                irBumpUseIfTmp(uses, I->r2);
+                if (I->op == IR_BR || I->op == IR_RET ||
+                    I->op == IR_STORE_DEREF) {
+                    irBumpUseIfTmp(uses, I->dst);
+                }
+                if (I->op == IR_PHI && I->extra.phi_pairs) {
+                    for (u64 i = 0; i < I->extra.phi_pairs->size; ++i) {
+                        IrPair *p = vecGet(IrPair *,
+                                            I->extra.phi_pairs, i);
+                        irBumpUseIfTmp(uses, p->ir_value);
+                    }
+                }
+            }
+        }
+    }
+
     listForEach(fn->blocks) {
         IrBlock *bb = (IrBlock *)it->value;
         if (listEmpty(bb->instructions)) continue;
-        listForEach(bb->instructions) { 
+        listForEach(bb->instructions) {
             IrInstr *cur = (IrInstr *)it->value;
             if (cur->op == IR_NOP) continue;
             if (!irInstrDefsIntoReg(cur)) continue;
@@ -437,6 +557,28 @@ int irBlockHasPhi(IrBlock *bb) {
     return 0;
 }
 
+int irPhiPairValueLiveInResultReg(IrBlock *from, IrValue *v) {
+    if (!from || !v || v->kind != IR_VAL_TMP) return 0;
+    if (listEmpty(from->instructions)) return 0;
+    for (List *node = from->instructions->prev;
+         node != from->instructions;
+         node = node->prev) {
+        IrInstr *I = (IrInstr *)node->value;
+        if (I->op == IR_NOP)
+            continue;
+        if (I->op == IR_JMP ||
+            I->op == IR_BR ||
+            I->op == IR_RET)
+            continue;
+        if (!I->dst || I->dst->kind != IR_VAL_TMP)
+            return 0;
+        if (I->dst->as.var.id != v->as.var.id)
+            return 0;
+        return (I->flags & IRCG_FUSE_TO_NEXT) != 0;
+    }
+    return 0;
+}
+
 static IrInstr *irBlockTerminator(IrBlock *bb) {
     IrInstr *term = NULL;
     listForEach(bb->instructions) {
@@ -529,6 +671,8 @@ void irCgBindAstLoffs(IrRaCtx *ra, Ast *ast_func) {
             else if (p->kind == AST_FUNPTR)   param_id = p->fn_ptr_id;
             else                              param_id = p->lvar_id;
             IrValue *iv = irFnGetVar(ra->func, param_id);
+            /* Pinned param: no slot. */
+            if (iv && iv->pinned_reg) continue;
             if (iv) irCgSetLoff(ra, iv->as.var.id, p->loff);
         }
     }
@@ -540,6 +684,9 @@ void irCgBindAstLoffs(IrRaCtx *ra, Ast *ast_func) {
         else if (l->kind == AST_FUNPTR)   id = l->fn_ptr_id;
         else                              id = l->lvar_id;
         IrValue *iv = irFnGetVar(ra->func, id);
+        /* Register-pinned locals have no slot - the codegen reads /
+         * writes the named register directly. */
+        if (iv && iv->pinned_reg) continue;
         if (iv) irCgSetLoff(ra, iv->as.var.id, l->loff);
     }
 }
@@ -578,6 +725,9 @@ int irCgComputeAstLayout(Ast *ast_func, IrFunction *ir_func) {
                        !setHas(surviving, (void *)(u64)iv->as.var.id);
         if (promoted)
             continue;
+        /* Register-pinned local: no stack slot, no loff. */
+        if (iv && iv->pinned_reg)
+            continue;
         total += align(size, 8);
         new_offset -= size;
         l->loff = new_offset;
@@ -594,6 +744,10 @@ int irCgComputeAstLayout(Ast *ast_func, IrFunction *ir_func) {
     if (ast_func->params) {
         for (u64 i = 0; i < ast_func->params->size; ++i) {
             Ast *p = vecGet(Ast *, ast_func->params, i);
+            /* TempleOS-pinned param has no stack slot. */
+            if (p->kind == AST_LVAR &&
+                p->pinned_kind == LVAR_REG &&
+                p->pinned_reg) continue;
             int sz;
             if (p->kind == AST_FUNPTR) {
                 sz = 8;
@@ -625,6 +779,10 @@ int irCgComputeAstLayout(Ast *ast_func, IrFunction *ir_func) {
                 p->argv->loff = 16;
                 continue;
             }
+            /* Pinned param: no slot, no loff. */
+            if (p->kind == AST_LVAR &&
+                p->pinned_kind == LVAR_REG &&
+                p->pinned_reg) continue;
             int sz = (p->kind == AST_FUNPTR) ? 8 : p->type->size;
             p->loff = -offset;
             offset -= align(sz, 8);

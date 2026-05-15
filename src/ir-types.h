@@ -80,7 +80,12 @@ typedef enum IrOp {
     IR_SELECT,      /* Select between two values based on condition */
     IR_VA_ARG,      /* Get next variadic argument */
     IR_VA_START,    /* Initialize va_list */
-    IR_VA_END       /* Clean up va_list */
+    IR_VA_END,      /* Clean up va_list */
+    /* Verbatim assembly text from an inline `asm { ... }` block.
+     * The per-arch codegen just dumps the bytes into the output;
+     * the user is responsible for asm validity. The raw text lives
+     * in `r1->as.str.str`. */
+    IR_ASM
 } IrOp;
 
 
@@ -178,9 +183,15 @@ struct IrValue {
     IrValueType type;
     IrValueKind kind;
     u64 flags;
+    /* When non-NULL, this value is bound to a specific machine
+     * register (TempleOS-style `<Type> reg <REG> name`). The codegen
+     * uses the register name verbatim for reads / writes; the slot
+     * allocator skips reserving a stack slot. Only meaningful for
+     * IR_VAL_LOCAL / IR_VAL_PARAM. */
+    AoStr *pinned_reg;
 
     union {
-        AoStr *name; /* aribitrary string that I seem to have used in my 
+        AoStr *name; /* aribitrary string that I seem to have used in my
                       * previous implementation */
         s64 _i64; /* For integer constants */
         f64 _f64; /* Float constants */
@@ -189,8 +200,8 @@ struct IrValue {
         IrInstr *phi; /* Notes that the value is a phi node, used for either
                        * a logical `OR` or an `AND` */
 
-        /* A string literal, the `str` is an escaped string suitable for 
-         * putting in a file for an assembler to read, the `str_real_len` 
+        /* A string literal, the `str` is an escaped string suitable for
+         * putting in a file for an assembler to read, the `str_real_len`
          * is the length of the string without escape sequences. */
         IrValueString str;
         IrValueGlobal global;
@@ -222,6 +233,11 @@ struct IrInstr {
                       * A switch statments cases in the form;
                       * i64 <number>, label <block>, */
         Vec *phi_pairs; /* `Vec<IrPair *>` */
+        /* For IR_ASM: list of AsmFragment* when the inline asm uses
+         * `&var` references that need stack-offset substitution at
+         * emit time. NULL when the asm body is pure text (read it
+         * from r1's IR_VAL_CONST_STR). */
+        List *asm_fragments;
     } extra;
 };
 
@@ -299,6 +315,11 @@ typedef struct IrCgCtx {
      * call site instead of going through the slot. NULL when no
      * LEA-into-call fusion fired. */
     Map *lea_inline_map;
+    /* Vec<AoStr *>: machine registers that pinned locals occupy in
+     * this function. Populated once at function emit start (walking
+     * the AST locals). The prologue saves these, the epilogue
+     * restores them. NULL when no pinned locals exist. */
+    Vec *pinned_regs;
 } IrCgCtx;
 
 typedef struct IrProgram {

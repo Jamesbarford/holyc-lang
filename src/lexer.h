@@ -121,6 +121,17 @@
 #define KW_PP_DEFINED   77
 #define KW_PP_UNDEF     78
 #define KW_PP_ERROR     79
+/* TempleOS-style structured exceptions. */
+#define KW_TRY          80
+#define KW_CATCH        81
+#define KW_THROW        82
+/* TempleOS-style register pinning for locals/params:
+ *   I64 reg R15 i = 5;    // bound to R15 for the function
+ *   I64 noreg j = 4;      // explicit stack local
+ * `noreg` is also required for any local in a function that contains
+ * an asm { } block (no implicit "compiler picks"). */
+#define KW_REG          83
+#define KW_NOREG        84
 
 /* Compiler Flags*/
 #define CCF_MULTI_CHAR_OP     (1<<0)

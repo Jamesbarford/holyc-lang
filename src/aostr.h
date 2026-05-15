@@ -34,6 +34,7 @@ void aoStrRepeatChar(AoStr *buf, char ch, int times);
 int aoStrCmp(AoStr *b1, AoStr *b2);
 AoStr *aoStrDupRaw(char *s, u64 len);
 AoStr *aoStrDup(AoStr *buf);
+void aoStrRemovePreviousChar(AoStr *s, char ch);
 
 char *aoStrMove(AoStr *buf);
 

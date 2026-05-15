@@ -238,6 +238,12 @@ AoStr *aoStrDup(AoStr *buf) {
     return dupe;
 }
 
+void aoStrRemovePreviousChar(AoStr *s, char ch) {
+    if (s->data[s->len-1] == ch) {
+        s->len--;
+    }
+}
+
 void aoStrCatLen(AoStr *buf, const void *d, u64 len) {
     aoStrExtendBufferIfNeeded(buf, len);
     memcpy(buf->data + buf->len, d, len);

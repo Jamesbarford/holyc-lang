@@ -248,9 +248,9 @@ static void irPeepholeFuseAddrIntoStoreDeref(IrFunction *func, Map *uses) {
  * register pools are full, which depends on the arg sequence in
  * complicated ways - the existing arg-load loop handles those, but we
  * don't try to fuse them. */
-static void irPeepholeFuseTailArgIntoCall(Cctrl *cc, IrFunction *func, Map *uses) {
+static void irPeepholeFuseTailArgIntoCall(Cctrl *cc, IrFunction *fn, Map *uses) {
     if (!cc) return;
-    listForEach(func->blocks) {
+    listForEach(fn->blocks) {
         IrBlock *bb = (IrBlock *)it->value;
         if (listEmpty(bb->instructions)) continue;
         listForEach(bb->instructions) {
@@ -261,7 +261,8 @@ static void irPeepholeFuseTailArgIntoCall(Cctrl *cc, IrFunction *func, Map *uses
                 continue;
 
             AoStr *fname = call->r1->as.array.label;
-            if (!fname) continue;  /* indirect call - no callee info */
+            if (!fname)
+              continue;  /* indirect call - no callee info */
 
             Ast *callee = (Ast *)mapGetLen(cc->global_env,
                                             fname->data, fname->len);

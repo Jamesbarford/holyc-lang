@@ -22,4 +22,8 @@ Ast *findFunctionDecl(Cctrl *cc, char *fname, int len);
 Ast *parseCreateBinaryOp(Cctrl *cc, AstBinOp operation, Ast *left, Ast *right);
 Ast *parseSizeof(Cctrl *cc);
 
+/* Defined in parser.c; used here by parseParams to honour `reg`/`noreg`
+ * on parameter declarations as well as locals. */
+void parseRegModifier(Cctrl *cc, int *kind_out, AoStr **reg_out);
+
 #endif

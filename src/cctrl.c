@@ -150,6 +150,17 @@ static void cctrlAddBuiltinMacros(Cctrl *cc) {
     mapAdd(cc->macro_defs,"__HCC_VERSION__",le);
 }
 
+void cctrlAddBuiltinFunctions(Cctrl *cc) {
+      Vec *params = vecNew(&vec_ast_type);
+      AstType *type = astMakePointerType(astMakePointerType(ast_u8_type));
+      Ast *var = astLVar(type,str_lit("fname"));
+      vecPush(params, var);
+      Ast *fn = astFunction(type,str_lit("Uf"),params,NULL,NULL,0);
+      fn->kind = AST_FUN_PROTO;
+      fn->flags |= AST_FLAG_BUILTIN;
+      mapAdd(cc->global_env,fn->fname->data,fn);
+}
+
 Cctrl *ccMacroProcessor(Map *macro_defs) {
     Cctrl *cc = (Cctrl *)malloc(sizeof(Cctrl));
     cc->macro_defs = macro_defs;
@@ -212,6 +223,7 @@ Cctrl *cctrlNew(void) {
     for (int i = 0; i < (int)static_size(built_in_types); ++i) {
         AstType *type = (AstType *)malloc(sizeof(AstType));
         BuiltInType *built_in = &built_in_types[i]; 
+        memset(type, 0, sizeof(AstType));
         type->size = built_in->size;
         type->issigned = built_in->issigned;
         type->kind = built_in->kind;
@@ -220,6 +232,8 @@ Cctrl *cctrlNew(void) {
     }
 
     cctrlAddBuiltinMacros(cc);
+    /* We have no real mechanism of adding compiler builtins */
+    // cctrlAddBuiltinFunctions(cc);
 
     Ast *cmd_args = astGlobalCmdArgs();
     listAppend(cc->ast_list,cmd_args->argc);

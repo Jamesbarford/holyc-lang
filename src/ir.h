@@ -10,5 +10,9 @@ void irMemoryStats(void);
 void irDump(Cctrl *cc);
 IrValue *irExpr(IrCtx *ctx, Ast *ast);
 IrCtx *irLowerProgram(Cctrl *cc);
+IrFunction *irLowerFunction(IrCtx *ctx, Ast *ast_func);
+
+void irBasicFunctionOptimisations(IrFunction *fn);
+void irFunctionPrepForCodeGen(IrCgCtx *ctx, IrFunction *fn, Ast *ast_fn);
 
 #endif

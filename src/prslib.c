@@ -155,6 +155,9 @@ Vec *parseParams(Cctrl *cc, s64 terminator, int *has_var_args, int store) {
         }
 
         type = parseDeclSpec(cc);
+        int pinned_kind;
+        AoStr *pinned_reg;
+        parseRegModifier(cc, &pinned_kind, &pinned_reg);
         pname = cctrlTokenGet(cc);
 
         if (tokenPunctIs(pname, ')') && arg_count == 0) {
@@ -197,6 +200,11 @@ Vec *parseParams(Cctrl *cc, s64 terminator, int *has_var_args, int store) {
                     type = astMakePointerType(type->ptr);
                 }
                 var = astLVar(type,"_unknown",7);
+                /* Anonymous param can still carry a `reg <REG>` modifier
+                 * (TempleOS-style `Foo(I64 reg X19, I64 reg X20)` -
+                 * names omitted, register IS the identity). */
+                var->pinned_kind = pinned_kind;
+                var->pinned_reg = pinned_reg;
                 if (cc->tmp_locals) {
                     listAppend(cc->tmp_locals, var);
                 }
@@ -217,6 +225,8 @@ Vec *parseParams(Cctrl *cc, s64 terminator, int *has_var_args, int store) {
             type = astMakePointerType(type->ptr);
         }
         var = astLVar(type,pname->start,pname->len);
+        var->pinned_kind = pinned_kind;
+        var->pinned_reg = pinned_reg;
 
         tok = cctrlTokenGet(cc);
         if (tokenPunctIs(tok, '=')) {

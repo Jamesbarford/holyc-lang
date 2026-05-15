@@ -7,32 +7,39 @@
 #include "aostr.h"
 #include "arena.h"
 #include "ast.h"
-#include "config.h"
 #include "containers.h"
 #include "list.h"
 #include "lexer.h"
 #include "util.h"
 
 static Arena ast_arena;
+static Arena ast_type_arena;
 static int ast_arena_init = 0;
+static int ast_type_arena_init = 0;
 
 void astMemoryInit(void) {
     if (!ast_arena_init) {
         arenaInit(&ast_arena, sizeof(Ast) * 512);
+        arenaInit(&ast_type_arena, sizeof(AstType) * 512);
         ast_arena_init = 1;
+        ast_type_arena_init = 1;
     }
 }
 
 void astMemoryRelease(void) {
     if (ast_arena_init) {
         ast_arena_init = 0;
+        ast_type_arena_init = 1;
         arenaClear(&ast_arena);
+        arenaClear(&ast_type_arena);
     }
 }
 
 void astMemoryStats(void) {
     printf("Ast Arena:\n");
     arenaPrintStats(&ast_arena);
+    printf("Ast Type Arena:\n");
+    arenaPrintStats(&ast_type_arena);
 }
 
 static Ast *astAlloc(void) {
@@ -40,7 +47,10 @@ static Ast *astAlloc(void) {
 }
 
 static AstType *astTypeAlloc(void) {
-    return (AstType *)arenaAlloc(&ast_arena, sizeof(AstType));
+   AstType *t = (AstType *)arenaAlloc(&ast_type_arena, sizeof(AstType));
+   //memset(t, 0, sizeof(AstType));
+   t->has_var_args = 0;
+   return t;
 }
 
 void astVecStringify(AoStr *buf, void *_ast) {
@@ -100,18 +110,18 @@ Map *astMapNew(void) {
     return mapNew(32, &map_ast_type);
 }
 
-AstType *ast_u8_type = &(AstType){.kind = AST_TYPE_CHAR, .size = 1, .ptr = NULL,.issigned=0};
-AstType *ast_i8_type = &(AstType){.kind = AST_TYPE_CHAR, .size = 1, .ptr = NULL,.issigned=1};
-AstType *ast_i16_type = &(AstType){.kind = AST_TYPE_INT, .size = 2, .ptr = NULL,.issigned=1};
-AstType *ast_u16_type = &(AstType){.kind = AST_TYPE_INT, .size = 2, .ptr = NULL,.issigned=0};
-AstType *ast_i32_type = &(AstType){.kind = AST_TYPE_INT, .size = 4, .ptr = NULL,.issigned=1};
-AstType *ast_u32_type = &(AstType){.kind = AST_TYPE_INT, .size = 4, .ptr = NULL,.issigned=0};
-AstType *ast_int_type = &(AstType){.kind = AST_TYPE_INT, .size = 8, .ptr = NULL,.issigned=1};
-AstType *ast_uint_type = &(AstType){.kind = AST_TYPE_INT, .size = 8, .ptr = NULL,.issigned=0};
+AstType *ast_u8_type = &(AstType){ .kind = AST_TYPE_CHAR, .size = 1, .has_var_args = 0, .ptr = NULL,.issigned=0};
+AstType *ast_i8_type = &(AstType){ .kind = AST_TYPE_CHAR, .size = 1, .has_var_args = 0, .ptr = NULL,.issigned=1};
+AstType *ast_i16_type = &(AstType){.kind = AST_TYPE_INT, .size = 2, .has_var_args = 0, .ptr = NULL,.issigned=1};
+AstType *ast_u16_type = &(AstType){.kind = AST_TYPE_INT, .size = 2, .has_var_args = 0, .ptr = NULL,.issigned=0};
+AstType *ast_i32_type = &(AstType){.kind = AST_TYPE_INT, .size = 4, .has_var_args = 0, .ptr = NULL,.issigned=1};
+AstType *ast_u32_type = &(AstType){.kind = AST_TYPE_INT, .size = 4, .has_var_args = 0, .ptr = NULL,.issigned=0};
+AstType *ast_int_type = &(AstType){.kind = AST_TYPE_INT, .size = 8, .has_var_args = 0, .ptr = NULL,.issigned=1};
+AstType *ast_uint_type = &(AstType){.kind = AST_TYPE_INT, .size = 8, .has_var_args = 0, .ptr = NULL,.issigned=0};
 
-AstType *ast_float_type = &(AstType){.kind = AST_TYPE_FLOAT, .size = 8, .ptr = NULL,.issigned=0};
-AstType *ast_void_type = &(AstType){.kind = AST_TYPE_VOID, .size = 0, .ptr = NULL,.issigned=0};
-AstType *ast_auto_type = &(AstType){.kind = AST_TYPE_VOID, .size = 0, .ptr = NULL,.issigned=0};
+AstType *ast_float_type = &(AstType){.kind = AST_TYPE_FLOAT, .size = 8, .has_var_args = 0, .ptr = NULL,.issigned=0};
+AstType *ast_void_type = &(AstType){.kind = AST_TYPE_VOID, .size = 0, .has_var_args = 0, .ptr = NULL,.issigned=0};
+AstType *ast_auto_type = &(AstType){.kind = AST_TYPE_VOID, .size = 0, .has_var_args = 0, .ptr = NULL,.issigned=0};
 
 Ast *ast_loop_sentinal = &(Ast){.kind = AST_GOTO, .type=NULL,
     .slabel = &(AoStr){.data="loop_sentinal", .len=13, .capacity = 0}};
@@ -261,7 +271,7 @@ Ast *astBinaryOp(AstBinOp operation, Ast *left, Ast *right, int *_is_err) {
 Ast *astI64Type(s64 val) {
     Ast *ast = astNew();
     ast->kind = AST_LITERAL;
-    ast->type = ast_int_type;
+    ast->type = astTypeCopy(ast_int_type);
     ast->i64 = val;
     return ast;
 }
@@ -269,7 +279,7 @@ Ast *astI64Type(s64 val) {
 Ast *astCharType(s64 ch) {
     Ast *ast = astNew();
     ast->kind = AST_LITERAL;
-    ast->type = ast_u8_type;
+    ast->type = astTypeCopy(ast_u8_type);
     ast->i64 = ch;
     return ast;
 }
@@ -277,7 +287,7 @@ Ast *astCharType(s64 ch) {
 Ast *astF64Type(double val) {
     Ast *ast = astNew();
     ast->kind = AST_LITERAL;
-    ast->type = ast_float_type;
+    ast->type = astTypeCopy(ast_float_type);
     ast->f64 = val;
     ast->f64_label = NULL;
     return ast;
@@ -391,8 +401,8 @@ Ast *astFunction(AstType *type, char *fname, int len, Vec *params, Ast *body,
                  List *locals, int has_var_args)
 {
     Ast *ast = astNew();
-    ast->type = type;
-    type->has_var_args = has_var_args;
+    ast->type = astTypeCopy(type);
+    ast->type->has_var_args = has_var_args;
     ast->kind = AST_FUNC;
     ast->fname = aoStrDupRaw(fname, len);
     ast->params = params;
@@ -491,7 +501,7 @@ Ast *astSwitch(Ast *cond, Vec *cases, Ast *case_default,
 
 Ast *astCase(AoStr *case_label, s64 case_begin, s64 case_end, List *case_asts) {
     Ast *ast = astNew();
-    ast->type = ast_int_type;
+    ast->type = astTypeCopy(ast_int_type);
     ast->kind = AST_CASE;
     ast->case_begin = case_begin;
     ast->case_end = case_end;
@@ -581,6 +591,21 @@ Ast *astReturn(Ast *retval, AstType *rettype) {
     ast->kind = AST_RETURN;
     ast->type = rettype;
     ast->retval = retval;
+    return ast;
+}
+
+Ast *astTry(Ast *try_body, Ast *catch_body) {
+    Ast *ast = astNew();
+    ast->kind = AST_TRY;
+    ast->try_body = try_body;
+    ast->catch_body = catch_body;
+    return ast;
+}
+
+Ast *astThrow(Ast *value) {
+    Ast *ast = astNew();
+    ast->kind = AST_THROW;
+    ast->throw_value = value;
     return ast;
 }
 
@@ -684,7 +709,22 @@ Ast *astAsmBlock(AoStr *asm_stmt, List *funcs) {
     ast->type = NULL;
     ast->asm_stmt = asm_stmt;
     ast->funcs = funcs;
+    ast->asm_fragments = NULL;
     return ast;
+}
+
+AsmFragment *asmFragmentText(AoStr *text) {
+    AsmFragment *f = (AsmFragment *)calloc(1, sizeof(AsmFragment));
+    f->kind = ASM_FRAG_TEXT;
+    f->text = text;
+    return f;
+}
+
+AsmFragment *asmFragmentLvarRef(Ast *lvar) {
+    AsmFragment *f = (AsmFragment *)calloc(1, sizeof(AsmFragment));
+    f->kind = ASM_FRAG_LVAR_REF;
+    f->lvar = lvar;
+    return f;
 }
 
 Ast *astAsmFunctionDef(AoStr *asm_fname, AoStr *asm_stmt) {
@@ -742,8 +782,9 @@ Ast *astGlobalCmdArgs(void) {
     Ast *ast = astNew();
     ast->kind = AST_VAR_ARGS;
     ast->type = NULL;
-    ast->argc = astDecl(astGVar(ast_int_type,"argc",4,0),NULL);
-    ast->argv = astDecl(astGVar(astMakePointerType(astMakePointerType(ast_u8_type)),"argv",4,0),NULL);
+    ast->argc = astDecl(astGVar(astTypeCopy(ast_int_type),"argc",4,0),NULL);
+    ast->argv = astDecl(astGVar(astMakePointerType(
+                    astMakePointerType(astTypeCopy(ast_u8_type))),"argv",4,0),NULL);
     return ast;
 }
 
@@ -765,7 +806,7 @@ Ast *astComment(char *comment, int len) {
 }
 
 AoStr *astNormaliseFunctionName(char *fname) {
-    AoStr *newfn = aoStrNew();
+        AoStr *newfn = aoStrNew();
 #if IS_BSD
     if (fname[0] != '_') {
         aoStrPutChar(newfn, '_');
@@ -939,15 +980,15 @@ start_routine:
             switch (ptr2->kind) {
                 case AST_TYPE_INT:
                 case AST_TYPE_CHAR:
-                    return ast_int_type;
+                    return astTypeCopy(ast_int_type);
                 case AST_TYPE_CLASS:
                     if (ptr2->is_intrinsic) {
-                        return ast_int_type;
+                        return astTypeCopy(ast_int_type);
                     } else {
                         goto error;
                     }
                 case AST_TYPE_FLOAT:
-                    return ast_float_type;
+                    return astTypeCopy(ast_float_type);
                 case AST_TYPE_ARRAY:
                 case AST_TYPE_POINTER:
                     return ptr2;
@@ -969,11 +1010,11 @@ start_routine:
             goto start_routine;
         case AST_TYPE_CLASS:
             if (ptr1->is_intrinsic && ptr2->is_intrinsic) {
-                return ast_int_type;
+                return astTypeCopy(ast_int_type);
             } else if (astIsIntType(ptr1) && ptr2->is_intrinsic) {
-                return ast_int_type;
+                return astTypeCopy(ast_int_type);
             } else if (ptr1->is_intrinsic && astIsIntType(ptr2)) {
-                return ast_int_type;
+                return astTypeCopy(ast_int_type);
             } else {
                 goto error;
             }
@@ -1693,6 +1734,21 @@ void _astToString(AoStr *str, Ast *ast, int depth) {
             astStringEndStmt(str);
             break;
 
+        case AST_TRY:
+            aoStrCatPrintf(str, "<try>\n");
+            _astToString(str, ast->try_body, depth+1);
+            aoStrCatRepeat(str, "  ", depth);
+            aoStrCatPrintf(str, "<catch>\n");
+            _astToString(str, ast->catch_body, depth+1);
+            astStringEndStmt(str);
+            break;
+
+        case AST_THROW:
+            aoStrCatPrintf(str, "<throw>\n");
+            _astToString(str, ast->throw_value, depth+1);
+            astStringEndStmt(str);
+            break;
+
         case AST_VAR_ARGS:
             aoStrCatPrintf(str, "<var_args>...\n");
             break;
@@ -1950,6 +2006,8 @@ char *astKindToString(AstKind kind) {
         case AST_COMMENT:       return "AST_COMMENT";
         case AST_BINOP:         return "AST_BINOP";
         case AST_UNOP:          return "AST_UNOP";
+        case AST_TRY:           return "AST_TRY";
+        case AST_THROW:         return "AST_THROW";
             break;
     }
     loggerPanic("Cannot find kind: %d\n", kind);
@@ -2191,6 +2249,22 @@ static void _astLValueToString(AoStr *str, Ast *ast, u64 lexeme_flags) {
                     lexemePunctToStringWithFlags(';',lexeme_flags));
             break;
 
+        case AST_TRY:
+            aoStrCatPrintf(str, "try ");
+            _astLValueToString(str, ast->try_body, lexeme_flags);
+            aoStrCatPrintf(str, " catch ");
+            _astLValueToString(str, ast->catch_body, lexeme_flags);
+            break;
+
+        case AST_THROW:
+            aoStrCatPrintf(str, "throw(");
+            _astLValueToString(str, ast->throw_value, lexeme_flags);
+            aoStrCatPrintf(str, "%s",
+                    lexemePunctToStringWithFlags(')',lexeme_flags));
+            aoStrCatPrintf(str,"%s",
+                    lexemePunctToStringWithFlags(';',lexeme_flags));
+            break;
+
         case AST_DEFAULT:
             aoStrCatPrintf(str,"default:");
             break;
@@ -2337,6 +2411,8 @@ const char *astKindToHumanReadable(Ast *ast) {
         case AST_IF: return "if statement";
         case AST_FOR: return "for loop";
         case AST_RETURN: return "return statement";
+        case AST_TRY: return "try/catch statement";
+        case AST_THROW: return "throw statement";
         case AST_DO_WHILE: return "do-while loop";
         case AST_WHILE: return "while loop";
         case AST_CLASS_REF: return "class reference";
