@@ -139,6 +139,8 @@ typedef enum AstKind {
     AST_COMMENT       = 295,
     AST_BINOP         = 296,
     AST_UNOP          = 297,
+    AST_TRY           = 298,  /* try { ... } catch <stmt> */
+    AST_THROW         = 299,  /* throw(u64_value); */
 } AstKind;
 
 /* @Cleanup
@@ -154,7 +156,7 @@ typedef struct AstType AstType;
 typedef struct AstType {
     AstTypeKind kind;
     int size;
-    int has_var_args;
+    u8 has_var_args;
 
     /* Alignment of a struct or union */
     u32 alignment;
@@ -180,9 +182,35 @@ typedef struct AstType {
 } AstType;
 
 
-#define AST_FLAG_INLINE (1<<0)
+#define AST_FLAG_INLINE  (1<<0)
+#define AST_FLAG_BUILTIN (1<<1)
+/* Set on an AST_GVAR / AST_DECL that came from `extern Type name;` -
+ * a TempleOS-style forward declaration. The parser registers the
+ * symbol in `cc->global_env` so user code can reference it, but the
+ * codegen skips emitting storage: the canonical definition lives in
+ * another translation unit (typically libtos). */
+#define AST_FLAG_EXTERN  (1<<2)
+
+/* AST_LVAR.pinned_kind values. */
+#define LVAR_AUTO  0  /* compiler chooses storage (default) */
+#define LVAR_REG   1  /* pinned to a specific machine register */
+#define LVAR_NOREG 2  /* explicit stack slot (required by asm functions) */
+
+/* AsmFragment.kind values. An inline `asm { ... }` block is parsed
+ * as a list of fragments: literal TEXT chunks and LVAR_REFs (TempleOS
+ * `&var` references to HolyC locals). The per-arch emitter renders
+ * LVAR_REFs using the local's stack offset, which isn't known until
+ * the layout pass runs (well after parse time). */
+#define ASM_FRAG_TEXT     1
+#define ASM_FRAG_LVAR_REF 2
 
 typedef struct Ast Ast;
+
+typedef struct AsmFragment {
+    int kind;
+    AoStr *text;   /* ASM_FRAG_TEXT */
+    Ast *lvar;     /* ASM_FRAG_LVAR_REF: must point to an AST_LVAR */
+} AsmFragment;
 typedef struct Ast {
     AstKind kind;
     u64 flags;
@@ -205,6 +233,11 @@ typedef struct Ast {
         struct {
             AoStr *asm_stmt;
             List *funcs;
+            /* Optional list of AsmFragment* when the asm body uses
+             * TempleOS-style `&var` refs that need stack-offset
+             * substitution at emit time. NULL for pure-text asm
+             * blocks (the existing code keeps using `asm_stmt`). */
+            List *asm_fragments;
         };
 
         /* String */
@@ -218,6 +251,15 @@ typedef struct Ast {
         struct {
             u32 lvar_id;
             AoStr *lname;
+            /* TempleOS-style register pinning. `pinned_kind` defaults
+             * to LVAR_AUTO (compiler chooses storage); `LVAR_REG` ties
+             * the local to a specific machine register named by
+             * `pinned_reg`; `LVAR_NOREG` explicitly forces a stack
+             * slot. The latter only matters semantically inside
+             * functions that contain `asm { }` blocks, where AUTO is
+             * forbidden. */
+            int pinned_kind;
+            AoStr *pinned_reg;
         };
 
         /* Global variable */
@@ -313,6 +355,17 @@ typedef struct Ast {
         struct {
             /* Return statement */
             Ast *retval;
+        };
+
+        /* try { body } catch <handler> */
+        struct {
+            Ast *try_body;
+            Ast *catch_body;
+        };
+
+        /* throw(value) */
+        struct {
+            Ast *throw_value;
         };
 
         /* @Typeo
@@ -434,6 +487,8 @@ Ast *astFunctionCall(AstType *type, char *fname, int len, Vec *argv);
 Ast *astFunction(AstType *rettype, char *fname, int len, Vec *params,
                  Ast *body, List *locals, int has_var_args);
 Ast *astReturn(Ast *retval, AstType *rettype);
+Ast *astTry(Ast *try_body, Ast *catch_body);
+Ast *astThrow(Ast *value);
 Ast *astFunctionPtr(AstType *type,
                     char *fname,
                     int fname_len, 
@@ -449,6 +504,8 @@ Ast *astFunctionDefaultParam(Ast *var, Ast *init);
 Ast *astVarArgs(void);
 
 Ast *astAsmBlock(AoStr *asm_stmt, List *funcs);
+AsmFragment *asmFragmentText(AoStr *text);
+AsmFragment *asmFragmentLvarRef(Ast *lvar);
 Ast *astAsmFunctionBind(AstType *rettype, AoStr *asm_fname, 
         AoStr *fname, Vec *params);
 Ast *astAsmFunctionCall(AstType *rettype, AoStr *asm_fname, Vec *argv);

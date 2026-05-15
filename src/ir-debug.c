@@ -706,7 +706,7 @@ void irValuePrint(IrValue *ir_value) {
     } else {
         aoStrCatFmt(buf, "IrValue %S", str);
     }
-    printf("%s\n",str->data);
+    printf("%s\n", buf->data);
     aoStrRelease(str);
     aoStrRelease(buf);
 }

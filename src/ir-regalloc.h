@@ -13,7 +13,7 @@
  * arch (e.g. %rax/%xmm0 on x86_64). */
 
 /* The instruction's result is consumed by the next non-NOP instruction
- * as its first source — emit nothing for the spill, the consumer knows
+ * as its first source, emit nothing for the spill, the consumer knows
  * to read directly from the result register. */
 #define IRCG_FUSE_TO_NEXT     (1u << 0)
 /* Paired with IRCG_FUSE_TO_NEXT on the consumer: skip the load of the
@@ -60,6 +60,19 @@
  * emits nothing and reserves no slot. */
 #define IRCG_LEA_INLINE_AT_CALL (1u << 7)
 
+/* This is a builtin compiler function and needs to be handled by the backend
+ * explicitly */
+#define IRCG_FN_BUILTIN (1u << 8)
+
+/* Set on an IR_CALL whose first source-order argument is the hidden
+ * out-pointer for a struct/union by-value return. On AArch64 this
+ * pointer is passed in x8 (the indirect-result-location register),
+ * not in x0; remaining integer args still start at x0. On x86_64 the
+ * pointer goes in %rdi (the first int arg register) so this flag is
+ * informational, the natural arg-slot mapping already does the
+ * right thing. */
+#define IRCG_CALL_AGG_RETURN (1u << 9)
+
 /* Slot offset map. */
 void irCgSetLoff(IrRaCtx *ra, u32 var_id, int loff);
 int  irCgGetLoff(IrRaCtx *ra, IrValue *val);
@@ -91,7 +104,13 @@ void irCgClassifyPhis(IrFunction *func);
 void irCgAnnotate(IrFunction *func);
 
 /* Analysis helpers used by codegen and the peephole pass. */
-int blockHasPhi(IrBlock *bb);
+int irBlockHasPhi(IrBlock *bb);
+
+/* target-agnostic helper that scans the predecessor block to see if a
+ * phi-source value still lives in the result register (x0/rax) because
+ * the producer was marked FUSE_TO_NEXT. Lets us skip a redundant reload. */
+int irPhiPairValueLiveInResultReg(IrBlock *from, IrValue *v);
+
 /* Does this op produce its result naturally into the architecture's
  * canonical result register (i.e. is it a candidate for the
  * "leave in register" fusion path)? Float-typed defs and ops that

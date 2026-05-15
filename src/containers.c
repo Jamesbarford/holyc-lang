@@ -918,6 +918,13 @@ static int mapResize(Map *map) {
 
     map->size = new_size;
     map->threashold = (unsigned long)(new_capacity * MAP_LOAD);
+
+    /* Resize relocates every entry, so the lookup cache (set by the last
+     * mapGet/mapHas) now points to whatever happens to live at the old
+     * index. Invalidate it so the next mapGet falls through to a real
+     * search instead of trusting a stale slot. */
+    map->cached_key = (void *)ULONG_MAX;
+    map->cached_idx = ULONG_MAX;
     return 1;
 }
 
@@ -933,10 +940,14 @@ int mapAddLen(Map *map, char *key, s64 key_len, void *value) {
     u64 idx = mapGetCStringNextIdx(map, key, key_len, &is_free);
     MapNode *n = &map->entries[idx];
 
-    /* Only if it is not free do we add to the vector... Though this does mean
-     * the ordering that we are trying to keep is now messed up... */
     if (is_free) {
-        vecPushInt(map->indexes, idx);
+        /* Brand-new FREE slot: append to indexes. Reused DELETED
+         * slot: idx is already in indexes from the original add, so
+         * don't push again - that's what was causing iteration to
+         * yield the same node twice. */
+        if (!(n->flags & MAP_FLAG_DELETED)) {
+            vecPushInt(map->indexes, idx);
+        }
         map->size++;
     }
 
@@ -959,10 +970,10 @@ int mapAdd(Map *map, void *key, void *value) {
     u64 idx = mapGetNextIdx(map, key, &is_free);
     MapNode *n = &map->entries[idx];
 
-    /* Only if it is not free do we add to the vector... Though this does mean
-     * the ordering that we are trying to keep is now messed up... */
     if (is_free) {
-        vecPushInt(map->indexes, idx);
+        if (!(n->flags & MAP_FLAG_DELETED)) {
+            vecPushInt(map->indexes, idx);
+        }
         map->size++;
     }
 
@@ -984,11 +995,13 @@ int mapAddOrErr(Map *map, void *key, void *value) {
     int is_free = 0;
     u64 idx = mapGetNextIdx(map, key, &is_free);
 
-    /* We only add if it is free otherwise this operation is an error - 
+    /* We only add if it is free otherwise this operation is an error -
      * in practice this ensures we can't overwrite values. */
     if (is_free) {
         MapNode *n = &map->entries[idx];
-        vecPushInt(map->indexes, idx);
+        if (!(n->flags & MAP_FLAG_DELETED)) {
+            vecPushInt(map->indexes, idx);
+        }
         n->key = key;
         n->value = value;
         n->key_len = map->type->get_key_len(key);
@@ -1010,10 +1023,13 @@ void mapRemove(Map *map, void *key) {
     n->value = NULL;
     n->key = NULL;
     n->key_len = 0;
-    /* @Bug
-     * Why does reducing the map size cause the hashtable to do weird
-     * things?*/
     map->size--;
+    /* The lookup cache may point at the slot we just deleted, or at
+     * a slot whose contents could change if this DELETED slot is
+     * later reused by mapAdd. Invalidate so the next mapGet does a
+     * real probe instead of trusting stale state. */
+    map->cached_key = (void *)ULONG_MAX;
+    map->cached_idx = ULONG_MAX;
 }
 
 int mapHas(Map *map, void *key) {
@@ -1058,13 +1074,15 @@ void *mapGetAt(Map *map, u64 index) {
 }
 
 void *mapGet(Map *map, void *key) {
-    /* Retrive from cache if we can */
+    /* Retrive from cache if we can. Only honour the hit when the
+     * slot is still TAKEN - if it was deleted or cleared we must
+     * fall through to a real probe, which also walks the parent
+     * chain (returning NULL here would shadow a parent-scope entry). */
     if (map->cached_key == key) {
         MapNode *n = &map->entries[map->cached_idx];
         if (n->flags & MAP_FLAG_TAKEN) {
             return n->value;
         }
-        return NULL;
     }
 
     for (; map != NULL; map = map->parent) {
@@ -1082,13 +1100,12 @@ void *mapGet(Map *map, void *key) {
 }
 
 void *mapGetLen(Map *map, char *key, s64 len) {
-    /* Retrive from cache if we can */
+    /* See mapGet above - same cache-fall-through invariant. */
     if (map->cached_key == key) {
         MapNode *n = &map->entries[map->cached_idx];
         if (n->flags & MAP_FLAG_TAKEN) {
             return n->value;
         }
-        return NULL;
     }
 
     for (; map != NULL; map = map->parent) {
@@ -1119,6 +1136,8 @@ void mapClear(Map *map) {
     }
     map->size = 0;
     vecClear(map->indexes);
+    map->cached_key = (void *)ULONG_MAX;
+    map->cached_idx = ULONG_MAX;
 }
 
 void mapMerge(Map *map1, Map *map2) {

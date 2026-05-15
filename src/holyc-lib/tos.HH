@@ -467,6 +467,32 @@ public _extern _EXIT U0 Exit(I64 exit_code = EXIT_FAIL);
 public _extern _WRITE I64 Write(I64 fd, U8 *buf, I64 len);
 public _extern _SYSTEM I64 System(U8 *command);
 
+/* TempleOS-style try/catch/throw. CatchFrame is 256 bytes (matches
+ * what the compiler reserves per `try` block); the runtime stores its
+ * jmp_buf bytes plus a chain pointer inside. Fs->except_ch holds the
+ * u64 thrown by the most recent `throw(...)`. */
+public class CatchFrame;
+public class CatchFrame
+{
+  I8 jb[248];
+  CatchFrame *prev;
+};
+public class HCFs
+{
+  CatchFrame *catch_top;
+  U64 except_ch;
+};
+/* `Fs` is the TempleOS-faithful global task pointer. The canonical
+ * definition (and storage init) lives in libtos's except.HC; this
+ * `extern` declaration tells user-side parsing that `Fs` exists
+ * without emitting storage here (which would clash at link time). */
+extern HCFs *Fs;
+public extern "c" I32 setjmp(U0 *env);
+public extern "c" U0 longjmp(U0 *env, I32 val);
+public U0 HCC_PushFrame(CatchFrame *f);
+public U0 HCC_TryLeave(CatchFrame *f);
+public U0 HCC_Throw(U64 v);
+
 public extern "c" F64 acos(F64 f1);
 public extern "c" F64 asin(F64 f1);
 public extern "c" F64 atan(F64 f1);
@@ -733,8 +759,8 @@ class cDIR;
 
 #ifdef IS_MACOS
 #define DIR_MAXPATHLEN (1024)
-
-class Dirent {
+class Dirent
+{
   U64 ino;
   U64 off;
   U16 reclen;        /* length of this record */

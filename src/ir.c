@@ -168,7 +168,7 @@ static IrValue *irNarrowToTargetWidth(IrCtx *ctx,
         return val;
     }
 
-    if (val->kind == IR_VAL_TMP && val->as.var.size < (u64)target_ty->size) {
+    if (val->kind == IR_VAL_TMP && val->as.var.size > (u64)target_ty->size) {
         IrValue *narrow = irTmp(narrow_ty, target_ty->size);
         irBlockAddInstr(ctx, irInstrNew(IR_TRUNC, narrow, val, NULL));
         return narrow;
@@ -217,7 +217,7 @@ static void irEmitMemcpy(IrCtx *ctx,
                          int n_bytes)
 {
     IrValue *args_wrap = irValueNew(IR_TYPE_ARRAY, IR_VAL_UNRESOLVED);
-    args_wrap->as.array.label = aoStrPrintf("MEMCPY");
+    args_wrap->as.array.label = aoStrPrintf("MemCpy");
     Vec *args = irValueVecNew();
     args_wrap->as.array.values = args;
     vecPush(args, dst);
@@ -233,6 +233,25 @@ static void irEmitMemcpy(IrCtx *ctx,
     irBlockAddInstr(ctx, call);
 }
 
+/* Emit a one-argument call to a HolyC runtime function by name. The
+ * args wrapper's label is the bare function name (no `_` prefix);
+ * asmNormaliseFunctionName adds the leading underscore at emit time.
+ * Returns the call's dst tmp (for the I64-returning variant) or
+ * NULL for the void variant. */
+static IrValue *irEmitRuntimeCall1(IrCtx *ctx, const char *fname,
+                                    IrValueType ret_type, int ret_size,
+                                    IrValue *arg) {
+    IrValue *args_wrap = irValueNew(IR_TYPE_ARRAY, IR_VAL_UNRESOLVED);
+    args_wrap->as.array.label = aoStrPrintf("%s", fname);
+    Vec *args = irValueVecNew();
+    args_wrap->as.array.values = args;
+    vecPush(args, arg);
+    IrValue *ret = irTmp(ret_type, ret_size);
+    IrInstr *call = irInstrNew(IR_CALL, ret, args_wrap, NULL);
+    irBlockAddInstr(ctx, call);
+    return ret;
+}
+
 
 IrValue *irFnCallTo(IrCtx *ctx, Ast *ast, IrValue *preallocated_buffer) {
     /* Is this returning a struct from the stack? */
@@ -242,6 +261,14 @@ IrValue *irFnCallTo(IrCtx *ctx, Ast *ast, IrValue *preallocated_buffer) {
     IrValue *ir_call_args = irValueNew(IR_TYPE_ARRAY, IR_VAL_UNRESOLVED);
     IrValue *ir_ret_val = irTmp(ret_type, ret_size);
     IrInstr *ir_call_instr = irInstrNew(IR_CALL, ir_ret_val, ir_call_args, NULL);
+
+    if (ast->flags & AST_FLAG_BUILTIN) {
+        ir_call_instr->flags |= IRCG_FN_BUILTIN;
+    }
+
+    if (agg_return) {
+        ir_call_instr->flags |= IRCG_CALL_AGG_RETURN;
+    }
 
     assert(ast->kind == AST_FUNCALL || ast->kind == AST_FUNPTR_CALL ||
            ast->kind == AST_ASM_FUNCALL);
@@ -507,7 +534,25 @@ IrValue *irLowerBinOpExpr(IrCtx *ctx, Ast *ast) {
             ir_result = irTmp(ir_type, 8);
         }
     } else {
-        float_dispatch = irIsFloat(ir_type) || left_is_float;
+        float_dispatch = irIsFloat(ir_type) || left_is_float ||
+                         right_is_float;
+        /* Mixed int/float arithmetic: promote the int side to f64 so the
+         * IR_F* op sees two float operands. Without this, e.g.
+         * `f64 * -1` lowered to fmul(f64, i64) which the codegen treats
+         * as a fmul of garbage. */
+        if (float_dispatch && !(left_is_float && right_is_float)) {
+            IrValue *prom = irTmp(IR_TYPE_F64, 8);
+            IrInstr *cast_instr = NULL;
+            if (!left_is_float) {
+                cast_instr = irInstrNew(IR_SITOFP, prom, lhs, NULL);
+                lhs = prom;
+            }
+            if (!right_is_float) {
+                cast_instr = irInstrNew(IR_SITOFP, prom, rhs, NULL);
+                rhs = prom;
+            }
+            irBlockAddInstr(ctx, cast_instr);
+        }
     }
 
     if (float_dispatch) {
@@ -688,24 +733,32 @@ static IrValue *irLowerCast(IrCtx *ctx,
     int to_float = astIsFloatType(to_type);
 
     if (from_int && to_float) {
+        IrValue *dst = irTmp(IR_TYPE_F64, 8);
         /* HolyC variadic-slot cast `argv[i](F64)`: the source's type
          * carries `has_var_args=1` (the parser tags the argv element
          * type). The slot holds raw 8 bytes that were pushed as the
          * F64 bit pattern - reinterpret rather than convert, matching
          * `asmToFloat`'s `movq %rax, %xmm0` path. */
         if (from_type->has_var_args) {
-            IrValue *dst = irTmp(IR_TYPE_F64, 8);
             irBlockAddInstr(ctx, irInstrNew(IR_BITCAST, dst, src, NULL));
             return dst;
         }
-        IrValue *dst = irTmp(IR_TYPE_F64, 8);
-        irBlockAddInstr(ctx, irInstrNew(IR_SITOFP, dst, src, NULL));
-        return dst;
+        if (from_type->issigned) {
+            irBlockAddInstr(ctx, irInstrNew(IR_SITOFP, dst, src, NULL));
+            return dst;
+        } else {
+            irBlockAddInstr(ctx, irInstrNew(IR_UITOFP, dst, src, NULL));
+            return dst;
+        }
     }
     if (from_float && to_int) {
         IrValueType t = irConvertType(to_type);
         IrValue *dst = irTmp(t, to_type->size);
-        irBlockAddInstr(ctx, irInstrNew(IR_FPTOSI, dst, src, NULL));
+        if (from_type->issigned) {
+            irBlockAddInstr(ctx, irInstrNew(IR_FPTOSI, dst, src, NULL));
+        } else {
+            irBlockAddInstr(ctx, irInstrNew(IR_FPTOUI, dst, src, NULL));
+        }
         return dst;
     }
     /* int<->int and ptr<->int: in our 64-bit-everywhere codegen the bits
@@ -1322,6 +1375,103 @@ void irLowerReturn(IrCtx *ctx, Ast *ast) {
     irBlockAddInstr(ctx, jmp);
 }
 
+/* try { try_body } catch <catch_body> compiles to:
+ *
+ *     frame = alloca(CatchFrame)                 ; ~256 bytes, opaque
+ *     t = HCC_TryEnter(&frame)                   ; setjmp inside runtime
+ *     br (t == 0), body_block, catch_block
+ *   body_block:
+ *     <lower try_body>
+ *     HCC_TryLeave(&frame)                       ; normal completion
+ *     jmp end_block
+ *   catch_block:
+ *     HCC_TryLeave(&frame)                       ; pop *before* handler
+ *                                                ; so a throw inside catch
+ *                                                ; escapes outward
+ *     <lower catch_body>
+ *     jmp end_block
+ *   end_block:
+ *
+ * The CatchFrame layout (jmp_buf bytes + prev pointer) is opaque to
+ * the compiler; we just reserve enough stack for the largest platform
+ * jmp_buf. The HolyC-side `class CatchFrame` agrees on the size. */
+void irLowerTry(IrCtx *ctx, Ast *ast) {
+    /* 1. Reserve CatchFrame storage on the caller's stack. Generous
+     *    size (256 bytes) covers every host jmp_buf we care about. */
+    int frame_size = 256;
+    IrValue *size_const = irConstInt(IR_TYPE_I64, frame_size);
+    IrValue *frame_tmp = irTmp(IR_TYPE_PTR, frame_size);
+    IrInstr *frame_alloca = irInstrNew(IR_ALLOCA, frame_tmp, size_const, NULL);
+    irBlockAddInstr(ctx, frame_alloca);
+    irAddStackSpace(ctx, frame_size);
+
+    /* 2. Materialise &frame as a pointer-typed tmp for the runtime
+     *    calls' arg. */
+    IrValue *frame_addr = irTmp(IR_TYPE_PTR, 8);
+    irBlockAddInstr(ctx,
+        irInstrNew(IR_LEA, frame_addr, frame_tmp, NULL));
+
+    /* 3. Push the frame onto the catch-stack via a tiny helper, then
+     *    call setjmp INLINE in the user's function. setjmp must be
+     *    called from a function whose stack frame still exists when
+     *    longjmp fires - calling it inside HCC_TryEnter (a returned
+     *    helper) was UB. The helper that managed the chain is split
+     *    out so the IR stays declarative. */
+    irEmitRuntimeCall1(ctx, "HCC_PushFrame",
+                        IR_TYPE_VOID, 8, frame_addr);
+    IrValue *enter_ret = irEmitRuntimeCall1(ctx, "setjmp",
+                                              IR_TYPE_I64, 8, frame_addr);
+
+    /* 4. Branch: (enter_ret == 0) -> body, else -> catch. */
+    IrBlock *body_block  = irBlockNew();
+    IrBlock *catch_block = irBlockNew();
+    IrBlock *end_block   = irBlockNew();
+
+    IrValue *cmp_zero = irTmp(IR_TYPE_I64, 8);
+    IrInstr *cmp = irICmp(cmp_zero, IR_CMP_EQ, enter_ret,
+                          irConstInt(IR_TYPE_I64, 0));
+    irBlockAddInstr(ctx, cmp);
+    irBranch(ctx->cur_func, ctx->cur_block, cmp_zero,
+             body_block, catch_block);
+
+    /* 5. body_block: lower try body, leave the catch frame, jump to end. */
+    irFnAddBlock(ctx->cur_func, body_block);
+    ctx->cur_block = body_block;
+    irLowerAst(ctx, ast->try_body);
+    if (!ctx->cur_block->sealed) {
+        irEmitRuntimeCall1(ctx, "HCC_TryLeave",
+                            IR_TYPE_VOID, 8, frame_addr);
+        IrInstr *jmp = irJump(ctx->cur_func, ctx->cur_block, end_block);
+        irBlockAddInstr(ctx, jmp);
+    }
+
+    /* 6. catch_block: pop the frame first (so a throw from inside the
+     *    handler propagates to the next outer try, not back to us),
+     *    then lower the handler, then jump to end. */
+    irFnAddBlock(ctx->cur_func, catch_block);
+    ctx->cur_block = catch_block;
+    irEmitRuntimeCall1(ctx, "HCC_TryLeave",
+                        IR_TYPE_VOID, 8, frame_addr);
+    irLowerAst(ctx, ast->catch_body);
+    if (!ctx->cur_block->sealed) {
+        IrInstr *jmp = irJump(ctx->cur_func, ctx->cur_block, end_block);
+        irBlockAddInstr(ctx, jmp);
+    }
+
+    /* 7. end_block: subsequent statements continue here. */
+    irFnAddBlock(ctx->cur_func, end_block);
+    ctx->cur_block = end_block;
+}
+
+/* throw(value) lowers to a single HCC_Throw(value) call. The runtime
+ * longjmps so control never returns; mark the current block sealed
+ * so the lowering driver doesn't append a fall-through edge. */
+void irLowerThrow(IrCtx *ctx, Ast *ast) {
+    IrValue *v = irExpr(ctx, ast->throw_value);
+    irEmitRuntimeCall1(ctx, "HCC_Throw", IR_TYPE_VOID, 8, v);
+    ctx->cur_block->sealed = 1;
+}
+
 void irLowerIf(IrCtx *ctx, Ast *ast) {
     IrValue *cond_val = irExpr(ctx, ast->cond);
     IrBlock *then_block = irBlockNew();
@@ -1480,6 +1630,26 @@ void irLowerDecl(IrCtx *ctx, Ast *ast) {
     Ast *init = ast->declinit;
     IrInstr *ir_alloca;
     u32 var_id;
+
+    /* Register-pinned local (TempleOS `<Type> reg <REG> name`).
+     * No alloca, no slot - the value lives in the named machine
+     * register for the whole function. Init is performed inline
+     * below as a regular store-to-local (the per-arch emitter sees
+     * the IrValue's `pinned_reg` and writes the register directly). */
+    if (var->kind == AST_LVAR && var->pinned_kind == LVAR_REG) {
+        IrValue *local = irValueNew(irConvertType(var->type), IR_VAL_LOCAL);
+        local->as.var.id = var->lvar_id;
+        local->as.var.size = var->type ? var->type->size : 8;
+        local->pinned_reg = var->pinned_reg;
+        irFnAddVar(ctx->cur_func, var->lvar_id, local);
+        if (init) {
+            IrValue *iv = irExpr(ctx, init);
+            IrInstr *st = irInstrNew(IR_STORE, local, iv, NULL);
+            irBlockAddInstr(ctx, st);
+        }
+        return;
+    }
+
     if (var->kind == AST_FUNPTR) {
         /* Function-pointer slot: 8 bytes, treated as a pointer. */
         IrValue *tmp = irTmp(IR_TYPE_PTR, 8);
@@ -1744,6 +1914,58 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
             break;
         }
 
+        case AST_TRY: {
+            irLowerTry(ctx, ast);
+            break;
+        }
+
+        case AST_THROW: {
+            irLowerThrow(ctx, ast);
+            break;
+        }
+
+        case AST_ASM_STMT: {
+            /* Inline `asm { ... }` block. Carry both the text (for
+             * legacy/pure asm) and the optional fragment list (when
+             * `&var` references need late binding to stack offsets).
+             *
+             * For each UNIQUE `&y` reference we emit ONE "spectator"
+             * IR_LEA. The result is unused, but mem2reg's
+             * other_uses-counter sees the LEA and skips promoting
+             * `y`, so `y` retains a real stack slot the asm can
+             * read/write through. One LEA per local suffices; we
+             * dedupe by lvar_id to avoid emitting N copies of the
+             * same dead `add xN, x29, #imm` when the asm uses `&y`
+             * multiple times. */
+            if (ast->asm_fragments) {
+                Set *seen = setNew(8, &set_uint_type);
+                listForEach(ast->asm_fragments) {
+                    AsmFragment *f = (AsmFragment *)it->value;
+                    if (f->kind != ASM_FRAG_LVAR_REF) continue;
+                    if (!f->lvar) continue;
+                    if (setHas(seen, (void *)(u64)f->lvar->lvar_id))
+                        continue;
+                    setAdd(seen, (void *)(u64)f->lvar->lvar_id);
+                    IrValue *slot = irFnGetVar(ctx->cur_func,
+                                                f->lvar->lvar_id);
+                    if (!slot) continue;
+                    IrValue *addr = irTmp(IR_TYPE_PTR, 8);
+                    irBlockAddInstr(ctx,
+                        irInstrNew(IR_LEA, addr, slot, NULL));
+                }
+                setRelease(seen);
+            }
+            IrValue *txt = irValueNew(IR_TYPE_ARRAY, IR_VAL_CONST_STR);
+            txt->as.str.str = ast->asm_stmt;
+            txt->as.str.label = NULL;
+            txt->as.str.str_real_len = ast->asm_stmt
+                ? (int)ast->asm_stmt->len : 0;
+            IrInstr *instr = irInstrNew(IR_ASM, NULL, txt, NULL);
+            instr->extra.asm_fragments = ast->asm_fragments;
+            irBlockAddInstr(ctx, instr);
+            break;
+        }
+
         case AST_UNOP: {
             /* Bare ++/-- as a statement: lower as expression and discard. */
             irExpr(ctx, ast);
@@ -1821,29 +2043,6 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
     }
 }
 
-void irSimplifyFunction(IrFunction *fn) {
-    Set *work_queue_ids = setNew(16, &set_uint_type);
-    List *queue = listNew();
-    Set *blocks_to_delete = setNew(16, &set_int_type);
-
-    (void)work_queue_ids;
-    (void)queue;
-    (void)blocks_to_delete;
-
-    /* Any blocks that don't have a successor lets assume they jump to 
-     * the return */
-    listForEach(fn->blocks) {
-        IrBlock *block = it->value;
-        if (irBlockIsStartOrEnd(fn, block)) continue;
-        Map *cur_successors = irBlockGetSuccessors(fn, block);
-        if (cur_successors && cur_successors->size == 0) {
-            /* @TODO
-             * Think I need a new file to contain making ir instructions/ values*/
-            irJump(fn, block, fn->exit_block);
-        }
-    }
-}
-
 IrFunction *irLowerFunction(IrCtx *ctx, Ast *ast_func) {
     IrFunction *func = irFunctionNew(ast_func->fname);
     IrBlock *entry = irBlockNew();
@@ -1893,6 +2092,18 @@ IrFunction *irLowerFunction(IrCtx *ctx, Ast *ast_func) {
         IrValue *ir_tmp_var = irTmp(irConvertType(ast_param->type),
                                     ast_param->type->size);
         ir_tmp_var->kind = IR_VAL_PARAM;
+        /* Propagate TempleOS-style `<Type> reg <REG> name` pinning
+         * from the AST onto the IrValue so the per-arch codegen can
+         * route reads / writes to the named register and skip the
+         * usual stack-slot spill. Only AST_LVAR params can carry the
+         * modifier; AST_FUNPTR / AST_DEFAULT_PARAM go through their
+         * normal slot paths. */
+        if (ast_param->kind == AST_LVAR &&
+            ast_param->pinned_kind == LVAR_REG &&
+            ast_param->pinned_reg)
+        {
+            ir_tmp_var->pinned_reg = ast_param->pinned_reg;
+        }
         irFnAddVar(func, key, ir_tmp_var);
         vecPush(func->params, ir_tmp_var);
         irAddStackSpace(ctx, ast_param->type->size);
@@ -1939,7 +2150,13 @@ IrFunction *irLowerFunction(IrCtx *ctx, Ast *ast_func) {
         IrInstr *ir_ret = irInstrNew(IR_RET, ir_load_dst, NULL, NULL);
         irBlockAddInstr(ctx, ir_ret);
     } else {
-        IrInstr *ir_ret = irInstrNew(IR_RET, NULL, NULL, NULL);
+        IrInstr *ir_ret = NULL;
+        if (func->name->len == 4 &&
+                !strncasecmp(func->name->data, str_lit("Main"))) {
+            ir_ret = irInstrNew(IR_RET, irConstInt(IR_TYPE_I32, 0), NULL, NULL);
+        } else {
+            ir_ret = irInstrNew(IR_RET, NULL, NULL, NULL);
+        }
         irBlockAddInstr(ctx, ir_ret);
     }
     exit_block->sealed = 1;
@@ -2071,6 +2288,7 @@ static void irRemoveRedundantBlocks(IrFunction *fn) {
 }
 
 void irBasicFunctionOptimisations(IrFunction *fn) {
+    irMem2Reg(fn);
     irRemoveAllNops(fn);
     irRemoveRedundantBlocks(fn);
     irEvalConstantExpressions(fn);
@@ -2084,20 +2302,22 @@ void irBasicFunctionOptimisations(IrFunction *fn) {
 static u32 ircg_func_seq = 0;
 
 void irFunctionPrepForCodeGen(IrCgCtx *ctx, IrFunction *fn, Ast *ast_fn) {
-    irCgClassifyPhis(fn);
-    irCgAnnotate(fn);
-    irPeephole(ctx->cc, fn);
-
-    int locals_params_space = irCgComputeAstLayout(ast_fn, fn);
+    ctx->fn = fn;
+    ctx->cur_block = NULL;
+    ctx->next_block = NULL;
 
     fn->uuid = ircg_func_seq++;
     fn->ra.func = fn;
     fn->ra.id_to_loff = mapNew(32, &map_uint_to_uint_type);
     fn->ra.extra_stack = 0;
 
-    ctx->fn = fn;
-    ctx->cur_block = NULL;
-    ctx->next_block = NULL;
+    irCgClassifyPhis(fn);
+    irCgAnnotate(fn);
+    irPeephole(ctx->cc, fn);
+
+    int locals_params_space = irCgComputeAstLayout(ast_fn, fn);
+
+
     /* Index every peephole-deferred LEA by its dst tmp id, so the
      * IR_CALL emit can re-create the leaq into the arg register. */
     ctx->lea_inline_map = mapNew(8, &map_uint_to_uint_type);
@@ -2116,6 +2336,14 @@ void irFunctionPrepForCodeGen(IrCgCtx *ctx, IrFunction *fn, Ast *ast_fn) {
                    (void *)I);
         }
     }
+
+    /* Bind AST-driven loffs (params + alloca'd locals) before walking the
+     * IR for tmp slots. An alloca's dst tmp shares its var.id with the AST
+     * local it represents; binding first lets `irCgAllocTmp`'s mapHasInt
+     * guard skip those tmps cleanly (and avoids double-counting their
+     * space in `extra_stack`). */
+    irCgBindAstLoffs(&fn->ra, ast_fn);
+
     /* Allocate slots for IR tmps just below the params area. */
     irCgAllocAllTmps(&fn->ra, locals_params_space);
 
@@ -2127,8 +2355,6 @@ void irFunctionPrepForCodeGen(IrCgCtx *ctx, IrFunction *fn, Ast *ast_fn) {
 
     /* Stack required for the function */
     fn->stack_space = (u16)total_stack;
-
-    irCgBindAstLoffs(&fn->ra, ast_fn);
 }
 
 void irCgFinishFunction(IrCgCtx *ctx) {
@@ -2150,10 +2376,6 @@ void irDump(Cctrl *cc) {
             IrFunction *fn = irLowerFunction(ctx, ast);
             irPrintFunction(fn);
  
-            irMem2Reg(fn);
-            printf("===== After mem2reg ===== \n");
-            irPrintFunction(fn);
-
             irBasicFunctionOptimisations(fn);
             printf("===== After basic optimisations ===== \n");
             irPrintFunction(fn);

@@ -2,6 +2,7 @@
 #include <stdio.h>
 
 #include "aostr.h"
+#include "asm.h"
 #include "ast.h"
 #include "cctrl.h"
 #include "lexer.h"
@@ -155,8 +156,22 @@ void prsAsmPunct(Cctrl *cc, Lexeme *tok, AoStr *buf) {
 }
 
 /* Custom assembly to AT&T */
+/* Format used to placeholder-mark a TempleOS `&y` operand inside an
+ * AT&T asm body. The numeric suffix is the index into `all_lvars`
+ * built up during parsing; after each instruction is emitted into
+ * `curblock`, we walk the freshly-written text looking for these
+ * markers and split into AsmFragment::TEXT / ASM_FRAG_LVAR_REF runs
+ * so codegen can resolve to `<loff>(%rbp)` once layout has assigned
+ * loffs.
+ *
+ * `__hcclv_` is intentionally lowercase + underscore-prefixed so it
+ * survives `aoStrToLowerCase(op1)` and won't collide with any token
+ * a user might reasonably write in inline asm. */
+#define ATT_LVAR_PLACEHOLDER_PREFIX "__hcclv_"
+#define ATT_LVAR_PLACEHOLDER_SUFFIX "__"
+
 Ast *prsAsmToATT(Cctrl *cc, int parse_one) {
-    AoStr *op1 = NULL, *op2 = NULL, *op3 = NULL, *asm_code = NULL, *curblock = NULL, *stdfunc = NULL, *curfunc = NULL;
+    AoStr *op1 = NULL, *op2 = NULL, *op3 = NULL, *asm_code = NULL, *curblock = NULL, *curfunc = NULL;
     List *asm_functions;
     Ast *asm_function, *asm_block;
     Lexeme *tok, *next;
@@ -166,6 +181,17 @@ Ast *prsAsmToATT(Cctrl *cc, int parse_one) {
     asm_code = aoStrNew();
     curblock = parse_one ? asm_code : NULL;
     memset(asm_code->data,'\0',asm_code->capacity-1);
+
+    /* TempleOS `&var` references: every `&IDENT` whose IDENT is a
+     * local in the surrounding HolyC function records the lvar here
+     * and stamps a `__hcclv_<idx>__` placeholder into the operand
+     * buffer. After each instruction flush we scan curblock for the
+     * placeholders and emit fragments. fragments stays empty for
+     * asm blocks that don't use the feature - we attach it only when
+     * non-empty, so the plain-text path is unchanged for those. */
+    Vec *all_lvars = astVecNew();
+    List *fragments = listNew();
+    s64 last_flush_pos = 0;
 
     cctrlTokenExpect(cc, '{');
     tok = cctrlAsmTokenGet(cc);
@@ -267,7 +293,14 @@ Ast *prsAsmToATT(Cctrl *cc, int parse_one) {
 
             case TK_PUNCT: {
                 switch (tok->i64) {
-                    case '\n':
+                    case '\n': {
+                        /* curblock is NULL until the first `Name::`
+                         * label is seen; with CCF_ACCEPT_NEWLINES on,
+                         * the `\n` between `asm {` and that label
+                         * arrives here first. count is 0 in that
+                         * case, so the inner switch is a no-op and
+                         * there's nothing to scan for placeholders. */
+                        s64 inst_start = curblock ? (s64)curblock->len : 0;
                         switch (count) {
                             case 0:
                                 break;
@@ -281,9 +314,13 @@ Ast *prsAsmToATT(Cctrl *cc, int parse_one) {
                                  * operation */
                                 aoStrToLowerCase(op1);
                                 if (setHasLen(cc->libc_functions, op1->data,op1->len)) {
-                                    stdfunc = astNormaliseFunctionName(op1->data);
-                                    aoStrCatFmt(curblock,"%S\n",stdfunc);
-                                    aoStrRelease(stdfunc);
+                                    /* Target-aware mangling: Darwin
+                                     * needs a leading `_`, Linux
+                                     * doesn't. asmNormaliseFunctionName
+                                     * reads cc->target rather than
+                                     * the build host's IS_BSD. */
+                                    char *stdfn = asmNormaliseFunctionName(cc, op1);
+                                    aoStrCatPrintf(curblock,"%s\n",stdfn);
                                 } else {
                                     aoStrCatFmt(curblock,"%S\n",op1);
                                 }
@@ -296,11 +333,10 @@ Ast *prsAsmToATT(Cctrl *cc, int parse_one) {
                                 int is_call = op1->len == 4 && !strncasecmp(op1->data,str_lit("call"));
 
                                 if (is_call) {
-                                    if (mapGetLen(cc->global_env, op2->data, op2->len) != NULL || 
+                                    if (mapGetLen(cc->global_env, op2->data, op2->len) != NULL ||
                                         setHasLen(cc->libc_functions, op2->data, op2->len)) {
-                                        stdfunc = astNormaliseFunctionName(op2->data);
-                                        aoStrCatFmt(curblock,"%S\n",stdfunc);
-                                        aoStrRelease(stdfunc);
+                                        char *stdfn = asmNormaliseFunctionName(cc, op2);
+                                        aoStrCatPrintf(curblock,"%s\n",stdfn);
                                     } else {
                                         if (op2->data[0] == '%') {
                                             aoStrPutChar(curblock,'*');
@@ -337,12 +373,115 @@ Ast *prsAsmToATT(Cctrl *cc, int parse_one) {
                                         " x86 transpilation: %d %s %s",
                                         count,op1->data,op2->data);
                         }
+                        /* If the freshly-emitted instruction has any
+                         * `__hcclv_<idx>__` placeholders, split the
+                         * range [inst_start, curblock->len) into
+                         * TEXT / LVAR_REF fragments. The text before
+                         * the placeholder becomes a TEXT fragment;
+                         * the placeholder itself maps to LVAR_REF
+                         * via all_lvars[idx]; trailing text after
+                         * the last placeholder is left for the next
+                         * iteration (or the final flush). */
+                        if (curblock && all_lvars->size > 0) {
+                            s64 cursor = inst_start;
+                            s64 end = (s64)curblock->len;
+                            size_t pfx_len =
+                                strlen(ATT_LVAR_PLACEHOLDER_PREFIX);
+                            while (cursor < end) {
+                                /* Bounded search for the prefix. */
+                                char *hay = curblock->data + cursor;
+                                size_t hay_len = (size_t)(end - cursor);
+                                char *hit = NULL;
+                                for (size_t i = 0;
+                                     i + pfx_len <= hay_len; ++i)
+                                {
+                                    if (memcmp(hay + i,
+                                            ATT_LVAR_PLACEHOLDER_PREFIX,
+                                            pfx_len) == 0)
+                                    {
+                                        hit = hay + i;
+                                        break;
+                                    }
+                                }
+                                if (!hit) break;
+                                s64 ph_pos = (s64)(hit - curblock->data);
+                                char *idx_str = hit + pfx_len;
+                                char *idx_end = NULL;
+                                long long idx_val = strtoll(idx_str,
+                                                            &idx_end,
+                                                            10);
+                                if (!idx_end ||
+                                    idx_end[0] != '_' ||
+                                    idx_end[1] != '_')
+                                {
+                                    /* Malformed - skip past the
+                                     * prefix and keep scanning so a
+                                     * spurious "__hcclv_" in user
+                                     * text doesn't break the loop. */
+                                    cursor = ph_pos + (s64)pfx_len;
+                                    continue;
+                                }
+                                s64 ph_end =
+                                    (s64)((idx_end + 2) - curblock->data);
+
+                                if (ph_pos > last_flush_pos) {
+                                    AoStr *chunk = aoStrDupRaw(
+                                        curblock->data + last_flush_pos,
+                                        ph_pos - last_flush_pos);
+                                    listAppend(fragments,
+                                            asmFragmentText(chunk));
+                                }
+                                Ast *lvar = vecGet(Ast *, all_lvars,
+                                                   (u64)idx_val);
+                                listAppend(fragments,
+                                        asmFragmentLvarRef(lvar));
+                                last_flush_pos = ph_end;
+                                cursor = ph_end;
+                            }
+                        }
                         isbol = 1;
                         count = 0;
                         break;
+                    }
 
                     case ',':
                         break;
+                    case '&': {
+                        /* TempleOS `&y` -> address of a HolyC local.
+                         * Record the lvar, stamp a placeholder into
+                         * the current operand slot; codegen resolves
+                         * it once layout has assigned the loff. Only
+                         * active for inline asm with a surrounding
+                         * localenv - falls through to the default
+                         * punct path otherwise so `&FUNCNAME`-style
+                         * usages keep working. */
+                        int handled = 0;
+                        if (parse_one && cc->localenv) {
+                            Lexeme *p = cctrlTokenPeek(cc);
+                            if (p && p->tk_type == TK_IDENT) {
+                                Ast *local = mapGetLen(cc->localenv,
+                                        p->start, p->len);
+                                if (local && local->kind == AST_LVAR) {
+                                    cctrlAsmTokenGet(cc);
+                                    s64 idx = (s64)all_lvars->size;
+                                    vecPush(all_lvars, local);
+                                    AoStr *ph = aoStrPrintf(
+                                        ATT_LVAR_PLACEHOLDER_PREFIX
+                                        "%lld"
+                                        ATT_LVAR_PLACEHOLDER_SUFFIX,
+                                        (long long)idx);
+                                    if (count == 0)      op1 = ph;
+                                    else if (count == 1) op2 = ph;
+                                    else                 op3 = ph;
+                                    count++;
+                                    handled = 1;
+                                }
+                            }
+                        }
+                        if (handled) break;
+                        /* fallthrough to default punct emission */
+                    }
+                    /* fallthrough */
                     default:
                         switch (count) {
                             case 0:
@@ -379,11 +518,28 @@ Ast *prsAsmToATT(Cctrl *cc, int parse_one) {
         }
     }
     asm_block = astAsmBlock(asm_code,asm_functions);
+    /* Attach fragments only if any `&var` placeholder was actually
+     * seen. Otherwise the plain-text path runs unchanged. */
+    if (parse_one && fragments && fragments->next != fragments) {
+        if ((s64)curblock->len > last_flush_pos) {
+            AoStr *chunk = aoStrDupRaw(
+                curblock->data + last_flush_pos,
+                curblock->len - last_flush_pos);
+            listAppend(fragments, asmFragmentText(chunk));
+        }
+        asm_block->asm_fragments = fragments;
+    }
     return asm_block;
 }
 
 /* The next token is expected to be '{' so the parser has just seen 'asm' */
 Ast *prsAsm(Cctrl *cc, int parse_one) {
+    if (cc->target == TARGET_AARCH64_APPLE_DARWIN ||
+        cc->target == TARGET_AARCH64_UNKNOWN_LINUX_GNU)
+    {
+        loggerPanic("Unsupported target, cannot use asm blocks %s\n",
+                cliTargetToString(cc->target));
+    }
     return prsAsmToATT(cc, parse_one);
 }
 

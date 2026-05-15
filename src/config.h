@@ -25,6 +25,10 @@
 #define ARCH_STR "aarch64"
 #endif
 
+#ifndef HCC_GIT_HASH
+#define HCC_GIT_HASH "unknown git hash"
+#endif
+
 #ifndef __GNUC__
     #define __attribute__(x)  // Define as empty if not using GCC/Clang
 #endif

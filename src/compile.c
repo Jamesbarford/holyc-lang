@@ -8,7 +8,7 @@
 #include "cli.h"
 #include "compile.h"
 #include "memory.h"
-#include "x86.h"
+#include "asm.h"
 #include "lexer.h"
 #include "list.h"
 #include "parser.h"

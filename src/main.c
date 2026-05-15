@@ -27,7 +27,7 @@ int is_terminal;
 
 #if defined(__aarch64__) || defined(__arm64ec__)
     #define _CC "clang"
-    #define CC_TARGET "--target=x86_64-apple-darwin"
+    #define CC_TARGET ""
 #else
     #define _CC "gcc"
     #define CC_TARGET ""
@@ -40,7 +40,7 @@ int is_terminal;
     #define INSTALL_PREFIX "/usr/local"
 #endif
 
-#define CLIBS_BASE "-ltos -lpthread -lc -lm"
+#define CLIBS_BASE "-lpthread -lc -lm"
 
 #ifdef HCC_LINK_SQLITE3
 #define CLIBS CLIBS_BASE" -lsqlite3"
@@ -69,33 +69,49 @@ typedef struct hccLib {
     char *install_cmd;
 } hccLib;
 
+static int hccCanLinkLibTos(Cctrl *cc) {
+    (void)cc;
+    return 1;
+}
+
 int hccLibInit(Cctrl *cc, hccLib *lib, CliArgs *args, char *name) { 
     AoStr *dylib_cmd = aoStrNew();
     AoStr *stylib_cmd = aoStrNew();
     AoStr *installcmd = aoStrNew();
     
+    /* All literal INSTALL_PREFIX paths are now plumbed through
+     * args->install_dir so a `-lib tos --install-dir=X` build lands
+     * in X/lib/ rather than always /usr/local/. The default install
+     * dir is still INSTALL_PREFIX (set in cliArgsInit), so existing
+     * invocations behave unchanged - this is purely an opt-in
+     * redirection for cross-builds and sandboxed installs. */
 #if IS_BSD
     snprintf(lib->stylib_name,LIB_BUFSIZ,"%s.a",name);
     snprintf(lib->dylib_name,LIB_BUFSIZ,"%s.dylib",name);
     snprintf(lib->dylib_version_name,LIB_BUFSIZ,"%s.0.0.1.dylib",name);
 
-    aoStrCatFmt(dylib_cmd,
-            "cp -pPR ./%s "INSTALL_PREFIX"/lib/lib%s && "
-            "cc -dynamiclib -Wl,-install_name,"INSTALL_PREFIX"/lib/%s -o %s "CLIBS" -o %s %s",
+    aoStrCatPrintf(dylib_cmd,
+            "cp -pPR ./%s %s/lib/lib%s && "
+            "%s -dynamiclib -Wl,-install_name,%s/lib/%s -o %s "CLIBS" -o %s %s",
             lib->stylib_name,
+            args->install_dir,
             lib->stylib_name,
+            cc->CC,
+            args->install_dir,
             name,
             lib->dylib_version_name,
             lib->dylib_name,
             args->obj_outfile);
 
     aoStrCatPrintf(installcmd,
-            "cp -pPR ./%s "INSTALL_PREFIX"/lib/lib%s && "
-            "ln -sf "INSTALL_PREFIX"/lib/%s "INSTALL_PREFIX"/lib/%s",
+            "cp -pPR ./%s %s/lib/lib%s && "
+            "ln -sf %s/lib/%s %s/lib/%s",
             lib->dylib_name,
+            args->install_dir,
             lib->dylib_version_name,
-
+            args->install_dir,
             lib->dylib_version_name,
+            args->install_dir,
             lib->dylib_name);
 
 #elif IS_LINUX
@@ -103,15 +119,16 @@ int hccLibInit(Cctrl *cc, hccLib *lib, CliArgs *args, char *name) {
     snprintf(lib->dylib_name,LIB_BUFSIZ,"%s.so",name);
     snprintf(lib->dylib_version_name,LIB_BUFSIZ,"%s.so.0.0.1",name);
     aoStrCatPrintf(dylib_cmd,
-            "%s -fPIC -shared -Wl,-soname,"INSTALL_PREFIX"/lib/%s -o %s "CLIBS,
+            "%s -fPIC -shared -Wl,-soname,%s/lib/%s -o %s "CLIBS,
             cc->CC,
+            args->install_dir,
             name,
             lib->dylib_name,
             lib->dylib_name);
     aoStrCatPrintf(dylib_cmd," -o %s %s",lib->dylib_name,args->obj_outfile);
     aoStrCatPrintf(installcmd,
-            "cp -pPR ./%s "INSTALL_PREFIX"/lib/lib%s",
-            lib->stylib_name,lib->stylib_name);
+            "cp -pPR ./%s %s/lib/lib%s",
+            lib->stylib_name,args->install_dir,lib->stylib_name);
 #else
 #error "System not supported"
 #endif
@@ -207,10 +224,17 @@ void emitFile(Cctrl *cc, AoStr *asmbuf, CliArgs *args) {
         if (args->run) {
             AoStr *run_cmd = aoStrNew();
             writeAsmToTmp(asmbuf);
-            aoStrCatPrintf(run_cmd,"%s -L"INSTALL_PREFIX"/lib %s "CLIBS" && ./a.out && rm ./a.out",
-                    cc->CC,
-                    ASM_TMP_FILE);
-            /* Don't use 'safeSystem' else anything other than a '0' exit 
+            if (hccCanLinkLibTos(cc)) {
+                aoStrCatPrintf(run_cmd,"%s -L%s/lib %s "CLIBS" -ltos && ./a.out && rm ./a.out",
+                        cc->CC,
+                        args->install_dir,
+                        ASM_TMP_FILE);
+            } else {
+                aoStrCatPrintf(run_cmd,"%s %s "CLIBS" && ./a.out && rm ./a.out",
+                        cc->CC,
+                        ASM_TMP_FILE);
+            }
+            /* Don't use 'safeSystem' else anything other than a '0' exit
              * code will cause a panic which is incorrect... This is a bit of a
              * hack as run, in an ideal world, would not be calling out to `_CC` */
             int ret = system(run_cmd->data);
@@ -226,13 +250,34 @@ void emitFile(Cctrl *cc, AoStr *asmbuf, CliArgs *args) {
         }
 
         if (args->clibs) {
-            aoStrCatPrintf(cmd, "%s -L"INSTALL_PREFIX"/lib %s %s "CLIBS" -o %s", 
-                    cc->CC,
-                    ASM_TMP_FILE,args->clibs,args->output_filename);
+            if (hccCanLinkLibTos(cc)) {
+                aoStrCatPrintf(cmd, "%s -L%s/lib %s %s "CLIBS" -ltos -o %s",
+                        cc->CC,
+                        args->install_dir,
+                        ASM_TMP_FILE,args->clibs,args->output_filename);
+            } else {
+                aoStrCatPrintf(cmd, "%s %s %s "CLIBS" -o %s",
+                        cc->CC,
+                        ASM_TMP_FILE,
+                        args->clibs,
+                        args->output_filename);
+            }
+
         } else {
-            aoStrCatPrintf(cmd, "%s -L"INSTALL_PREFIX"/lib %s "CLIBS" -o %s", 
-                    cc->CC,
-                    ASM_TMP_FILE, args->output_filename);
+            if (hccCanLinkLibTos(cc)) {
+                aoStrCatPrintf(cmd,
+                               "%s -L%s/lib %s "CLIBS" -ltos -o %s",
+                               cc->CC,
+                               args->install_dir,
+                               ASM_TMP_FILE,
+                               args->output_filename);
+            } else {
+                aoStrCatPrintf(cmd,
+                               "%s %s "CLIBS" -o %s",
+                               cc->CC,
+                               ASM_TMP_FILE,
+                               args->output_filename);
+            }
         }
         safeSystem(cmd->data);
     }
@@ -253,14 +298,27 @@ void assemble(Cctrl *cc, CliArgs *args) {
             .capacity = len,
         };
         writeAsmToTmp(&asm_buf);
-        aoStrCatPrintf(run_cmd,"%s -L"INSTALL_PREFIX"/lib %s "CLIBS" && ./a.out && rm ./a.out",
-                cc->CC,
-                ASM_TMP_FILE);
+        if (hccCanLinkLibTos(cc)) {
+            aoStrCatPrintf(run_cmd,
+                           "%s -L"INSTALL_PREFIX"/lib %s "CLIBS" -ltos && ./a.out && rm ./a.out",
+                            cc->CC,
+                            ASM_TMP_FILE);
+        } else {
+            aoStrCatPrintf(run_cmd,
+                           "%s %s "CLIBS" && ./a.out && rm ./a.out",
+                           cc->CC,
+                           ASM_TMP_FILE);
+        }
         free(buffer);
         int ret = system(run_cmd->data);
         (void)ret;
     } else {
-        aoStrCatPrintf(run_cmd, "%s %s -L"INSTALL_PREFIX"/lib "CLIBS, cc->CC, args->infile);
+        if (hccCanLinkLibTos(cc)) {
+            aoStrCatPrintf(run_cmd, "%s %s -L"INSTALL_PREFIX"/lib "CLIBS" -ltos",
+                    cc->CC, args->infile);
+        } else {
+            aoStrCatPrintf(run_cmd, "%s %s "CLIBS, cc->CC, args->infile);
+        }
         safeSystem(run_cmd->data);
     }
     aoStrRelease(run_cmd);
@@ -316,27 +374,20 @@ int main(int argc, char **argv) {
     cc = cctrlNew();
 
     /* Plumb in support for cross compiling... currently does nothing :)*/
-    cc->target = (char *)cliTargetToString(args.target);
+    const char *str_target = cliTargetToString(args.target);
     switch (args.target) {
-        case TARGET_DEFAULT:
-            cc->CC = mprintf("%s %s", _CC, CC_TARGET);
-            break;
-        case TARGET_AARCH64_APPLE_DARWIN:
-            cc->CC = mprintf("clang --target=%s", cc->target);
-            break;
+        /* Let clang do the heavy lifting */
         case TARGET_AARCH64_UNKNOWN_LINUX_GNU:
-            cc->CC = mprintf("clang --target=%s", cc->target);
-            break;
         case TARGET_X86_64_APPLE_DARWIN:
-            cc->CC = mprintf("clang --target=%s", cc->target);
-            break;
         case TARGET_X86_64_UNKNOWN_LINUX_GNU:
-            cc->CC = mprintf("clang --target=%s", cc->target);
+        case TARGET_AARCH64_APPLE_DARWIN:
+            cc->CC = mprintf("clang --target=%s", str_target);
+            cc->target = args.target;
             break;
     }
 
-    if (args.target != TARGET_DEFAULT) {
-        loggerPanic("This is an unfinished feature :(, please do not set the `-`-target=` cli flag\n");
+    if (args.use_legacy_x86) {
+        cc->flags |= CCTRL_USE_LEGACY_X86;
     }
 
     if (args.assemble) {
@@ -344,11 +395,9 @@ int main(int argc, char **argv) {
         goto success;
     }
 
-
     if (!listEmpty(args.defines_list)) {
         cctrlSetCommandLineDefines(cc,args.defines_list);
     }
-
 
     if (args.print_tokens) {
         compileToTokens(cc,&args,lexer_flags);

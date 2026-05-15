@@ -1,6 +1,7 @@
 #include "./defs.HH"
 #include "./memory.HC"
 #include "./system.HC"
+#include "./except.HC"
 #include "./math.HC"
 #include "./date.HC"
 #include "./io.HC"

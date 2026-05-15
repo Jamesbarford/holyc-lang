@@ -132,6 +132,11 @@ static LexerType lexer_types[] = {
     {"goto",     KW_GOTO},
     {"default",  KW_DEFAULT},
     {"return",   KW_RETURN},
+    {"try",      KW_TRY},
+    {"catch",    KW_CATCH},
+    {"throw",    KW_THROW},
+    {"reg",      KW_REG},
+    {"noreg",    KW_NOREG},
 
     {"if",      KW_IF},
     {"else",    KW_ELSE},
@@ -470,6 +475,11 @@ AoStr *lexemeToAoStr(Lexeme *tok) {
                 case KW_CAST:        aoStrCatPrintf(str,"cast"); break;
                 case KW_SIZEOF:      aoStrCatPrintf(str,"sizeof");  break;
                 case KW_RETURN:      aoStrCatPrintf(str,"return");  break;
+                case KW_TRY:         aoStrCatPrintf(str,"try");     break;
+                case KW_CATCH:       aoStrCatPrintf(str,"catch");   break;
+                case KW_THROW:       aoStrCatPrintf(str,"throw");   break;
+                case KW_REG:         aoStrCatPrintf(str,"reg");     break;
+                case KW_NOREG:       aoStrCatPrintf(str,"noreg");   break;
                 case KW_SWITCH:      aoStrCatPrintf(str,"switch");  break;
                 case KW_CASE:        aoStrCatPrintf(str,"case");    break;
                 case KW_BREAK:       aoStrCatPrintf(str,"break");   break;
@@ -1224,6 +1234,13 @@ int lex(Lexer *l, Lexeme *le) {
                 return 1;
 
             case '#': {
+                /* Inside an asm{} block `#` could be the immediate
+                 * marker preprocessor directives can't appear there anyway,
+                 * so surface it as a plain punctuation token. */
+                if (l->flags & CCF_ASM_BLOCK) {
+                    lexemeAssignOp(le,start,1,ch,l->lineno);
+                    return 1;
+                }
                 type = lexPreProcDirective(l);
                 le->tk_type = TK_KEYWORD;
                 le->i64 = type->kind;

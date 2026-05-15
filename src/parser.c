@@ -5,6 +5,7 @@
 #include <assert.h>
 
 #include "aostr.h"
+#include "asm.h"
 #include "ast.h"
 #include "cctrl.h"
 #include "lexer.h"
@@ -25,8 +26,37 @@ Ast *parseVariableInitialiser(Cctrl *cc, Ast *var, s64 terminator_flags);
 Ast *parseDecl(Cctrl *cc);
 Ast *parseDeclOrStatement(Cctrl *cc);
 Ast *parseCompoundStatement(Cctrl *cc);
+Ast *parseTryStatement(Cctrl *cc);
+Ast *parseThrowStatement(Cctrl *cc);
 AstType *parseClassDef(Cctrl *cc, int is_intrinsic);
 AstType *parseUnionDef(Cctrl *cc);
+
+/* TempleOS-style `reg <REG>` / `noreg` modifier after a decl type.
+ * If the next token is `reg`, consume it plus the following register-
+ * name identifier; if `noreg`, consume it. Otherwise leave the token
+ * stream alone and report LVAR_AUTO. Shared with parseParams in
+ * prslib.c for the parameter-list case. */
+void parseRegModifier(Cctrl *cc, int *kind_out, AoStr **reg_out) {
+    *kind_out = LVAR_AUTO;
+    *reg_out = NULL;
+    Lexeme *peek = cctrlTokenPeek(cc);
+    if (!peek || peek->tk_type != TK_KEYWORD) return;
+    if (peek->i64 == KW_REG) {
+        cctrlTokenGet(cc);  /* consume `reg` */
+        Lexeme *reg_tok = cctrlTokenGet(cc);
+        if (!reg_tok || reg_tok->tk_type != TK_IDENT) {
+            cctrlRaiseException(cc,
+                "`reg` must be followed by a register name, got `%.*s`",
+                reg_tok ? reg_tok->len : 0,
+                reg_tok ? reg_tok->start : "");
+        }
+        *kind_out = LVAR_REG;
+        *reg_out = aoStrDupRaw(reg_tok->start, reg_tok->len);
+    } else if (peek->i64 == KW_NOREG) {
+        cctrlTokenGet(cc);  /* consume `noreg` */
+        *kind_out = LVAR_NOREG;
+    }
+}
 
 static AoStr *getRangeLoopIdx(void) {
     static int id = 0;
@@ -720,7 +750,7 @@ Ast *parseOptExpr(Cctrl *cc) {
 Ast *parseDesugarArrayLoop(Cctrl *cc, Ast *iteratee, Ast *static_array) {
     /* Create a temporay variable as the counter */
     AoStr *range_tmp_var = getRangeLoopIdx();
-    Ast *counter_var = astLVar(ast_int_type,range_tmp_var->data,
+    Ast *counter_var = astLVar(astTypeCopy(ast_int_type),range_tmp_var->data,
                                range_tmp_var->len);
 
     Ast *counter = astDecl(counter_var,astI64Type(0));
@@ -750,7 +780,7 @@ Ast *parseDesugarArrayLoop(Cctrl *cc, Ast *iteratee, Ast *static_array) {
                 AST_UN_OP_DEREF,
                 parseCreateBinaryOp(cc,AST_BIN_OP_ADD, static_array, counter_var))
             );
-    Ast *step = astUnaryOperator(ast_int_type,AST_UN_OP_PRE_INC,counter_var);
+    Ast *step = astUnaryOperator(astTypeCopy(ast_int_type),AST_UN_OP_PRE_INC,counter_var);
 
     cctrlTokenExpect(cc,')');
     Ast *forbody = parseStatement(cc);
@@ -788,7 +818,7 @@ Ast *parseCreateForRange(Cctrl *cc, Ast *iteratee,
                          Ast *size_ref, Ast *entries_ref)
 {
     AoStr *range_tmp_var = getRangeLoopIdx();
-    Ast *counter_var = astLVar(ast_int_type,range_tmp_var->data,
+    Ast *counter_var = astLVar(astTypeCopy(ast_int_type),range_tmp_var->data,
                                range_tmp_var->len);
     Ast *counter = astDecl(counter_var,astI64Type(0));
 
@@ -806,7 +836,7 @@ Ast *parseCreateForRange(Cctrl *cc, Ast *iteratee,
                 AST_UN_OP_DEREF,
                 parseCreateBinaryOp(cc,AST_BIN_OP_ADD, entries_ref, counter_var))
             );
-    Ast *step = astUnaryOperator(ast_int_type,AST_UN_OP_PRE_INC,counter_var);
+    Ast *step = astUnaryOperator(astTypeCopy(ast_int_type),AST_UN_OP_PRE_INC,counter_var);
     cctrlTokenExpect(cc,')');
     Ast *forbody = parseStatement(cc);
     listPrepend(forbody->stms,iterator);
@@ -1101,6 +1131,40 @@ Ast *parseReturnStatement(Cctrl *cc) {
     return astReturn(retval,cc->tmp_rettype);
 }
 
+/* TempleOS-strict `try { ... } catch <stmt>`. The catch handler is a
+ * single statement (often `{...}` so braces still work via the
+ * normal block-statement path) and does NOT bind the thrown value -
+ * read it via the global `Fs->except_ch`. */
+Ast *parseTryStatement(Cctrl *cc) {
+    cctrlTokenExpect(cc,'{');
+    Ast *try_body = parseCompoundStatement(cc);
+    Lexeme *tok = cctrlTokenPeek(cc);
+    if (!tok) {
+        cctrlRaiseException(cc,
+            "Expected `catch` after `try { ... }`, got end of input");
+    }
+    if (tok->tk_type != TK_KEYWORD || tok->i64 != KW_CATCH) {
+        cctrlRaiseException(cc,
+            "Expected `catch` after `try { ... }`, got `%.*s`",
+            tok->len, tok->start);
+    }
+    cctrlTokenGet(cc);  /* consume `catch` */
+    Ast *catch_body = parseStatement(cc);
+    return astTry(try_body, catch_body);
+}
+
+/* `throw(expr);` - the expression yields a u64 (commonly a multi-
+ * char constant like `'BlkDev'` which the lexer packs into 8 bytes
+ * via TK_CHAR_CONST). The runtime stashes it into `Fs->except_ch`
+ * and longjmps to the nearest enclosing catch. */
+Ast *parseThrowStatement(Cctrl *cc) {
+    cctrlTokenExpect(cc,'(');
+    Ast *value = parseExpr(cc,16);
+    cctrlTokenExpect(cc,')');
+    cctrlTokenExpect(cc,';');
+    return astThrow(value);
+}
+
 void parseRaiseCaseException(Cctrl *cc, Ast *case_expr) {
     cctrlRewindUntilStrMatch(cc,str_lit("case"),NULL);
     char *exp = astLValueToString(case_expr,0);
@@ -1304,11 +1368,28 @@ Ast *parseStatement(Cctrl *cc) {
             case KW_WHILE:    return parseWhileStatement(cc);
             case KW_DO:       return parseDoWhileStatement(cc);
             case KW_RETURN:   return parseReturnStatement(cc);
+            case KW_TRY:      return parseTryStatement(cc);
+            case KW_THROW:    return parseThrowStatement(cc);
             case KW_SWITCH:   return parseSwitchStatement(cc);
             case KW_CASE:     return parseCaseLabel(cc,tok);
             case KW_DEFAULT:  return parseDefaultStatement(cc);
             case KW_BREAK:    return parseBreakStatement(cc);
             case KW_CONTINUE: return parseContinueStatement(cc);
+            case KW_ASM: {
+                /* Inline `asm { ... }` block as a statement. TempleOS
+                 * lets functions splice raw asm directly into the body
+                 * (no `Name::` wrapper inside). prsAsm's `parse_one`
+                 * mode is the one-block-no-label path we need. */
+                Lexeme *p = cctrlTokenPeek(cc);
+                if (!tokenPunctIs(p,'{')) {
+                    cctrlRaiseException(cc,
+                        "Expected `{` after `asm`, got `%.*s`",
+                        p ? p->len : 0, p ? p->start : "");
+                }
+                Ast *asm_block = prsAsm(cc, 1);
+                listAppend(cc->asm_blocks, asm_block);
+                return asm_block;
+            }
             case KW_STATIC: {
                 env = cc->localenv;
                 cc->localenv = NULL;
@@ -1466,6 +1547,9 @@ void parseCompoundStatementInternal(Cctrl *cc, Ast *body) {
             base_type = parseBaseDeclSpec(cc);
             while (1) {
                 next_type = parsePointerType(cc,base_type);
+                int pinned_kind;
+                AoStr *pinned_reg;
+                parseRegModifier(cc, &pinned_kind, &pinned_reg);
                 peek = cctrlTokenPeek(cc);
 
                 if (!tokenPunctIs(peek,'(')) {
@@ -1479,6 +1563,8 @@ void parseCompoundStatementInternal(Cctrl *cc, Ast *body) {
                     }
                     type = parseArrayDimensions(cc,next_type);
                     var = astLVar(type,varname->start,varname->len);
+                    var->pinned_kind = pinned_kind;
+                    var->pinned_reg = pinned_reg;
                     if (!mapAddOrErr(cc->localenv,var->lname->data,var)) {
                         cctrlRewindUntilStrMatch(cc,var->lname->data,var->lname->len,NULL);
                         cctrlRaiseException(cc,"variable `%s` already declared",
@@ -1548,10 +1634,96 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
         Lexeme *peek = cctrlTokenPeek(cc);
         if (tokenPunctIs(peek,'{')) {
             AoStr *fname_duped = aoStrDupRaw(fname,len);
-            AoStr *asm_fname = astNormaliseFunctionName(fname_duped->data);
+            /* Target-aware: adds the leading `_` on Mach-O so it
+             * matches what `bl _Add` callers expect. The compile-time
+             * `astNormaliseFunctionName` only handles IS_BSD and would
+             * leave the symbol as `Add` (no underscore) on this build. */
+            AoStr *asm_fname = aoStrPrintf("%s",
+                asmNormaliseFunctionName(cc, fname_duped));
             AoStr *prev_asm_name = cc->tmp_asm_fname;
             cc->tmp_asm_fname = asm_fname;
             Ast *asm_block = prsAsm(cc,1);
+
+            /* If any param is `reg <REG>` pinned, emit shuffle moves
+             * up-front so the user's asm can refer to the pinned
+             * register names. The asm-only-function path bypasses
+             * the normal ParamSpills path that runs for IR-codegen'd
+             * functions; we splice the shuffle directly into the asm
+             * text. Note: this path doesn't save/restore callee-
+             * saved regs - the user's `RET` exits before any epilogue
+             * can run, so if the body clobbers callee-saved registers
+             * the caller is on the hook for that ABI rule.
+             * TempleOS-flavoured asm functions are explicit by design.
+             *
+             * Target-aware: AArch64 uses x0..x7 (8 int arg regs, mov
+             * "dst, src" order); x86_64 SysV uses rdi/rsi/rdx/rcx/r8/r9
+             * (6 int arg regs, AT&T "movq %src, %dst" order). */
+            const char **kIntArgRegs;
+            int max_int_args;
+            int is_x86;
+            switch (cc->target) {
+                case TARGET_AARCH64_APPLE_DARWIN:
+                case TARGET_AARCH64_UNKNOWN_LINUX_GNU: {
+                    static const char *aarch64_regs[] = {
+                        "x0", "x1", "x2", "x3",
+                        "x4", "x5", "x6", "x7"
+                    };
+                    kIntArgRegs = aarch64_regs;
+                    max_int_args = 8;
+                    is_x86 = 0;
+                    break;
+                }
+                case TARGET_X86_64_APPLE_DARWIN:
+                case TARGET_X86_64_UNKNOWN_LINUX_GNU: {
+                    static const char *x86_regs[] = {
+                        "rdi", "rsi", "rdx", "rcx", "r8", "r9"
+                    };
+                    kIntArgRegs = x86_regs;
+                    max_int_args = 6;
+                    is_x86 = 1;
+                    break;
+                }
+                default:
+                    kIntArgRegs = NULL;
+                    max_int_args = 0;
+                    is_x86 = 0;
+            }
+
+            if (params && kIntArgRegs) {
+                AoStr *shuffle = aoStrNew();
+                int int_idx = 0;
+                for (u64 pi = 0; pi < params->size; ++pi) {
+                    Ast *p = vecGet(Ast *, params, pi);
+                    if (!p || p->kind != AST_LVAR) continue;
+                    if (p->pinned_kind != LVAR_REG || !p->pinned_reg) {
+                        if (p->type && p->type->kind != AST_TYPE_FLOAT) {
+                            int_idx++;
+                        }
+                        continue;
+                    }
+                    if (int_idx < max_int_args) {
+                        if (is_x86) {
+                            /* AT&T: "movq %src, %dst" => pinned = arg. */
+                            aoStrCatFmt(shuffle,
+                                    "\tmovq    %%%s, %%%S\n",
+                                    kIntArgRegs[int_idx], p->pinned_reg);
+                        } else {
+                            /* AArch64: "mov dst, src" => pinned = arg. */
+                            aoStrCatFmt(shuffle,
+                                    "\tmov     %S, %s\n",
+                                    p->pinned_reg, kIntArgRegs[int_idx]);
+                        }
+                    }
+                    int_idx++;
+                }
+                if (shuffle->len > 0) {
+                    aoStrCatAoStr(shuffle, asm_block->asm_stmt);
+                    aoStrRelease(asm_block->asm_stmt);
+                    asm_block->asm_stmt = shuffle;
+                } else {
+                    aoStrRelease(shuffle);
+                }
+            }
 
             Ast *asm_function = astAsmFunctionDef(asm_fname, asm_block->asm_stmt);
 
@@ -1642,8 +1814,49 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
     }
     parseCompoundStatementInternal(cc, func_body);
     fn_type->rettype = cc->tmp_rettype;
+    /* `astFunction` shallow-copies the type into the AST node, so
+     * `func->type` is a different AstType than the local `fn_type`.
+     * Updating only `fn_type->rettype` would leave the version stored
+     * in `cc->global_env` (and hence visible to every later caller)
+     * still pointing at the original `auto` type. Mirror the
+     * resolution onto `func->type` too. */
+    if (func->type) {
+        func->type->rettype = cc->tmp_rettype;
+    }
     if (is_inline) {
         listAppend(func->locals,func->inline_ret);
+    }
+
+    /* TempleOS rule: a function containing an `asm { }` block may
+     * declare register-pinned locals via `<Type> reg <REG> name`;
+     * the asm block can then reference the register directly. Plain
+     * locals (default stack) still work as ordinary stack slots that
+     * the asm can reach through `&var[RBP]`. We reject `noreg` here
+     * because the explicit-stack form duplicates the default and just
+     * adds complexity. */
+    int has_asm = 0;
+    if (func_body->stms) {
+        listForEach(func_body->stms) {
+            Ast *stmt = (Ast *)it->value;
+            if (stmt && stmt->kind == AST_ASM_STMT) {
+                has_asm = 1;
+                break;
+            }
+        }
+    }
+    if (has_asm && func->locals) {
+        listForEach(func->locals) {
+            Ast *l = (Ast *)it->value;
+            if (!l || l->kind != AST_LVAR) continue;
+            if (l->pinned_kind == LVAR_NOREG) {
+                cctrlRaiseException(cc,
+                    "`noreg` is not supported in `asm { }` functions; "
+                    "drop the modifier (locals default to a stack slot) "
+                    "or use `reg <REG>` to pin to a register",
+                    l->lname ? l->lname->data : "?",
+                    len, fname);
+            }
+        }
     }
 
     cc->localenv = NULL;
@@ -1804,6 +2017,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
                 case KW_EXTERN: {
                     tok = cctrlTokenGet(cc);
                     if (tok->tk_type == TK_STR && !strncmp(tok->start,"c",1)) {
+                        /* extern "c" func(...) - C-ABI function decl. */
                         type = parseDeclSpec(cc);
                         name = cctrlTokenGet(cc);
                         cctrlTokenExpect(cc,'(');
@@ -1811,8 +2025,26 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
                                 name->start,name->len);
                         return extern_func;
                     }
-                    cctrlRaiseException(cc,"Can only call external c functions for the "
-                            "time being");
+                    /* TempleOS-style `extern Type name;` data forward
+                     * declaration. The next token was the start of the
+                     * type; put it back so parseFullType sees it. */
+                    cctrlTokenRewind(cc);
+                    type = parseFullType(cc);
+                    name = cctrlTokenGet(cc);
+                    if (name->tk_type != TK_IDENT) {
+                        cctrlRaiseException(cc,
+                            "`extern <Type>` must be followed by an "
+                            "identifier, got `%.*s`",
+                            name->len, name->start);
+                    }
+                    type = parseArrayDimensions(cc, type);
+                    cctrlTokenExpect(cc,';');
+                    Ast *gvar = astGVar(type, name->start, name->len, 0);
+                    Ast *decl = astDecl(gvar, NULL);
+                    decl->flags |= AST_FLAG_EXTERN;
+                    gvar->flags |= AST_FLAG_EXTERN;
+                    mapAdd(cc->global_env, gvar->gname->data, gvar);
+                    return decl;
                 }
                 case KW_INLINE: {
                     peek = cctrlTokenPeek(cc);

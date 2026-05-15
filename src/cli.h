@@ -2,11 +2,13 @@
 #define CLI_H
 
 #include <stdint.h>
+#include <stdarg.h>
 
+#include "config.h"
 #include "list.h"
+#include "types.h"
 
 enum CliTarget {
-    TARGET_DEFAULT,
     TARGET_AARCH64_APPLE_DARWIN,
     TARGET_AARCH64_UNKNOWN_LINUX_GNU,
     TARGET_X86_64_APPLE_DARWIN,
@@ -32,6 +34,7 @@ enum CliArgType {
     CLI_EMIT_DYLIB,
     CLI_EMIT_OBJECT,
     CLI_HELP,
+    CLI_INSTALL_DIR,
     CLI_MEM_STATS,
     CLI_OUTPUT_FILENAME,
     CLI_PRINT_AST,
@@ -41,6 +44,7 @@ enum CliArgType {
     CLI_TERRY,
     CLI_TO_STDOUT,
     CLI_TRANSPILE,
+    CLI_USE_LEGACY_X86,
     CLI_VERSION,
 };
 
@@ -80,6 +84,7 @@ typedef struct CliArgs {
     int assemble;
     int transpile;
     int to_stdout;
+    int use_legacy_x86;
     char *infile;
     char *infile_no_ext;
     char *asm_outfile;

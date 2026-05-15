@@ -5,6 +5,7 @@
 
 #include "aostr.h"
 #include "ast.h"
+#include "cli.h"
 #include "config.h"
 #include "containers.h"
 #include "lexer.h"
@@ -12,10 +13,16 @@
 #define CCTRL_TOKEN_BUFFER_SIZE 16
 #define CCTRL_TOKEN_BUFFER_MASK CCTRL_TOKEN_BUFFER_SIZE-1
 
-#define CCTRL_TRANSPILING     (1<<0)
-#define CCTRL_SAVE_ANONYMOUS  (1<<1)
-#define CCTRL_PASTE_DEFINES   (1<<2)
-#define CCTRL_PRESERVE_SIZEOF (1<<3)
+#define CCTRL_TRANSPILING          (1<<0)
+#define CCTRL_SAVE_ANONYMOUS       (1<<1)
+#define CCTRL_PASTE_DEFINES        (1<<2)
+#define CCTRL_PRESERVE_SIZEOF      (1<<3)
+#define CCTRL_ASM_HAS_INITIALISERS (1<<4)
+/* Escape hatch back to the legacy AST-based x86_64 codegen
+ * (src/x86.c). Default is now the IR-based src/x86_64.c. The
+ * legacy path will be deleted once the IR backend has full unit-
+ * test coverage; until then this flag stays as a debugging tool. */
+#define CCTRL_USE_LEGACY_X86       (1<<5)
 
 /* For messages */
 #define CCTRL_ICE   0
@@ -136,7 +143,7 @@ typedef struct Cctrl {
     char *CC;
     
     /* Target triple */
-    char *target;
+    enum CliTarget target;
 } Cctrl;
 
 /* Instantiate a new compiler control struct */
