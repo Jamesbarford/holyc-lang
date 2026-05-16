@@ -1243,6 +1243,15 @@ Ast *parseUnaryExpr(Cctrl *cc) {
             operand = parseExpr(cc,16);
         } else {
             operand = parseUnaryExpr(cc);
+            /* parsePrimary returns NULL when it sees a punct that
+             * can't start an expression. Such as a stray
+             * slash left over from a malformed block-comment close.
+             * Bail with a real error rather than dereffing `NULL`. */
+            if (!operand) {
+                cctrlRaiseException(cc,
+                    "Expected expression after unary '%s'",
+                    lexemePunctToString(tok->i64));
+            }
             peek = cctrlTokenPeek(cc);
             if (tokenPunctIs(peek, '[') && (operand->kind == AST_CLASS_REF ||
                                             operand->type->kind == AST_TYPE_ARRAY)) {
