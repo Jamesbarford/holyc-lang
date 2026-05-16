@@ -646,19 +646,22 @@ static void lexSkipCodeComment(Lexer *l) {
             l->ptr++;
         }
     } else if (*l->ptr == '*') {
-        while ((*l->ptr != '\0' && *(l->ptr + 1) != '\0')) {
+        int start_line = l->lineno;
+        while (*l->ptr != '\0') {
+            if (*l->ptr == '*' && *(l->ptr + 1) == '/') {
+                l->ptr += 2;
+                return;
+            }
             if (*l->ptr == '\n') {
                 l->lineno++;
             }
-            if (*l->ptr == '*' && *(l->ptr + 1) == '/') {
-                //while (*l->ptr != '\n') {
-                //    l->ptr++;
-                //}
-                l->ptr += 2;
-                break;
-            }
             l->ptr++;
         }
+        /* Walked off EOF without seeing the closing delimiter.
+         * Bail here rather than silently returning, which leaves
+         * the parser staring at an empty token stream and crashing
+         * on the next peek. */
+        loggerPanic("line %d: unterminated block comment\n", start_line);
     }
 }
 
