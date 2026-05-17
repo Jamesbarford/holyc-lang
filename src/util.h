@@ -68,5 +68,8 @@ extern int is_terminal;
 
 #endif
 
+static inline const char *clr(const char *code) {
+    return is_terminal ? code : "";
+}
 
 #endif // !UTIL_H

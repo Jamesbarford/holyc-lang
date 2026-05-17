@@ -105,31 +105,38 @@ void assertTokenIsTerminator(Cctrl *cc, Lexeme *tok, s64 terminator_flags) {
         return;
     }
 
-    cctrlRewindUntilPunctMatch(cc,tok->i64,NULL);
-    AoStr *info_msg = NULL;
-    Lexeme *next = cctrlTokenPeek(cc);
-    if (tok->line != next->line) {
-        s64 next = cc->lineno+1;
-        while (cc->lineno <= next) {
-            cctrlTokenGet(cc);
-        }
-        cctrlTokenRewind(cc);
-        info_msg = cctrlMessagePrintF(cc,CCTRL_INFO,"Next line has a match of identifer `%.*s`",
-                tok->len,tok->start);
-        cctrlRewindUntilPunctMatch(cc,tok->i64,NULL);
-        cctrlTokenGet(cc);
-    }
-    AoStr *error_msg = cctrlMessagePrintF(cc,CCTRL_ERROR,"Unexpected %s `%.*s` %s",lexemeTypeToString(tok->tk_type),
-                                                    tok->len,tok->start,
-                                                   assertionTerminatorMessage(cc,
-                                                   tok,terminator_flags));
-    fprintf(stderr,"%s\n",error_msg->data);
+    char *suggestion = assertionTerminatorMessage(cc, tok, terminator_flags);
+
+    /* tok has already been consumed by the caller, so `peek` is
+     * pointing one past it. Rewind once so the diagnostic
+     * renderer sees `tok` as the current position - otherwise
+     * cctrlMessagePrintF captures the *next* token's line/col and
+     * the underline lands on the wrong thing. */
+    cctrlTokenRewind(cc);
+    AoStr *error_msg = cctrlMessagePrintF(cc,CCTRL_ERROR,
+            "Unexpected %s `%.*s` %s",
+            lexemeTypeToString(tok->tk_type),
+            tok->len, tok->start,
+            suggestion);
+    /* Re-consume tok so the buffer head is back where the caller
+     * left it before we start hunting for the hint. */
+    cctrlTokenGet(cc);
+
+    /* Build a follow-up note pointing at the *previous* line. The
+     * statement that almost certainly forgot its terminator and let
+     * the next statement collide with our parser. */
+    AoStr *info_msg = cctrlInfoAtPreviousLine(cc, tok,
+            "perhaps a missing `;` at the end of this line?");
+
+    /* Push diagnostics in source order: the error fires first
+     * (rendered at tok's actual position), then the info hint. */ 
+    CctrlDiagnostic *err_d = cctrlMakeDiag(cc, CCTRL_ERROR, error_msg, NULL);
+    cctrlDiagPush(cc, err_d);
     if (info_msg) {
-        fprintf(stderr,"%s\n",info_msg->data);
-        aoStrRelease(info_msg);
+        CctrlDiagnostic *info_d = cctrlMakeDiag(cc, CCTRL_INFO, info_msg, NULL);
+        cctrlDiagPush(cc, info_d);
     }
-    aoStrRelease(error_msg);
-    exit(EXIT_FAILURE);
+    cctrlTerminate(cc);
 }
 
 void assertTokenIsTerminatorWithMsg(Cctrl *cc, Lexeme *tok,

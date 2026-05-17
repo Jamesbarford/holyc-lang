@@ -151,6 +151,11 @@ typedef struct Lexeme {
     int tk_type;
     int len;
     int line;
+    /* 1-based column of the first byte of `start` within its source
+     * line. Derived at lex time from `start - line_start_ptr + 1`;
+     * preserved when the lexer cursor moves so we don't have to
+     * rescan the line later which could lead to the wrong characters. */
+    int col;
     char *start;
     int ishex;
     union {
@@ -163,6 +168,10 @@ typedef struct LexFile {
     AoStr *filename; /* name of the file */
     char *ptr; /* Where we are in the file */
     int lineno; /* line number in the file */
+    /* First byte of the current line in `src->data`. Saved/restored
+     * alongside `ptr` and `lineno` when crossing file boundaries so
+     * columns stays consistent across includes. */
+    char *line_start_ptr;
     AoStr *src; /* source */
 } LexFile;
 
@@ -170,6 +179,13 @@ typedef struct Lexer {
     int tk_type;
     char *ptr;
     char *start;
+    /* Pointer to the start of the current source line. */
+    char *line_start_ptr;
+    /* Line and column of the first byte of the token currently
+     * being lexed. */
+    int tok_start_line;
+    int tok_start_col;
+
     char cur_ch;
     char *cur_str;
     s64 cur_strlen;

@@ -188,6 +188,7 @@ Lexeme *lexemeNew(char *start, int len) {
     le->start = start;
     le->len = len;
     le->line = -1;
+    le->col = 0;
     le->tk_type = -1;
     return le;
 }
@@ -197,6 +198,7 @@ Lexeme *lexemeSentinal(void) {
     le->start = "(-sentinal-)";
     le->len = 12;
     le->line = 1;
+    le->col = 0;
     le->tk_type = -1;
     return le;
 }
@@ -204,6 +206,11 @@ Lexeme *lexemeSentinal(void) {
 void lexemeAssignOp(Lexeme *le, char *start, int len, s64 op, int line) {
     le->tk_type = TK_PUNCT;
     le->line = line;
+    /* Column is filled in by the `lex()` wrapper for tokens that
+     * come from the main lexer loop; constructors used elsewhere
+     * (e.g. macro expansion) leave it at 0 and the diagnostic
+     * renderer falls back to its line-only path. */
+    le->col = 0;
     le->start = start;
     le->len = len;
     le->i64 = op; /* instead of 'char'*/
@@ -215,6 +222,7 @@ Lexeme *lexemeTokNew(char *start, int len, int line, s64 ch) {
     copy->start = start;
     copy->len = len;
     copy->line = line;
+    copy->col = 0;
     copy->i64 = ch;
     return copy;
 }
@@ -235,6 +243,7 @@ static Cctrl *macro_proccessor = NULL;
 
 void lexInit(Lexer *l, char *source, int flags) {
     l->ptr = source;
+    l->line_start_ptr = source;
     l->cur_ch = -1;
     l->lineno = 1;
     l->cur_f64 = 0;
@@ -556,8 +565,9 @@ static char lexNextChar(Lexer *l) {
             return '\0';
         }
         l->cur_file = lex_file;
-        l->ptr = lex_file->ptr; 
+        l->ptr = lex_file->ptr;
         l->lineno = lex_file->lineno;
+        l->line_start_ptr = lex_file->line_start_ptr;
         ch = *l->ptr;
         l->cur_ch = ch;
         l->start = l->ptr;
@@ -626,14 +636,21 @@ void lexPushFile(Lexer *l, AoStr *filename) {
     f->ptr = src_code->data;
     f->src = src_code;
     f->lineno = 1;
+    f->line_start_ptr = src_code->data;
     f->filename = filename;
     setAdd(l->seen_files,filename->data);
     if (l->cur_file) {
+        /* Snapshot the outgoing file's cursor state so column maths
+         * still works when we pop back to it after an `#include`. */
+        l->cur_file->ptr = l->ptr;
+        l->cur_file->lineno = l->lineno;
+        l->cur_file->line_start_ptr = l->line_start_ptr;
         listAppend(l->files,l->cur_file);
     }
     l->cur_file = f;
     l->ptr = f->ptr;
     l->lineno = f->lineno;
+    l->line_start_ptr = f->line_start_ptr;
     l->start = f->ptr;
 }
 
@@ -654,6 +671,7 @@ static void lexSkipCodeComment(Lexer *l) {
             }
             if (*l->ptr == '\n') {
                 l->lineno++;
+                l->line_start_ptr = l->ptr + 1;
             }
             l->ptr++;
         }
@@ -762,6 +780,7 @@ char *lexString(Lexer *l, char terminator, s64 *_real_len, int *_buffer_len) {
         real_len++;
         if (ch == '\n') {
             l->lineno++;
+            l->line_start_ptr = l->ptr;
         }
 
         if ((unsigned int)(len + 3) >= capacity) {
@@ -956,7 +975,7 @@ LexerType *lexPreProcDirective(Lexer *l) {
     return type;
 }
 
-int lex(Lexer *l, Lexeme *le) {
+static int lexCore(Lexer *l, Lexeme *le) {
     char ch, *start;
     int tk_type;
     LexerType *type;
@@ -965,10 +984,23 @@ int lex(Lexer *l, Lexeme *le) {
         ch = lexNextChar(l);
         start = l->start;
 
+        /* Capture the *start* position of the token. Most iterations are
+         * ignored like whitespace or comments but the iteration that returns a
+         * lexeme will have the right values here. Multi-line tokens like strings
+         * still report the opening line/column even after `lexString` bumps
+         * `lineno` and line_start_ptr past the embedded newlines. */
+        l->tok_start_line = l->lineno;
+        if (start >= l->line_start_ptr) {
+            l->tok_start_col = (int)(start - l->line_start_ptr) + 1;
+        } else {
+            l->tok_start_col = 1;
+        }
+
         switch (ch) {
             case '\r':
             case '\n':
                 l->lineno++;
+                l->line_start_ptr = l->ptr;
                 if (l->flags & (CCF_ACCEPT_NEWLINES|CCF_ACCEPT_WHITESPACE)) {
                     lexemeAssignOp(le,start,1,ch,l->lineno);
                     return 1;
@@ -1298,6 +1330,14 @@ int lex(Lexer *l, Lexeme *le) {
 error:
     loggerPanic("line %d: Lexer error\n", l->lineno);
     return 0;
+}
+
+int lex(Lexer *l, Lexeme *le) {
+    int rc = lexCore(l, le);
+    if (rc != 1) return rc;
+    le->line = l->tok_start_line;
+    le->col = l->tok_start_col;
+    return rc;
 }
 
 void lexInclude(Lexer *l) {
@@ -1750,25 +1790,29 @@ char *lexerReportLine(Lexer *l, s64 lineno) {
     s64 size = l->cur_file->src->len;
     s64 line = 1;
     s64 i = 0;
-    
-    for (; i < size-1; ++i) {
+
+    /* Walk forwards until `line == lineno`. For line 1 the loop exits
+     * immediately at i == 0 (no preceding newline to skip); for higher lines,
+     * we break at the `\n` that terminates the previous line and step over it */
+    while (i < size && line < lineno) {
+        if (ptr[i] == '\0') {
+            return aoStrMove(buf);
+        }
         if (ptr[i] == '\n') {
             line++;
         }
-        if (ptr[i] == '\0') break;
-        if (line == lineno) break;
-    }
-
-    i++;
-    if (ptr[i] == '\0') {
-        return aoStrMove(buf);
-    }
-
-    while (isspace(ptr[i])) {
         i++;
     }
 
-    while (ptr[i] && ptr[i] != '\n') {
+    if (line != lineno) {
+        return aoStrMove(buf);
+    }
+
+    /* Preserve leading whitespace. The diagnostic renderer
+     * positions the `^` underline from the token's source column,
+     * which only lines up if the rendered line has the same
+     * leading indent as the source. */
+    while (i < size && ptr[i] && ptr[i] != '\n') {
         aoStrPutChar(buf, ptr[i++]);
     }
     aoStrPutChar(buf, '\0');

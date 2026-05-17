@@ -1,3 +1,4 @@
+#include <setjmp.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1537,12 +1538,51 @@ void parseCompoundStatementInternal(Cctrl *cc, Ast *body) {
     Ast *var = NULL;
     AstType *base_type, *type, *next_type;
     Lexeme *tok, *varname, *peek;
-    cc->localenv = cctrlCreateAstMap(cc->localenv);
+    Map *block_scope = cctrlCreateAstMap(cc->localenv);
+    cc->localenv = block_scope;
     tok = NULL;
+
+    /* Per-statement recovery point hoisted to the function frame
+     * so the jmp_buf has a stable address across iterations. A
+     * longjmp here lands at the top of the iteration's body via
+     * the setjmp check below; we restore the block's scope (in
+     * case a half-parsed nested block left us in a child) and
+     * resync the token stream to the next `;` or `}`. The outer
+     * recovery (toplevel decl) is reinstated when this function
+     * returns so the caller's failure mode is unchanged. */
+    jmp_buf stmt_recovery;
+    jmp_buf *outer_recovery = cc->current_recovery;
+    cc->current_recovery = &stmt_recovery;
 
     tok = cctrlTokenPeek(cc);
 
     while (tok && !tokenPunctIs(tok, '}')) {
+        /* Snapshot the tail of body->stms and cc->tmp_locals
+         * *before* attempting the next statement. If the parse
+         * longjmps mid-way, half-built nodes may already have
+         * been appended; truncate back to these saved tails so
+         * the recovered block has only the statements that
+         * actually parsed cleanly. Allocations themselves leak
+         * into the arena (freed at end of compilation), but the
+         * AST no longer points at them. */
+        List *body_tail = (body && body->stms) ? body->stms->prev : NULL;
+        List *locals_tail = cc->tmp_locals ? cc->tmp_locals->prev : NULL;
+
+        if (setjmp(stmt_recovery) != 0) {
+            cc->localenv = block_scope;
+            if (body && body->stms && body_tail) {
+                body_tail->next = body->stms;
+                body->stms->prev = body_tail;
+            }
+            if (cc->tmp_locals && locals_tail) {
+                locals_tail->next = cc->tmp_locals;
+                cc->tmp_locals->prev = locals_tail;
+            }
+            cctrlSyncStatement(cc);
+            tok = cctrlTokenPeek(cc);
+            continue;
+        }
+
         if (cctrlIsKeyword(cc,tok->start,tok->len)) {
             base_type = parseBaseDeclSpec(cc);
             while (1) {
@@ -1613,6 +1653,7 @@ void parseCompoundStatementInternal(Cctrl *cc, Ast *body) {
         }
         tok = cctrlTokenPeek(cc);
     }
+    cc->current_recovery = outer_recovery;
     cc->localenv = cc->localenv->parent;
     cctrlTokenExpect(cc,'}');
     cctrlTokenPeek(cc);
@@ -2236,7 +2277,55 @@ void parseToAst(Cctrl *cc) {
     Ast *ast;
     Lexeme *tok;
     int is_global = 0;
-    while ((ast = parseToplevelDef(cc,&is_global)) != NULL) {
+
+    /* Top-level recovery point. cctrlRaiseException longjmps here
+     * once a CctrlDiagnostic is queued; we wipe function-scoped state
+     * and skip tokens until the next plausible decl boundary, then
+     * loop. parseCompoundStatementInternal installs its own
+     * (finer-grained) recovery point for statements inside a
+     * function body and restores ours on return. */
+    jmp_buf recovery;
+    jmp_buf *prev_recovery = cc->current_recovery;
+    cc->current_recovery = &recovery;
+
+    while (1) {
+        /* Snapshot the tails of the lists a top-level decl can
+         * append to. Mirrors the per-statement snapshot in
+         * parseCompoundStatementInternal: if the decl longjmps
+         * partway, we truncate any half-built additions so the
+         * accumulated program list stays consistent. */
+        List *ast_tail = cc->ast_list ? cc->ast_list->prev : NULL;
+        List *init_tail = cc->initalisers ? cc->initalisers->prev : NULL;
+        List *init_locals_tail = cc->initaliser_locals
+                                 ? cc->initaliser_locals->prev : NULL;
+
+        if (setjmp(recovery) != 0) {
+            cc->tmp_locals = NULL;
+            cc->localenv = NULL;
+            cc->tmp_func = NULL;
+            cc->tmp_rettype = NULL;
+            cc->tmp_loop_begin = NULL;
+            cc->tmp_loop_end = NULL;
+            if (cc->ast_list && ast_tail) {
+                ast_tail->next = cc->ast_list;
+                cc->ast_list->prev = ast_tail;
+            }
+            if (cc->initalisers && init_tail) {
+                init_tail->next = cc->initalisers;
+                cc->initalisers->prev = init_tail;
+            }
+            if (cc->initaliser_locals && init_locals_tail) {
+                init_locals_tail->next = cc->initaliser_locals;
+                cc->initaliser_locals->prev = init_locals_tail;
+            }
+            cctrlSyncToplevel(cc);
+            tok = cctrlTokenPeek(cc);
+            if (!tok) break;
+            continue;
+        }
+
+        ast = parseToplevelDef(cc, &is_global);
+        if (ast == NULL) break;
         if (is_global) {
             listAppend(cc->initalisers,ast);
             if (!listEmpty(cc->tmp_locals)) {
@@ -2247,10 +2336,10 @@ void parseToAst(Cctrl *cc) {
         }
         is_global = 0;
         tok = cctrlTokenPeek(cc);
-        if (!tok) {
-            break;
-        }
+        if (!tok) break;
         cc->tmp_locals = NULL;
         cc->localenv = NULL;
     }
+
+    cc->current_recovery = prev_recovery;
 }

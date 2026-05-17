@@ -44,6 +44,10 @@ void aoStrCat(AoStr *buf, const void *d);
 void aoStrCatRepeat(AoStr *buf, char *str, int times);
 void aoStrCatPrintf(AoStr *b, const char *fmt, ...);
 void aoStrCatFmt(AoStr *buf, const char *fmt, ...);
+
+void aoStrCatColoured(AoStr *buf, const char *color, const char *str);
+void aoStrCatColouredFmt(AoStr *buf, const char *color, const char *fmt, ...);
+
 AoStr *aoStrPrintf(const char *fmt, ...);
 AoStr *aoStrEscapeString(AoStr *buf);
 AoStr *aoStrEncode(AoStr *buf);
