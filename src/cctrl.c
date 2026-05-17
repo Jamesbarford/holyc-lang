@@ -393,6 +393,9 @@ void cctrLoadNextTokens(Cctrl *cc, s64 token_count) {
 
 void cctrlInitParse(Cctrl *cc, Lexer *lexer_) {
     cc->lexer_ = lexer_;
+    /* Wire the back-pointer so lex-time errors can route through
+     * this Cctrl's diagnostic accumulator and recovery longjmp. */
+    if (lexer_) lexer_->cc = cc;
     if (cc->token_buffer == NULL) {
         cc->token_buffer = tokenRingBufferStaticNew();
     }
@@ -615,8 +618,12 @@ void cctrlCreateColoredLine(Cctrl *cc,
     /* Accept whitespace AND comments so the rendered line preserves
      * every source character. Without this, comments get silently
      * swallowed during re-lexing and the `^` underline (positioned
-     * by source column) lands past the wrong text. */
-    lexInit(&l, (char *)line_buffer, CCF_ACCEPT_WHITESPACE|CCF_ACCEPT_COMMENTS);
+     * by source column) lands past the wrong text. Also flip on
+     * CCF_PERMISSIVE so malformed escapes (e.g. `"\q"` in the
+     * source) don't make the renderer call lexRaise - we're here
+     * to syntax-colour the line, not to validate it. */
+    lexInit(&l, (char *)line_buffer,
+            CCF_ACCEPT_WHITESPACE|CCF_ACCEPT_COMMENTS|CCF_PERMISSIVE);
     s64 current_offset = 0;
 
     /* This assumes we want the last match of an error as opposed to the first */
@@ -703,6 +710,52 @@ AoStr *cctrlCreateErrorLine(Cctrl *cc,
         for (int i = 0; i < char_pos; ++i) {
             aoStrPutChar(buf,' ');
         }
+        for (int i = 0; i < tok_len; ++i) {
+            aoStrCatColoured(buf, color, "^");
+        }
+        if (suggestion) {
+            aoStrCatColouredFmt(buf, color, " %s", suggestion);
+        }
+    } else {
+        aoStrCatColoured(buf, ESC_CYAN, "     |");
+    }
+    return buf;
+}
+
+/* Render a diagnostic at an *explicit* source position. Unlike
+ * cctrlCreateErrorLine this never calls cctrlTokenPeek, so it
+ * works correctly when the caller knows where the error is but
+ * the token buffer doesn't (e.g. mid-token lex errors, where peek
+ * returns whatever stale token preceded the broken lexeme).
+ *
+ * `col` is 1-based; passing 0 means "we don't have a column" -
+ * the line is rendered without an underline. `len` is the width
+ * of the `^` underline (clamped to 1 if 0 is given). */
+AoStr *cctrlCreateErrorLineAt(Cctrl *cc, s64 lineno, s64 col, s64 len,
+                              char *msg, int severity, char *suggestion)
+{
+    char *color = severity == CCTRL_ERROR || CCTRL_ICE
+            ? ESC_BOLD_RED
+            : CCTRL_WARN ? ESC_BOLD_YELLOW : ESC_CYAN;
+    AoStr *buf = aoStrNew();
+    if (!cc->lexer_) {
+        cctrlFileAndLine(cc, buf, lineno, -1, msg, severity);
+        aoStrCatColoured(buf, ESC_CYAN, "     |\n");
+        return buf;
+    }
+
+    s64 char_pos = col > 0 ? col - 1 : -1;
+    s64 tok_len  = len > 0 ? len : 1;
+    cctrlFileAndLine(cc, buf, lineno, char_pos, msg, severity);
+
+    const char *line_buffer = lexerReportLine(cc->lexer_, lineno);
+    s64 unused_off = -1, unused_len = -1;
+    cctrlCreateColoredLine(cc, buf, lineno, 0, NULL, -1,
+                           &unused_off, &unused_len, line_buffer);
+
+    if (char_pos != -1) {
+        aoStrCatColoured(buf, ESC_CYAN, "     |    ");
+        for (int i = 0; i < char_pos; ++i) aoStrPutChar(buf, ' ');
         for (int i = 0; i < tok_len; ++i) {
             aoStrCatColoured(buf, color, "^");
         }

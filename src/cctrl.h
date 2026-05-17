@@ -2,6 +2,7 @@
 #define CCTRL_H
 
 #include <setjmp.h>
+#include <stdarg.h>
 #include <sys/types.h>
 
 #include "aostr.h"
@@ -207,6 +208,18 @@ Ast *cctrlGetOrSetString(Cctrl *cc, char *str, int len, s64 real_len);
 void cctrlRewindUntilPunctMatch(Cctrl *cc, s64 ch, int *_count);
 void cctrlRewindUntilStrMatch(Cctrl *cc, char *str, int len, int *_count);
 AoStr *cctrlMessagePrintF(Cctrl *cc, int severity, char *fmt,...);
+/* va_list variant of cctrlMessagePrintF. Public so subsystems
+ * outside cctrl.c (the lexer) can build pre-rendered diagnostic
+ * messages without re-implementing the printf-+-position dance. */
+AoStr *cctrlMessagVnsPrintF(Cctrl *cc, char *fmt, va_list ap, int severity);
+
+/* Build a fully-rendered diagnostic at an explicit (line, col, len).
+ * Bypasses cctrlTokenPeek so callers that know their own position
+ * (the lexer, mid-token) aren't subject to whatever stale token the
+ * parser's ring buffer is holding. `col` is 1-based; pass 0 to skip
+ * the underline entirely. */
+AoStr *cctrlCreateErrorLineAt(Cctrl *cc, s64 lineno, s64 col, s64 len,
+                              char *msg, int severity, char *suggestion);
 
 /* Diagnostic accumulation. `cctrlDiagPush` adds an entry without
  * printing it */
