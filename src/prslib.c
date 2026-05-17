@@ -572,11 +572,17 @@ Vec *parseArgv(Cctrl *cc, Ast *decl, s64 terminator, char *fname, int len) {
 
         if (!tokenPunctIs(tok,',')) {
             cctrlRewindUntilPunctMatch(cc, tok->i64, NULL);
+            /* We could have a malformed string as a function argument */
+            int is_string = tok->tk_type == TK_STR;
+            char terminator = is_string ? '"' : ')';
+            char *suggestion = is_string ?
+                                "terminate with `\"`" :
+                                "terminate with `)`";
             cctrlInfo(cc, "Function call `%.*s` not terminated correctly", len,fname);
-            cctrlRaiseSuggestion(cc,"terminate with `)`",
-                    "Invalid %s `%.*s` while parsing function call, perhaps you meant to terminate the arguments with `)` or keep going with `,`?",
+            cctrlRaiseSuggestion(cc,suggestion,
+                    "Invalid %s `%.*s` while parsing function call, perhaps you meant to terminate the arguments with `%c` or keep going with `,`?",
                     lexemeTypeToString(tok->tk_type),
-                   tok->len, tok->start);
+                   tok->len, tok->start, terminator);
         }
 
         tok = cctrlTokenPeek(cc);

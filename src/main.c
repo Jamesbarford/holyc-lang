@@ -413,7 +413,12 @@ int main(int argc, char **argv) {
         goto success;
     }
 
-    compileToAst(cc,&args,lexer_flags);
+    if (!compileToAst(cc,&args,lexer_flags)) {
+        /* Parser surfaced one or more errors and the diagnostics
+         * have already been printed. Bail before codegen. */
+        memoryRelease();
+        return 1;
+    }
 
     if (args.print_ast) {
         compilePrintAst(cc);

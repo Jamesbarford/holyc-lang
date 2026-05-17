@@ -11,6 +11,7 @@
 #include "aostr.h"
 #include "lexer.h"
 #include "memory.h"
+#include "util.h"
 
 /* Power-of-2 size-class freelist sitting in front of the global arena for
  * AoStr character buffers. Buckets recycle buffers freed via aoStrRelease and
@@ -545,6 +546,31 @@ void aoStrCatPrintf(AoStr *b, const char *fmt, ...) {
     aoStrCatAoStr(b,new_str);
     aoStrRelease(new_str);
     va_end(ap);
+}
+
+void aoStrCatColoured(AoStr *buf, const char *color, const char *str) {
+    if (is_terminal) {
+        aoStrCat(buf, color);
+        aoStrCat(buf, str);
+        aoStrCat(buf, ESC_RESET);
+    } else {
+        aoStrCat(buf, str);
+    }
+}
+
+void aoStrCatColouredFmt(AoStr *buf, const char *color, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    AoStr *body = aoStrPrintfVa(fmt, ap);
+    va_end(ap);
+    if (is_terminal) {
+        aoStrCat(buf, color);
+        aoStrCatAoStr(buf, body);
+        aoStrCat(buf, ESC_RESET);
+    } else {
+        aoStrCatAoStr(buf, body);
+    }
+    aoStrRelease(body);
 }
 
 char *mprintFmtVa(const char *fmt, va_list ap, u64 *_len, u64 *_allocated) {

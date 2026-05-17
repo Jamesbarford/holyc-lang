@@ -85,7 +85,14 @@ int compileToAst(Cctrl *cc, CliArgs *args, int lexer_flags) {
 
     parseToAst(cc);
 
+    /* Print any accumulated diagnostics in source order. If the
+     * parser saw real errors, bail before handing a half-built
+     * AST to the backend - the IR / codegen still hard-panic on
+     * malformed input. */
+    int n_errors = cctrlDiagFlush(cc);
+
     lexReleaseAllFiles(l);
     listRelease(l->files,NULL);
+    if (n_errors > 0) return 0;
     return 1;
 }

@@ -188,6 +188,7 @@ Lexeme *lexemeNew(char *start, int len) {
     le->start = start;
     le->len = len;
     le->line = -1;
+    le->col = 0;
     le->tk_type = -1;
     return le;
 }
@@ -197,6 +198,7 @@ Lexeme *lexemeSentinal(void) {
     le->start = "(-sentinal-)";
     le->len = 12;
     le->line = 1;
+    le->col = 0;
     le->tk_type = -1;
     return le;
 }
@@ -204,6 +206,11 @@ Lexeme *lexemeSentinal(void) {
 void lexemeAssignOp(Lexeme *le, char *start, int len, s64 op, int line) {
     le->tk_type = TK_PUNCT;
     le->line = line;
+    /* Column is filled in by the `lex()` wrapper for tokens that
+     * come from the main lexer loop; constructors used elsewhere
+     * (e.g. macro expansion) leave it at 0 and the diagnostic
+     * renderer falls back to its line-only path. */
+    le->col = 0;
     le->start = start;
     le->len = len;
     le->i64 = op; /* instead of 'char'*/
@@ -215,6 +222,7 @@ Lexeme *lexemeTokNew(char *start, int len, int line, s64 ch) {
     copy->start = start;
     copy->len = len;
     copy->line = line;
+    copy->col = 0;
     copy->i64 = ch;
     return copy;
 }
@@ -233,8 +241,50 @@ Lexeme *lexemeNewOp(char *start, int len, s64 op, int line) {
 
 static Cctrl *macro_proccessor = NULL;
 
+/* User-visible lex error. Routes through the diagnostic
+ * accumulator when the lexer has a Cctrl back-pointer; otherwise
+ * falls back to the loggerPanic-style stderr print + exit for
+ * standalone lexer instances (re-lexer, macro stub). */
+__noreturn static void lexRaise(Lexer *l, const char *fmt, ...) {
+    va_list ap;
+    if (l && l->cc) {
+        va_start(ap, fmt);
+        char *body = mprintVa((char *)fmt, ap, NULL);
+        va_end(ap);
+
+        AoStr *bold = aoStrNew();
+        aoStrCatColoured(bold, ESC_BOLD, body);
+
+        s64 line = l->tok_start_line > 0 ? l->tok_start_line : l->lineno;
+        s64 col  = l->tok_start_col;
+        s64 len  = (l->start && l->ptr && l->ptr > l->start)
+                   ? (s64)(l->ptr - l->start) : 1;
+
+        AoStr *buf = cctrlCreateErrorLineAt(l->cc, line, col, len,
+                                            bold->data, CCTRL_ERROR, NULL);
+        aoStrRelease(bold);
+
+        /* cctrlMakeDiag fills line/col from cctrlTokenPeek by
+         * default; override with the lexer's view since peek will
+         * be holding a stale token from before the broken lexeme. */
+        CctrlDiagnostic *d = cctrlMakeDiag(l->cc, CCTRL_ERROR, buf, NULL);
+        d->line = (int)line;
+        d->col = (int)col;
+        d->end_line = (int)line;
+        d->end_col = (int)(col + len);
+        cctrlDiagPush(l->cc, d);
+        cctrlTerminate(l->cc);
+    }
+    fprintf(stderr, "\033[0;31mERROR: \033[0m");
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    exit(EXIT_FAILURE);
+}
+
 void lexInit(Lexer *l, char *source, int flags) {
     l->ptr = source;
+    l->line_start_ptr = source;
     l->cur_ch = -1;
     l->lineno = 1;
     l->cur_f64 = 0;
@@ -250,6 +300,10 @@ void lexInit(Lexer *l, char *source, int flags) {
     l->seen_files = setNew(32, &set_cstring_type);
     l->collecting = 1;
     l->skip_else = 1;
+    /* Default: no diagnostic engine wired up; lex errors fall
+     * back to loggerPanic. cctrlInitParse plugs the real Cctrl
+     * in when this lexer is being driven by a real parse. */
+    l->cc = NULL;
     if (macro_proccessor == NULL) {
         macro_proccessor = ccMacroProcessor(NULL);
     }
@@ -556,8 +610,9 @@ static char lexNextChar(Lexer *l) {
             return '\0';
         }
         l->cur_file = lex_file;
-        l->ptr = lex_file->ptr; 
+        l->ptr = lex_file->ptr;
         l->lineno = lex_file->lineno;
+        l->line_start_ptr = lex_file->line_start_ptr;
         ch = *l->ptr;
         l->cur_ch = ch;
         l->start = l->ptr;
@@ -626,14 +681,21 @@ void lexPushFile(Lexer *l, AoStr *filename) {
     f->ptr = src_code->data;
     f->src = src_code;
     f->lineno = 1;
+    f->line_start_ptr = src_code->data;
     f->filename = filename;
     setAdd(l->seen_files,filename->data);
     if (l->cur_file) {
+        /* Snapshot the outgoing file's cursor state so column maths
+         * still works when we pop back to it after an `#include`. */
+        l->cur_file->ptr = l->ptr;
+        l->cur_file->lineno = l->lineno;
+        l->cur_file->line_start_ptr = l->line_start_ptr;
         listAppend(l->files,l->cur_file);
     }
     l->cur_file = f;
     l->ptr = f->ptr;
     l->lineno = f->lineno;
+    l->line_start_ptr = f->line_start_ptr;
     l->start = f->ptr;
 }
 
@@ -654,6 +716,7 @@ static void lexSkipCodeComment(Lexer *l) {
             }
             if (*l->ptr == '\n') {
                 l->lineno++;
+                l->line_start_ptr = l->ptr + 1;
             }
             l->ptr++;
         }
@@ -661,7 +724,8 @@ static void lexSkipCodeComment(Lexer *l) {
          * Bail here rather than silently returning, which leaves
          * the parser staring at an empty token stream and crashing
          * on the next peek. */
-        loggerPanic("line %d: unterminated block comment\n", start_line);
+        l->lineno = start_line;
+        lexRaise(l, "unterminated block comment");
     }
 }
 
@@ -762,6 +826,7 @@ char *lexString(Lexer *l, char terminator, s64 *_real_len, int *_buffer_len) {
         real_len++;
         if (ch == '\n') {
             l->lineno++;
+            l->line_start_ptr = l->ptr;
         }
 
         if ((unsigned int)(len + 3) >= capacity) {
@@ -800,8 +865,13 @@ char *lexString(Lexer *l, char terminator, s64 *_real_len, int *_buffer_len) {
                     buffer[len++] = toupper(lexNextChar(l));
                     break;
             default:
-                loggerPanic("Line: %d - Invalid escape character: '%c'\n",
-                        l->lineno, (char)ch);
+                if (l->flags & CCF_PERMISSIVE) {
+                    /* Absorb literally - the renderer just wants
+                     * a syntax-coloured echo, not validation. */
+                    buffer[len++] = (char)ch;
+                    break;
+                }
+                lexRaise(l, "Invalid escape character: '\\%c'", (char)ch);
             }
         } else {
             /* Because HC can have multi line strings, tabs or other escaped 
@@ -904,7 +974,7 @@ u64 lexCharConst(Lexer *l) {
     }
 
     if (ch != '\'' && lexPeek(l) != '\'') {
-        loggerPanic("line %d: Char const limited to 8 characters!\n",l->lineno);
+        lexRaise(l, "Char const limited to 8 characters");
     }
 
     /* Consume next character if it is the end of the char const */
@@ -951,12 +1021,12 @@ LexerType *lexPreProcDirective(Lexer *l) {
     s64 len = snprintf(buffer,sizeof(buffer),"#%.*s",le.len,le.start);
     LexerType *type = mapGetLen(l->symbol_table,buffer,len);
     if (!type) {
-        loggerPanic("line %d: invalid preprocessor directive '%s'\n", le.line, buffer);
+        lexRaise(l, "invalid preprocessor directive '%s'", buffer);
     }
     return type;
 }
 
-int lex(Lexer *l, Lexeme *le) {
+static int lexCore(Lexer *l, Lexeme *le) {
     char ch, *start;
     int tk_type;
     LexerType *type;
@@ -965,10 +1035,23 @@ int lex(Lexer *l, Lexeme *le) {
         ch = lexNextChar(l);
         start = l->start;
 
+        /* Capture the *start* position of the token. Most iterations are
+         * ignored like whitespace or comments but the iteration that returns a
+         * lexeme will have the right values here. Multi-line tokens like strings
+         * still report the opening line/column even after `lexString` bumps
+         * `lineno` and line_start_ptr past the embedded newlines. */
+        l->tok_start_line = l->lineno;
+        if (start >= l->line_start_ptr) {
+            l->tok_start_col = (int)(start - l->line_start_ptr) + 1;
+        } else {
+            l->tok_start_col = 1;
+        }
+
         switch (ch) {
             case '\r':
             case '\n':
                 l->lineno++;
+                l->line_start_ptr = l->ptr;
                 if (l->flags & (CCF_ACCEPT_NEWLINES|CCF_ACCEPT_WHITESPACE)) {
                     lexemeAssignOp(le,start,1,ch,l->lineno);
                     return 1;
@@ -997,9 +1080,7 @@ int lex(Lexer *l, Lexeme *le) {
             case '8':
             case '9':
                 if ((tk_type = lexNumeric(l,0)) == -1) {
-                    loggerPanic("line %d: Lex error while lexing lexNumeric\n",
-                            l->lineno);
-                    goto error;
+                    lexRaise(l, "malformed numeric literal");
                 }
                 le->len = l->cur_strlen;
                 le->tk_type = tk_type;
@@ -1203,9 +1284,7 @@ int lex(Lexer *l, Lexeme *le) {
             case '.':
                 if (isNum(lexPeek(l))) {
                     if ((tk_type = lexNumeric(l,0)) == -1) {
-                        loggerPanic("line %d: Lex error while lexing lexNumeric\n",
-                                l->lineno);
-                        goto error;
+                        lexRaise(l, "malformed numeric literal");
                     }
                     le->len = l->ptr - start;
                     le->tk_type = tk_type;
@@ -1225,8 +1304,7 @@ int lex(Lexer *l, Lexeme *le) {
                         lexemeAssignOp(le,start,3,TK_ELLIPSIS,l->lineno);
                         return 1;
                     }
-                    loggerPanic("line %d: .. is an invalid token sequence\n",
-                            l->lineno);
+                    lexRaise(l, "`..` is an invalid token sequence");
                 }
                 
                 lexemeAssignOp(le,start,1,ch,l->lineno);
@@ -1274,9 +1352,7 @@ int lex(Lexer *l, Lexeme *le) {
             default: {
                 if (isalpha(ch) || ch == '_') {
                     if ((tk_type = lexIdentifier(l, ch)) == -1) {
-                        loggerPanic("line %d: Lex error while lexing lexIdentifier\n",
-                                l->lineno);
-                        goto error;
+                        lexRaise(l, "malformed identifier");
                     }
 
                     le->start = start;
@@ -1295,9 +1371,16 @@ int lex(Lexer *l, Lexeme *le) {
             }
         }
     }
-error:
-    loggerPanic("line %d: Lexer error\n", l->lineno);
+    lexRaise(l, "Lexer error");
     return 0;
+}
+
+int lex(Lexer *l, Lexeme *le) {
+    int rc = lexCore(l, le);
+    if (rc != 1) return rc;
+    le->line = l->tok_start_line;
+    le->col = l->tok_start_col;
+    return rc;
 }
 
 void lexInclude(Lexer *l) {
@@ -1319,9 +1402,9 @@ void lexInclude(Lexer *l) {
     } else if (next.tk_type == TK_STR) {
         include_path = aoStrDupRaw(next.start, next.len);
     } else {
-        loggerPanic(
-                "line %d: Syntax is: #include \"<value>\" got: %s\n",
-                next.line,lexemeToString(&next));
+        lexRaise(l,
+                "Syntax is: #include \"<value>\" got: %s",
+                lexemeToString(&next));
     }
 
     if (!setHas(l->seen_files,include_path->data)) {
@@ -1341,9 +1424,8 @@ Lexeme *lexDefine(Map *macro_defs, Lexer *l) {
     /* <ident> <value> */
     lex(l, &next);
     if (next.tk_type != TK_IDENT) {
-        loggerPanic("%s: line %d: Syntax is: #define <TK_IDENT> <value> got %s\n",
-                l->cur_file->filename->data,
-                next.line,
+        lexRaise(l,
+                "Syntax is: #define <TK_IDENT> <value> got %s",
                 lexemeToString(&next));
     }
 
@@ -1390,8 +1472,9 @@ Lexeme *lexDefine(Map *macro_defs, Lexer *l) {
     }
 
     if (tk_type == -1) {
-        loggerPanic("line %d: Error while parsing #define %s; #define either be a numerical expression or a string\n",
-                next.line,ident->data);
+        lexRaise(l,
+                "Error while parsing #define %s; #define must be a numerical expression or a string",
+                ident->data);
     }
 
     if (start == end) {
@@ -1414,15 +1497,14 @@ Lexeme *lexDefine(Map *macro_defs, Lexer *l) {
                 expanded->start = strndup(start->start,start->len);
                 expanded->len = start->len;
             } else if (ast && ast->kind != TK_STR && ast->kind != AST_STRING) {
-                loggerPanic("line %d: #define %s expected string but got: %s\n",
-                        next.line,ident->data,astKindToString(ast->kind));
+                lexRaise(l, "#define %s expected string but got: %s",
+                        ident->data, astKindToString(ast->kind));
             } else if (ast && ast->kind == AST_STRING) {
                 /* Copy as we will free the AST which will free the string*/
                 expanded->start = strndup(ast->sval->data,ast->sval->len);
                 expanded->len = ast->sval->len;
             } else {
-                loggerPanic("line: %d failed to parse #define %s\n",
-                        next.line, ident->data);
+                lexRaise(l, "failed to parse #define %s", ident->data);
             }
         } else if (tk_type == TK_F64) {
             expanded->f64 = (f64)evalFloatExpr(ast);
@@ -1449,7 +1531,7 @@ void lexUndef(Map *macro_defs, Lexer *l) {
 
     lex(l, &next);
     if (next.tk_type != TK_IDENT) {
-        loggerPanic("line %d: Syntax is: #undef <TK_IDENT>\n",next.line);
+        lexRaise(l, "Syntax is: #undef <TK_IDENT>");
     }
     tmp_len = snprintf(tmp,sizeof(tmp),"%.*s",
             next.len,next.start);
@@ -1471,7 +1553,7 @@ int lexPreProcIf(Map *macro_defs, Lexer *l) {
     iters = 0;
 
     if (!lex(l,&next)) {
-        loggerPanic("line %d: Run out of tokens\n", l->lineno);
+        lexRaise(l, "Run out of tokens");
     }
 
     while (!tokenPunctIs(&next,'\n') && !tokenPunctIs(&next,'\0')){ 
@@ -1480,8 +1562,9 @@ int lexPreProcIf(Map *macro_defs, Lexer *l) {
         if (tokenPunctIs(&next,'\\')) {
             if (!lex(l,&next)) break;
             if (!tokenPunctIs(&next,'\n')) {
-                loggerPanic("line %d: Invalid use of '\\' should be \\ \\n got %s\n",
-                        next.line, lexemeToString(&next));
+                lexRaise(l,
+                        "Invalid use of '\\' should be `\\ \\n` got %s",
+                        lexemeToString(&next));
             }
             if (!lex(l,&next)) break;
         } 
@@ -1515,7 +1598,7 @@ int lexPreProcIf(Map *macro_defs, Lexer *l) {
     end = macro_tokens->entries[macro_tokens->size-1];
 
     if (start == end && iters == 1) {
-        loggerPanic("line %d: a #if must evaluate some expression\n",next.line);
+        lexRaise(l, "a #if must evaluate some expression");
         return 0;
     }
     cctrlInitMacroProcessor(macro_proccessor);
@@ -1682,7 +1765,8 @@ Lexeme *lexToken(Map *macro_defs, Lexer *l) {
                         while ((lexPreProcBoolean(l,macro_defs,&le)) != 1) {
                             int ok = lex(l,&le);
                             if (!ok) {
-                                loggerPanic("line %d: Unterminated #if\n", line);
+                                l->lineno = line;
+                                lexRaise(l, "Unterminated #if");
                             }
                         }
                     }
@@ -1696,7 +1780,8 @@ Lexeme *lexToken(Map *macro_defs, Lexer *l) {
                     while ((lexPreProcBoolean(l,macro_defs,&le)) != 1) {
                         int ok = lex(l,&le);
                         if (!ok) {
-                            loggerPanic("line %d: Unterminated #if\n", line);
+                            l->lineno = line;
+                            lexRaise(l, "Unterminated #if");
                         }
                     }
                     continue;
@@ -1707,7 +1792,7 @@ Lexeme *lexToken(Map *macro_defs, Lexer *l) {
 
                 case KW_PP_ERROR:
                     lex(l,&next);
-                    loggerPanic("line %d: %.*s",next.line,next.len,next.start);
+                    lexRaise(l, "%.*s", next.len, next.start);
                     break;
 
                 default:
@@ -1750,25 +1835,29 @@ char *lexerReportLine(Lexer *l, s64 lineno) {
     s64 size = l->cur_file->src->len;
     s64 line = 1;
     s64 i = 0;
-    
-    for (; i < size-1; ++i) {
+
+    /* Walk forwards until `line == lineno`. For line 1 the loop exits
+     * immediately at i == 0 (no preceding newline to skip); for higher lines,
+     * we break at the `\n` that terminates the previous line and step over it */
+    while (i < size && line < lineno) {
+        if (ptr[i] == '\0') {
+            return aoStrMove(buf);
+        }
         if (ptr[i] == '\n') {
             line++;
         }
-        if (ptr[i] == '\0') break;
-        if (line == lineno) break;
-    }
-
-    i++;
-    if (ptr[i] == '\0') {
-        return aoStrMove(buf);
-    }
-
-    while (isspace(ptr[i])) {
         i++;
     }
 
-    while (ptr[i] && ptr[i] != '\n') {
+    if (line != lineno) {
+        return aoStrMove(buf);
+    }
+
+    /* Preserve leading whitespace. The diagnostic renderer
+     * positions the `^` underline from the token's source column,
+     * which only lines up if the rendered line has the same
+     * leading indent as the source. */
+    while (i < size && ptr[i] && ptr[i] != '\n') {
         aoStrPutChar(buf, ptr[i++]);
     }
     aoStrPutChar(buf, '\0');

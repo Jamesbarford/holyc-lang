@@ -17,6 +17,37 @@
 #include "util.h"
 #include "version.h"
 
+/* VecType for the CtrlDiagnostic accumulator. Owns its entries,
+ * release frees the heap-allocated CctrlDiagnostic plus its message /
+ * suggestion AoStrs. */
+static void cctrlDiagnosticStringify(AoStr *buf, void *ptr) {
+    CctrlDiagnostic *d = (CctrlDiagnostic *)ptr;
+    if (d && d->message) {
+        aoStrCatFmt(buf, "%S", d->message);
+    }
+}
+
+static int cctrlDiagnosticMatch(void *a, void *b) {
+    return a == b;
+}
+
+static int cctrlDiagnosticRelease(void *ptr) {
+    CctrlDiagnostic *d = (CctrlDiagnostic *)ptr;
+    if (d) {
+        if (d->message) aoStrRelease(d->message);
+        if (d->suggestion) aoStrRelease(d->suggestion);
+        free(d);
+    }
+    return 1;
+}
+
+static VecType vec_diagnostic_type = {
+    .stringify = cctrlDiagnosticStringify,
+    .match     = cctrlDiagnosticMatch,
+    .release   = cctrlDiagnosticRelease,
+    .type_str  = "CctrlDiagnostic *",
+};
+
 /* `Map<char *, Lexeme *>` Map does not own either the key nor the Lexeme */
 MapType map_cstring_lexeme_type = {
     .match           = mapCStringEq,
@@ -166,6 +197,12 @@ Cctrl *ccMacroProcessor(Map *macro_defs) {
     cc->macro_defs = macro_defs;
     cc->strs = mapNew(32, &map_ast_type);
     cc->ast_list = NULL;
+    /* The macro-processor stub Cctrl is passed to helpers that may
+     * call cctrlRaiseException; keep diagnostics state consistent
+     * so those paths don't read uninitialised fields. */
+    cc->diagnostics = NULL;
+    cc->n_errors = 0;
+    cc->current_recovery = NULL;
     return cc;
 }
 
@@ -198,6 +235,9 @@ Cctrl *cctrlNew(void) {
     cc->tmp_loop_end = NULL;
     cc->tmp_func = NULL;
     cc->token_buffer = NULL;
+    cc->diagnostics = vecNew(&vec_diagnostic_type);
+    cc->n_errors = 0;
+    cc->current_recovery = NULL;
 
     int len;
     AoStr **str_array = aoStrSplit(x86_registers,',',&len);
@@ -353,6 +393,9 @@ void cctrLoadNextTokens(Cctrl *cc, s64 token_count) {
 
 void cctrlInitParse(Cctrl *cc, Lexer *lexer_) {
     cc->lexer_ = lexer_;
+    /* Wire the back-pointer so lex-time errors can route through
+     * this Cctrl's diagnostic accumulator and recovery longjmp. */
+    if (lexer_) lexer_->cc = cc;
     if (cc->token_buffer == NULL) {
         cc->token_buffer = tokenRingBufferStaticNew();
     }
@@ -421,7 +464,7 @@ Lexeme *cctrlTokenGet(Cctrl *cc) {
     while (token) {
         tokenRingBufferPop(cc->token_buffer);
         if (token->tk_type == TK_COMMENT) {
-            /* XXX: Not really sure what to do with the comments or where they 
+            /* XXX: Not really sure what to do with the comments or where they
              * should go ??*/
             token = tokenRingBufferPeek(cc->token_buffer);
             continue;
@@ -460,43 +503,20 @@ Lexeme *cctrlAsmTokenGet(Cctrl *cc) {
 
 AoStr *cctrlSeverityMessage(int severity) {
     AoStr *buf = aoStrNew();
-    if (is_terminal) {
-        switch (severity) {
-            case CCTRL_ERROR:
-                aoStrCatLen(buf,str_lit(ESC_BOLD_RED));
-                aoStrCatLen(buf,str_lit("error: "));
-                aoStrCatLen(buf,str_lit(ESC_RESET));
-                aoStrCatLen(buf,str_lit(ESC_CLEAR_BOLD));
-                break;
-            case CCTRL_WARN:
-                aoStrCatLen(buf,str_lit(ESC_BOLD_YELLOW));
-                aoStrCatLen(buf,str_lit("warning: "));
-                aoStrCatLen(buf,str_lit(ESC_RESET));
-                break;
-            case CCTRL_INFO:
-                aoStrCatLen(buf,str_lit(ESC_BOLD_CYAN));
-                aoStrCatLen(buf,str_lit("info: "));
-                aoStrCatLen(buf,str_lit(ESC_RESET));
-                break;
-            case CCTRL_ICE: {
-                char *ice_msg = mprintf(ESC_BOLD_RED"INTERNAL COMPILER ERROR"ESC_RESET" - hcc %s: ",
-                                        cctrlGetVersion());
-                aoStrCat(buf,ice_msg);
-                break;
-            }
-        }
-    } else {
-        switch (severity) {
-            case CCTRL_ERROR: aoStrCatLen(buf,str_lit("error: ")); break;
-            case CCTRL_WARN: aoStrCatLen(buf,str_lit("warning: ")); break;
-            case CCTRL_INFO: aoStrCatLen(buf,str_lit("info: ")); break;
-            case CCTRL_ICE: {
-                char *ice_msg = mprintf("INTERNAL COMPILER ERROR - hcc %s: ",
-                                        cctrlGetVersion());
-                aoStrCat(buf,ice_msg);
-                break;
-            }
-        }
+    switch (severity) {
+        case CCTRL_ERROR:
+            aoStrCatColoured(buf, ESC_BOLD_RED, "error: ");
+            break;
+        case CCTRL_WARN:
+            aoStrCatColoured(buf, ESC_BOLD_YELLOW, "warning: ");
+            break;
+        case CCTRL_INFO:
+            aoStrCatColoured(buf, ESC_BOLD_CYAN, "info: ");
+            break;
+        case CCTRL_ICE:
+            aoStrCatColoured(buf, ESC_BOLD_RED, "INTERNAL COMPILER ERROR");
+            aoStrCatPrintf(buf, " - hcc %s: ", cctrlGetVersion());
+            break;
     }
     return buf;
 }
@@ -512,13 +532,9 @@ void cctrlFileAndLine(Cctrl *cc, AoStr *buf, s64 lineno, s64 char_pos, char *msg
     if (cc->lexer_) {
         LexFile *file = cc->lexer_->cur_file;
         char *file_name = file->filename->data;
-        if (is_terminal) {
-            aoStrCatFmt(buf, " "ESC_CYAN"-->"ESC_RESET" %s:%I",
-                    file_name,
-                    lineno);
-        } else {
-            aoStrCatFmt(buf, " --> %s:%I", file_name, lineno);
-        }
+        aoStrPutChar(buf, ' ');
+        aoStrCatColoured(buf, ESC_CYAN, "-->");
+        aoStrCatPrintf(buf, " %s:%ld", file_name, (long)lineno);
         if (char_pos > -1) {
             aoStrCatFmt(buf,":%I",char_pos+1);
         }
@@ -530,71 +546,39 @@ void cctrlFileAndLine(Cctrl *cc, AoStr *buf, s64 lineno, s64 char_pos, char *msg
 }
 
 char *lexemeToColor(Cctrl *cc, Lexeme *tok, int is_err) {
-    if (!is_terminal) {
+    /* Error token wins: render in bold red, no syntax colouring.
+     * Otherwise pick a per-kind colour, with TK_IDENT looking up
+     * the keyword table to catch user-defined-but-actually-builtin
+     * names (e.g. type aliases). */
+    if (is_err) {
+        const char *red = clr(ESC_BOLD_RED);
+        const char *rst = clr(ESC_RESET);
         switch (tok->tk_type) {
-            case TK_KEYWORD: return mprintf("%.*s", tok->len,tok->start);
-            case TK_STR: return mprintf("\"%.*s\"", tok->len,tok->start);
-            case TK_I64: return mprintf("%ld",tok->i64);
-            case TK_F64: return mprintf("%f",tok->f64);
-            case TK_IDENT: return mprintf("%.*s", tok->len,tok->start);
-            default: return mprintf("%.*s",tok->len, tok->start);
+            case TK_STR: return mprintf("%s\"%.*s\"%s", red, tok->len, tok->start, rst);
+            case TK_I64: return mprintf("%s%ld%s", red, tok->i64, rst);
+            case TK_F64: return mprintf("%s%f%s", red, tok->f64, rst);
+            default:     return mprintf("%s%.*s%s", red, tok->len, tok->start, rst);
         }
-    } else if (is_terminal && is_err) {
-        AoStr *buf = aoStrNew();
-        aoStrCat(buf,ESC_BOLD_RED);
-        switch (tok->tk_type) {
-            case TK_KEYWORD: aoStrCatFmt(buf, "%.*s", tok->len,tok->start); break;
-            case TK_STR: aoStrCatFmt(buf,"\"%.*s\"", tok->len,tok->start); break;
-            case TK_I64: aoStrCatFmt(buf,"%I",tok->i64); break;
-            case TK_F64: aoStrCatFmt(buf,"%f",tok->f64); break;
-            case TK_IDENT: aoStrCatFmt(buf,"%.*s", tok->len,tok->start); break;
-            default: aoStrCatFmt(buf,"%.*s",tok->len, tok->start); break;
-        }
-        aoStrCat(buf,ESC_RESET);
-        return aoStrMove(buf);
-    } else {
-        switch (tok->tk_type) {
-            case TK_KEYWORD: return mprintf(ESC_BLUE"%.*s"ESC_RESET, tok->len, tok->start);
-            case TK_STR: return mprintf(ESC_GREEN"\"%.*s\""ESC_RESET, tok->len,tok->start);
-            case TK_I64: return mprintf(ESC_PURPLE"%ld"ESC_RESET, tok->i64);
-            case TK_F64: return mprintf(ESC_PURPLE"%f"ESC_RESET, tok->f64);
-            case TK_IDENT: {
-                if (cctrlIsKeyword(cc, tok->start, tok->len)) {
-                    return mprintf(ESC_BLUE"%.*s"ESC_RESET,tok->len, tok->start);
-                } else {
-                    return mprintf("%.*s",tok->len, tok->start);
-                }
+    }
+
+    const char *rst = clr(ESC_RESET);
+    switch (tok->tk_type) {
+        case TK_KEYWORD:
+            return mprintf("%s%.*s%s", clr(ESC_BLUE), tok->len, tok->start, rst);
+        case TK_STR:
+            return mprintf("%s\"%.*s\"%s", clr(ESC_GREEN), tok->len, tok->start, rst);
+        case TK_I64:
+            return mprintf("%s%ld%s", clr(ESC_PURPLE), tok->i64, rst);
+        case TK_F64:
+            return mprintf("%s%f%s", clr(ESC_PURPLE), tok->f64, rst);
+        case TK_IDENT:
+            if (cctrlIsKeyword(cc, tok->start, tok->len)) {
+                return mprintf("%s%.*s%s", clr(ESC_BLUE), tok->len, tok->start, rst);
             }
-            default: return mprintf("%.*s",tok->len, tok->start);
-        }
+            return mprintf("%.*s", tok->len, tok->start);
+        default:
+            return mprintf("%.*s", tok->len, tok->start);
     }
-}
-
-s64 cctrlGetCharErrorIdx(Cctrl *cc, Lexeme *cur_tok,
-                             const char *line_buffer)
-{
-    (void)cc;
-    Lexeme tok;
-    Lexer l;
-    lexInit(&l, (char *)line_buffer, CCF_ACCEPT_WHITESPACE);
-
-    s64 offset = 0;
-    s64 latest_offset = 0;
-    int match = 0;
-    /* to the beginning of the line */
-    while (lex(&l,&tok)) {
-        /* We want to find the last instance of the error not the first */
-        if (lexemeEq(cur_tok,&tok)) {
-            match = 1;
-            latest_offset = offset;
-        }
-        offset += tok.len;
-        if (cur_tok->tk_type != TK_STR && tok.tk_type == TK_STR) offset++;
-    }
-    if (!match) {
-        return -1;
-    }
-    return latest_offset;
 }
 
 s64 cctrlGetErrorIdx(Cctrl *cc, s64 line, char ch,
@@ -623,11 +607,7 @@ void cctrlCreateColoredLine(Cctrl *cc,
                             const char *line_buffer)
 {
     (void)suggestion;
-    if (is_terminal) {
-        aoStrCat(buf, ESC_CYAN"     |\n"ESC_RESET);
-    } else {
-        aoStrCat(buf, "     |\n");
-    }
+    aoStrCatColoured(buf, ESC_CYAN, "     |\n");
     Lexeme *cur_tok = cctrlTokenPeek(cc);
 
     AoStr *colored_buffer = aoStrNew();
@@ -635,7 +615,14 @@ void cctrlCreateColoredLine(Cctrl *cc,
     s64 tok_len = -1;
     Lexeme tok;
     Lexer l;
-    lexInit(&l, (char *)line_buffer, CCF_ACCEPT_WHITESPACE);
+    /* Accept whitespace AND comments so we preserve every source character.
+     * Without this, comments get silently swallowed during re-lexing and the
+     * `^` underline (positioned by source column) lands past the wrong text.
+     * Also flip on CCF_PERMISSIVE so malformed escapes (e.g. `"\q"` in the
+     * source) don't make the renderer call lexRaise. We're only trying to
+     * syntax-colour the line, not to validate it. */
+    lexInit(&l, (char *)line_buffer,
+            CCF_ACCEPT_WHITESPACE|CCF_ACCEPT_COMMENTS|CCF_PERMISSIVE);
     s64 current_offset = 0;
 
     /* This assumes we want the last match of an error as opposed to the first */
@@ -659,85 +646,63 @@ void cctrlCreateColoredLine(Cctrl *cc,
         current_offset += tok.len;
     }
 
-    if (is_terminal) {
-        aoStrCatPrintf(buf, ESC_CYAN"%4ld |"ESC_RESET"    ", lineno);
-        aoStrCatFmt(buf, "%S\n", colored_buffer);
-    } else {
-        aoStrCatPrintf(buf, "%4ld |    %s\n", lineno, colored_buffer->data);
-    }
+    aoStrCatColouredFmt(buf, ESC_CYAN, "%4ld |", (long)lineno);
+    aoStrCatPrintf(buf, "    %s\n", colored_buffer->data);
     if (_offset) *_offset = offset;
     if (_tok_len) *_tok_len = tok_len;
     aoStrRelease(colored_buffer);
 }
 
-AoStr *cctrlCreateErrorLine(Cctrl *cc,
-                            s64 lineno,
-                            char *msg,
-                            int severity,
-                            char *suggestion)
+/* Render a diagnostic positioned at the current peek token. */
+AoStr *cctrlCreateErrorLine(Cctrl *cc, s64 lineno, char *msg,
+                            int severity, char *suggestion)
 {
-    char *color = severity == CCTRL_ERROR || CCTRL_ICE ? ESC_BOLD_RED : CCTRL_WARN ? ESC_BOLD_YELLOW : ESC_CYAN;
-    Lexeme *eof_peek = cctrlTokenPeek(cc);
-    if (!cc->lexer_ || !eof_peek) {
-        /* No current token (EOF) or no lexer state: fall back to the
-         * simple message format - the column-pointer rendering below
-         * assumes a live token. */
-        AoStr *buf = aoStrNew();
-        cctrlFileAndLine(cc,buf,lineno,-1,msg,severity);
-        if (is_terminal) {
-            aoStrCat(buf, ESC_CYAN"     |\n"ESC_RESET);
-        } else {
-            aoStrCat(buf, "     |\n");
-        }
+    Lexeme *peek = cctrlTokenPeek(cc);
+    s64 line = peek ? peek->line : lineno;
+    s64 col  = peek ? peek->col  : 0;
+    s64 len  = peek ? peek->len  : 0;
+    return cctrlCreateErrorLineAt(cc, line, col, len, msg, severity, suggestion);
+}
+
+/* Render a diagnostic at an *explicit* source position. Unlike
+ * cctrlCreateErrorLine this never calls cctrlTokenPeek, so it works correctly
+ * when the caller knows where the error is but the token buffer doesn't.
+ * 0 for a column means "we don't have a column", the line is rendered without
+ * an underline. `len` is the width of the `^` underline
+ * (clamped to 1 if 0 is given). */
+AoStr *cctrlCreateErrorLineAt(Cctrl *cc, s64 lineno, s64 col, s64 len,
+                              char *msg, int severity, char *suggestion)
+{
+    char *color = severity == CCTRL_ERROR || CCTRL_ICE
+            ? ESC_BOLD_RED
+            : CCTRL_WARN ? ESC_BOLD_YELLOW : ESC_CYAN;
+    AoStr *buf = aoStrNew();
+    if (!cc->lexer_) {
+        cctrlFileAndLine(cc, buf, lineno, -1, msg, severity);
+        aoStrCatColoured(buf, ESC_CYAN, "     |\n");
         return buf;
     }
 
-    const char *line_buffer = lexerReportLine(cc->lexer_,lineno);
-    Lexeme *cur_tok = eof_peek;
-    AoStr *buf = aoStrNew();
-    s64 char_pos = cctrlGetCharErrorIdx(cc,cur_tok, line_buffer);
+    s64 char_pos = col > 0 ? col - 1 : -1;
+    s64 tok_len  = len > 0 ? len : 1;
+    cctrlFileAndLine(cc, buf, lineno, char_pos, msg, severity);
 
-    s64 offset = -1;
-    s64 tok_len = -1;
+    const char *line_buffer = lexerReportLine(cc->lexer_, lineno);
+    s64 unused_off = -1, unused_len = -1;
+    cctrlCreateColoredLine(cc, buf, lineno, 0, NULL, -1,
+                           &unused_off, &unused_len, line_buffer);
 
-    cctrlFileAndLine(cc,buf,cur_tok->line,char_pos,msg,severity);
-    cctrlCreateColoredLine(cc, buf, lineno, 1, suggestion,
-            char_pos, &offset, &tok_len, line_buffer);
-
-    if (char_pos != -1 && tok_len != -1) {
-        if (is_terminal) {
-            aoStrCat(buf, ESC_CYAN"     |    "ESC_RESET);
-        } else {
-            aoStrCat(buf, "     |    ");
+    if (char_pos != -1) {
+        aoStrCatColoured(buf, ESC_CYAN, "     |    ");
+        for (int i = 0; i < char_pos; ++i) aoStrPutChar(buf, ' ');
+        for (int i = 0; i < tok_len; ++i) {
+            aoStrCatColoured(buf, color, "^");
         }
-
-        for (int i = 0; i < char_pos; ++i) {
-            aoStrPutChar(buf,' ');
-        }
-
-        if (is_terminal) {
-            for (int i = 0; i < tok_len; ++i) {
-                aoStrCatFmt(buf,"%s^%s",color,ESC_RESET);
-            }
-        } else {
-            for (int i = 0; i < tok_len; ++i) {
-                aoStrCat(buf, "^");
-            }
-        }
-
         if (suggestion) {
-            if (is_terminal) {
-                aoStrCatFmt(buf, "%s %s%s",color,suggestion,ESC_RESET);
-            } else {
-                aoStrCatFmt(buf, " %s", suggestion);
-            }
+            aoStrCatColouredFmt(buf, color, " %s", suggestion);
         }
     } else {
-        if (is_terminal) {
-            aoStrCat(buf, ESC_CYAN"     |"ESC_RESET);
-        } else {
-            aoStrCat(buf, "     |");
-        }
+        aoStrCatColoured(buf, ESC_CYAN, "     |");
     }
     return buf;
 }
@@ -745,11 +710,7 @@ AoStr *cctrlCreateErrorLine(Cctrl *cc,
 AoStr *cctrlMessagVnsPrintF(Cctrl *cc, char *fmt, va_list ap, int severity) {
     char *msg = mprintVa(fmt, ap, NULL);
     AoStr *bold_msg = aoStrNew();
-    if (is_terminal) {
-        aoStrCatFmt(bold_msg, ESC_BOLD"%s"ESC_CLEAR_BOLD, msg);
-    } else {
-        aoStrCatFmt(bold_msg, "%s", msg);
-    }
+    aoStrCatColoured(bold_msg, ESC_BOLD, msg);
     Lexeme *cur_tok = cctrlTokenPeek(cc);
     /* At EOF the peek returns NULL; use the last known line so the
      * error message still has useful location info instead of
@@ -760,16 +721,12 @@ AoStr *cctrlMessagVnsPrintF(Cctrl *cc, char *fmt, va_list ap, int severity) {
     return buf;
 }
 
-AoStr *cctrlMessagVnsPrintFWithSuggestion(Cctrl *cc, char *fmt, va_list ap, 
+AoStr *cctrlMessagVnsPrintFWithSuggestion(Cctrl *cc, char *fmt, va_list ap,
                                           int severity, char *suggestion)
 {
     char *msg = mprintVa(fmt, ap, NULL);
     AoStr *bold_msg = aoStrNew();
-    if (is_terminal) {
-        aoStrCatFmt(bold_msg, ESC_BOLD"%s"ESC_CLEAR_BOLD, msg);
-    } else {
-        aoStrCatFmt(bold_msg, "%s", msg);
-    }
+    aoStrCatColoured(bold_msg, ESC_BOLD, msg);
     Lexeme *cur_tok = cctrlTokenPeek(cc);
     s64 line = cur_tok ? cur_tok->line : cc->lineno;
     AoStr *buf = cctrlCreateErrorLine(cc,line,bold_msg->data,severity,suggestion);
@@ -789,38 +746,144 @@ void cctrlInfo(Cctrl *cc, char *fmt, ...) {
     va_list ap;
     va_start(ap,fmt);
     AoStr *buf = cctrlMessagVnsPrintF(cc,fmt,ap,CCTRL_INFO);
-    fprintf(stderr,"%s\n",buf->data);
-    aoStrRelease(buf);
     va_end(ap);
+    /* Route through the diagnostic accumulator so info/warning
+     * lines interleave with errors in source order at flush time
+     * instead of bleeding out mid-parse. */
+    CctrlDiagnostic *d = cctrlMakeDiag(cc, CCTRL_INFO, buf, NULL);
+    cctrlDiagPush(cc, d);
 }
 
 void cctrlWarning(Cctrl *cc, char *fmt, ...) {
     va_list ap;
     va_start(ap,fmt);
     AoStr *buf = cctrlMessagVnsPrintF(cc,fmt,ap,CCTRL_WARN);
-    fprintf(stderr,"%s\n",buf->data);
-    aoStrRelease(buf);
     va_end(ap);
+    CctrlDiagnostic *d = cctrlMakeDiag(cc, CCTRL_WARN, buf, NULL);
+    cctrlDiagPush(cc, d);
+}
+
+CctrlDiagnostic *cctrlMakeDiag(Cctrl *cc,
+                               int severity,
+                               AoStr *rendered,
+                               AoStr *suggestion)
+{
+    CctrlDiagnostic *d = (CctrlDiagnostic *)calloc(1, sizeof(CctrlDiagnostic));
+    d->severity = severity;
+    d->message = rendered;
+    d->suggestion = suggestion;
+    d->file = cc->lexer_ ? cc->lexer_->cur_file : NULL;
+
+    Lexeme *cur = cctrlTokenPeek(cc);
+    if (cur) {
+        d->line = cur->line;
+        d->col = cur->col;
+        d->end_line = cur->line;
+        d->end_col = cur->col + (cur->len > 0 ? cur->len : 1);
+    } else {
+        d->line = (int)cc->lineno;
+        d->col = 0;
+        d->end_line = d->line;
+        d->end_col = 0;
+    }
+    return d;
+}
+
+void cctrlDiagPush(Cctrl *cc, CctrlDiagnostic *d) {
+    if (!cc || !cc->diagnostics) {
+        /* No accumulation storage (e.g. macro-processor stub).
+         * Print immediately so the message isn't lost. */
+        if (d) {
+            if (d->message) fprintf(stderr, "%s\n", d->message->data);
+            if (d->message) aoStrRelease(d->message);
+            if (d->suggestion) aoStrRelease(d->suggestion);
+            free(d);
+        }
+        return;
+    }
+    vecPush(cc->diagnostics, d);
+    if (d->severity == CCTRL_ERROR) cc->n_errors++;
+}
+
+int cctrlDiagFlush(Cctrl *cc) {
+    if (!cc || !cc->diagnostics) return 0;
+    for (u64 i = 0; i < cc->diagnostics->size; i++) {
+        CctrlDiagnostic *d = (CctrlDiagnostic *)cc->diagnostics->entries[i];
+        if (d && d->message) {
+            fprintf(stderr, "%s\n", d->message->data);
+        }
+    }
+    return cc->n_errors;
+}
+
+__noreturn void cctrlTerminate(Cctrl *cc) {
+    /* Optionally we can not have a jump buffer */
+    if (cc->current_recovery) {
+        /* Hand control to the nearest active recovery point. The
+         * jumper resyncs tokens and resumes; the message is
+         * printed by `cctrlDiagFlush` at the end of compilation. */
+        longjmp(*cc->current_recovery, 1);
+    }
+    /* No recovery active: keep the legacy fail-fast behaviour. */
+    cctrlDiagFlush(cc);
+    exit(EXIT_FAILURE);
+}
+
+/* Walks the ring buffer back to a token on a strictly earlier
+ * line than `tok->line`, renders an INFO message positioned at
+ * that token, then re-advances so the buffer head ends up where
+ * the caller left it. The walk is capped at 16 rewinds and bails
+ * on a same-peek-after-rewind (ring floor). Returns NULL when no
+ * earlier-line token exists in reach - the caller should treat
+ * that as "no hint available" rather than an error. */
+AoStr *cctrlInfoAtPreviousLine(Cctrl *cc, Lexeme *tok, const char *fmt, ...) {
+    int rewinds = 0;
+    Lexeme *prev = cctrlTokenPeek(cc);
+    while (prev && prev->line >= tok->line && rewinds < 16) {
+        cctrlTokenRewind(cc);
+        Lexeme *new_prev = cctrlTokenPeek(cc);
+        if (new_prev == prev) break;
+        prev = new_prev;
+        rewinds++;
+    }
+
+    AoStr *info_msg = NULL;
+    if (prev && prev->line < tok->line) {
+        va_list ap;
+        va_start(ap, fmt);
+        info_msg = cctrlMessagVnsPrintF(cc, (char *)fmt, ap, CCTRL_INFO);
+        va_end(ap);
+    }
+
+    /* Restore buffer head so the recovery code sees the same
+     * state the caller had before this helper ran. */
+    while (rewinds-- > 0) {
+        if (!cctrlTokenGet(cc)) break;
+    }
+    return info_msg;
 }
 
 void cctrlRaiseException(Cctrl *cc, char *fmt, ...) {
     va_list ap;
     va_start(ap,fmt);
     AoStr *buf = cctrlMessagVnsPrintF(cc,fmt,ap,CCTRL_ERROR);
-    fprintf(stderr,"%s\n",buf->data);
-    aoStrRelease(buf);
     va_end(ap);
-    exit(EXIT_FAILURE);
+
+    CctrlDiagnostic *d = cctrlMakeDiag(cc, CCTRL_ERROR, buf, NULL);
+    cctrlDiagPush(cc, d);
+    cctrlTerminate(cc);
 }
 
 void cctrlRaiseSuggestion(Cctrl *cc, char *suggestion, char *fmt, ...) {
     va_list ap;
     va_start(ap,fmt);
     AoStr *buf = cctrlMessagVnsPrintFWithSuggestion(cc,fmt,ap,CCTRL_ERROR,suggestion);
-    fprintf(stderr,"%s\n",buf->data);
-    aoStrRelease(buf);
     va_end(ap);
-    exit(EXIT_FAILURE);
+
+    AoStr *sug = suggestion ? aoStrPrintf("%s", suggestion) : NULL;
+    CctrlDiagnostic *d = cctrlMakeDiag(cc, CCTRL_ERROR, buf, sug);
+    cctrlDiagPush(cc, d);
+    cctrlTerminate(cc);
 }
 
 void cctrlIce(Cctrl *cc, char *fmt, ...) {
@@ -833,13 +896,68 @@ void cctrlIce(Cctrl *cc, char *fmt, ...) {
     exit(EXIT_FAILURE);
 }
 
-/* Rewind the token buffer until there is a match */
+/* Walk forwards through the token stream, balancing `{`/`}`, until
+ * we land on a recovery point. Returns once `peek()` is positioned
+ * at the first token the caller's loop should resume from. */
+static void cctrlSyncCommon(Cctrl *cc, int stop_at_toplevel_kw) {
+    int depth = 0;
+    while (1) {
+        Lexeme *peek = cctrlTokenPeek(cc);
+        if (!peek) return;
+
+        if (tokenPunctIs(peek, '{')) {
+            depth++;
+            cctrlTokenGet(cc);
+            continue;
+        }
+        if (tokenPunctIs(peek, '}')) {
+            if (depth == 0) {
+                /* Hit the closing brace of our containing block;
+                 * leave it in place so the parent parser can consume
+                 * it and exit cleanly. */
+                return;
+            }
+            depth--;
+            cctrlTokenGet(cc);
+            continue;
+        }
+        if (depth == 0 && tokenPunctIs(peek, ';')) {
+            /* Consume the terminator so the next iteration starts
+             * fresh on the following statement. */
+            cctrlTokenGet(cc);
+            return;
+        }
+        if (depth == 0 && stop_at_toplevel_kw && peek->tk_type == TK_KEYWORD) {
+            /* Likely the start of a new top-level decl; leave it
+             * for parseToplevelDef. */
+            return;
+        }
+        cctrlTokenGet(cc);
+    }
+}
+
+void cctrlSyncToplevel(Cctrl *cc) {
+    cctrlSyncCommon(cc, 1);
+}
+
+void cctrlSyncStatement(Cctrl *cc) {
+    cctrlSyncCommon(cc, 0);
+}
+
+/* Rewind the token buffer until there is a match. NULL `peek`
+ * (EOF in the ring buffer) and a NULL-source `ch` are tolerated -
+ * callers in the parser sometimes hit this when the lexer has run
+ * dry mid-construct. */
 void cctrlRewindUntilPunctMatch(Cctrl *cc, s64 ch, int *_count) {
     int count = 0;
     Lexeme *peek = cctrlTokenPeek(cc);
-    while (!tokenPunctIs(peek, ch)) {
+    while (peek && !tokenPunctIs(peek, ch)) {
         cctrlTokenRewind(cc);
-        peek = cctrlTokenPeek(cc);
+        Lexeme *new_peek = cctrlTokenPeek(cc);
+        /* Rewind can't go below the start of the ring; if peek
+         * doesn't change, we've hit the floor. Bail. */
+        if (new_peek == peek) break;
+        peek = new_peek;
         count++;
         if (count > 5) break; // has to be some limit
     }
@@ -863,86 +981,80 @@ void cctrlRewindUntilStrMatch(Cctrl *cc, char *str, int len, int *_count) {
  * matches 'expected'. Then consume this token else throw an error */
 void cctrlTokenExpect(Cctrl *cc, s64 expected) {
     Lexeme *tok = cctrlTokenGet(cc);
-    if (!tokenPunctIs(tok, expected)) {
-        if (!tok) {
-            /* End of input while we still wanted `expected`. This is
-             * almost always an unbalanced bracket / missing terminator
-             * - point at the line we were last consuming so the user
-             * sees the actual region the parse fell off at. */
-            const char *hint = (expected == '}')
-                ? " (unterminated `{ ... }` block?)"
-              : (expected == ')')
-                ? " (unterminated `( ... )`?)"
-              : (expected == ']')
-                ? " (unterminated `[ ... ]`?)"
-              : (expected == ';')
-                ? " (missing terminator?)"
-              : "";
-            cctrlRaiseException(cc,
-                "Unexpected end of input, expected `%c`%s",
-                (char)expected, hint);
-        } else {
-            cctrlRewindUntilStrMatch(cc,tok->start,tok->len,NULL);
-            cctrlTokenRewind(cc);
-            AoStr *info_msg = cctrlMessagePrintF(cc,CCTRL_INFO,"Previous line was");
-            cctrlTokenGet(cc);
+    if (tokenPunctIs(tok, expected)) return;
 
-
-            AoStr *err_msg = cctrlMessagePrintF(cc,CCTRL_ERROR,"Syntax error, got an unexpected %s `%.*s`, perhaps you meant `%c`?",
-                    lexemeTypeToString(tok->tk_type), 
-                    tok->len, tok->start,
-                    (char)expected);
-
-            fprintf(stderr,"%s\n%s\n",info_msg->data, err_msg->data);
-            aoStrRelease(info_msg);
-            aoStrRelease(err_msg);
-            exit(EXIT_FAILURE);
-        }
+    if (!tok) {
+        /* End of input while we still wanted `expected`. This is
+         * almost always an unbalanced bracket / missing terminator
+         * - point at the line we were last consuming so the user
+         * sees the actual region the parse fell off at. */
+        const char *hint = (expected == '}')
+            ? " (unterminated `{ ... }` block?)"
+          : (expected == ')')
+            ? " (unterminated `( ... )`?)"
+          : (expected == ']')
+            ? " (unterminated `[ ... ]`?)"
+          : (expected == ';')
+            ? " (missing terminator?)"
+          : "";
+        cctrlRaiseException(cc,
+            "Unexpected end of input, expected `%c`%s",
+            (char)expected, hint);
+        return; /* unreachable; cctrlRaiseException is noreturn */
     }
+
+    /* tok was consumed by the get above so peek now points past it. Rewind
+     * once so the diagnostic renderer captures tok's actual line/col. */
+    cctrlTokenRewind(cc);
+    AoStr *err_msg = cctrlMessagePrintF(cc, CCTRL_ERROR,
+            "Syntax error, got an unexpected %s `%.*s`, perhaps you meant `%c`?",
+            lexemeTypeToString(tok->tk_type),
+            tok->len, tok->start,
+            (char)expected);
+    /* Re-consume so the buffer is back to where the caller left us before we
+     * go hunting for an explanatory hint. */
+    cctrlTokenGet(cc);
+
+    AoStr *info_msg = cctrlInfoAtPreviousLine(cc, tok,
+            "previous statement starts here");
+
+    CctrlDiagnostic *err_d = cctrlMakeDiag(cc, CCTRL_ERROR, err_msg, NULL);
+    cctrlDiagPush(cc, err_d);
+    if (info_msg) {
+        CctrlDiagnostic *info_d = cctrlMakeDiag(cc, CCTRL_INFO, info_msg, NULL);
+        cctrlDiagPush(cc, info_d);
+    }
+    cctrlTerminate(cc);
 }
 
-AoStr *cctrlRaiseFromTo(Cctrl *cc, int severity, char *suggestion, char from, 
+/* Render a diagnostic whose underline spans the chars `from`..`to`
+ * within the offending source line (e.g. `{` ... `}` for an
+ * unbalanced block). Position-derivation is the only thing that
+ * differs from the regular path - actual rendering goes through
+ * cctrlCreateErrorLineAt. */
+AoStr *cctrlRaiseFromTo(Cctrl *cc, int severity, char *suggestion, char from,
                         char to, char *fmt, va_list ap)
 {
-    char *color = severity == CCTRL_ERROR || CCTRL_ICE ? ESC_BOLD_RED : CCTRL_WARN ? ESC_BOLD_YELLOW : ESC_CYAN;
     char *msg = mprintVa(fmt, ap, NULL);
     AoStr *bold_msg = aoStrNew();
-    aoStrCatFmt(bold_msg, ESC_BOLD"%s"ESC_CLEAR_BOLD, msg);
+    aoStrCatColoured(bold_msg, ESC_BOLD, msg);
+
     Lexeme *cur_tok = cctrlTokenPeek(cc);
+    s64 line = cur_tok ? cur_tok->line : cc->lineno;
 
-    char *line_buffer = lexerReportLine(cc->lexer_, cur_tok->line);
-    AoStr *buf = aoStrNew();
-    /* This is not a terribly efficient way of getting an error message */
-    s64 char_pos = cctrlGetCharErrorIdx(cc,cur_tok, line_buffer);
-    s64 from_idx = cctrlGetErrorIdx(cc,cur_tok->line,from, line_buffer);
-    s64 to_idx = cctrlGetErrorIdx(cc,cur_tok->line,to, line_buffer);
-
-    s64 offset = -1;
-    s64 tok_len = -1;
-
-    cctrlFileAndLine(cc,buf,cur_tok->line,char_pos,bold_msg->data,severity);
-    cctrlCreateColoredLine(cc, buf, cur_tok->line, 0, NULL, char_pos, &offset, &tok_len, 
-            line_buffer);
-
-    if (from_idx != -1 && to_idx != -1) {
-        aoStrCat(buf, ESC_CYAN"     |    "ESC_RESET);
-        for (int i = 0; i < from_idx; ++i) {
-            aoStrPutChar(buf,' ');
+    s64 col = 0, len = 0;
+    if (cur_tok && cc->lexer_) {
+        const char *line_buffer = lexerReportLine(cc->lexer_, line);
+        s64 from_idx = cctrlGetErrorIdx(cc, line, from, line_buffer);
+        s64 to_idx   = cctrlGetErrorIdx(cc, line, to,   line_buffer);
+        if (from_idx != -1 && to_idx != -1) {
+            col = from_idx + 1;
+            len = (to_idx + 1) - from_idx;
         }
-        for (int i = 0; i < (to_idx+1)-from_idx; ++i) {
-            aoStrCatFmt(buf,"%s^%s",color,ESC_RESET);
-        }
-        if (suggestion) {
-            if (is_terminal) {
-                aoStrCatFmt(buf,"%s %s%s",color,suggestion,ESC_RESET);
-            } else {
-                aoStrCatFmt(buf, " %s", suggestion);
-            }
-        }
-    } else {
-        aoStrCat(buf, ESC_CYAN"     |"ESC_RESET);
     }
 
+    AoStr *buf = cctrlCreateErrorLineAt(cc, line, col, len,
+                                        bold_msg->data, severity, suggestion);
     aoStrRelease(bold_msg);
     return buf;
 }
@@ -951,19 +1063,27 @@ void cctrlRaiseExceptionFromTo(Cctrl *cc, char *suggestion, char from, char to, 
     va_list ap;
     va_start(ap,fmt);
     AoStr *buf = cctrlRaiseFromTo(cc,CCTRL_ERROR,suggestion,from,to,fmt,ap);
-    fprintf(stderr,"%s\n",buf->data);
     va_end(ap);
-    aoStrRelease(buf);
-    exit(EXIT_FAILURE);
+
+    AoStr *sug = suggestion ? aoStrPrintf("%s", suggestion) : NULL;
+    CctrlDiagnostic *d = cctrlMakeDiag(cc, CCTRL_ERROR, buf, sug);
+    cctrlDiagPush(cc, d);
+
+    cctrlTerminate(cc);
 }
 
 void cctrlWarningFromTo(Cctrl *cc, char *suggestion, char from, char to, char *fmt, ...) {
     va_list ap;
     va_start(ap,fmt);
     AoStr *buf = cctrlRaiseFromTo(cc,CCTRL_WARN,suggestion,from,to,fmt,ap);
-    fprintf(stderr,"%s\n",buf->data);
     va_end(ap);
-    aoStrRelease(buf);
+
+    /* Warnings accumulate but never longjmp as the parser keeps going.
+     * `cctrlDiagFlush(...)` prints them alongside the errors at the end of
+     * compilation. */
+    AoStr *sug = suggestion ? aoStrPrintf("%s", suggestion) : NULL;
+    CctrlDiagnostic *d = cctrlMakeDiag(cc, CCTRL_WARN, buf, sug);
+    cctrlDiagPush(cc, d);
 }
 
 /* Get variable either from the local or global scope */

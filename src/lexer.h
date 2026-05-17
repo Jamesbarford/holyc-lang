@@ -142,6 +142,12 @@
 #define CCF_BLOCK             (1<<5)
 #define CCF_ACCEPT_WHITESPACE (1<<6)
 #define CCF_ACCEPT_COMMENTS   (1<<7)
+/* Permissive mode: don't raise on malformed input. Lexing
+ * continues by absorbing the offending byte literally (e.g.
+ * unknown escape `\q` becomes the two chars `\q` in the string
+ * body). Used by the diagnostic renderer's per-line re-lexer,
+ * which only needs to colourise, not validate. */
+#define CCF_PERMISSIVE        (1<<8)
 
 #define LEXEME_RAW_PUNCT              (1<<0)
 #define LEXEME_ENCODE_PUNCT           (1<<1)
@@ -151,6 +157,11 @@ typedef struct Lexeme {
     int tk_type;
     int len;
     int line;
+    /* 1-based column of the first byte of `start` within its source
+     * line. Derived at lex time from `start - line_start_ptr + 1`;
+     * preserved when the lexer cursor moves so we don't have to
+     * rescan the line later which could lead to the wrong characters. */
+    int col;
     char *start;
     int ishex;
     union {
@@ -159,10 +170,22 @@ typedef struct Lexeme {
     };
 } Lexeme;
 
+/* Forward declaration. The lexer holds a back-pointer to its
+ * owning Cctrl (when there is one) so user-visible lex errors
+ * can route through the diagnostic accumulator instead of the
+ * fail-fast `loggerPanic`. NULL for standalone lexer instances
+ * (the macro-processor stub, the per-line re-lexer used by the
+ * diagnostic renderer). */
+struct Cctrl;
+
 typedef struct LexFile {
     AoStr *filename; /* name of the file */
     char *ptr; /* Where we are in the file */
     int lineno; /* line number in the file */
+    /* First byte of the current line in `src->data`. Saved/restored
+     * alongside `ptr` and `lineno` when crossing file boundaries so
+     * columns stays consistent across includes. */
+    char *line_start_ptr;
     AoStr *src; /* source */
 } LexFile;
 
@@ -170,6 +193,13 @@ typedef struct Lexer {
     int tk_type;
     char *ptr;
     char *start;
+    /* Pointer to the start of the current source line. */
+    char *line_start_ptr;
+    /* Line and column of the first byte of the token currently
+     * being lexed. */
+    int tok_start_line;
+    int tok_start_col;
+
     char cur_ch;
     char *cur_str;
     s64 cur_strlen;
@@ -186,6 +216,12 @@ typedef struct Lexer {
     Set *seen_files;
     Map *symbol_table;
     LexFile *cur_file;
+    /* Diagnostic engine back-pointer. When non-NULL the lexer
+     * routes user-visible errors through cctrlRaiseException so
+     * they accumulate in the same Vec the parser writes to and
+     * honour the recovery longjmp. NULL means fall back to
+     * `loggerPanic` (standalone lexer / macro processor). */
+    struct Cctrl *cc;
 } Lexer;
 
 void lexemeMemoryInit(void);

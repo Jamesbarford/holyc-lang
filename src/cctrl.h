@@ -1,6 +1,8 @@
 #ifndef CCTRL_H
 #define CCTRL_H
 
+#include <setjmp.h>
+#include <stdarg.h>
 #include <sys/types.h>
 
 #include "aostr.h"
@@ -29,6 +31,22 @@
 #define CCTRL_INFO  1
 #define CCTRL_WARN  2
 #define CCTRL_ERROR 3
+
+/* A single accumulated parser/lexer diagnostic. Carries enough
+ * spatial info (file + start line/col + end line/col) for an LSP
+ * to render a squiggle without re-tokenising. `message` and
+ * `suggestion` are owned by the diagnostic. `file` is borrowed
+ * from the Lexer's LexFile list and outlives the diagnostic. */
+typedef struct CctrlDiagnostic {
+    int severity;          /* CCTRL_INFO / CCTRL_WARN / CCTRL_ERROR */
+    struct LexFile *file;  /* borrowed; NULL if the source is unknown */
+    int line;
+    int col;
+    int end_line;
+    int end_col;
+    AoStr *message;        /* owned */
+    AoStr *suggestion;     /* owned; may be NULL */
+} CctrlDiagnostic;
 
 typedef struct TokenRingBuffer {
     s64 tail;
@@ -138,6 +156,21 @@ typedef struct Cctrl {
     TokenRingBuffer *token_buffer;
     Lexer *lexer_;
 
+    /* Accumulated diagnostics emitted during this compilation.
+     * Pushed in source order. Includes info and warnings. Not just errors. */ 
+    Vec *diagnostics;
+
+    /* `n_errors` counts only `CCTRL_ERROR` entries so the driver can decide
+     * whether to proceed to codegen. */
+    int n_errors;
+
+    /* Innermost active parser recovery point. `NULL` means errors
+     * are fatal. non-NULL means `cctrlRaiseException` will record the
+     * diagnostic and longjmp here instead of calling `exit()`. Set/cleared by
+     * the parser around top-level decls, statements which are points of
+     * recovery. */
+    jmp_buf *current_recovery;
+
     /* Externl compiler command e.g `clang --target=x86_64-apple-darwin`.
      * This will default to clang on mac and gcc on x86_64 linux */
     char *CC;
@@ -175,6 +208,53 @@ Ast *cctrlGetOrSetString(Cctrl *cc, char *str, int len, s64 real_len);
 void cctrlRewindUntilPunctMatch(Cctrl *cc, s64 ch, int *_count);
 void cctrlRewindUntilStrMatch(Cctrl *cc, char *str, int len, int *_count);
 AoStr *cctrlMessagePrintF(Cctrl *cc, int severity, char *fmt,...);
+/* va_list variant of cctrlMessagePrintF. Public so subsystems
+ * outside cctrl.c (the lexer) can build pre-rendered diagnostic
+ * messages without re-implementing the printf-+-position dance. */
+AoStr *cctrlMessagVnsPrintF(Cctrl *cc, char *fmt, va_list ap, int severity);
+
+/* Build a fully-rendered diagnostic at an explicit (line, col, len).
+ * Bypasses cctrlTokenPeek so callers that know their own position
+ * (the lexer, mid-token) aren't subject to whatever stale token the
+ * parser's ring buffer is holding. `col` is 1-based; pass 0 to skip
+ * the underline entirely. */
+AoStr *cctrlCreateErrorLineAt(Cctrl *cc, s64 lineno, s64 col, s64 len,
+                              char *msg, int severity, char *suggestion);
+
+/* Diagnostic accumulation. `cctrlDiagPush` adds an entry without
+ * printing it */
+void cctrlDiagPush(Cctrl *cc, CctrlDiagnostic *d);
+/* prints every queued diagnostic to stderr (in source order) and returns the
+ * number of CCTRL_ERROR entries. */
+int cctrlDiagFlush(Cctrl *cc);
+
+/* Build a CctrlDiagnostic from a pre-rendered message and the current source
+ * position. Takes ownership of `rendered` and `suggestion`. */
+CctrlDiagnostic *cctrlMakeDiag(Cctrl *cc,
+                               int severity,
+                               AoStr *rendered,
+                               AoStr *suggestion);
+
+/* Hand off to the nearest active recovery point (longjmp) if one is set.
+ * Otherwise flush queued diagnostics and exit. */
+__noreturn void cctrlTerminate(Cctrl *cc);
+
+/* Walk the token ring back to a token on a strictly earlier line than
+ * `tok->line`, render a CCTRL_INFO message positioned there. */
+AoStr *cctrlInfoAtPreviousLine(Cctrl *cc, Lexeme *tok, const char *fmt, ...);
+
+/* Token-stream resync after an error. Both skip tokens until they
+ * reach a brace-depth-zero boundary; the caller's recovery loop
+ * then resumes from there.
+ *  - cctrlSyncToplevel: consume up to and including a top-level
+ *    `;` or stop right before a `}` (which would close a top-level
+ *    block) or a token that looks like the start of a new top-level
+ *    decl (keyword / `#`).
+ *  - cctrlSyncStatement: consume up to and including a statement
+ *    `;` or stop right before a `}` (lets the enclosing block
+ *    close cleanly). */
+void cctrlSyncToplevel(Cctrl *cc);
+void cctrlSyncStatement(Cctrl *cc);
 
 Map *cctrlCreateAstMap(Map *parent);
 Map *cctrlCreateLexemeMap(void);
