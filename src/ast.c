@@ -949,14 +949,6 @@ start_routine:
         if (!astIsValidPointerOp(op)) {
             goto error;
         }
-        if (op != AST_BIN_OP_ADD &&
-            op != AST_BIN_OP_SUB &&
-            op != AST_BIN_OP_EQ &&
-            op != AST_BIN_OP_NE &&
-            op != AST_BIN_OP_LOG_OR &&
-            op != AST_BIN_OP_LOG_AND) {
-            goto error;
-        }
 
         if (ptr2->kind == ptr1->kind) {
             return ast_uint_type;
@@ -1053,7 +1045,13 @@ check_type:
         goto out;
     }
 
-    if ((e->kind == AST_TYPE_POINTER || e->kind == AST_TYPE_FUNC) && a->kind == AST_TYPE_INT) {
+    /* For when we are casting a pointer to an integer. Just accept it as Ok*/
+    if (expected->kind == AST_TYPE_INT && expected->size == 8 &&
+        actual->kind == AST_TYPE_POINTER)
+    {
+        ret = e;
+        goto out;
+    } else if ((e->kind == AST_TYPE_POINTER || e->kind == AST_TYPE_FUNC) && a->kind == AST_TYPE_INT) {
         if (ast->kind == AST_LITERAL && ast->i64 == 0) {
             ret = e;
             goto out;

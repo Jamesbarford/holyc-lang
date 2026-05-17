@@ -977,17 +977,47 @@ static int parseCompoundAssign(Lexeme *tok, AstBinOp *_op) {
     return 0;
 }
 
+/* Inverse of astBinOpFromToken. Returns the source token punct value
+ * (e.g. '<', TK_SHL) for an AstBinOp. */
+static s64 astBinOpToTokenPunct(AstBinOp op) {
+    switch (op) {
+        case AST_BIN_OP_ADD:     return '+';
+        case AST_BIN_OP_SUB:     return '-';
+        case AST_BIN_OP_MUL:     return '*';
+        case AST_BIN_OP_DIV:     return '/';
+        case AST_BIN_OP_MOD:     return '%';
+        case AST_BIN_OP_ASSIGN:  return '=';
+        case AST_BIN_OP_LT:      return '<';
+        case AST_BIN_OP_GT:      return '>';
+        case AST_BIN_OP_LE:      return TK_LESS_EQU;
+        case AST_BIN_OP_GE:      return TK_GREATER_EQU;
+        case AST_BIN_OP_EQ:      return TK_EQU_EQU;
+        case AST_BIN_OP_NE:      return TK_NOT_EQU;
+        case AST_BIN_OP_LOG_AND: return TK_AND_AND;
+        case AST_BIN_OP_LOG_OR:  return TK_OR_OR;
+        case AST_BIN_OP_BIT_XOR: return '^';
+        case AST_BIN_OP_BIT_AND: return '&';
+        case AST_BIN_OP_BIT_OR:  return '|';
+        case AST_BIN_OP_SHL:     return TK_SHL;
+        case AST_BIN_OP_SHR:     return TK_SHR;
+        default:                 return 0;
+    }
+}
+
 Ast *parseCreateBinaryOp(Cctrl *cc, AstBinOp operation, Ast *left, Ast *right) {
     int is_err = 0;
     Ast *binop = astBinaryOp(operation,left,right,&is_err);
     if (!is_err) {
         return binop;
     } else if (is_err && !(cc->flags & CCTRL_TRANSPILING)) {
-        char *opstr = lexemePunctToString(operation);
+        const char *opstr = astBinOpKindToString(operation);
         const char *left_kind = astTypeKindToHumanReadable(left->type);
         const char *right_kind = astKindToHumanReadable(right);
         const char *right_type_kind = astTypeKindToHumanReadable(right->type);
-        cctrlRewindUntilPunctMatch(cc,operation,NULL);
+        s64 op_tok = astBinOpToTokenPunct(operation);
+        if (op_tok) {
+            cctrlRewindUntilPunctMatch(cc, op_tok, NULL);
+        }
         char *msg = mprintf("`%s %s %s` is invalid",
                             astTypeToString(left->type),
                             opstr,

@@ -113,8 +113,7 @@ _STRNCMP::
     MOVZBQ  RAX,-1[RDI]
     MOVZBQ  RDX,-1[RSI]
     SUBQ    RAX,RDX
-    LEAVE
-    RET
+    JMP     @@2
 @@1:
     XORQ    RAX, RAX
 @@2:
