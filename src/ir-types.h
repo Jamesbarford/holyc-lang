@@ -387,6 +387,7 @@ int irGetIntSize(IrValueType ir_value_type);
 IrBlock *irInstrEvalConstBranch(IrInstr *ir_cmp, IrInstr *ir_branch);
 u8 irBlocksPointToEachOther(IrFunction *func, IrBlock *prev_block, IrBlock *next_block);
 IrValueType irConvertType(AstType *type);
+u32 irGetParamId(Ast *param);
 
 IrBlock *irInstrGetTargetBlock(IrInstr *instr);
 IrBlock *irInstrGetFallthroughBlock(IrInstr *instr);

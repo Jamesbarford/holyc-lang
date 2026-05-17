@@ -316,6 +316,19 @@ IrValueType irConvertType(AstType *type) {
     }
 }
 
+/* Identity used to key an IR slot for an AST param-or-local. AST_FUNPTR
+ * carries its id on `fn_ptr_id`; AST_LVAR on `lvar_id`. AST_DEFAULT_PARAM
+ * is a wrapper - the real id lives on its inner `declvar`. */
+u32 irGetParamId(Ast *param) {
+    if (param->kind == AST_DEFAULT_PARAM) {
+        return param->declvar->kind == AST_FUNPTR
+            ? param->declvar->fn_ptr_id
+            : param->declvar->lvar_id;
+    }
+    if (param->kind == AST_FUNPTR) return param->fn_ptr_id;
+    return param->lvar_id;
+}
+
 int irValueIsVariable(IrValue *value) {
     return value->kind == IR_VAL_LOCAL ||
            value->kind == IR_VAL_PARAM ||

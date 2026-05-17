@@ -2123,17 +2123,13 @@ IrFunction *irLowerFunction(IrCtx *ctx, Ast *ast_func) {
             irAddStackSpace(ctx, 8);
             break;
         }
-        u32 key = 0;
-        if (ast_param->kind == AST_LVAR) {
-            key = ast_param->lvar_id;
-        } else if (ast_param->kind == AST_FUNPTR) {
-            key = ast_param->fn_ptr_id;
-        } else if (ast_param->kind == AST_DEFAULT_PARAM) {
-            key = ast_param->declvar->lvar_id;
-        } else {
+        if (ast_param->kind != AST_LVAR &&
+            ast_param->kind != AST_FUNPTR &&
+            ast_param->kind != AST_DEFAULT_PARAM) {
             loggerPanic("Unhandled key kind: %s\n",
                     astKindToString(ast_param->kind));
         }
+        u32 key = irGetParamId(ast_param);
         IrValue *ir_tmp_var = irTmp(irConvertType(ast_param->type),
                                     ast_param->type->size);
         ir_tmp_var->kind = IR_VAL_PARAM;
