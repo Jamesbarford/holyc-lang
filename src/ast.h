@@ -490,9 +490,6 @@ int astIsLabelMatch(Ast *ast, AoStr *goto_label);
 int astIsAddr(Ast *ast);
 int astIsDeref(Ast *ast);
 int astIsUnOp(Ast *ast);
-int astIsBinOp(Ast *ast);
-int astFuncHasVarArgs(Ast *ast);
-int astFuncCountDefaultArgs(Ast *ast);
 /* Check if the ast exists, if it is a unary operator and what op it is */
 int astIsUnOpKind(Ast *ast, AstUnOp op);
 

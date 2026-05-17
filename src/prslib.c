@@ -412,7 +412,7 @@ Ast *findFunctionDecl(Cctrl *cc, char *fname, int len) {
     return NULL;
 }
 
-static Vec *parseFunctionParams(Ast *def) {
+static Vec *parseGetFunctionParams(Ast *def) {
     if (!def) return NULL;
 
     /* Function-typed references store params on their type; declarations and
@@ -425,7 +425,7 @@ static Vec *parseFunctionParams(Ast *def) {
 /* We use this to check function calls against their definitions reusably */
 static void parseFunctionArgumentCheck(Cctrl *cc, Ast *def, Vec *argv, char *fname, int len)
 {
-    Vec *params = parseFunctionParams(def);
+    Vec *params = parseGetFunctionParams(def);
     int param_count = params ? (int)params->size : 0;
     int arg_count = argv ? (int)argv->size : 0;
     int default_count = 0, required_count = 0, fixed_param_count = param_count;
@@ -501,7 +501,7 @@ Vec *parseArgv(Cctrl *cc, Ast *decl, s64 terminator, char *fname, int len) {
     Vec *params = NULL;
     int param_idx = 0;
 
-    if (decl) params = parseFunctionParams(decl);
+    if (decl) params = parseGetFunctionParams(decl);
 
     Vec *argv_vec = astVecNew();
 

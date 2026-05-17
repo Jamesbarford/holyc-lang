@@ -48,106 +48,120 @@ Bool CompileFailsWith(U8 *source, U8 *expected)
 Bool TestOverArgs(U0)
 {
   return CompileFailsWith(
-    "U0 DoNothing(I32 a, I32 b) {\n"
-    "  return;\n"
-    "}\n"
-    "\n"
-    "U0 Main() {\n"
-    "  DoNothing(1,2,3,4);\n"
-    "}\n",
+"
+U0 DoNothing(I32 a, I32 b) {
+  return;
+}
+
+U0 Main() {
+  DoNothing(1,2,3,4);
+}
+",
     "Unexpected number of arguments 4 in call to DoNothing(), expected 2 args");
 }
 
 Bool TestUnderArgs(U0)
 {
   return CompileFailsWith(
-    "U0 DoNothing(I32 a, I32 b) {\n"
-    "  return;\n"
-    "}\n"
-    "\n"
-    "U0 Main() {\n"
-    "  DoNothing(1);\n"
-    "}\n",
+"
+U0 DoNothing(I32 a, I32 b) {
+  return;
+}
+
+U0 Main() {
+  DoNothing(1);
+}
+",
     "Unexpected number of arguments 1 in call to DoNothing(), expected 2 args");
 }
 
 Bool TestOverDefaultArgs(U0)
 {
   return CompileFailsWith(
-    "I64 AddS(I64 i1,\n"
-    "         I64 i2=2,\n"
-    "         I64 i3)\n"
-    "{\n"
-    "  return i1+i2+i3;\n"
-    "}\n"
-    "\n"
-    "U0 Main()\n"
-    "{\n"
-    "  I64 res = AddS(3,4,5,6);\n"
-    "}\n",
+"
+I64 AddS(I64 i1,
+         I64 i2=2,
+         I64 i3)
+{
+  return i1+i2+i3;
+}
+
+U0 Main()
+{
+  I64 res = AddS(3,4,5,6);
+}
+",
     "Unexpected number of arguments 4 in call to AddS(), expected args in range 2 to 3");
 }
 
 Bool TestUnderDefaultArgs(U0)
 {
   return CompileFailsWith(
-    "I64 AddS(I64 i1,\n"
-    "         I64 i2=2,\n"
-    "         I64 i3)\n"
-    "{\n"
-    "  return i1+i2+i3;\n"
-    "}\n"
-    "\n"
-    "U0 Main()\n"
-    "{\n"
-    "  I64 res = AddS(3);\n"
-    "}\n",
+"
+I64 AddS(I64 i1,
+         I64 i2=2,
+         I64 i3)
+{
+  return i1+i2+i3;
+}
+
+U0 Main()
+{
+  I64 res = AddS(3);
+}
+",
     "Unexpected number of arguments 1 in call to AddS(), argument 3 is required");
 }
 
 Bool TestMidDefaultMissingRequiredArg(U0)
 {
   return CompileFailsWith(
-    "I64 AddS(I64 i1, I64 i2=2, I64 i3)\n"
-    "{\n"
-    "  return i1+i2+i3;\n"
-    "}\n"
-    "\n"
-    "U0 Main()\n"
-    "{\n"
-    "  AddS(1,2);\n"
-    "}\n",
+"
+I64 AddS(I64 i1, I64 i2=2, I64 i3)
+{
+  return i1+i2+i3;
+}
+
+U0 Main()
+{
+  AddS(1,2);
+}
+",
     "Unexpected number of arguments 2 in call to AddS(), argument 3 is required");
 }
 
 Bool TestUnderVarArgs(U0)
 {
   return CompileFailsWith(
-    "I64 AddS(I64 i1, ...)\n"
-    "{\n"
-    "  return i1;\n"
-    "}\n"
-    "\n"
-    "U0 Main()\n"
-    "{\n"
-    "  AddS();\n"
-    "}\n",
+"
+I64 AddS(I64 i1, ...)
+{
+  return i1;
+}
+
+U0 Main()
+{
+  AddS();
+}
+",
     "Unexpected number of arguments 0 in call to AddS(), expected 1 args");
 }
 
 Bool TestUnderFunctionPointerArgs(U0)
 {
   return CompileFailsWith(
-    "I64 Add(I64 i1, I64 i2)\n"
-    "{\n"
-    "  return i1+i2;\n"
-    "}\n"
-    "\n"
-    "U0 Main()\n"
-    "{\n"
-    "  I64 (*fn)(I64 i1, I64 i2) = &Add;\n"
-    "  fn(1);\n"
-    "}\n",
+"
+I64 Add(I64 i1, I64 i2)
+{
+  return i1+i2;
+}
+
+U0 Main()
+{
+  I64 (*fn)(I64 i1, I64 i2) = &Add;
+  fn(1);
+}
+",
     "Unexpected number of arguments 1 in call to fn(), expected 2 args");
 }
 

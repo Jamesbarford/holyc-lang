@@ -717,25 +717,6 @@ Ast *astAsmFunctionCall(AstType *rettype, AoStr *asm_fname, Vec *argv) {
     return ast;
 }
 
-int astFuncHasVarArgs(Ast *ast) {
-    if (!ast->params) return 0;
-    for (int i = 0; i < (int)ast->params->size; i++) {
-        Ast *p = ast->params->entries[i];
-        if (p->kind == AST_VAR_ARGS) return 1;
-    }
-    return 0;
-}
-
-int astFuncCountDefaultArgs(Ast *ast) {
-    if (!ast->params) return 0;
-    int count = 0;
-    for (int i = 0; i < (int)ast->params->size; i++) {
-        Ast *p = ast->params->entries[i];
-        if (p->kind == AST_DEFAULT_PARAM) count++;
-    }
-    return count;
-}
-
 int astIsVarArg(Ast *ast) {
     if (ast->kind == AST_LVAR) {
         return ast->type->has_var_args == 1 && 
