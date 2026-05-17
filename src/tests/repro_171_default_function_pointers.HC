@@ -7,7 +7,7 @@ U0 FN()
 
 U8 *PrintMessage(U8 *msg,
                  I64 i,
-                 U0 (*fn)(I64 x, I64 y) = NULL,
+                 U0 (*fn)() = NULL,
                  I64 N)
 {
   if (fn) fn();

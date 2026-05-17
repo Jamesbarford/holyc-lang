@@ -182,14 +182,17 @@ Vec *parseParams(Cctrl *cc, s64 terminator, int *has_var_args, int store) {
                 if (cc->tmp_locals) {
                     listAppend(cc->tmp_locals, var);
                 }
-                vecPush(params, var);
 
                 tok = cctrlTokenGet(cc);
                 if (tokenPunctIs(tok, '=')) {
                     Ast *default_fnptr = parseDefaultFunctionParam(cc,var);
                     var->default_fn = default_fnptr;
+                    vecPush(params, default_fnptr);
                     tok = cctrlTokenGet(cc);
+                } else {
+                    vecPush(params, var);
                 }
+
                 if (tokenPunctIs(tok, terminator)) {
                     return params;
                 }
@@ -419,17 +422,96 @@ Ast *findFunctionDecl(Cctrl *cc, char *fname, int len) {
     return NULL;
 }
 
+static Vec *parseGetFunctionParams(Ast *def) {
+    if (!def) return NULL;
+
+    /* Function-typed references store params on their type; declarations and
+     * function pointers store them directly on the AST. */
+    if (def->kind == AST_CLASS_REF || def->kind == AST_LVAR || def->kind == AST_GVAR)
+        return def->type && def->type->kind == AST_TYPE_FUNC ? def->type->params : NULL;
+    return def->params;
+}
+
+/* We use this to check function calls against their definitions reusably */
+static void parseFunctionArgumentCheck(Cctrl *cc, Ast *def, Vec *argv, char *fname, int len)
+{
+    Vec *params = parseGetFunctionParams(def);
+    int param_count = params ? (int)params->size : 0;
+    int arg_count = argv ? (int)argv->size : 0;
+    int default_count = 0, required_count = 0, fixed_param_count = param_count;
+
+    /* count fixed/default/required params and find the varargs point if it exists */
+    for (int i = 0; i < param_count; ++i) {
+        Ast *param = params->entries[i];
+        if (param->kind == AST_VAR_ARGS) {
+            fixed_param_count = i;
+            break;
+        }
+
+        if (param->kind == AST_DEFAULT_PARAM) default_count++;
+        else required_count++;
+    }
+
+    /* validate each fixed parameter against its call argument */
+    for (int i = 0; i < fixed_param_count; ++i) {
+        Ast *param = params->entries[i];
+        Ast *arg = i < arg_count ? argv->entries[i] : NULL;
+
+        if (!arg || arg->kind == AST_PLACEHOLDER) {
+            if (param->kind == AST_DEFAULT_PARAM) continue;
+
+            if (default_count) {
+                cctrlRaiseExceptionFromTo(cc, NULL, '(', ')',
+                        "Unexpected number of arguments %d in call to %.*s(), argument %d is required",
+                        arg_count, len, fname, i + 1);
+            }
+
+            cctrlRaiseExceptionFromTo(cc, NULL, '(', ')',
+                    "Unexpected number of arguments %d in call to %.*s(), expected %d args",
+                    arg_count, len, fname, fixed_param_count);
+        }
+
+        AstType *type = param->kind == AST_DEFAULT_PARAM ? param->declvar->type : param->type;
+        if (type && astTypeCheck(type,arg,AST_BIN_OP_ASSIGN) == NULL) {
+            char *expected = astTypeToColorString(type);
+            char *got = astTypeToColorString(arg->type);
+            cctrlWarning(cc,"Incompatible function argument, expected '%s' got '%s' in function '%.*s'",
+                    expected,got,len,fname);
+        }
+    }
+
+    /* vararg calls allow extras, but still require fixed args */
+    if (fixed_param_count != param_count) {
+        if (arg_count < required_count) {
+            cctrlRaiseExceptionFromTo(cc, NULL, '(', ')',
+                    "Unexpected number of arguments %d in call to %.*s(), expected at least %d args",
+                    arg_count, len, fname, required_count);
+        }
+        return;
+    }
+
+    /* non-vararg calls cannot use more than the fixed parameter count */
+    if (arg_count > fixed_param_count) {
+        if (default_count) {
+            cctrlRaiseExceptionFromTo(cc, NULL, '(', ')',
+                    "Unexpected number of arguments %d in call to %.*s(), expected args in range %d to %d",
+                    arg_count, len, fname, required_count, fixed_param_count);
+        }
+
+        cctrlRaiseExceptionFromTo(cc, NULL, '(', ')',
+                "Unexpected number of arguments %d in call to %.*s(), expected %d args",
+                arg_count, len, fname, fixed_param_count);
+    }
+}
+
 Vec *parseArgv(Cctrl *cc, Ast *decl, s64 terminator, char *fname, int len) {
     List *var_args = NULL;
     Ast *ast, *param = NULL;
-    AstType *check;
     Lexeme *tok;
     Vec *params = NULL;
     int param_idx = 0;
 
-    if (decl) {
-        params = decl->params;
-    }
+    if (decl) params = parseGetFunctionParams(decl);
 
     Vec *argv_vec = astVecNew();
 
@@ -479,15 +561,6 @@ Vec *parseArgv(Cctrl *cc, Ast *decl, s64 terminator, char *fname, int len) {
                 listAppend(var_args,ast);
             }
         } else {
-            /* Does a distinctly adequate job of type checking function parameters */
-            if (param && param->kind != AST_DEFAULT_PARAM) {
-                if ((check = astTypeCheck(param->type,ast,AST_BIN_OP_ASSIGN)) == NULL) {
-                    char *expected = astTypeToColorString(param->type);
-                    char *got = astTypeToColorString(ast->type);
-                    cctrlWarning(cc,"Incompatible function argument, expected '%s' got '%s'in function '%.*s'",
-                            expected,got,len,fname);
-                }
-            }
             vecPush(argv_vec,ast);
         }
 
@@ -556,7 +629,10 @@ Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, s64 terminator) {
     Ast *maybe_fn = findFunctionDecl(cc,fname,len);
     Vec *argv = parseArgv(cc,maybe_fn,terminator,fname,len);
 
+
     if (maybe_fn) {
+        parseFunctionArgumentCheck(cc,maybe_fn,argv,fname,len);
+
         rettype = maybe_fn->type->rettype;
         if (maybe_fn->flags & AST_FLAG_INLINE && !(cc->flags & CCTRL_TRANSPILING)) {
             if (maybe_fn->kind == AST_ASM_FUNC_BIND || maybe_fn->kind == AST_ASM_FUNCDEF) {
@@ -645,21 +721,22 @@ static Ast *parseIdentifierOrFunction(Cctrl *cc,
             if ((tokenPunctIs(tok,';') || tokenPunctIs(tok,',') || 
                 tokenPunctIs(tok,')'))  
                     && parseIsFunction(ast)) {
+                Vec *argv = astVecNew();
+                parseFunctionArgumentCheck(cc,ast,argv,ast->fname->data,ast->fname->len);
                 if (ast->flags & AST_FLAG_INLINE && !(cc->flags & CCTRL_TRANSPILING)) {
                     if (ast->kind == AST_ASM_FUNC_BIND || ast->kind == AST_ASM_FUNCDEF) {
-                        Ast *call = astAsmFunctionCall(ast->type->rettype,
-                                aoStrDup(ast->asmfname),astVecNew());
+                        Ast *call = astAsmFunctionCall(ast->type->rettype, aoStrDup(ast->asmfname), argv);
                         call->flags |= ast->flags;
                         return call;
                     }
-                    return parseInlineFunctionCall(cc,ast,astVecNew());
+                    return parseInlineFunctionCall(cc,ast,argv);
                 }
                 if (ast->kind == AST_ASM_FUNC_BIND || ast->kind == AST_ASM_FUNCDEF) {
                     return astAsmFunctionCall(ast->type->rettype,
-                            aoStrDup(ast->asmfname),astVecNew());
+                            aoStrDup(ast->asmfname),argv);
                 } else {
                     return astFunctionCall(ast->type->rettype,
-                            ast->fname->data,ast->fname->len,astVecNew());
+                            ast->fname->data,ast->fname->len,argv);
                 }
             }
         }
@@ -1134,6 +1211,7 @@ Ast *parsePostFixExpr(Cctrl *cc) {
             } else if (ast->kind == AST_CLASS_REF) { 
                 int len = strlen(ast->field);
                 Vec *argv = parseArgv(cc,ast,')',ast->field,len);
+                parseFunctionArgumentCheck(cc,ast,argv,ast->field,len);
                 ast = astFunctionPtrCall(
                         ast->type->rettype,
                         ast->field,
