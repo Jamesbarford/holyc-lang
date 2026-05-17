@@ -615,13 +615,12 @@ void cctrlCreateColoredLine(Cctrl *cc,
     s64 tok_len = -1;
     Lexeme tok;
     Lexer l;
-    /* Accept whitespace AND comments so the rendered line preserves
-     * every source character. Without this, comments get silently
-     * swallowed during re-lexing and the `^` underline (positioned
-     * by source column) lands past the wrong text. Also flip on
-     * CCF_PERMISSIVE so malformed escapes (e.g. `"\q"` in the
-     * source) don't make the renderer call lexRaise - we're here
-     * to syntax-colour the line, not to validate it. */
+    /* Accept whitespace AND comments so we preserve every source character.
+     * Without this, comments get silently swallowed during re-lexing and the
+     * `^` underline (positioned by source column) lands past the wrong text.
+     * Also flip on CCF_PERMISSIVE so malformed escapes (e.g. `"\q"` in the
+     * source) don't make the renderer call lexRaise. We're only trying to
+     * syntax-colour the line, not to validate it. */
     lexInit(&l, (char *)line_buffer,
             CCF_ACCEPT_WHITESPACE|CCF_ACCEPT_COMMENTS|CCF_PERMISSIVE);
     s64 current_offset = 0;
@@ -654,83 +653,23 @@ void cctrlCreateColoredLine(Cctrl *cc,
     aoStrRelease(colored_buffer);
 }
 
-AoStr *cctrlCreateErrorLine(Cctrl *cc,
-                            s64 lineno,
-                            char *msg,
-                            int severity,
-                            char *suggestion)
+/* Render a diagnostic positioned at the current peek token. */
+AoStr *cctrlCreateErrorLine(Cctrl *cc, s64 lineno, char *msg,
+                            int severity, char *suggestion)
 {
-    char *color = severity == CCTRL_ERROR || CCTRL_ICE ? ESC_BOLD_RED : CCTRL_WARN ? ESC_BOLD_YELLOW : ESC_CYAN;
-    Lexeme *eof_peek = cctrlTokenPeek(cc);
-    if (!cc->lexer_) {
-        /* No lexer state at all: bare message, no source rendering. */
-        AoStr *buf = aoStrNew();
-        cctrlFileAndLine(cc,buf,lineno,-1,msg,severity);
-        aoStrCatColoured(buf, ESC_CYAN, "     |\n");
-        return buf;
-    }
-    if (!eof_peek) {
-        /* We have a lexer but no token i.e EOF . We still know which line the
-         * error is on, so render it with full syntax colouring via
-         * cctrlCreateColoredLine. Pass should_color_err=0
-         * since there's no token to single out, and the function
-         * safely skips the lexemeEq path in that mode. */
-        AoStr *buf = aoStrNew();
-        cctrlFileAndLine(cc,buf,lineno,-1,msg,severity);
-        const char *line_buffer = lexerReportLine(cc->lexer_, lineno);
-        s64 unused_off = -1, unused_len = -1;
-        cctrlCreateColoredLine(cc, buf, lineno, 0, NULL, -1,
-                               &unused_off, &unused_len, line_buffer);
-        aoStrCatColoured(buf, ESC_CYAN, "     |");
-        return buf;
-    }
-
-    const char *line_buffer = lexerReportLine(cc->lexer_,lineno);
-    Lexeme *cur_tok = eof_peek;
-    AoStr *buf = aoStrNew();
-    /* Source column straight off the token stamped at lex time.
-     * Synthesized tokens (macros, parser-side construction) come
-     * through with col == 0; we render the line but skip the underline. */
-    s64 char_pos = cur_tok->col > 0 ? cur_tok->col - 1 : -1;
-    s64 tok_len = cur_tok->len > 0 ? cur_tok->len : 1;
-
-    s64 offset = -1;
-    s64 unused_tok_len = -1;
-
-    cctrlFileAndLine(cc,buf,cur_tok->line,char_pos,msg,severity);
-    /* cctrlCreateColoredLine still produces a syntax-coloured
-     * rendering of the line; we ignore its tok_len output now
-     * that we have the lexer-supplied length above. */
-    cctrlCreateColoredLine(cc, buf, lineno, 1, suggestion,
-            char_pos, &offset, &unused_tok_len, line_buffer);
-
-    if (char_pos != -1 && tok_len != -1) {
-        aoStrCatColoured(buf, ESC_CYAN, "     |    ");
-
-        for (int i = 0; i < char_pos; ++i) {
-            aoStrPutChar(buf,' ');
-        }
-        for (int i = 0; i < tok_len; ++i) {
-            aoStrCatColoured(buf, color, "^");
-        }
-        if (suggestion) {
-            aoStrCatColouredFmt(buf, color, " %s", suggestion);
-        }
-    } else {
-        aoStrCatColoured(buf, ESC_CYAN, "     |");
-    }
-    return buf;
+    Lexeme *peek = cctrlTokenPeek(cc);
+    s64 line = peek ? peek->line : lineno;
+    s64 col  = peek ? peek->col  : 0;
+    s64 len  = peek ? peek->len  : 0;
+    return cctrlCreateErrorLineAt(cc, line, col, len, msg, severity, suggestion);
 }
 
 /* Render a diagnostic at an *explicit* source position. Unlike
- * cctrlCreateErrorLine this never calls cctrlTokenPeek, so it
- * works correctly when the caller knows where the error is but
- * the token buffer doesn't (e.g. mid-token lex errors, where peek
- * returns whatever stale token preceded the broken lexeme).
- *
- * `col` is 1-based; passing 0 means "we don't have a column" -
- * the line is rendered without an underline. `len` is the width
- * of the `^` underline (clamped to 1 if 0 is given). */
+ * cctrlCreateErrorLine this never calls cctrlTokenPeek, so it works correctly
+ * when the caller knows where the error is but the token buffer doesn't.
+ * 0 for a column means "we don't have a column", the line is rendered without
+ * an underline. `len` is the width of the `^` underline
+ * (clamped to 1 if 0 is given). */
 AoStr *cctrlCreateErrorLineAt(Cctrl *cc, s64 lineno, s64 col, s64 len,
                               char *msg, int severity, char *suggestion)
 {
@@ -1088,57 +1027,34 @@ void cctrlTokenExpect(Cctrl *cc, s64 expected) {
     cctrlTerminate(cc);
 }
 
+/* Render a diagnostic whose underline spans the chars `from`..`to`
+ * within the offending source line (e.g. `{` ... `}` for an
+ * unbalanced block). Position-derivation is the only thing that
+ * differs from the regular path - actual rendering goes through
+ * cctrlCreateErrorLineAt. */
 AoStr *cctrlRaiseFromTo(Cctrl *cc, int severity, char *suggestion, char from,
                         char to, char *fmt, va_list ap)
 {
-    char *color = severity == CCTRL_ERROR || CCTRL_ICE ? ESC_BOLD_RED : CCTRL_WARN ? ESC_BOLD_YELLOW : ESC_CYAN;
     char *msg = mprintVa(fmt, ap, NULL);
     AoStr *bold_msg = aoStrNew();
     aoStrCatColoured(bold_msg, ESC_BOLD, msg);
+
     Lexeme *cur_tok = cctrlTokenPeek(cc);
+    s64 line = cur_tok ? cur_tok->line : cc->lineno;
 
-    /* Fall back to the simple no-source renderer when peek is empty (typical
-     * after recovery has drained tokens past an unterminated construct). Avoids
-     * the NULL deref the old code did on `cur_tok->line`. */
-    if (!cur_tok) {
-        AoStr *buf = aoStrNew();
-        cctrlFileAndLine(cc,buf,cc->lineno,-1,bold_msg->data,severity);
-        aoStrCatColoured(buf, ESC_CYAN, "     |");
-        aoStrRelease(bold_msg);
-        return buf;
+    s64 col = 0, len = 0;
+    if (cur_tok && cc->lexer_) {
+        const char *line_buffer = lexerReportLine(cc->lexer_, line);
+        s64 from_idx = cctrlGetErrorIdx(cc, line, from, line_buffer);
+        s64 to_idx   = cctrlGetErrorIdx(cc, line, to,   line_buffer);
+        if (from_idx != -1 && to_idx != -1) {
+            col = from_idx + 1;
+            len = (to_idx + 1) - from_idx;
+        }
     }
 
-    char *line_buffer = lexerReportLine(cc->lexer_, cur_tok->line);
-    AoStr *buf = aoStrNew();
-    /* Source column comes straight off the token. The from/to chars
-     * (e.g. `{`/`}`) are still searched in the rendered line buffer via
-     * cctrlGetErrorIdx to position the span underline. */
-    s64 char_pos = cur_tok->col > 0 ? cur_tok->col - 1 : -1;
-    s64 from_idx = cctrlGetErrorIdx(cc,cur_tok->line,from, line_buffer);
-    s64 to_idx = cctrlGetErrorIdx(cc,cur_tok->line,to, line_buffer);
-
-    s64 offset = -1;
-    s64 tok_len = -1;
-
-    cctrlFileAndLine(cc,buf,cur_tok->line,char_pos,bold_msg->data,severity);
-    cctrlCreateColoredLine(cc, buf, cur_tok->line, 0, NULL, char_pos, &offset, &tok_len,
-            line_buffer);
-
-    if (from_idx != -1 && to_idx != -1) {
-        aoStrCatColoured(buf, ESC_CYAN, "     |    ");
-        for (int i = 0; i < from_idx; ++i) {
-            aoStrPutChar(buf,' ');
-        }
-        for (int i = 0; i < (to_idx+1)-from_idx; ++i) {
-            aoStrCatColoured(buf, color, "^");
-        }
-        if (suggestion) {
-            aoStrCatColouredFmt(buf, color, " %s", suggestion);
-        }
-    } else {
-        aoStrCatColoured(buf, ESC_CYAN, "     |");
-    }
-
+    AoStr *buf = cctrlCreateErrorLineAt(cc, line, col, len,
+                                        bold_msg->data, severity, suggestion);
     aoStrRelease(bold_msg);
     return buf;
 }
