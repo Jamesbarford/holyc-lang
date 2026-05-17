@@ -102,13 +102,59 @@ Bool TestUnderDefaultArgs(U0)
     "{\n"
     "  I64 res = AddS(3);\n"
     "}\n",
-    "Unexpected number of arguments 1 in call to AddS(), expected args in range 2 to 3");
+    "Unexpected number of arguments 1 in call to AddS(), argument 3 is required");
+}
+
+Bool TestMidDefaultMissingRequiredArg(U0)
+{
+  return CompileFailsWith(
+    "I64 AddS(I64 i1, I64 i2=2, I64 i3)\n"
+    "{\n"
+    "  return i1+i2+i3;\n"
+    "}\n"
+    "\n"
+    "U0 Main()\n"
+    "{\n"
+    "  AddS(1,2);\n"
+    "}\n",
+    "Unexpected number of arguments 2 in call to AddS(), argument 3 is required");
+}
+
+Bool TestUnderVarArgs(U0)
+{
+  return CompileFailsWith(
+    "I64 AddS(I64 i1, ...)\n"
+    "{\n"
+    "  return i1;\n"
+    "}\n"
+    "\n"
+    "U0 Main()\n"
+    "{\n"
+    "  AddS();\n"
+    "}\n",
+    "Unexpected number of arguments 0 in call to AddS(), expected 1 args");
+}
+
+Bool TestUnderFunctionPointerArgs(U0)
+{
+  return CompileFailsWith(
+    "I64 Add(I64 i1, I64 i2)\n"
+    "{\n"
+    "  return i1+i2;\n"
+    "}\n"
+    "\n"
+    "U0 Main()\n"
+    "{\n"
+    "  I64 (*fn)(I64 i1, I64 i2) = &Add;\n"
+    "  fn(1);\n"
+    "}\n",
+    "Unexpected number of arguments 1 in call to fn(), expected 2 args");
 }
 
 I32 Main()
 {
   "Test - Argument count errors: \n";
-  I64 tests = 4;
+  I64 tests = 7;
   I64 correct = 0;
 
   if (TestOverArgs()) correct++;
@@ -122,6 +168,15 @@ I32 Main()
 
   if (TestUnderDefaultArgs()) correct++;
   else "Failed - TestUnderDefaultArgs()\n";
+
+  if (TestMidDefaultMissingRequiredArg()) correct++;
+  else "Failed - TestMidDefaultMissingRequiredArg()\n";
+
+  if (TestUnderVarArgs()) correct++;
+  else "Failed - TestUnderVarArgs()\n";
+
+  if (TestUnderFunctionPointerArgs()) correct++;
+  else "Failed - TestUnderFunctionPointerArgs()\n";
 
   PrintResult(correct, tests);
   "====\n";
