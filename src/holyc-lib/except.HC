@@ -65,6 +65,14 @@ public U0 HCC_TryLeave(CatchFrame *f)
 
 public U0 HCC_Throw(U64 v)
 {
+  /* Fs is lazily initialised by HCC_PushFrame on the first `try`. A
+   * throw before any `try` would otherwise null-deref on the assign
+   * below. No prior try also means no catch frame, so go straight to
+   * the uncaught path. */
+  if (!Fs) {
+    "uncaught throw: %X (no active try)\n", v;
+    Exit(1);
+  }
   Fs->except_ch = v;
   auto t = Fs->catch_top;
   if (!t) {

@@ -359,6 +359,12 @@ u32 CalcClassSize(List *fields) {
 }
 
 int CalcPadding(int offset, int size) {
+    /* Zero-size fields (e.g. trailing `U0 body;` placeholders used as
+     * "rest of bytes" markers) need no padding. Guard before `% size`
+     * so we don't depend on platform UB for `% 0` (x86 traps, ARM
+     * returns the dividend - which here would roll `offset` back to 0
+     * and zero out the whole class size). */
+    if (size == 0) return 0;
     return offset % size == 0 ? 0 : size - offset % size;
 }
 
@@ -521,6 +527,16 @@ AstType *parseClassOrUnion(Cctrl *cc, Map *env,
 
     if (tag) {
         prev = mapGetLen(env, tag->data, tag->len);
+    }
+
+    /* Pre-register the tag with an incomplete placeholder so a self-reference
+     * like `class T { T *next; };` resolves to this declaration during body
+     * parsing, instead of raising "Type T has not been declared". The
+     * fields_dict and size are filled in later via the `prev && fields_dict`. */
+    if (tag && !prev) {
+        prev = astClassType(NULL, tag, 0, is_intrinsic);
+        if (!is_class) prev->kind = AST_TYPE_UNION;
+        mapAdd(env, tag->data, prev);
     }
 
     fields = parseClassOrUnionFields(cc,tag,computeSize,&class_size);
@@ -692,6 +708,9 @@ int parseValidPostControlFlowToken(Lexeme *tok) {
             case KW_WHILE:
             case KW_BREAK:
             case KW_CONTINUE:
+            case KW_TRY:
+            case KW_THROW:
+            case KW_ASM:
                 return 1;
         }
     }

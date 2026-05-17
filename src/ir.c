@@ -476,10 +476,28 @@ IrValue *irLowerBinOpExpr(IrCtx *ctx, Ast *ast) {
     IrOp op;
     IrCmpKind cmp = IR_CMP_INVALID;
 
+    /* Pointer - pointer: result is element count C semantics, not byte count.
+     * Subtract as ints, then divide by sizeof(element). */
+    if (astIsBinOpKind(ast, AST_BIN_OP_SUB) &&
+        ast->left && ast->right &&
+        (astTypeIsPtr(ast->left->type) || astTypeIsArray(ast->left->type)) &&
+        (astTypeIsPtr(ast->right->type) || astTypeIsArray(ast->right->type)))
+    {
+        AstType *elem = ast->left->type->ptr;
+        int scale = elem ? elem->size : 1;
+        if (scale < 1) scale = 1;
+        IrValue *diff = irTmp(IR_TYPE_I64, 8);
+        irBlockAddInstr(ctx, irInstrNew(IR_ISUB, diff, lhs, rhs));
+        if (scale == 1) return diff;
+        IrValue *k = irConstInt(IR_TYPE_I64, scale);
+        irBlockAddInstr(ctx, irInstrNew(IR_IDIV, ir_result, diff, k));
+        return ir_result;
+    }
+
     /* Pointer arithmetic: if the result is pointer/array, scale the int
      * operand by sizeof(element). */
-    if ((astTypeIsPtr(ast->type) || astTypeIsArray(ast->type)) && 
-        (astIsBinOpKind(ast, AST_BIN_OP_ADD) || astIsBinOpKind(ast, AST_BIN_OP_SUB))) { 
+    if ((astTypeIsPtr(ast->type) || astTypeIsArray(ast->type)) &&
+        (astIsBinOpKind(ast, AST_BIN_OP_ADD) || astIsBinOpKind(ast, AST_BIN_OP_SUB))) {
         AstType *elem = ast->type->ptr;
         int scale = elem ? elem->size : 1;
         if (scale < 1) scale = 1;

@@ -490,19 +490,15 @@ void assertUniqueSwitchCaseLabels(Vec *case_vector, Ast *case_) {
 void typeCheckWarn(Cctrl *cc, s64 op, Ast *expected, Ast *actual) {
     AoStr *expected_type = astTypeToColorAoStr(expected->type);
     AoStr *actual_type = astTypeToColorAoStr(actual->type);
-    char *actual_str = astToString(actual);
 
     int count = 0;
     cctrlRewindUntilPunctMatch(cc,op,&count);
     cctrlTokenGet(cc);
     count--;
 
-    char *suggestion = mprintf("%s is not of type %s, perhaps change the type to %s?",
-            actual_str,
-            expected_type->data,
-            actual_type->data);
-    cctrlWarningFromTo(cc, suggestion, op, ';', "Incompatible types '%s' is not assignable to type '%s'",
-            actual_type->data, expected_type->data);
+    cctrlWarningFromTo(cc, NULL, op, ';', "Incompatible types '%s' is not assignable to type '%s'",
+            actual_type->data,
+            expected_type->data);
     for (int i = 0; i < count; ++i) {
         cctrlTokenGet(cc);
     }
