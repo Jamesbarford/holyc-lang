@@ -666,11 +666,7 @@ void irCgBindAstLoffs(IrRaCtx *ra, Ast *ast_func) {
                 continue;
             }
 
-            u32 param_id;
-            if (p->kind == AST_DEFAULT_PARAM) param_id = p->declvar->lvar_id;
-            else if (p->kind == AST_FUNPTR)   param_id = p->fn_ptr_id;
-            else                              param_id = p->lvar_id;
-            IrValue *iv = irFnGetVar(ra->func, param_id);
+            IrValue *iv = irFnGetVar(ra->func, irGetParamId(p));
             /* Pinned param: no slot. */
             if (iv && iv->pinned_reg) continue;
             if (iv) irCgSetLoff(ra, iv->as.var.id, p->loff);
@@ -679,11 +675,7 @@ void irCgBindAstLoffs(IrRaCtx *ra, Ast *ast_func) {
 
     listForEach(ast_func->locals) {
         Ast *l = (Ast *)it->value;
-        u32 id;
-        if (l->kind == AST_DEFAULT_PARAM) id = l->declvar->lvar_id;
-        else if (l->kind == AST_FUNPTR)   id = l->fn_ptr_id;
-        else                              id = l->lvar_id;
-        IrValue *iv = irFnGetVar(ra->func, id);
+        IrValue *iv = irFnGetVar(ra->func, irGetParamId(l));
         /* Register-pinned locals have no slot - the codegen reads /
          * writes the named register directly. */
         if (iv && iv->pinned_reg) continue;
@@ -708,19 +700,15 @@ int irCgComputeAstLayout(Ast *ast_func, IrFunction *ir_func) {
 
     listForEach(ast_func->locals) {
         Ast *l = (Ast *)it->value;
-        u32 id;
         int size;
         if (l->kind == AST_DEFAULT_PARAM) {
-            id = l->declvar->lvar_id;
             size = l->declvar->type->size;
         } else if (l->kind == AST_FUNPTR) {
-            id = l->fn_ptr_id;
             size = 8;
         } else {
-            id = l->lvar_id;
             size = l->type->size;
         }
-        IrValue *iv = irFnGetVar(ir_func, id);
+        IrValue *iv = irFnGetVar(ir_func, irGetParamId(l));
         int promoted = iv && iv->kind == IR_VAL_TMP &&
                        !setHas(surviving, (void *)(u64)iv->as.var.id);
         if (promoted)
