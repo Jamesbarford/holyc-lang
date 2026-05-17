@@ -81,7 +81,6 @@
 #define KW_ATOMIC       8
 #define KW_DEFINE       10
 #define KW_PP_INCLUDE   12
-#define KW_CAST  14
 #define KW_SIZEOF       16
 #define KW_RETURN       18
 #define KW_SWITCH       20

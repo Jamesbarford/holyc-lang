@@ -1166,20 +1166,6 @@ Ast *parseExpr(Cctrl *cc, int prec) {
     }
 }
 
-static Ast *parseCast(Cctrl *cc) {
-    Ast *ast;
-    AstType *cast_type;
-
-    cctrlTokenExpect(cc,'<');
-    cast_type = parseDeclSpec(cc);
-    cctrlTokenExpect(cc,'>');
-    cctrlTokenExpect(cc,'(');
-    ast = parseExpr(cc,16);
-    cctrlTokenExpect(cc,')');
-    ast = astCast(ast,cast_type);
-    return ast;
-}
-
 Ast *parseSizeof(Cctrl *cc) {
     Lexeme *tok = cctrlTokenGet(cc);
     Lexeme *peek = cctrlTokenPeek(cc);
@@ -1304,7 +1290,6 @@ Ast *parseUnaryExpr(Cctrl *cc) {
     if (tok->tk_type == TK_KEYWORD) {
         switch (tok->i64) {
             case KW_SIZEOF: return parseSizeof(cc);
-            case KW_CAST:   return parseCast(cc);
             case KW_DEFINED: {
                 cctrlTokenExpect(cc,'(');
                 tok = cctrlTokenGet(cc);

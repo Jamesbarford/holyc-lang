@@ -1,9 +1,7 @@
 #include "testhelper.HC"
 
 /**
- * Type casting can be a postfix cast of a functional style `cast<TYPE>`.
- * the result is the same.
- */
+ * Type casting is a postfix cast of a functional style. */
 
 class Foo
 {
@@ -29,7 +27,7 @@ I64 PtrCast(U0 *ptr)
 
 I64 I64ToI8Cast(I64 ll)
 { // down cast
-  return cast<I8>(ll) == 'h'; 
+  return ll(U8) == 'h'; 
 }
 
 I64 I64ToU8Cast(I64 ll)
@@ -39,7 +37,7 @@ I64 I64ToU8Cast(I64 ll)
 
 I64 U8ToI64(U8 ch)
 { // Upcast
-  return cast<I64>(ch) == 99;
+  return ch(I64) == 99;
 }
 
 I64 Varadic(...)
