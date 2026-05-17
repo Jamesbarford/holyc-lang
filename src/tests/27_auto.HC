@@ -35,7 +35,7 @@ Bool VariableAutos()
   auto x = 1<<2,
        f = 4.5,
        ch = 'hello', 
-       p = cast<Person *>(MAlloc(sizeof(Person)));
+       p = MAlloc(sizeof(Person))(Person *);
   if (x + 4 == 8)    correct++;
   if (f + 4.5 == 9)  correct++;
   if (ch == 'hello') correct++;

@@ -1480,18 +1480,6 @@ Ast *parseStatement(Cctrl *cc) {
                 return ret;
             }
 
-            /**
-             * XXX: DELETE cast<>
-             * It is possible to do: 
-             * cast<Obj *>(_ptr)->x = 10;
-             * */
-            case KW_CAST: {
-                cctrlTokenRewind(cc);
-                ast = parseExpr(cc,16);
-                tok = cctrlTokenGet(cc);
-                assertTokenIsTerminator(cc,tok,PUNCT_TERM_SEMI|PUNCT_TERM_COMMA);
-                return ast;
-            }
             default: {
                 cctrlTokenRewind(cc);
                 cctrlRaiseException(cc,"Keyword '%.*s' cannot be used in this context",
