@@ -348,6 +348,7 @@ u32 CalcClassSize(List *fields) {
         if (type->size < MAX_ALIGN) size = type->size;
         else                        size = MAX_ALIGN;
 
+        if (size == 0) continue;
         if (offset % size != 0) {
             offset += size - offset % size;
         }
