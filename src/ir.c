@@ -297,64 +297,22 @@ IrValue *irFnCallTo(IrCtx *ctx, Ast *ast, IrValue *preallocated_buffer) {
 
     /* Direct call: store the static function name on the wrapper.
      * Indirect call: leave label NULL and stash the function-pointer
-     * source in r2, codegen knows to load it into a register and emit
+     * source in r2; codegen knows to load it into a register and emit
      * `call *<reg>`. */
-    Ast *callee = NULL;
-    Vec *params = NULL;
     if (ast->kind == AST_FUNPTR_CALL) {
         ir_call_args->as.array.label = NULL;
         IrValue *ptr = irExpr(ctx, ast->ref);
         ir_call_instr->r2 = ptr;
-        /* AST_FUNPTR holds its declared param list on `params`. Find the
-         * underlying decl so we can apply default-param fill-in. */
-        Ast *ref = ast->ref;
-        while (ref && ref->kind != AST_FUNPTR) {
-            if (ref->kind == AST_LVAR || ref->kind == AST_GVAR) {
-                /* Not a function-pointer slot we can walk for params. */
-                ref = NULL;
-                break;
-            }
-            ref = NULL;
-        }
-        if (ref && ref->kind == AST_FUNPTR) {
-            params = ref->params;
-        }
     } else {
         ir_call_args->as.array.label = ast->fname;
-        /* Look up the callee to discover default-param fill-ins. The call
-         * site itself can omit trailing args when the corresponding param
-         * is AST_DEFAULT_PARAM; we substitute the param's declinit here.
-         * Functions defined elsewhere (libtos) appear as AST_FUN_PROTO;
-         * their params still carry default-value info. */
-        if (ctx->cc && ast->fname) {
-            callee = mapGetLen(ctx->cc->global_env,
-                               ast->fname->data, ast->fname->len);
-        }
-        if (callee && callee->type &&
-            (callee->kind == AST_FUNC || callee->kind == AST_FUN_PROTO ||
-             callee->kind == AST_EXTERN_FUNC)) {
-            params = callee->params;
-        }
-    } 
+    }
 
+    /* Default-parameter fill-in already happened in the parser
+     * (parseFlattenDefaultArgs), so ast->args is the complete
+     * argument list - just lower each entry. */
     u64 n_args = ast->args ? ast->args->size : 0;
-    u64 n_params = params ? params->size : 0;
-    u64 n_total = n_args > n_params ? n_args : n_params;
-
-    for (u64 i = 0; i < n_total; ++i) {
-        Ast *ast_arg = NULL;
-        if (i < n_args) {
-            ast_arg = ast->args->entries[i];
-        } else if (i < n_params) {
-            Ast *p = (Ast *)params->entries[i];
-            if (p && p->kind == AST_DEFAULT_PARAM) {
-                ast_arg = p->declinit;
-            } else if (p && p->kind == AST_FUNPTR && p->default_fn) {
-                /* `T (*fn)(...) = X` default - the parser stashes the
-                 * default expression on `default_fn->declinit`. */
-                ast_arg = p->default_fn->declinit;
-            }
-        }
+    for (u64 i = 0; i < n_args; ++i) {
+        Ast *ast_arg = (Ast *)ast->args->entries[i];
         if (!ast_arg) break;
         IrValue *ir_arg = irExpr(ctx, ast_arg);
         vecPush(args, ir_arg);
