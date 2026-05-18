@@ -112,7 +112,7 @@ public I32 Rm(U8 *path, Bool flags=0)
   if (flags == 0) {
     result = unlink(path);
     if (flags & RM_VERBOSE) {
-      "Rm '%s'";
+      "Rm '%s'",path;
       if (result != 0) " failed\n";
       else             "\n";
     }

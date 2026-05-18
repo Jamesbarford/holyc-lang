@@ -504,6 +504,46 @@ static void parseFunctionArgumentCheck(Cctrl *cc, Ast *def, Vec *argv, char *fna
     }
 }
 
+/* Materialize default values into `argv` so every fixed-parameter position
+ * holds a real expression. Mutates in place. Run after
+ * parseFunctionArgumentCheck has validated counts/types, so any still-missing
+ * position past this point is one the check let through (e.g. inline-only
+ * mismatches) and we silently leave alone rather than splice in NULL. */
+static void parseFlattenDefaultArgs(Ast *def, Vec *argv) {
+    if (!def || !argv) {
+        return;
+    }
+    Vec *params = parseGetFunctionParams(def);
+    if (!params)
+        return;
+
+    u64 param_count = params->size;
+    for (u64 i = 0; i < param_count; ++i) {
+        Ast *param = (Ast *)params->entries[i];
+        if (!param)
+            continue;
+        if (param->kind == AST_VAR_ARGS)
+            break;
+
+        Ast *def_ast = NULL;
+        if (param->kind == AST_DEFAULT_PARAM) {
+            def_ast = param->declinit;
+        } else if (param->kind == AST_FUNPTR && param->default_fn) {
+            def_ast = param->default_fn->declinit;
+        }
+
+        int in_bounds = i < argv->size;
+        Ast *cur = in_bounds ? (Ast *)argv->entries[i] : NULL;
+        if (in_bounds && cur && cur->kind != AST_PLACEHOLDER)
+            continue;
+        if (!def_ast)
+            continue;
+
+        if (in_bounds) argv->entries[i] = def_ast;
+        else           vecPush(argv, def_ast);
+    }
+}
+
 Vec *parseArgv(Cctrl *cc, Ast *decl, s64 terminator, char *fname, int len) {
     List *var_args = NULL;
     Ast *ast, *param = NULL;
@@ -629,15 +669,187 @@ Ast *parseInlineFunctionCall(Cctrl *cc, Ast *fn, Vec *argv) {
     return inlined;
 }
 
+/* Count printf-style conversion specifiers in a format-string literal. Skips
+ * `%%`; each `%...c` (where c is a conversion char) counts as one expected
+ * argument, plus one extra for each `*` used as a width or precision. Returns
+ * -1 if a trailing/malformed spec is encountered so the caller can skip the
+ *  warning rather than report a confusing count. */
+static int parseCountPrintfFormatSpecs(const char *fmt, int len) {
+    int n = 0;
+    int i = 0;
+    while (i < len) {
+        if (fmt[i] != '%') {
+            i++;
+            continue;
+        }
+        if (i + 1 < len && fmt[i+1] == '%') {
+            i += 2;
+            continue;
+        }
+        i++; /* past `%` */
+        while (i < len) {
+            char ch = fmt[i];
+            if (ch == '*') n++;
+            if (ch == 'd' || ch == 'i' || ch == 'u' || ch == 'o' ||
+                ch == 'x' || ch == 'X' || ch == 'e' || ch == 'E' ||
+                ch == 'f' || ch == 'F' || ch == 'g' || ch == 'G' ||
+                ch == 'c' || ch == 's' || ch == 'p' || ch == 'n' ||
+                ch == 'a' || ch == 'A')
+            {
+                n++;
+                i++;
+                goto next_spec;
+            }
+            i++;
+        }
+        return -1; /* `%` with no terminating conversion */
+next_spec: ;
+    }
+    return n;
+}
+
+/* Position of the format string within a known printf-style call's argument
+ * list. -1 means this isn't one of the format-checked functions. Single
+ * source of truth shared by the pre-parse position snapshot and the
+ * post-parse arg-count check. */
+static int parseFormatArgIdx(char *fname, int len) {
+    /* Feels like we may want to occasionally add to this list? */
+    if      (len == 6 && !strncmp(fname, str_lit("printf"))) return 0;
+    else if (len == 7 && !strncmp(fname, str_lit("sprintf"))) return 0;
+    else if (len == 8 && !strncmp(fname, str_lit("snprintf"))) return 0;
+    /* May as well type-check holyc's library too which is even more
+     * prone to erroring. */
+    else if (len == 9 && !strncmp(fname, str_lit("MStrPrint"))) return 0;
+    else if (len == 8 && !strncmp(fname, str_lit("StrPrint"))) return 1;
+    else if (len == 8 && !strncmp(fname, str_lit("CatPrint"))) return 1;
+    else if (len == 11 && !strncmp(fname, str_lit("CatLenPrint"))) return 2;
+    return -1;
+}
+
+/* Walk the lookahead buffer past the leading args up to position
+ * `fmt_arg_idx`, returning that arg's first token. Used pre-parse to
+ * snapshot the format-literal's source position so the format-check
+ * diagnostic can underline it - by the time the check runs, parseArgv
+ * has long since moved the buffer head. Balances `( [ {` so calls
+ * like `StrPrint(getBuf(), "fmt")` don't trip on inner commas. */
+static Lexeme *parsePeekArgAt(Cctrl *cc, int fmt_arg_idx) {
+    int depth = 0;
+    int args_seen = 0;
+    for (int off = 0; off <= 64; off++) {
+        /* off=0 is the current peek (first not-yet-consumed token);
+         * cctrlTokenPeekBy(cc, n) returns the n-th token AFTER that,
+         * so we have to dispatch on the two helpers explicitly. */
+        Lexeme *tok = off == 0 ? cctrlTokenPeek(cc)
+                               : cctrlTokenPeekBy(cc, off);
+        if (!tok) return NULL;
+        if (tok->tk_type == TK_PUNCT) {
+            if (tok->i64 == '(' || tok->i64 == '[' || tok->i64 == '{') {
+                depth++;
+                continue;
+            }
+            if (tok->i64 == ')' || tok->i64 == ']' || tok->i64 == '}') {
+                if (depth == 0) return NULL;
+                depth--;
+                continue;
+            }
+            if (tok->i64 == ',' && depth == 0) {
+                args_seen++;
+                continue;
+            }
+        }
+        if (args_seen == fmt_arg_idx) return tok;
+    }
+    return NULL;
+}
+
+/* Raise an error when a printf-style call's format-string literal disagrees
+ * with the supplied argument count. Very easy footgun. `"%d\n";`
+ * Only fires when argv[0] is a real string literal so we stay silent on
+ * `printf(fmt, ...)` where the `fmt` is dynamic. */
+static void parsePrintfFormatCheck(Cctrl *cc,
+                                   Ast *maybe_fn,
+                                   Vec *argv,
+                                   char *fname,
+                                   int len,
+                                   int fmt_line,
+                                   int fmt_col,
+                                   int fmt_len)
+{
+    if (!argv || argv->size == 0)
+        return;
+
+    int fmt_arg_idx = parseFormatArgIdx(fname, len);
+    if (fmt_arg_idx == -1) return;
+
+    Ast *fmt_ast = argv->entries[fmt_arg_idx];
+    if (!fmt_ast || fmt_ast->kind != AST_STRING || !fmt_ast->sval)
+        return;
+
+    int expected = parseCountPrintfFormatSpecs(fmt_ast->sval->data,
+            fmt_ast->sval->len);
+    if (expected < 0)
+        return;
+
+    /* Number of arguments the user actually wrote after the format
+     * string. parseArgv stashes everything from the fixed-param slot
+     * onwards behind a synthetic count prefix for HolyC-native
+     * varargs (printf-the-extern is C-style and has no prefix), so
+     * we subtract one extra slot in that case to land on the
+     * caller-visible count. */
+    int supplied = (int)argv->size - fmt_arg_idx - 1;
+    int holyc_vararg = maybe_fn && maybe_fn->type &&
+                       maybe_fn->type->has_var_args &&
+                       maybe_fn->kind != AST_EXTERN_FUNC;
+    if (holyc_vararg && supplied > 0) supplied -= 1;
+    if (supplied == expected)
+        return;
+
+    char *raw = mprintf(
+        "printf format expects %d argument%s but %d %s supplied",
+        expected, expected == 1 ? "" : "s",
+        supplied, supplied == 1 ? "was" : "were");
+    AoStr *bold = aoStrNew();
+    aoStrCatColoured(bold, ESC_BOLD, raw);
+    AoStr *buf = cctrlCreateErrorLineAt(cc, fmt_line, fmt_col, fmt_len,
+                                        bold->data, CCTRL_ERROR, NULL);
+    aoStrRelease(bold);
+    CctrlDiagnostic *d = cctrlMakeDiag(cc, CCTRL_ERROR, buf, NULL);
+    cctrlDiagPush(cc, d);
+    cctrlTerminate(cc);
+}
+
 /* Read function arguments for a function being called */
 Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, s64 terminator) {
     AstType *rettype = NULL;
     Ast *maybe_fn = findFunctionDecl(cc,fname,len);
-    Vec *argv = parseArgv(cc,maybe_fn,terminator,fname,len);
 
+    /* Snapshot the format-string token's position before parseArgv
+     * consumes it, so the format-check below can underline the
+     * literal rather than wherever the buffer head landed after
+     * parsing all the args. Handles format-arg-at-idx>0 callees
+     * (StrPrint, CatPrint, CatLenPrint) by walking past the leading
+     * positional args via parsePeekArgAt. */
+    int fmt_line = 0, fmt_col = 0, fmt_len = 0;
+    int fmt_arg_idx = parseFormatArgIdx(fname, len);
+    if (fmt_arg_idx != -1) {
+        Lexeme *peek = parsePeekArgAt(cc, fmt_arg_idx);
+        if (peek && peek->tk_type == TK_STR) {
+            fmt_line = peek->line;
+            fmt_col = peek->col;
+            /* peek->len is the inner content (escapes kept as 2-char
+             * pairs); +2 to cover the surrounding quotes. */
+            fmt_len = peek->len + 2;
+        }
+    }
+
+    Vec *argv = parseArgv(cc,maybe_fn,terminator,fname,len);
 
     if (maybe_fn) {
         parseFunctionArgumentCheck(cc,maybe_fn,argv,fname,len);
+        parseFlattenDefaultArgs(maybe_fn, argv);
+        parsePrintfFormatCheck(cc, maybe_fn, argv, fname, len,
+                               fmt_line, fmt_col, fmt_len);
+
 
         rettype = maybe_fn->type->rettype;
         if (maybe_fn->flags & AST_FLAG_INLINE && !(cc->flags & CCTRL_TRANSPILING)) {
@@ -724,11 +936,12 @@ static Ast *parseIdentifierOrFunction(Cctrl *cc,
         cctrlTokenRewind(cc);
         if (can_call_function) {
             /* Function calls with no arguments are 'Function;' */
-            if ((tokenPunctIs(tok,';') || tokenPunctIs(tok,',') || 
-                tokenPunctIs(tok,')'))  
+            if ((tokenPunctIs(tok,';') || tokenPunctIs(tok,',') ||
+                tokenPunctIs(tok,')'))
                     && parseIsFunction(ast)) {
                 Vec *argv = astVecNew();
                 parseFunctionArgumentCheck(cc,ast,argv,ast->fname->data,ast->fname->len);
+                parseFlattenDefaultArgs(ast, argv);
                 if (ast->flags & AST_FLAG_INLINE && !(cc->flags & CCTRL_TRANSPILING)) {
                     if (ast->kind == AST_ASM_FUNC_BIND || ast->kind == AST_ASM_FUNCDEF) {
                         Ast *call = astAsmFunctionCall(ast->type->rettype, aoStrDup(ast->asmfname), argv);

@@ -38,7 +38,7 @@ I64 TestRunner(I64 i1, I64 i2, I64 op, I64 expected)
   } else if (op == MATHS_NOT) {
     answer = ~i1;
   } else {
-    "operation: %d not supported\n";
+    "operation: %d not supported\n", op;
     Exit(1);
   }
   return answer == expected;
