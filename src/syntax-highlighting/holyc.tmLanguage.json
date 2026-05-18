@@ -1,0 +1,170 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "HolyC",
+  "scopeName": "source.holyc",
+  "fileTypes": ["HC", "HH", "hc", "hh"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#preprocessor" },
+    { "include": "#strings" },
+    { "include": "#characters" },
+    { "include": "#asm-block" },
+    { "include": "#numbers" },
+    { "include": "#types" },
+    { "include": "#constants" },
+    { "include": "#cast-operators" },
+    { "include": "#control-keywords" },
+    { "include": "#declaration-keywords" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.holyc",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.holyc",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "preprocessor": {
+      "patterns": [
+        {
+          "name": "keyword.other.preprocessor.include.holyc",
+          "match": "^\\s*#\\s*include\\b"
+        },
+        {
+          "name": "keyword.other.preprocessor.holyc",
+          "match": "^\\s*#\\s*(define|ifdef|ifndef|endif|elif|elifdef|undef|error|if|else)\\b"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.holyc",
+          "begin": "\"",
+          "end": "\"",
+          "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.holyc" } },
+          "endCaptures": { "0": { "name": "punctuation.definition.string.end.holyc" } },
+          "patterns": [
+            {
+              "name": "constant.character.escape.holyc",
+              "match": "\\\\."
+            },
+            {
+              "name": "constant.other.placeholder.holyc",
+              "match": "%[-+' #0*]*(\\d+|\\*)?(\\.\\d+|\\.\\*)?[hlLjzt]*(d|i|u|o|x|X|f|F|e|E|g|G|c|s|p|n|%)"
+            }
+          ]
+        }
+      ]
+    },
+    "characters": {
+      "patterns": [
+        {
+          "name": "string.quoted.single.holyc",
+          "match": "'([^'\\\\]|\\\\.)'"
+        }
+      ]
+    },
+    "asm-block": {
+      "patterns": [
+        {
+          "name": "meta.asm.holyc",
+          "begin": "\\basm\\s*\\{",
+          "end": "\\}",
+          "beginCaptures": { "0": { "name": "keyword.other.asm.holyc" } },
+          "endCaptures": { "0": { "name": "keyword.other.asm.holyc" } },
+          "patterns": [
+            { "include": "#comments" },
+            {
+              "name": "entity.name.function.asm.holyc",
+              "match": "^\\s*\\w+::"
+            },
+            {
+              "name": "constant.other.asm.label.holyc",
+              "match": "@@\\d+"
+            },
+            {
+              "name": "keyword.operator.asm.holyc",
+              "match": "\\b(MOV|PUSH|POP|LEA|TEST|CLD|REP|LOD|STOSB|DEC|RET|CMP|INC|SCASB|XCHG|CLI|BT|PAUSE|JMP|JZ|JNZ|JE|JNE|JB|JBE|JA|JAE|CALL|ADD|SUB|XOR|OR|AND|MUL|NOT|MOD|DIV|SHL|SHR)\\w*\\b"
+            },
+            {
+              "name": "variable.other.register.asm.holyc",
+              "match": "\\b(RAX|RBX|RCX|RDX|RSI|RDI|RBP|RSP|R[89]|R1[0-5]|EAX|EBX|ECX|EDX|AL|BL|CL|DL)\\b"
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.holyc",
+          "match": "\\b0[xX][0-9a-fA-F]+\\b"
+        },
+        {
+          "name": "constant.numeric.float.holyc",
+          "match": "\\b[0-9]+\\.[0-9]+\\b"
+        },
+        {
+          "name": "constant.numeric.integer.holyc",
+          "match": "\\b[0-9]+\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "storage.type.holyc",
+          "match": "\\b(U0|Bool|I8|U8|I16|U16|I32|U32|I64|U64|F64|auto|atomic|reg|noreg)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.holyc",
+          "match": "\\b(NULL|TRUE|FALSE|EXIT_OK|EXIT_FAIL|I64_MIN|I64_MAX|U64_MAX|U8_MAX|I8_MAX|I8_MIN|STDOUT|STDERR|STDIN|__BUFSIZ__|DT_REG|DT_DIR)\\b"
+        }
+      ]
+    },
+    "cast-operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.sizeof.holyc",
+          "match": "\\bsizeof\\b"
+        }
+      ]
+    },
+    "control-keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.holyc",
+          "match": "\\b(if|else|for|while|do|switch|case|default|return|break|continue|goto|try|catch|throw)\\b"
+        }
+      ]
+    },
+    "declaration-keywords": {
+      "patterns": [
+        {
+          "name": "storage.modifier.holyc",
+          "match": "\\b(class|union|public|private|extern|_extern|inline|static|volatile)\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.other.asm.holyc",
+          "match": "\\basm\\b"
+        }
+      ]
+    }
+  }
+}

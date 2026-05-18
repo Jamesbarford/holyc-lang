@@ -1,0 +1,43 @@
+## HolyC syntax highlighting for GNU nano
+## Save to ~/.nano/ or /usr/share/nano/ and add: include "holyc.nanorc" to ~/.nanorc
+
+syntax "holyc" "\.HC$" "\.HH$" "\.hc$" "\.hh$"
+
+## Types
+color green "\b(U0|Bool|I8|U8|I16|U16|I32|U32|I64|U64|F64|auto|atomic|reg|noreg)\b"
+
+## Keywords — control flow
+color brightyellow "\b(if|else|for|while|do|switch|case|default|return|break|continue|goto|try|catch|throw)\b"
+
+## Keywords — declaration and storage
+color brightyellow "\b(class|union|public|private|extern|_extern|inline|static|volatile)\b"
+
+## Keywords — operators
+color brightyellow "\bsizeof\b"
+
+## Preprocessor directives
+color brightcyan "^[[:space:]]*#[[:space:]]*(include|define|ifdef|ifndef|endif|elif|elifdef|undef|error|if|else)"
+
+## Constants
+color brightmagenta "\b(NULL|TRUE|FALSE|EXIT_OK|EXIT_FAIL|I64_MIN|I64_MAX|U64_MAX|U8_MAX|I8_MAX|I8_MIN|STDOUT|STDERR|STDIN|__BUFSIZ__|DT_REG|DT_DIR)\b"
+
+## Numeric literals — hex
+color brightblue "\b0[xX][0-9a-fA-F]+\b"
+
+## Numeric literals — decimal and float
+color brightblue "\b[0-9]+(\.[0-9]+)?\b"
+
+## String literals
+color brightyellow ""([^"\\]|\\.)*""
+
+## Character literals
+color brightyellow "'([^'\\]|\\.)*'"
+
+## Assembly block keyword
+color brightred "\basm\b"
+
+## Line comments
+color brightblack "//.*$"
+
+## Block comments
+color brightblack start="/\*" end="\*/"
