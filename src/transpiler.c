@@ -270,6 +270,9 @@ void transpileInitMaps(void) {
 
 TranspileCtx *transpileCtxNew(Cctrl *cc) {
     TranspileCtx *ctx = (TranspileCtx *)malloc(sizeof(TranspileCtx));
+    if (ctx == NULL) {
+        loggerPanic("Failed to allocate TranspileCtx\n");
+    }
     ctx->used_types = setNew(32, &set_cstring_type);
     ctx->used_defines = setNew(32, &set_cstring_type);
 
