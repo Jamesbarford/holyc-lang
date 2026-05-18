@@ -976,7 +976,24 @@ public Bool JsonIsInt(Json *j);
 public Bool JsonIsFloat(Json *j);
 public Json *JsonSelect(Json *j, U8 *fmt, ...);
 
-#ifdef __HCC_LINK_SQLITE3__ 
+/* JSON builder API: construct JSON trees programmatically. */
+public Json *JsonCreateObject();
+public Json *JsonCreateArray();
+public Json *JsonObjectSetString(Json *obj, U8 *key, U8 *value);
+public Json *JsonObjectSetInt(Json *obj, U8 *key, I64 value);
+public Json *JsonObjectSetBool(Json *obj, U8 *key, Bool value);
+public Json *JsonObjectSetNull(Json *obj, U8 *key);
+public Json *JsonObjectSetObject(Json *obj, U8 *key, Json *child);
+public Json *JsonObjectSetArray(Json *obj, U8 *key, Json *child);
+public Json *JsonArrayAddString(Json *arr, U8 *value);
+public Json *JsonArrayAddInt(Json *arr, I64 value);
+public Json *JsonArrayAddBool(Json *arr, Bool value);
+public Json *JsonArrayAddNull(Json *arr);
+public Json *JsonArrayAddObject(Json *arr, Json *child);
+public Json *JsonArrayAddArray(Json *arr, Json *child);
+public U8 *JsonToPrettyString(Json *json, I64 indent);
+
+#ifdef __HCC_LINK_SQLITE3__
 
 #define SQLITE_OK           0   /* Successful result */
 /* beginning-of-error-codes */
