@@ -114,15 +114,22 @@ void irCgAllocOperandsForInstr(IrRaCtx *ra, IrInstr *I, int start) {
         return;
 
     case IR_FADD: case IR_FSUB: case IR_FMUL: case IR_FDIV:
+        if (spill_dst) irCgAllocTmp(ra, I->dst, start);
+        if (load_r1)   irCgAllocTmp(ra, I->r1, start);
+        irCgAllocTmp(ra, I->r2, start);
+        return;
+
     case IR_FCMP:
-        irCgAllocTmp(ra, I->dst, start);
-        irCgAllocTmp(ra, I->r1, start);
+        /* FCMP's dst is the integer bool result; integer rules already
+         * cover its spill. r1 is the float operand that loads to xmm0. */
+        if (spill_dst) irCgAllocTmp(ra, I->dst, start);
+        if (load_r1)   irCgAllocTmp(ra, I->r1, start);
         irCgAllocTmp(ra, I->r2, start);
         return;
 
     case IR_FNEG:
-        irCgAllocTmp(ra, I->dst, start);
-        irCgAllocTmp(ra, I->r1, start);
+        if (spill_dst) irCgAllocTmp(ra, I->dst, start);
+        if (load_r1)   irCgAllocTmp(ra, I->r1, start);
         return;
 
     case IR_BR:
@@ -182,19 +189,26 @@ void irCgAllocAllTmps(IrRaCtx *ra, int starting_offset) {
 }
 
 int irInstrDefsIntoReg(IrInstr *I) {
-    if (I->dst && irIsFloat(I->dst->type))
-        return 0;
     if (I->op == IR_PHI && (I->flags & IRCG_PHI_IN_REG))
         return 1;
+    int is_float = I->dst && irIsFloat(I->dst->type);
     switch (I->op) {
+        /* Loads carry the value into the canonical result register for
+         * the dst's type (rax for int, xmm0 for float). */
         case IR_LOAD:
         case IR_LOAD_DEREF:
+            return 1;
+        /* Integer-result-only ops: not eligible when dst is float. */
         case IR_LEA:
         case IR_IADD: case IR_ISUB: case IR_IMUL:
         case IR_AND:  case IR_OR:   case IR_XOR:
         case IR_IDIV: case IR_UDIV: case IR_IREM: case IR_UREM:
         case IR_SHL:  case IR_SHR:  case IR_SAR:
         case IR_ICMP:
+            return !is_float;
+        /* Float arith leaves the result in xmm0. */
+        case IR_FADD: case IR_FSUB: case IR_FMUL: case IR_FDIV:
+        case IR_FNEG:
             return 1;
         case IR_CALL:
             return I->dst && I->dst->type != IR_TYPE_VOID;
@@ -213,6 +227,11 @@ IrValue *irFirstFusableSource(IrInstr *I) {
         case IR_IDIV: case IR_UDIV: case IR_IREM: case IR_UREM:
         case IR_SHL:  case IR_SHR:  case IR_SAR:
         case IR_ICMP:
+        /* Float ops take r1 from xmm0; the consumer-side skip uses the
+         * same R1_IN_REG flag, dispatched by the codegen on the value's
+         * type. */
+        case IR_FADD: case IR_FSUB: case IR_FMUL: case IR_FDIV:
+        case IR_FNEG: case IR_FCMP:
             return I->r1;
         case IR_BR:
         case IR_RET:
