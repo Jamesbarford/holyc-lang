@@ -352,6 +352,24 @@ static void x86_64LoadFirstSrc(IrCgCtx *ctx, IrInstr *instr, IrValue *src) {
     x86_64LoadToReg(ctx, src, "rax");
 }
 
+/* Float counterparts. */
+static void x86_64LoadFirstSrcFpr(IrCgCtx *ctx,
+                                  IrInstr *instr,
+                                  IrValue *src)
+{
+    if (instr->flags & IRCG_R1_IN_REG) return;
+    x86_64LoadToFpr(ctx, src, "xmm0");
+}
+
+static void x86_64SpillDstFpr(IrCgCtx *ctx,
+                              IrInstr *instr,
+                              const char *xmm_reg)
+{
+    if (instr->flags & IRCG_FUSE_TO_NEXT)
+        return;
+    x86_64StoreFpr(ctx, instr->dst, xmm_reg);
+}
+
 /* The float branch uses ucomisd, whose flags follow unsigned-int
  * semantics (b/be/a/ae). NaN sets CF=ZF=PF=1; we treat IR cmps as
  * loose-ordered (matches aarch64's behaviour - the IR_CMP_O* /
@@ -651,7 +669,17 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                 x86_64SpillDst(ctx, instr, "rax");
                 break;
             }
+
             int loff = irCgGetLoff(&ctx->fn->ra, instr->r1);
+            /* Float-typed loads go straight to xmm0 with movsd so the
+             * value is already in the FP result reg for a fused float
+             * consumer, no slot round-trip. */
+            if (instr->dst && irIsFloat(instr->dst->type)) {
+                aoStrCatFmt(ctx->buf, "movsd   %i(%%rbp), %%xmm0\n\t", loff);
+                x86_64SpillDstFpr(ctx, instr, "xmm0");
+                break;
+            }
+
             u32 size = instr->dst ? instr->dst->as.var.size : 8;
             x86_64Load(ctx->buf, "rax", size, loff);
             x86_64SpillDst(ctx, instr, "rax");
@@ -659,23 +687,45 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
         }
 
         case IR_STORE: {
+            /* Float r1 takes the FP path so a fused producer can hand
+             * the value over in xmm0 (movsd xmm0->slot, no rax bounce). */
+            if (instr->r1 && irIsFloat(instr->r1->type) &&
+                !(instr->dst && instr->dst->pinned_reg))
+            {
+                x86_64LoadFirstSrcFpr(ctx, instr, instr->r1);
+                x86_64StoreFpr(ctx, instr->dst, "xmm0");
+                break;
+            }
+
             /* Width comes from the value's size, not the destination's:
              * when dst is a GEP'd pointer to a sub-word slot (e.g.
              * `I8 a[3]`), forcing an 8-byte store would overrun the
              * slot and clobber adjacent stack data. */
+            int loff = irCgGetLoff(&ctx->fn->ra, instr->dst);
             x86_64LoadFirstSrc(ctx, instr, instr->r1);
             if (instr->dst && instr->dst->pinned_reg) {
                 aoStrCatFmt(ctx->buf, "movq    %%rax, %%%s\n\t",
                             instr->dst->pinned_reg->data);
                 break;
             }
-            int loff = irCgGetLoff(&ctx->fn->ra, instr->dst);
             u32 size = irValueByteSize(instr->r1);
             x86_64FrameStoreWidth(ctx->buf, loff, size, "rax");
             break;
         }
 
         case IR_LOAD_DEREF: {
+            /* Float dst: load straight into xmm0 via movsd. R1_IN_REG
+             * still applies to the pointer (which lives in rax). */
+            if (instr->dst && irIsFloat(instr->dst->type)) {
+                const char *addr_reg = (instr->flags & IRCG_R1_IN_REG)
+                                       ? "rax" : "rcx";
+                if (!(instr->flags & IRCG_R1_IN_REG)) {
+                    x86_64LoadToReg(ctx, instr->r1, "rcx");
+                }
+                aoStrCatFmt(ctx->buf, "movsd   (%%%s), %%xmm0\n\t", addr_reg);
+                x86_64SpillDstFpr(ctx, instr, "xmm0");
+                break;
+            }
             const char *addr_reg;
             if (instr->flags & IRCG_R1_IN_REG) {
                 /* r1 already lives in %rax from the fused producer
@@ -693,6 +743,21 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
         }
 
         case IR_STORE_DEREF: {
+            /* Float r1: value goes through xmm0; address stays in
+             * rax (via DST_IN_REG fusion) or rcx as usual. xmm0 and
+             * rax/rcx don't alias so no shuffling is needed. */
+            if (instr->r1 && irIsFloat(instr->r1->type)) {
+                const char *addr_reg;
+                if (instr->flags & IRCG_DST_IN_REG) {
+                    addr_reg = "rax";
+                } else {
+                    x86_64LoadToReg(ctx, instr->dst, "rcx");
+                    addr_reg = "rcx";
+                }
+                x86_64LoadFirstSrcFpr(ctx, instr, instr->r1);
+                aoStrCatFmt(ctx->buf, "movsd   %%xmm0, (%%%s)\n\t", addr_reg);
+                break;
+            }
             if (instr->flags & IRCG_DST_IN_REG) {
                 /* dst (the destination pointer) is already in %rax
                  * from the fused producer. Shuffle it to %rcx so
@@ -832,10 +897,10 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                            : (instr->op == IR_FSUB) ? "subsd"
                            : (instr->op == IR_FMUL) ? "mulsd"
                                                     : "divsd";
-            x86_64LoadToFpr(ctx, instr->r1, "xmm0");
+            x86_64LoadFirstSrcFpr(ctx, instr, instr->r1);
             x86_64LoadToFpr(ctx, instr->r2, "xmm1");
             aoStrCatFmt(ctx->buf, "%s   %%xmm1, %%xmm0\n\t", op);
-            x86_64StoreFpr(ctx, instr->dst, "xmm0");
+            x86_64SpillDstFpr(ctx, instr, "xmm0");
             break;
         }
 
@@ -843,10 +908,10 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
             /* No fneg on SSE - flip the sign bit by XORing with
              * 0x8000000000000000. `sign_bit` is the shared global
              * emitted by the data-section pass. */
-            x86_64LoadToFpr(ctx, instr->r1, "xmm0");
+            x86_64LoadFirstSrcFpr(ctx, instr, instr->r1);
             aoStrCatFmt(ctx->buf,
                         "xorpd   sign_bit(%%rip), %%xmm0\n\t");
-            x86_64StoreFpr(ctx, instr->dst, "xmm0");
+            x86_64SpillDstFpr(ctx, instr, "xmm0");
             break;
         }
 
@@ -868,7 +933,7 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
         }
 
         case IR_FCMP: {
-            x86_64LoadToFpr(ctx, instr->r1, "xmm0");
+            x86_64LoadFirstSrcFpr(ctx, instr, instr->r1);
             x86_64LoadToFpr(ctx, instr->r2, "xmm1");
             /* ucomisd %xmm1, %xmm0 sets flags from (xmm0 cmp xmm1). */
             aoStrCatFmt(ctx->buf, "ucomisd %%xmm1, %%xmm0\n\t");
@@ -948,7 +1013,7 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
         case IR_RET:
             if (instr->dst) {
                 if (irIsFloat(instr->dst->type)) {
-                    x86_64LoadToFpr(ctx, instr->dst, "xmm0");
+                    x86_64LoadFirstSrcFpr(ctx, instr, instr->dst);
                 } else {
                     /* Canonically XOR EAX for returning 0 */
                     if (irIsConstInt(instr->dst) && instr->dst->as._i64 == 0) {
@@ -1215,7 +1280,7 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                 instr->dst->kind == IR_VAL_TMP)
             {
                 if (irIsFloat(instr->dst->type)) {
-                    x86_64StoreFpr(ctx, instr->dst, "xmm0");
+                    x86_64SpillDstFpr(ctx, instr, "xmm0");
                 } else {
                     x86_64SpillDst(ctx, instr, "rax");
                 }
