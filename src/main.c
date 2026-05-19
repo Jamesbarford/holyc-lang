@@ -33,7 +33,12 @@ int is_terminal;
     #define CC_TARGET ""
 #endif
 
-#define ASM_TMP_FILE "/tmp/holyc-asm.s"
+#ifdef HCC_ASM_TMPDIR
+    #define ASM_TMP_FILE HCC_ASM_TMPDIR
+#else
+    #define ASM_TMP_FILE "/tmp/holyc-asm.s"
+#endif
+
 #define LIB_BUFSIZ 256
 
 #ifndef INSTALL_PREFIX
