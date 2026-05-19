@@ -2,6 +2,7 @@
 #include <math.h>
 #include <string.h>
 
+#include "aarch64.h"
 #include "asm.h"
 #include "cli.h"
 #include "x86.h"
@@ -79,8 +80,7 @@ AoStr *asmGenerate(Cctrl *cc) {
     switch (cc->target) {
         case TARGET_AARCH64_APPLE_DARWIN:
         case TARGET_AARCH64_UNKNOWN_LINUX_GNU:
-            loggerPanic("Unsupported codegen target; %s\n",
-                    cliTargetToString(cc->target));
+            return aarch64AsmGenerate(cc);
         case TARGET_X86_64_APPLE_DARWIN:
         case TARGET_X86_64_UNKNOWN_LINUX_GNU:
             /* Default: IR-based src/x86_64.c. --use-legacy-x86 opts

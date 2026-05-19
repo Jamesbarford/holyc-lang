@@ -1,10 +1,21 @@
 /* Yup we can mix #define's and assembly */
 #define ALIGN_16 0xFFFFFFFFFFFFFFF0
 
+public extern "c" U0 *memchr(U0 *__s, I32 __c, U64 __n);
+public extern "c" I32 memcmp(U0 *__s1, U0 *__s2, U64 __n);
+public extern "c" U0 *memmove(U0 *__dst, U0 *__src, U64 __len);
+public extern "c" U0 free(U0 *ptr);
+public extern "c" U0 *malloc(U64 size);
+public extern "c" U0 *calloc(U64 count, U64 size);
+public extern "c" U0 *realloc(U0 *ptr, U64 size);
+public extern "c" U0 *memset(U0 *__dst, I32 __c, U64 __n);
+public extern "c" U0 *memcpy(U0 *__dst, U0 *__src, U64 __n);
+
+#ifdef IS_X86_64
 asm {
 _MALLOC::
     PUSHQ  RBP
-    MOVQ   RBP, RSP 
+    MOVQ   RBP, RSP
     SUB    RSP,16
     MOV    -8[RBP], RDI
     ADD    RDI, 8
@@ -19,7 +30,7 @@ _MALLOC::
 // Different from c's calloc
 _CALLOC::
     PUSHQ  RBP
-    MOVQ   RBP, RSP 
+    MOVQ   RBP, RSP
     SUB    RSP,16
     MOV    -8[RBP],RDI
     CALL   _MALLOC
@@ -36,7 +47,7 @@ _CALLOC::
 // RSI = U64 size
 _REALLOC:: // U0 *ReAlloc(U0 *ptr, I64 size);
     PUSHQ  RBP
-    MOVQ   RBP, RSP 
+    MOVQ   RBP, RSP
     SUB    RSP, 16
     TEST   RDI, RDI
     JZ     @@1
@@ -64,7 +75,7 @@ _REALLOC:: // U0 *ReAlloc(U0 *ptr, I64 size);
 /* How many bytes were allocated */
 _MSIZE::
     PUSHQ  RBP
-    MOVQ   RBP, RSP 
+    MOVQ   RBP, RSP
     TEST   RDI, RDI
     JZ     @@2/* NULL CHECK */
     SUB    RDI, 8
@@ -77,11 +88,11 @@ _MSIZE::
     LEAVE
     RET
 
-/* Gets to the start of the actual allocated buffer 
+/* Gets to the start of the actual allocated buffer
  * And then calls free */
 _FREE::
     PUSHQ  RBP
-    MOVQ   RBP, RSP 
+    MOVQ   RBP, RSP
     TEST   RDI,RDI
     JZ     @@1
     SUB    RDI, 8
@@ -92,7 +103,7 @@ _FREE::
 
 _MEMSET::
     PUSHQ RBP
-    MOVQ  RBP, RSP 
+    MOVQ  RBP, RSP
     MOVQ  RCX, RDX
     MOVB  AL,  SIL
     CLD
@@ -103,21 +114,13 @@ _MEMSET::
 
 _MEMCPY::
     PUSHQ  RBP
-    MOV    RBP, RSP 
-    MOVQ   RCX, RDX 
+    MOV    RBP, RSP
+    MOVQ   RCX, RDX
     CLD
     REP    MOVSB
     LEAVE
-    RET 
+    RET
 }
-
-public extern "c" U0 *memchr(U0 *__s, I32 __c, U64 __n);
-public extern "c" I32 memcmp(U0 *__s1, U0 *__s2, U64 __n);
-public extern "c" U0 *memmove(U0 *__dst, U0 *__src, U64 __len);
-public extern "c" U0 free(U0 *ptr);
-public extern "c" U0 *malloc(U64 size);
-public extern "c" U0 *calloc(U64 count, U64 size);
-public extern "c" U0 *realloc(U0 *ptr, U64 size);
 public _extern _MALLOC U0 *MAlloc(U64 size);
 public _extern _FREE U0 Free(U0 *ptr);
 public _extern _REALLOC U0 *ReAlloc(U0 *ptr, U64 new_size);
@@ -125,3 +128,64 @@ public _extern _CALLOC U0 *CAlloc(U64 new_size);
 public _extern _MSIZE U64 MSize(U0 *ptr);
 public _extern _MEMCPY U0 *MemCpy(U0 *dst, U0 *src, U64 len);
 public _extern _MEMSET U0 *MemSet(U0 *dst, I32 ch, U64 len);
+#endif
+
+#ifdef IS_ARM_64
+/* HolyC fallbacks for non-x86 targets. MAlloc's 8-byte size header
+ * is preserved so MSize/Free/ReAlloc remain compatible with code
+ * that depends on it. */
+public U0 *MAlloc(U64 size)
+{
+  U64 *p = malloc(size + 8);
+  *p = size;
+  return &p[1];
+}
+
+public U0 Free(U0 *ptr)
+{
+  U64 *p;
+  if (!ptr) return;
+  p = ptr;
+  free(&p[-1]);
+}
+
+public U64 MSize(U0 *ptr)
+{
+  U64 *p;
+  if (!ptr) return 0;
+  p = ptr;
+  return p[-1];
+}
+
+public U0 *MemSet(U0 *dst, I32 ch, U64 len)
+{
+  memset(dst, ch, len);
+  return dst;
+}
+
+public U0 *MemCpy(U0 *dst, U0 *src, U64 len)
+{
+  memcpy(dst, src, len);
+  return dst;
+}
+
+public U0 *CAlloc(U64 size)
+{
+  U0 *p = MAlloc(size);
+  MemSet(p, 0, size);
+  return p;
+}
+
+public U0 *ReAlloc(U0 *ptr, U64 new_size)
+{
+  U0 *new_ptr;
+  U64 old_size;
+  if (!ptr) return MAlloc(new_size);
+  new_ptr = MAlloc(new_size);
+  old_size = MSize(ptr);
+  if (old_size > new_size) old_size = new_size;
+  MemCpy(new_ptr, ptr, old_size);
+  Free(ptr);
+  return new_ptr;
+}
+#endif

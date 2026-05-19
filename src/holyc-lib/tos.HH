@@ -463,9 +463,17 @@ public U0 ThreadPoolRelease(ThreadPool *pool);
 public extern "c" I32 wait(I32 *statloc);
 public extern "c" I32 waitpid(I32 pid, I32 *statlock, I32 options);
 public extern "c" I32 fork();
+#ifdef IS_X86_64
 public _extern _EXIT U0 Exit(I64 exit_code = EXIT_FAIL);
 public _extern _WRITE I64 Write(I64 fd, U8 *buf, I64 len);
 public _extern _SYSTEM I64 System(U8 *command);
+#endif
+
+#ifdef IS_ARM_64
+public U0 Exit(I64 exit_code = EXIT_FAIL);
+public I64 Write(I64 fd, U8 *buf, I64 len);
+public I64 System(U8 *command);
+#endif
 
 /* TempleOS-style try/catch/throw. CatchFrame is 256 bytes (matches
  * what the compiler reserves per `try` block); the runtime stores its
@@ -547,8 +555,15 @@ public extern "c" F64 fdim(F64 f1, F64 f2);
 public extern "c" F64 fmax(F64 f1, F64 f2);
 public extern "c" F64 fmin(F64 f1, F64 f2);
 public extern "c" F64 fma(F64 f1, F64 f2, F64 f3);
+#ifdef IS_X86_64
 public _extern _ABS U64 Abs(I64 num);
 public _extern _GCD U64 Gcd(I64 a, I64 b);
+#endif
+
+#ifdef IS_ARM_64
+public U64 Abs(I64 num);
+public U64 Gcd(I64 a, I64 b);
+#endif
 public F64 Pow(F64 a, I64 b);
 public U64 ModU64(U64 *k, U64 m);
 
@@ -557,6 +572,12 @@ public extern "c" I32 memcmp(U0 *__s1, U0 *__s2, U64 __n);
 public extern "c" U0 *memmove(U0 *__dst, U0 *__src, U64 __len);
 public extern "c" U0 free(U0 *ptr);
 public extern "c" U0 *malloc(U64 size);
+
+/* On x86 the core memory ops have hand-rolled asm trampolines so we
+ * declare them via `_extern <asm-label>`. On ARM the library
+ * provides ordinary HolyC implementations of these names, so just
+ * declare the prototypes. */
+#ifdef IS_X86_64
 public _extern _MALLOC U0 *MAlloc(U64 size);
 public _extern _FREE U0 Free(U0 *ptr);
 public _extern _REALLOC U0 *ReAlloc(U0 *ptr, U64 new_size);
@@ -564,6 +585,17 @@ public _extern _CALLOC U0 *CAlloc(U64 new_size);
 public _extern _MSIZE U64 MSize(U0 *ptr);
 public _extern _MEMCPY U0 *MemCpy(U0 *dst, U0 *src, U64 len);
 public _extern _MEMSET U0 *MemSet(U0 *dst, I32 ch, U64 len);
+#endif
+
+#ifdef IS_ARM_64
+public U0 *MAlloc(U64 size);
+public U0 Free(U0 *ptr);
+public U0 *ReAlloc(U0 *ptr, U64 new_size);
+public U0 *CAlloc(U64 new_size);
+public U64 MSize(U0 *ptr);
+public U0 *MemCpy(U0 *dst, U0 *src, U64 len);
+public U0 *MemSet(U0 *dst, I32 ch, U64 len);
+#endif
 
 #define STR_LEN 256
 
@@ -613,6 +645,7 @@ extern "c" U8 *strstr(U8 *__big, U8 *__little);
 extern "c" U8 *strtok(U8 *__str, U8 *__sep);
 extern "c" U64 strxfrm(U8 *__s1, U8 *__s2, U64 __n);
 
+#ifdef IS_X86_64
 public _extern _STRLEN_FAST U64 StrLen(U8 *buf);
 public _extern _STRNCMP I64 StrNCmp(U8 *s1, U8 *s2, I64 len);
 public _extern _STRNICMP I64 StrNICmp(U8 *s1, U8 *s2, I64 len);
@@ -623,6 +656,20 @@ public _extern _TOUPPER U8 ToUpper(U8 ch);
 public _extern _ISSPACE Bool IsSpace(U8 ch);
 public _extern _STRHASH U64 StrHash(U8 *str);
 public _extern _ATOI I64 Atoi(U8 *str);
+#endif
+
+#ifdef IS_ARM_64
+public U64 StrLen(U8 *buf);
+public I64 StrNCmp(U8 *s1, U8 *s2, I64 len);
+public I64 StrNICmp(U8 *s1, U8 *s2, I64 len);
+public I64 StrCmp(U8 *s1, U8 *s2);
+public U0 StrCpy(U8 *dst, U8 *src);
+public U8 ToLower(U8 ch);
+public U8 ToUpper(U8 ch);
+public Bool IsSpace(U8 ch);
+public U64 StrHash(U8 *str);
+public I64 Atoi(U8 *str);
+#endif
 
 public U8 *StrNCpy(U8 *buf, I64 len);
 public U8 *FileExtDot(U8 *src);
@@ -768,12 +815,10 @@ class Dirent
   U8 type;         /* file type, see below */
   I8 name[DIR_MAXPATHLEN]; /* entry name (up to MAXPATHLEN bytes) */
 };
-public _extern _opendir$INODE64 cDIR *opendir(U8 *dirname);
-public _extern _readdir$INODE64 Dirent *readdir(cDIR *dir);
+#endif
 
-#elifdef IS_LINUX
+#ifdef IS_LINUX
 #define DIR_MAXPATHLEN (256)
-
 class Dirent {
   U64 ino;         /* file number of entry */
   U64 seekoff;       /* seek offset (optional, used by servers) */
@@ -783,6 +828,17 @@ class Dirent {
 };
 public cDIR *opendir(U8 *dirname);
 public Dirent *readdir(cDIR *dir);
+#endif
+
+/* Mac x86 vs ARM symbol-name divergence -- see dir.HC. */
+#ifdef IS_X86_64
+public _extern _opendir$INODE64 cDIR *opendir(U8 *dirname);
+public _extern _readdir$INODE64 Dirent *readdir(cDIR *dir);
+#endif
+
+#ifdef IS_ARM_64
+public _extern _opendir cDIR *opendir(U8 *dirname);
+public _extern _readdir Dirent *readdir(cDIR *dir);
 #endif
 
 public extern "c" I32 closedir(cDIR *dir);
@@ -817,9 +873,6 @@ public class cStat {
   I32 st_lspare;
   I64 st_qspare[2];
 };
-public _extern _stat$INODE64 I32 stat(U8 *pathname, cStat *st);
-public _extern _lstat$INODE64 I32 lstat(U8 *pathname, cStat *st);
-public _extern _fstat$INODE64 I32 fstat(I32 fd, cStat *st);
 #elifdef IS_LINUX
 class cStat
 {
@@ -843,6 +896,20 @@ class cStat
 public extern "c" I32 stat(U8 *pathname, cStat *st);
 public extern "c" I32 lstat(U8 *pathname, cStat *st);
 public extern "c" I32 fstat(I32 fd, cStat *st);
+#endif
+
+/* Mac x86 uses the $INODE64 stat variants; ARM uses the plain
+ * symbols. Linux is handled above with `extern "c"`. */
+#ifdef IS_X86_64
+public _extern _stat$INODE64 I32 stat(U8 *pathname, cStat *st);
+public _extern _lstat$INODE64 I32 lstat(U8 *pathname, cStat *st);
+public _extern _fstat$INODE64 I32 fstat(I32 fd, cStat *st);
+#endif
+
+#ifdef IS_ARM_64
+public _extern _stat I32 stat(U8 *pathname, cStat *st);
+public _extern _lstat I32 lstat(U8 *pathname, cStat *st);
+public _extern _fstat I32 fstat(I32 fd, cStat *st);
 #endif
 
 public extern "c" I32 mkdir(U8 *dirname, I32 mode = 438);

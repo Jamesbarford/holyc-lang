@@ -1,5 +1,4 @@
 # HolyC Programming Language
-
 > [!WARNING]
 > The Compiler is in a working state and most features are implemented. Errors are a bit hit and miss! This is more for fun than for serious software development.
 
@@ -28,10 +27,11 @@ https://holyc-lang.com/
 A holyc compiler built from scratch in C. Basic optimisations like constant,
 folding and some dead code elimination occurs. But broadly it should be easy
 to see how the assembly maps to the source code. It works by creating an AST,
-lowering to an SSA based IR and emitting x86_64 assembly code as text which 
-is fed into gcc to assemble. Floating point arithmetic is supported as are most
-of the major language features. There is experimental support for transpiling 
-HolyC to C, which is in varying states of broken and not properly supported.
+lowering to an SSA based IR and emitting x86_64/AArch64 assembly code as text
+which is fed into gcc to assemble. Floating point arithmetic is supported as
+are most of the major language features. There is experimental support for
+transpiling HolyC to C, which is in varying states of broken and not properly
+supported.
 
 ## Example
 Below is a snippet of code showing some of the features supported by this holyc
@@ -67,9 +67,11 @@ ExampleFunction;
 ```
 
 ## Compatibility
-Currently this holyc compiler will compile holyc source code to an x86_64 
-compatible binary which has been tested on amd linux and an intel mac.
-Thus most x86_64 architectures should be supported.
+Currently this holyc compiler will compile holyc source code to an
+x86_64/AArch64 compatible binary which has been tested on amd linux and an
+intel mac. An M1 mac and fedora linux on an M4 using QEMU.
+
+Assembly is not yet supported in AArch64.
 
 ## Building
 ### Operating Systems:
