@@ -355,6 +355,7 @@ const char *irOpcodeToString(IrInstr *ir_instr) {
         case IR_STORE:    ir_op_str = "store"; break;
         case IR_LOAD_DEREF:  ir_op_str = "load*";  break;
         case IR_STORE_DEREF: ir_op_str = "store*"; break;
+        case IR_RMW_DEREF:   ir_op_str = "rmw*";   break;
         case IR_LEA:      ir_op_str = "lea"; break;
         case IR_GEP:      ir_op_str = "gep"; break;
 
@@ -397,6 +398,7 @@ const char *irOpcodeToString(IrInstr *ir_instr) {
         case IR_BITCAST:  ir_op_str = "bitcast"; break;
         case IR_RET:      ir_op_str = "ret"; break;
         case IR_BR:       ir_op_str = "br"; break;
+        case IR_CMP_BR:   ir_op_str = "cmp_br"; break;
         case IR_JMP:      ir_op_str = "jmp"; break;
         case IR_SWITCH:   ir_op_str = "switch"; break;
         case IR_CALL:     ir_op_str = "call"; break;
@@ -481,6 +483,19 @@ AoStr *irInstrToString(IrInstr *ir_instr) {
                         ir_instr->extra.blocks.target_block->id,
                         ir_instr->extra.blocks.fallthrough_block->id);
             aoStrRelease(ir_value_str);
+            break;
+        }
+
+        case IR_CMP_BR: {
+            AoStr *lhs = irValueToString(ir_instr->r1);
+            AoStr *rhs = irValueToString(ir_instr->r2);
+            const char *cmp = irCmpKindToString(ir_instr->extra.cmp_br.cmp_kind);
+            aoStrCatFmt(buf, "%s_%s %S, %S, bb%i, bb%i",
+                        op, cmp, lhs, rhs,
+                        ir_instr->extra.cmp_br.target_block->id,
+                        ir_instr->extra.cmp_br.fallthrough_block->id);
+            aoStrRelease(lhs);
+            aoStrRelease(rhs);
             break;
         }
 

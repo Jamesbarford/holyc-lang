@@ -5,82 +5,52 @@
 #include "containers.h"
 #include "ir-types.h"
 
-/* Codegen-private bits stored on IrInstr.flags. ir.c initialises flags
- * to 0 and no other code (ir-fold, ir-debug) reads or writes them, so
- * the regalloc + peephole passes own these bits exclusively. The
- * names speak in target-agnostic terms ("result register") - the
- * emitter maps that to whatever register file is canonical for the
- * arch (e.g. %rax/%xmm0 on x86_64). */
+/* Codegen-private bits stored on IrInstr.flags. */
 
-/* The instruction's result is consumed by the next non-NOP instruction
- * as its first source, emit nothing for the spill, the consumer knows
- * to read directly from the result register. */
-#define IRCG_FUSE_TO_NEXT     (1u << 0)
-/* Paired with IRCG_FUSE_TO_NEXT on the consumer: skip the load of the
- * first source - it's already in the result register from the prior
- * instruction. */
-#define IRCG_R1_IN_REG        (1u << 1)
-/* Set on an IR_PHI when the value can live in the result register
- * across the block boundary (the only phi at this block's head and all
- * predecessors arrive via IR_JMP, not IR_BR). When set, predecessors
- * materialise the incoming value into the register before their jmp;
- * the phi itself emits nothing; the slot allocator skips the phi's
- * dst. */
-#define IRCG_PHI_IN_REG       (1u << 2)
-/* Set by the peephole pass on an IR_ICMP / IR_FCMP whose result feeds
- * a single immediately-following IR_BR. The cmp emits the bare
- * compare (no setcc / movzbq / spill); the BR reads the cmp's
- * cmp_kind off the prior instruction and emits a direct conditional
- * jump. */
-#define IRCG_CMP_FUSED_BR     (1u << 3)
-#define IRCG_BR_USE_PRIOR_CMP (1u << 4)
-/* Set on an IR_STORE_DEREF whose `dst` (address) tmp came from the
- * immediately-prior rax-defining instruction (single-use). The
- * producer kept its result in the result register (FUSE_TO_NEXT),
- * and the STORE_DEREF stashes that into the scratch register
- * (`movq %rax, %rcx` on x86) before loading r1 into the result
- * register and emitting the indirect store. Saves the slot spill /
- * reload that would otherwise sit between IADD and STORE_DEREF for
- * `*(p + offset) = value` patterns. */
-#define IRCG_DST_IN_REG       (1u << 5)
-/* Set on an IR_CALL whose last source-order argument is a single-use
- * tmp produced by the immediately-prior rax-defining instruction, AND
- * the callee is HolyC-variadic so that argument is the FIRST one
- * pushed onto the stack (variadic args push in reverse). The producer
- * keeps its result in the result register (FUSE_TO_NEXT); the call
- * emit skips the reload-into-rax for that first push and goes
- * straight to `pushq %rax`. */
-#define IRCG_CALL_TAIL_ARG_IN_REG (1u << 6)
-/* Set on an IR_LEA whose dst is a single-use tmp consumed only as one
- * argument of an IR_CALL. Address values from LEA are pure functions
- * of rbp (locals) or RIP (globals), so we can re-emit the leaq at the
- * call site directly into the target arg register, bypassing the
- * slot round-trip (`leaq -16(%rbp), %rax; movq %rax, slot;
- * movq slot, %rsi` becomes `leaq -16(%rbp), %rsi`). The original LEA
- * emits nothing and reserves no slot. */
-#define IRCG_LEA_INLINE_AT_CALL (1u << 7)
-
-/* This is a builtin compiler function and needs to be handled by the backend
- * explicitly */
-#define IRCG_FN_BUILTIN (1u << 8)
+/* Builtin compiler intrinsic, the backend handles it directly. */
+#define IRCG_FN_BUILTIN (1u << 0)
 
 /* Set on an IR_CALL whose first source-order argument is the hidden
- * out-pointer for a struct/union by-value return. On AArch64 this
- * pointer is passed in x8 (the indirect-result-location register),
- * not in x0; remaining integer args still start at x0. On x86_64 the
- * pointer goes in %rdi (the first int arg register) so this flag is
- * informational, the natural arg-slot mapping already does the
- * right thing. */
-#define IRCG_CALL_AGG_RETURN (1u << 9)
+ * out-pointer for a struct/union by-value return. On x86_64 the
+ * pointer naturally goes in %rdi via the standard arg-slot mapping,
+ * so this flag is informational. */
+#define IRCG_CALL_AGG_RETURN (1u << 1)
+
+/* Per-backend ABI descriptor. The peephole reads this to know which
+ * register a fused producer's value will live in (the result reg);
+ * the codegen reads it when laying out call arguments and parameter
+ * spills. A new backend slots in by providing one. */
+typedef struct IrRegPool {
+    /* ABI integer argument registers, in argument order. Vec<AoStr *>. */
+    Vec *int_arg_regs;
+    /* ABI float argument registers, in argument order. Vec<AoStr *>. */
+    Vec *float_arg_regs;
+    /* Integer return register (rax on SysV, x0 on AAPCS64). */
+    AoStr *int_return_reg;
+    /* Float return register (xmm0 / v0). */
+    AoStr *float_return_reg;
+    /* Per-instruction scratch surface: registers the codegen clobbers
+     * while emitting an arithmetic/load/store/cast. Forward-store
+     * passes drop any forwarded source whose loc names one of these
+     * after a non-trivial op. Vec<AoStr *>. */
+    Vec *scratch_regs;
+    /* Apple AArch64 ABI: variadic args (incl. HolyC's implicit argc)
+     * are passed on the stack, not in arg regs. The IR builder and
+     * layout pass consult this to skip the argc spill and place argc
+     * at the start of the caller's variadic stack region. */
+    int variadic_on_stack;
+} IrRegPool;
+
+void irRegPoolSet(IrRegPool *pool);
+IrRegPool *irRegPoolGet(void);
 
 /* Slot offset map. */
 void irCgSetLoff(IrRaCtx *ra, u32 var_id, int loff);
 int  irCgGetLoff(IrRaCtx *ra, IrValue *val);
 
 /* Per-temp slot allocation. `irCgAllocTmp` reserves one slot for `val`;
- * `irCgAllocOperandsForInstr` does the per-opcode "which operands need
- * a slot" decision (consults FUSE_TO_NEXT / R1_IN_REG); the driver
- * `irCgAllocAllTmps` walks every block. */
+ * `irCgAllocOperandsForInstr` decides per-opcode which operands need
+ * a slot; `irCgAllocAllTmps` is the linear-scan driver. */
 void irCgAllocTmp(IrRaCtx *ra, IrValue *val, int starting_offset);
 void irCgAllocOperandsForInstr(IrRaCtx *ra, IrInstr *I, int start);
 void irCgAllocAllTmps(IrRaCtx *ra, int starting_offset);
@@ -99,28 +69,18 @@ int irCgComputeAstLayout(Ast *ast_func, IrFunction *ir_func);
  * look up an IR value's slot via `irCgGetLoff`. */
 void irCgBindAstLoffs(IrRaCtx *ra, Ast *ast_func);
 
-/* Annotation passes (mutate `IrInstr.flags`). */
-void irCgClassifyPhis(IrFunction *func);
-void irCgAnnotate(IrFunction *func);
-
-/* Analysis helpers used by codegen and the peephole pass. */
+/* True if `bb` starts with at least one IR_PHI (skipping IR_NOPs).
+ * Used by the codegen to decide whether a branch arm needs phi
+ * materialisation before jumping in. */
 int irBlockHasPhi(IrBlock *bb);
 
-/* target-agnostic helper that scans the predecessor block to see if a
- * phi-source value still lives in the result register (x0/rax) because
- * the producer was marked FUSE_TO_NEXT. Lets us skip a redundant reload. */
-int irPhiPairValueLiveInResultReg(IrBlock *from, IrValue *v);
-
-/* Does this op produce its result naturally into the architecture's
- * canonical result register (i.e. is it a candidate for the
- * "leave in register" fusion path)? Float-typed defs and ops that
- * don't compute a value return 0. */
-int irInstrDefsIntoReg(IrInstr *I);
-/* The single source operand the instruction loads into the result
- * register first. NULL when the op doesn't have one (alloca,
- * unconditional jmp, nop, ...). */
-IrValue *firstFusableSource(IrInstr *I);
 Set *irCgComputeReferencedBlocks(IrFunction *func);
 u32 irValueByteSize(IrValue *v);
+
+/* True if the function body contains at least one IR_CALL. The x86_64
+ * frame-elision check uses this to know whether it must keep an rbp
+ * prologue (calls require rsp to be 16-byte aligned at the call
+ * point). Linear in function size; codegen-driver only. */
+int irFnHasCalls(IrFunction *fn);
 
 #endif

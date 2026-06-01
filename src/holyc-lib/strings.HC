@@ -59,6 +59,14 @@ public Bool WildMatch(U8 *test_str, U8 *wild_str);
 
 #define TIMESTAMP_FMT "%d-%02d-%02d %02d:%02d:%02d"
 
+public extern "c" U64 strlen(U8 *s);
+public extern "c" I32 strncmp(U8 *s1, U8 *s2, U64 n);
+public extern "c" I32 strncasecmp(U8 *s1, U8 *s2, U64 n);
+public extern "c" I32 strcmp(U8 *s1, U8 *s2);
+public extern "c" U8 *strcpy(U8 *dst, U8 *src);
+public extern "c" I64 atol(U8 *str);
+
+#ifdef IS_X86_64
 asm {
 // RDI=s1, RSI=s2, RDX=N
 // 'a'=97, 'z'=122
@@ -285,6 +293,41 @@ public _extern _TOUPPER U8 ToUpper(U8 ch);
 public _extern _ISSPACE Bool IsSpace(U8 ch);
 public _extern _STRHASH U64 StrHash(U8 *str);
 public _extern _ATOI I64 Atoi(U8 *str);
+#endif
+
+#ifdef IS_ARM_64
+public U64 StrLen(U8 *buf) { return strlen(buf); }
+public I64 StrNCmp(U8 *s1, U8 *s2, I64 len) { return strncmp(s1, s2, len); }
+public I64 StrNICmp(U8 *s1, U8 *s2, I64 len) { return strncasecmp(s1, s2, len); }
+public I64 StrCmp(U8 *s1, U8 *s2) { return strcmp(s1, s2); }
+public U0 StrCpy(U8 *dst, U8 *src) { strcpy(dst, src); }
+public U8 ToLower(U8 ch)
+{
+  if (ch >= 'A' && ch <= 'Z') return ch + 32;
+  return ch;
+}
+public U8 ToUpper(U8 ch)
+{
+  if (ch >= 'a' && ch <= 'z') return ch - 32;
+  return ch;
+}
+public Bool IsSpace(U8 ch)
+{
+  return ch == ' ' || ch == '\t' || ch == '\n' ||
+         ch == '\v' || ch == '\f' || ch == '\r';
+}
+public U64 StrHash(U8 *str)
+{
+  U64 h = str[0];
+  U64 i = 1;
+  while (str[i]) {
+    h = (h << 5) - h + str[i];
+    i++;
+  }
+  return h;
+}
+public I64 Atoi(U8 *str) { return atol(str); }
+#endif
 
 public U8 *StrNCpy(U8 *buf, I64 len)
 {

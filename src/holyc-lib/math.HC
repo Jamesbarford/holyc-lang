@@ -69,6 +69,7 @@ extern "c" F64 fmax(F64 f1, F64 f2);
 extern "c" F64 fmin(F64 f1, F64 f2);
 extern "c" F64 fma(F64 f1, F64 f2, F64 f3);
 
+#ifdef IS_X86_64
 asm {
 _ABS::
     MOV     RAX, RDI
@@ -99,6 +100,26 @@ _GCD::
 
 public _extern _ABS U64 Abs(I64 num);
 public _extern _GCD U64 Gcd(I64 a, I64 b);
+#endif
+
+#ifdef IS_ARM_64
+public U64 Abs(I64 num)
+{
+  if (num < 0) return -num;
+  return num;
+}
+
+public U64 Gcd(I64 a, I64 b)
+{
+  I64 t;
+  while (b != 0) {
+    t = b;
+    b = a % b;
+    a = t;
+  }
+  return a;
+}
+#endif
 
 F64 Pow(F64 a, I64 b)
 {

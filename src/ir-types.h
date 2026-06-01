@@ -20,6 +20,13 @@ typedef enum IrOp {
     IR_STORE,       /* Store to memory */
     IR_LOAD_DEREF,  /* dst = *r1 (r1 is a pointer value, not a slot id) */
     IR_STORE_DEREF, /* *dst = r1 (dst is a pointer value) */
+    /* Read-modify-write on memory: `*addr <op>= r1` where the op is
+     * carried in extra.rmw_op (IR_IADD/IR_ISUB/IR_AND/IR_OR/IR_XOR).
+     * dst is the base pointer; idx/scale/disp form the SIB if set.
+     * The fusion pass replaces matching load/binop/store triples with
+     * this op so codegen can emit x86's memory-destination forms
+     * (`incb mem`, `addq $k, mem`, etc.). */
+    IR_RMW_DEREF,
     IR_LEA,         /* dst = &r1 (address of a stack slot, as a pointer) */
     IR_GEP,         /* Get element pointer (array/struct indexing) */
 
@@ -69,7 +76,11 @@ typedef enum IrOp {
     
     /* Control flow operations */
     IR_RET,         /* Return from function */
-    IR_BR,          /* Conditional branch */
+    IR_BR,          /* Conditional branch off a 0/1 condition value */
+    IR_CMP_BR,      /* Fused compare-and-branch: cmp r1, r2; j<cc> target,
+                     * fallthrough. r1/r2 carry the operands, extra.cmp_br
+                     * carries cmp_kind and both blocks. dst is unused
+                     * (the result lives in EFLAGS for one instruction). */
     IR_JMP,         /* Unconditional jump */
     IR_SWITCH,      /* Switch statement */
     IR_CALL,        /* Function call */
@@ -179,6 +190,33 @@ typedef struct IrVar {
 
 #define IR_VAL_FLAG_FUNC 0x1
 
+/* Where an IrValue physically lives after register allocation.
+ * Filled in by the regalloc pass; consumed by codegen so it never
+ * has to make a "which register?" decision itself.
+ *
+ *   IR_LOC_NONE  - not yet decided (pre-regalloc state); codegen
+ *                  must fall back to the legacy slot lookup.
+ *   IR_LOC_REG   - lives in physical register `reg` (an AoStr*
+ *                  borrowed from the per-backend reg pool table).
+ *   IR_LOC_SLOT  - lives at `[rbp + loff]`; loff is sign-extended.
+ *   IR_LOC_IMM   - constant value materialised at use site; codegen
+ *                  emits as an immediate operand. */
+typedef enum IrLocKind {
+    IR_LOC_NONE = 0,
+    IR_LOC_REG,
+    IR_LOC_SLOT,
+    IR_LOC_IMM
+} IrLocKind;
+
+typedef struct IrLocation {
+    IrLocKind kind;
+    union {
+        AoStr *reg;
+        int loff;
+        s64 imm;
+    } as;
+} IrLocation;
+
 struct IrValue {
     IrValueType type;
     IrValueKind kind;
@@ -189,6 +227,10 @@ struct IrValue {
      * allocator skips reserving a stack slot. Only meaningful for
      * IR_VAL_LOCAL / IR_VAL_PARAM. */
     AoStr *pinned_reg;
+    /* Where this value lives after the regalloc pass. NONE until
+     * regalloc runs (or for value kinds the regalloc doesn't track,
+     * e.g. constants which carry their value in `as` directly). */
+    IrLocation loc;
 
     union {
         AoStr *name; /* aribitrary string that I seem to have used in my
@@ -216,16 +258,43 @@ struct IrBlockPair {
     IrBlock *fallthrough_block; /* For conditional flow */
 };
 
+/* IR_CMP_BR carries both the comparison and the branch destinations
+ * in a single op, so codegen emits `cmp; j<cc>` without peeking at
+ * the prior instruction. */
+typedef struct IrCmpBr {
+    IrCmpKind cmp_kind;
+    IrBlock *target_block;
+    IrBlock *fallthrough_block;
+} IrCmpBr;
+
 struct IrInstr {
     IrOp op;
     IrValue *dst;
     IrValue *r1;
     IrValue *r2;
     u64 flags;
+    /* Constant displacement folded into a memory op's effective
+     * address. Populated by the addressing-mode fusion pass for
+     * IR_LOAD_DEREF/IR_STORE_DEREF: the addr operand stays the
+     * base; codegen emits `disp(%base)`. Zero when no fold has
+     * happened. Signed 32-bit matches the x86 disp32 and AArch64 ldur/stur
+     * ranges. */
+    s32 disp;
+    /* Scaled-index addressing: `disp(%base, %idx, scale)`. Set by
+     * the fusion pass when a `shl/imul idx, n` and a `iadd base,
+     * scaled` chain feeds a memory op; both intermediates get
+     * NOP'd. `scale` is one of 1/2/4/8 (matches x86 SIB); 0 means
+     * no idx component, and `idx` must then be NULL. */
+    IrValue *idx;
+    u8 scale;
 
     union {
         IrBlockPair blocks;
         IrCmpKind cmp_kind;
+        IrCmpBr cmp_br;   /* IR_CMP_BR: cmp_kind + both blocks */
+        /* IR_RMW_DEREF carries the original binop here (IR_IADD,
+         * IR_ISUB, IR_AND, IR_OR, IR_XOR). */
+        IrOp rmw_op;
         /* either an unresolved `goto label;` or a a `label:` */
         AoStr *unresolved_label;
 
@@ -309,17 +378,16 @@ typedef struct IrCgCtx {
      * order. */
     IrBlock *cur_block;
     IrBlock *next_block;
-    /* Map<u32 IrValue.var.id -> IrInstr* (IR_LEA)>. Populated once per
-     * function from peephole-marked LEAs. The IR_CALL emit consults
-     * this to re-create `leaq <source>, <target_reg>` directly at the
-     * call site instead of going through the slot. NULL when no
-     * LEA-into-call fusion fired. */
-    Map *lea_inline_map;
     /* Vec<AoStr *>: machine registers that pinned locals occupy in
      * this function. Populated once at function emit start (walking
      * the AST locals). The prologue saves these, the epilogue
      * restores them. NULL when no pinned locals exist. */
     Vec *pinned_regs;
+
+    /* Leaf function with empty frame: prologue skips the rbp dance
+     * and epilogue emits a bare `retq`. Set once before emission. */
+    int omit_frame;
+
 } IrCgCtx;
 
 typedef struct IrProgram {
@@ -350,9 +418,16 @@ typedef struct IrCtx {
     /*`Map<AoStr *label_name, IrBlock *>` for goto and labels within the current
      * function. */
     Map *labels;
+    /* `Set<u32 lvar_id>` of lvars in the current function whose
+     * address is taken (via &x or inline-asm refs). NULL outside a
+     * function. The lvar lowerer consults this to decide whether a
+     * read can return the slot operand directly or must emit an
+     * IR_LOAD tmp to capture the current value. */
+    Set *escape_set;
 } IrCtx;
 
 extern VecType vec_ir_block_type;
+extern VecType vec_aostr_type;
 extern MapType map_u32_to_ir_block_type;
 
 /* Memory management */
@@ -378,6 +453,15 @@ u8 irTypeIsScalar(IrValueType ir_value_type);
 u8 irIsConst(IrValueKind ir_value_kind);
 u8 irIsPtr(IrValueType ir_value_type);
 u8 irIsTmp(IrValue *val);
+
+/* var.id accessors: 0 when the value (or the instruction's field)
+ * is NULL. Caller is still responsible for checking that the kind
+ * is one that actually carries a var.id (TMP / LOCAL / PARAM). */
+u32 irVarId(IrValue *val);
+u32 irDstVarId(IrInstr *instr);
+u32 irR1VarId(IrInstr *instr);
+u32 irR2VarId(IrInstr *instr);
+
 u8 irIsStore(IrOp opcode);
 u8 irIsLoad(IrOp opcode);
 u8 irIsStruct(IrValueType ir_value_type);

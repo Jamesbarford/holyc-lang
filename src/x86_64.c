@@ -24,6 +24,7 @@
 #include "containers.h"
 #include "ir.h"
 #include "ir-debug.h"
+#include "ir-optimise.h"
 #include "ir-regalloc.h"
 #include "list.h"
 #include "util.h"
@@ -39,6 +40,36 @@ static const char *kXmmRegs[] = {
     "xmm0", "xmm1", "xmm2", "xmm3",
     "xmm4", "xmm5", "xmm6", "xmm7"
 };
+
+/* Build AoStr-wrapped backend pool once, lazily, and hand it to the
+ * IR layer via `irRegPoolSet`. The AoStr instances live for the
+ * compiler's lifetime; the Vec owns the pointer array. */
+static Vec *x86_64MakeAoStrVec(const char *const *src, int n) {
+    Vec *v = vecNew(&vec_aostr_type);
+    for (int i = 0; i < n; ++i) {
+        vecPush(v, aoStrDupRaw((char *)src[i], strlen(src[i])));
+    }
+    return v;
+}
+
+static void x86_64InitRegPool(void) {
+    static int initialised = 0;
+    static IrRegPool pool;
+    if (initialised) return;
+
+    static const char *kScratchRegs[] = { "rax", "rcx", "rdx", "xmm0", "xmm1" };
+    int n_int     = (int)(sizeof(kIntRegs64)   / sizeof(kIntRegs64[0]));
+    int n_float   = (int)(sizeof(kXmmRegs)     / sizeof(kXmmRegs[0]));
+    int n_scratch = (int)(sizeof(kScratchRegs) / sizeof(kScratchRegs[0]));
+    pool.int_arg_regs     = x86_64MakeAoStrVec(kIntRegs64,   n_int);
+    pool.float_arg_regs   = x86_64MakeAoStrVec(kXmmRegs,     n_float);
+    pool.int_return_reg   = aoStrDupRaw((char *)"rax", 3);
+    pool.float_return_reg = aoStrDupRaw((char *)"xmm0", 4);
+    pool.scratch_regs     = x86_64MakeAoStrVec(kScratchRegs, n_scratch);
+
+    irRegPoolSet(&pool);
+    initialised = 1;
+}
 
 /* Map a 64-bit GP register name to its narrower variant. The
  * heterogeneous register-naming scheme on x86 makes this a lookup
@@ -107,20 +138,6 @@ static void x86_64Lea(IrCgCtx *ctx, IrInstr *lea, const char *reg) {
     }
 }
 
-/* If the source value was marked for LEA-inlining by peephole, emit
- * the address arithmetic directly into <reg> instead of going through
- * the slot. Returns 1 if it handled the value, 0 if the caller should
- * fall back to a regular load. */
-static int x86_64InlinedLea(IrCgCtx *ctx, IrValue *val, const char *reg) {
-    if (!ctx->lea_inline_map) return 0;
-    if (!val || val->kind != IR_VAL_TMP) return 0;
-    if (!mapHasInt(ctx->lea_inline_map, val->as.var.id)) return 0;
-    IrInstr *lea = mapGetInt(ctx->lea_inline_map, val->as.var.id);
-    if (!lea || lea->op != IR_LEA || !lea->r1) return 0;
-    x86_64Lea(ctx, lea, reg);
-    return 1;
-}
-
 /* Width-aware load from <loff>(%rbp) into <reg64>.
  *
  * Width policy mirrors aarch64's choice: sub-word loads (1/2) zero-
@@ -135,18 +152,74 @@ static void x86_64Load(AoStr *buf, const char *reg, u32 size, int loff) {
     }
 }
 
-/* Width-aware load from (<addr_reg>) into <reg64>. Same extension
- * policy as x86_64Load. */
+/* Build the `[disp](%base[,%idx,scale])` operand text. disp==0 ->
+ * no displacement; idx_reg==NULL -> no SIB component. The scale
+ * must be one of 1/2/4/8 when idx_reg is provided. */
+static void x86_64FmtMemOperand(char *out, u64 out_sz,
+                                s32 disp,
+                                const char *base_reg,
+                                const char *idx_reg,
+                                u8 scale)
+{
+    if (idx_reg) {
+        if (disp == 0) {
+            snprintf(out, out_sz, "(%%%s,%%%s,%d)",
+                     base_reg, idx_reg, (int)scale);
+        } else {
+            snprintf(out, out_sz, "%d(%%%s,%%%s,%d)",
+                     (int)disp, base_reg, idx_reg, (int)scale);
+        }
+    } else if (disp == 0) {
+        snprintf(out, out_sz, "(%%%s)", base_reg);
+    } else {
+        snprintf(out, out_sz, "%d(%%%s)", (int)disp, base_reg);
+    }
+}
+
+/* Width-aware load from `disp(<base_reg>[, <idx_reg>, scale])` into
+ * <reg64>. Same extension policy as x86_64Load. idx_reg==NULL drops
+ * the SIB component. */
 static void x86_64DerefLoadWidth(AoStr *buf,
                                  u32 size,
                                  const char *reg,
-                                 const char *addr_reg)
+                                 const char *base_reg,
+                                 const char *idx_reg,
+                                 u8 scale,
+                                 s32 disp)
 {
+    char mem[48];
+    x86_64FmtMemOperand(mem, sizeof(mem), disp, base_reg, idx_reg, scale);
     switch (size) {
-        case 1:  aoStrCatFmt(buf, "movzbq  (%%%s), %%%s\n\t", addr_reg, reg); break;
-        case 2:  aoStrCatFmt(buf, "movzwq  (%%%s), %%%s\n\t", addr_reg, reg); break;
-        case 4:  aoStrCatFmt(buf, "movslq  (%%%s), %%%s\n\t", addr_reg, reg); break;
-        default: aoStrCatFmt(buf, "movq    (%%%s), %%%s\n\t", addr_reg, reg); break;
+        case 1:  aoStrCatFmt(buf, "movzbq  %s, %%%s\n\t", mem, reg); break;
+        case 2:  aoStrCatFmt(buf, "movzwq  %s, %%%s\n\t", mem, reg); break;
+        case 4:  aoStrCatFmt(buf, "movslq  %s, %%%s\n\t", mem, reg); break;
+        default: aoStrCatFmt(buf, "movq    %s, %%%s\n\t", mem, reg); break;
+    }
+}
+
+
+const char *x86_64GetSizedMov(u32 size) {
+    switch (size) {
+        case 1:  return "movb";
+        case 2:  return "movw";
+        case 4:  return "movl";
+        default: return "movq";
+    }
+}
+
+
+static void x86_64GenericStoreWidth(AoStr *buf, u32 size, const char *reg, char *fmt) {
+    switch (size) {
+        case 1:
+        case 2:
+        case 4: {
+            char nreg[8];
+            const char *sized_mov = x86_64GetSizedMov(size);
+            x86_64RegForWidth(reg, size, nreg, sizeof(nreg));
+            aoStrCatFmt(buf, "%s    %%%s, %s\n\t", sized_mov, nreg, fmt);
+            break;
+        }
+        default: aoStrCatFmt(buf, "movq    %%%s, %s\n\t", reg, fmt); break;
     }
 }
 
@@ -158,50 +231,70 @@ static void x86_64FrameStoreWidth(AoStr *buf,
                                   u32 size,
                                   const char *reg)
 {
-    char nreg[8];
-    switch (size) {
-        case 1:
-            x86_64RegForWidth(reg, 1, nreg, sizeof(nreg));
-            aoStrCatFmt(buf, "movb    %%%s, %i(%%rbp)\n\t", nreg, loff);
-            break;
-        case 2:
-            x86_64RegForWidth(reg, 2, nreg, sizeof(nreg));
-            aoStrCatFmt(buf, "movw    %%%s, %i(%%rbp)\n\t", nreg, loff);
-            break;
-        case 4:
-            x86_64RegForWidth(reg, 4, nreg, sizeof(nreg));
-            aoStrCatFmt(buf, "movl    %%%s, %i(%%rbp)\n\t", nreg, loff);
-            break;
-        default:
-            aoStrCatFmt(buf, "movq    %%%s, %i(%%rbp)\n\t", reg, loff);
-            break;
-    }
+    char fmt[32];
+    snprintf(fmt, sizeof(fmt), "%d(%%rbp)", loff);
+    x86_64GenericStoreWidth(buf, size, reg, fmt);
+
 }
 
-/* Width-aware store of <reg64> into (<addr_reg>). */
+/* Width-aware store of <reg64> into `disp(<base_reg>[, <idx_reg>,
+ * scale])`. idx_reg==NULL drops the SIB component. */
 static void x86_64DerefStoreWidth(AoStr *buf,
                                   u32 size,
                                   const char *reg,
-                                  const char *addr_reg)
+                                  const char *base_reg,
+                                  const char *idx_reg,
+                                  u8 scale,
+                                  s32 disp)
 {
-    char nreg[8];
+    char fmt[48];
+    x86_64FmtMemOperand(fmt, sizeof(fmt), disp, base_reg, idx_reg, scale);
+    x86_64GenericStoreWidth(buf, size, reg, fmt);
+}
+
+static void x86_64DerefStoreGlobal(AoStr *buf, u32 size, const char *reg, const char *sym) {
+    char fmt[32];
+    snprintf(fmt, sizeof(fmt), "%s(%%rip)", sym);
+    x86_64GenericStoreWidth(buf, size, reg, fmt);
+}
+
+/* x86 mnemonic suffix for an N-byte operation. */
+static const char *x86_64SizedSuffix(u32 size) {
     switch (size) {
-        case 1:
-            x86_64RegForWidth(reg, 1, nreg, sizeof(nreg));
-            aoStrCatFmt(buf, "movb    %%%s, (%%%s)\n\t", nreg, addr_reg);
-            break;
-        case 2:
-            x86_64RegForWidth(reg, 2, nreg, sizeof(nreg));
-            aoStrCatFmt(buf, "movw    %%%s, (%%%s)\n\t", nreg, addr_reg);
-            break;
-        case 4:
-            x86_64RegForWidth(reg, 4, nreg, sizeof(nreg));
-            aoStrCatFmt(buf, "movl    %%%s, (%%%s)\n\t", nreg, addr_reg);
-            break;
-        default:
-            aoStrCatFmt(buf, "movq    %%%s, (%%%s)\n\t", reg, addr_reg);
-            break;
+        case 1:  return "b";
+        case 2:  return "w";
+        case 4:  return "l";
+        default: return "q";
     }
+}
+
+/* Mnemonic base for an RMW IrOp; suffix added by caller. */
+static const char *x86_64RmwMnem(IrOp op) {
+    switch (op) {
+        case IR_IADD: return "add";
+        case IR_ISUB: return "sub";
+        case IR_AND:  return "and";
+        case IR_OR:   return "or";
+        case IR_XOR:  return "xor";
+        default:      return NULL;
+    }
+}
+
+/* Lay an immediate down through a register-held address (optionally
+ * displaced and SIB-scaled). Used by the DST_IN_REG path so we
+ * don't bounce through %rax for the value. */
+static void x86_64DerefStoreImm(AoStr *buf,
+                                u32 size,
+                                s64 imm,
+                                const char *base_reg,
+                                const char *idx_reg,
+                                u8 scale,
+                                s32 disp)
+{
+    const char *mnem = x86_64GetSizedMov(size);
+    char mem[48];
+    x86_64FmtMemOperand(mem, sizeof(mem), disp, base_reg, idx_reg, scale);
+    aoStrCatFmt(buf, "%s    $%I, %s\n\t", mnem, (s64)imm, mem);
 }
 
 /* Load any IrValue into the given 64-bit GP register.
@@ -214,6 +307,15 @@ static void x86_64DerefStoreWidth(AoStr *buf,
 static void x86_64LoadToReg(IrCgCtx *ctx, IrValue *val, const char *reg) {
     switch (val->kind) {
         case IR_VAL_CONST_INT:
+            /* Zero load: `xorl r32, r32` is 2 bytes and the implicit
+             * zero-extend gives us a clean 64-bit zero. */
+            if (val->as._i64 == 0) {
+                char reg32[8];
+                x86_64RegForWidth(reg, 4, reg32, sizeof(reg32));
+                aoStrCatFmt(ctx->buf, "xorl    %%%s, %%%s\n\t",
+                            reg32, reg32);
+                break;
+            }
             /* GNU as picks the 7-byte mov-imm32 or 10-byte movabs
              * encoding depending on whether the value fits in a
              * 32-bit sign-extended immediate. */
@@ -241,6 +343,15 @@ static void x86_64LoadToReg(IrCgCtx *ctx, IrValue *val, const char *reg) {
                             val->pinned_reg->data, reg);
                 break;
             }
+            /* Regalloc parked the value in a physical reg, just a
+             * reg-to-reg move (or nothing if it's already there). */
+            if (val->loc.kind == IR_LOC_REG && val->loc.as.reg) {
+                const char *src = val->loc.as.reg->data;
+                if (strcmp(src, reg) != 0) {
+                    aoStrCatFmt(ctx->buf, "movq    %%%s, %%%s\n\t", src, reg);
+                }
+                break;
+            }
             u32 size = irValueByteSize(val);
             int loff = irCgGetLoff(&ctx->fn->ra, val);
             x86_64Load(ctx->buf, reg, size, loff);
@@ -261,30 +372,52 @@ static void x86_64StoreReg(IrCgCtx *ctx, IrValue *dst, const char *reg) {
                     reg, dst->pinned_reg->data);
         return;
     }
+    /* Regalloc-assigned register: reg-to-reg move (or nothing). */
+    if (dst->loc.kind == IR_LOC_REG && dst->loc.as.reg) {
+        const char *home = dst->loc.as.reg->data;
+        if (strcmp(home, reg) != 0) {
+            aoStrCatFmt(ctx->buf, "movq    %%%s, %%%s\n\t",
+                        reg, home);
+        }
+        return;
+    }
     u32 size = irValueByteSize(dst);
     int loff = irCgGetLoff(&ctx->fn->ra, dst);
     x86_64FrameStoreWidth(ctx->buf, loff, size, reg);
 }
 
-/* Spill the result register into instr->dst's slot unless this
- * instruction is fusing into the next (its consumer will read
- * directly from the live register). */
+/* Spill instr->dst into its home. When dst.loc is a register (set by
+ * the peephole or the linear-scan), StoreReg's same-reg short-circuit
+ * makes this a no-op move; when dst is a slot, it's a real store. */
 static void x86_64SpillDst(IrCgCtx *ctx, IrInstr *instr, const char *reg) {
-    if (instr->flags & IRCG_FUSE_TO_NEXT)
-        return;
     x86_64StoreReg(ctx, instr->dst, reg);
 }
 
 /* Materialise a 64-bit double constant in .data and load it via
  * PC-relative addressing. x86_64 movsd <sym>(%rip), %xmm is a
- * single instruction. */
+ * single instruction. Bit-pattern dedup: identical doubles share a
+ * single .LIRFn slot across the whole translation unit. */
 static void x86_64EmitFloatLiteralData(IrCgCtx *ctx,
                                        const char *xmm_reg,
                                        f64 f)
 {
     static int float_seq = 0;
-    char label[64];
-    snprintf(label, sizeof(label), ".LIRF%d", float_seq++);
+    static Map *bits_to_label = NULL;
+    if (!bits_to_label)
+        bits_to_label = mapNew(16, &map_uint_to_uint_type);
+
+    u64 bits = (u64)ieee754(f);
+    AoStr *label = (AoStr *)mapGetInt(bits_to_label, bits);
+    if (label) {
+        /* Already in the data section, just reference it. */
+        aoStrCatFmt(ctx->buf, "movsd   %S(%%rip), %%%s\n\t",
+                    label, xmm_reg);
+        return;
+    }
+    char buf[64];
+    int n = snprintf(buf, sizeof(buf), ".LIRF%d", float_seq++);
+    label = aoStrDupRaw(buf, (u64)n);
+    mapAddIntOrErr(bits_to_label, bits, label);
 
     aoStrRemovePreviousChar(ctx->buf, '\t');
     aoStrCatPrintf(ctx->buf,
@@ -292,8 +425,8 @@ static void x86_64EmitFloatLiteralData(IrCgCtx *ctx,
                    ".quad 0x%lX # %.9f\n"
                    ".text\n\t"
                    "movsd   %s(%%rip), %%%s\n\t",
-                   label, (unsigned long)ieee754(f), f,
-                   label, xmm_reg);
+                   label->data, (unsigned long)bits, f,
+                   label->data, xmm_reg);
 }
 
 /* Load any IrValue into an xmm register. Integer constants are
@@ -307,6 +440,14 @@ static void x86_64LoadToFpr(IrCgCtx *ctx, IrValue *val, const char *xmm_reg) {
             double _f64 = val->kind == IR_VAL_CONST_INT ?
                                        (double)val->as._i64 :
                                        val->as._f64;
+            /* +0.0 (bit pattern 0): xorpd is shorter than a rodata
+             * load and leaves no .LIRF entry behind. -0.0 has the
+             * sign bit set, so it must keep the rodata path. */
+            if (ieee754(_f64) == 0) {
+                aoStrCatFmt(ctx->buf, "xorpd   %%%s, %%%s\n\t",
+                            xmm_reg, xmm_reg);
+                break;
+            }
             x86_64EmitFloatLiteralData(ctx, xmm_reg, _f64);
             break;
         }
@@ -314,6 +455,17 @@ static void x86_64LoadToFpr(IrCgCtx *ctx, IrValue *val, const char *xmm_reg) {
         case IR_VAL_TMP:
         case IR_VAL_LOCAL:
         case IR_VAL_PARAM: {
+            if (val->loc.kind == IR_LOC_REG && val->loc.as.reg) {
+                const char *src = val->loc.as.reg->data;
+                if (strcmp(src, xmm_reg) == 0) break;
+                /* Cross-file move (int reg -> xmm) uses `movq`; same
+                 * register file uses `movsd`. xmm reg names start
+                 * with 'x'; everything else is a GP reg. */
+                const char *mnem = (src[0] == 'x') ? "movsd" : "movq";
+                aoStrCatFmt(ctx->buf, "%s   %%%s, %%%s\n\t",
+                            mnem, src, xmm_reg);
+                break;
+            }
             int loff = irCgGetLoff(&ctx->fn->ra, val);
             aoStrCatFmt(ctx->buf, "movsd   %i(%%rbp), %%%s\n\t",
                         loff, xmm_reg);
@@ -326,9 +478,16 @@ static void x86_64LoadToFpr(IrCgCtx *ctx, IrValue *val, const char *xmm_reg) {
 }
 
 static void x86_64StoreFpr(IrCgCtx *ctx, IrValue *dst, const char *xmm_reg) {
+    if (dst->loc.kind == IR_LOC_REG && dst->loc.as.reg) {
+        const char *home = dst->loc.as.reg->data;
+        if (strcmp(home, xmm_reg) == 0) return;
+        const char *mnem = (home[0] == 'x') ? "movsd" : "movq";
+        aoStrCatFmt(ctx->buf, "%s   %%%s, %%%s\n\t",
+                    mnem, xmm_reg, home);
+        return;
+    }
     int loff = irCgGetLoff(&ctx->fn->ra, dst);
-    aoStrCatFmt(ctx->buf, "movsd   %%%s, %i(%%rbp)\n\t",
-                xmm_reg, loff);
+    aoStrCatFmt(ctx->buf, "movsd   %%%s, %i(%%rbp)\n\t", xmm_reg, loff);
 }
 
 /* Does this value fit in the 32-bit sign-extended immediate form that
@@ -341,33 +500,31 @@ static int x86_64IsImm32(IrValue *val, s64 *out) {
     return 1;
 }
 
-/* Load instr->r1 into %rax, honouring producer-side fusion: when
- * IRCG_R1_IN_REG is set the previous instruction already left the
- * value in %rax (avoids a redundant reload from the slot). Falls
- * back to LEA-inlining when the value's def was a peephole-marked
- * IR_LEA, otherwise a plain LoadToReg. */
+/* Load src into %rax. When src.loc is already %rax (peephole-fused
+ * producer), LoadToReg's same-reg check makes this a no-op. */
 static void x86_64LoadFirstSrc(IrCgCtx *ctx, IrInstr *instr, IrValue *src) {
-    if (instr->flags & IRCG_R1_IN_REG) return;
-    if (x86_64InlinedLea(ctx, src, "rax")) return;
+    (void)instr;
     x86_64LoadToReg(ctx, src, "rax");
 }
 
-/* Float counterparts. */
-static void x86_64LoadFirstSrcFpr(IrCgCtx *ctx,
-                                  IrInstr *instr,
-                                  IrValue *src)
-{
-    if (instr->flags & IRCG_R1_IN_REG) return;
+/* Float counterpart. */
+static void x86_64LoadFirstSrcFpr(IrCgCtx *ctx, IrInstr *instr, IrValue *src) {
+    (void)instr;
     x86_64LoadToFpr(ctx, src, "xmm0");
 }
 
-static void x86_64SpillDstFpr(IrCgCtx *ctx,
-                              IrInstr *instr,
-                              const char *xmm_reg)
-{
-    if (instr->flags & IRCG_FUSE_TO_NEXT)
-        return;
+static void x86_64SpillDstFpr(IrCgCtx *ctx, IrInstr *instr, const char *xmm_reg) {
     x86_64StoreFpr(ctx, instr->dst, xmm_reg);
+}
+
+/* Resolve a mem op's SIB idx to its physical register: use idx.loc
+ * when set, otherwise load into %rdx. NULL if no scaled-idx. */
+static const char *x86_64IdxReg(IrCgCtx *ctx, IrInstr *instr) {
+    if (!instr->idx || !instr->scale) return NULL;
+    if (instr->idx->loc.kind == IR_LOC_REG && instr->idx->loc.as.reg)
+        return instr->idx->loc.as.reg->data;
+    x86_64LoadToReg(ctx, instr->idx, "rdx");
+    return "rdx";
 }
 
 /* The float branch uses ucomisd, whose flags follow unsigned-int
@@ -402,6 +559,7 @@ static const char *x86_64CcFor(IrCmpKind cmp, int is_float) {
     }
 }
 
+/* Inverted condition for jumping when the cmp is FALSE. */
 static const char *x86_64CcInvFor(IrCmpKind cmp, int is_float) {
     if (is_float) {
         switch (cmp) {
@@ -470,45 +628,49 @@ static void x86_64RestorePinnedRegs(AoStr *buf, Vec *pinned) {
 }
 
 /* leaveq is `movq %rbp, %rsp; popq %rbp` in one instruction. Saves a
- * byte over the explicit pair, no other difference. */
-static void x86_64Epilogue(AoStr *buf) {
-    aoStrCatFmt(buf,
-                "leaveq\n\t"
-                "retq\n");
+ * byte over the explicit pair, no other difference. When the matching
+ * prologue elided its rbp dance, emit just retq. */
+static void x86_64Epilogue(IrCgCtx *ctx) {
+    if (ctx->omit_frame) {
+        aoStrCatFmt(ctx->buf, "retq\n");
+    } else {
+        aoStrCatFmt(ctx->buf,
+                    "leaveq\n\t"
+                    "retq\n");
+    }
 }
 
 /* Did the last emit already place an epilogue at the tail of buf?
  * Used so we don't double-emit when the function ends with an
  * explicit return. */
-static int x86_64HasRet(AoStr *buf) {
-    static const char *needle = "leaveq\n\tretq\n";
+static int x86_64HasRet(IrCgCtx *ctx) {
+    static const char *with_frame    = "leaveq\n\tretq\n";
+    static const char *without_frame = "retq\n";
+    const char *needle = ctx->omit_frame ? without_frame : with_frame;
     int nlen = (int)strlen(needle);
+    AoStr *buf = ctx->buf;
     if ((int)buf->len < nlen) return 0;
     return memcmp(buf->data + buf->len - nlen, needle, nlen) == 0;
 }
 
-static void x86_64BlockLabel(IrCgCtx *ctx,
-                             IrBlock *block,
-                             char *out,
-                             int n)
-{
+static void x86_64BlockLabel(IrCgCtx *ctx, IrBlock *block, char *out, int n) {
     snprintf(out, n, ".LIRBB%d_%u", ctx->fn->uuid, block->id);
 }
 
-/* Move a single phi's incoming value into the phi's destination. The
- * value either lives in %rax already (when the producer fused to
- * this block's terminator), in a slot, or is dangling (no slot yet -
- * happens when the value is mem2reg-promoted and we got here via a
- * never-taken path; zero out as a safe filler). */
+/* Move a single phi's incoming value into the phi's destination.
+ * Dangling values (tmp with no slot) only arise from unreachable
+ * incoming edges, zero out for safety. Phis here always materialise
+ * via the slot: register-resident phi classification was removed
+ * alongside the FUSE_TO_NEXT machinery. */
 static void x86_64EmitOnePhi(IrCgCtx *ctx, IrInstr *phi, IrPair *match) {
     IrValue *v = match->ir_value;
-
-    int in_rax = !irIsFloat(phi->dst->type) &&
-                 irPhiPairValueLiveInResultReg(match->ir_block, v);
-
-    int v_dangling = !in_rax && v &&
-                      v->kind == IR_VAL_TMP &&
-                     !mapHasInt(ctx->fn->ra.id_to_loff, v->as.var.id);
+    /* A tmp is "dangling" when it has neither a slot nor an
+     * allocator-assigned register, which happens for short-circuit
+     * shims that compute their value via control flow rather than a
+     * real producer. Source it as zero. */
+    int v_dangling = irIsTmp(v) &&
+                     v->loc.kind != IR_LOC_REG &&
+                     !mapHasInt(ctx->fn->ra.id_to_loff, irVarId(v));
 
     if (irIsFloat(phi->dst->type)) {
         if (v_dangling) {
@@ -521,12 +683,10 @@ static void x86_64EmitOnePhi(IrCgCtx *ctx, IrInstr *phi, IrPair *match) {
     }
     if (v_dangling) {
         aoStrCatFmt(ctx->buf, "xorq    %%rax, %%rax\n\t");
-    } else if (!in_rax) {
+    } else {
         x86_64LoadToReg(ctx, v, "rax");
     }
-    if (!(phi->flags & IRCG_PHI_IN_REG)) {
-        x86_64StoreReg(ctx, phi->dst, "rax");
-    }
+    x86_64StoreReg(ctx, phi->dst, "rax");
 }
 
 /* Materialise all phis at block `to` from predecessor `from`, ordered
@@ -535,10 +695,7 @@ static void x86_64EmitOnePhi(IrCgCtx *ctx, IrInstr *phi, IrPair *match) {
  * phis would need a temporary swap; we panic loudly if one appears,
  * matching aarch64's behaviour. This is target-agnostic */
 #define kMaxPhisX86 32
-static void x86_64PhiMaterialise(IrCgCtx *ctx,
-                                 IrBlock *from,
-                                 IrBlock *to)
-{
+static void x86_64PhiMaterialise(IrCgCtx *ctx, IrBlock *from, IrBlock *to) {
     if (!to || !from) return;
 
     IrInstr *phis[kMaxPhisX86];
@@ -578,10 +735,8 @@ static void x86_64PhiMaterialise(IrCgCtx *ctx,
             for (int j = 0; j < n; ++j) {
                 if (i == j || done[j]) continue;
                 IrValue *v = pairs[j]->ir_value;
-                if (v && v->kind == IR_VAL_TMP &&
-                    phis[i]->dst &&
-                    phis[i]->dst->kind == IR_VAL_TMP &&
-                    v->as.var.id == phis[i]->dst->as.var.id) {
+                if (irIsTmp(v) && irIsTmp(phis[i]->dst) &&
+                    irVarId(v) == irDstVarId(phis[i])) {
                     read_by_pending = 1;
                     break;
                 }
@@ -649,7 +804,6 @@ static s32 x86_64PartitionCallArgs(u8 *is_stack, u64 n, Vec *args,
 }
 
 static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
-    (void)ctx;
     switch (instr->op) {
         /* No-ops at codegen: ALLOCA/GEP/PHI/LABEL are all resolved
          * elsewhere (alloca slots are assigned during layout, GEPs
@@ -670,16 +824,17 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                 break;
             }
 
-            int loff = irCgGetLoff(&ctx->fn->ra, instr->r1);
-            /* Float-typed loads go straight to xmm0 with movsd so the
-             * value is already in the FP result reg for a fused float
-             * consumer, no slot round-trip. */
+            /* Float-typed loads go straight to xmm0 with movsd so a
+             * fused FP consumer reads from the result reg directly. */
             if (instr->dst && irIsFloat(instr->dst->type)) {
-                aoStrCatFmt(ctx->buf, "movsd   %i(%%rbp), %%xmm0\n\t", loff);
+                int loff = irCgGetLoff(&ctx->fn->ra, instr->r1);
+                aoStrCatFmt(ctx->buf,
+                            "movsd   %i(%%rbp), %%xmm0\n\t", loff);
                 x86_64SpillDstFpr(ctx, instr, "xmm0");
                 break;
             }
 
+            int loff = irCgGetLoff(&ctx->fn->ra, instr->r1);
             u32 size = instr->dst ? instr->dst->as.var.size : 8;
             x86_64Load(ctx->buf, "rax", size, loff);
             x86_64SpillDst(ctx, instr, "rax");
@@ -687,13 +842,26 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
         }
 
         case IR_STORE: {
+            /* If r1 already lives in a register (e.g. a param's ABI
+             * arg reg at function entry), store from there directly
+             * instead of bouncing through %rax / %xmm0. */
+            const char *src_reg = NULL;
+            if (instr->r1 && instr->r1->loc.kind == IR_LOC_REG &&
+                instr->r1->loc.as.reg)
+            {
+                src_reg = instr->r1->loc.as.reg->data;
+            }
+
             /* Float r1 takes the FP path so a fused producer can hand
              * the value over in xmm0 (movsd xmm0->slot, no rax bounce). */
             if (instr->r1 && irIsFloat(instr->r1->type) &&
                 !(instr->dst && instr->dst->pinned_reg))
             {
-                x86_64LoadFirstSrcFpr(ctx, instr, instr->r1);
-                x86_64StoreFpr(ctx, instr->dst, "xmm0");
+                if (!src_reg) {
+                    x86_64LoadFirstSrcFpr(ctx, instr, instr->r1);
+                    src_reg = "xmm0";
+                }
+                x86_64StoreFpr(ctx, instr->dst, src_reg);
                 break;
             }
 
@@ -702,82 +870,192 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
              * `I8 a[3]`), forcing an 8-byte store would overrun the
              * slot and clobber adjacent stack data. */
             int loff = irCgGetLoff(&ctx->fn->ra, instr->dst);
-            x86_64LoadFirstSrc(ctx, instr, instr->r1);
+            if (!src_reg) {
+                x86_64LoadFirstSrc(ctx, instr, instr->r1);
+                src_reg = "rax";
+            }
             if (instr->dst && instr->dst->pinned_reg) {
-                aoStrCatFmt(ctx->buf, "movq    %%rax, %%%s\n\t",
-                            instr->dst->pinned_reg->data);
+                aoStrCatFmt(ctx->buf, "movq    %%%s, %%%s\n\t",
+                            src_reg, instr->dst->pinned_reg->data);
                 break;
             }
             u32 size = irValueByteSize(instr->r1);
-            x86_64FrameStoreWidth(ctx->buf, loff, size, "rax");
+            x86_64FrameStoreWidth(ctx->buf, loff, size, src_reg);
             break;
         }
 
         case IR_LOAD_DEREF: {
-            /* Float dst: load straight into xmm0 via movsd. R1_IN_REG
-             * still applies to the pointer (which lives in rax). */
-            if (instr->dst && irIsFloat(instr->dst->type)) {
-                const char *addr_reg = (instr->flags & IRCG_R1_IN_REG)
-                                       ? "rax" : "rcx";
-                if (!(instr->flags & IRCG_R1_IN_REG)) {
-                    x86_64LoadToReg(ctx, instr->r1, "rcx");
+            /* Global address folded in by irFoldGlobalDeref: read the
+             * symbol RIP-relative in a single instruction. Disp on a
+             * GLOBAL operand has no current use (the IADD fusion only
+             * runs when r1 is a TMP), so we assert it's zero. */
+            if (instr->r1 && instr->r1->kind == IR_VAL_GLOBAL) {
+                const char *sym = instr->r1->as.global.name->data;
+                if (instr->dst && irIsFloat(instr->dst->type)) {
+                    aoStrCatFmt(ctx->buf, "movsd   %s(%%rip), %%xmm0\n\t", sym);
+                    x86_64SpillDstFpr(ctx, instr, "xmm0");
+                } else {
+                    aoStrCatFmt(ctx->buf, "movq    %s(%%rip), %%rax\n\t",
+                                sym);
+                    x86_64SpillDst(ctx, instr, "rax");
                 }
-                aoStrCatFmt(ctx->buf, "movsd   (%%%s), %%xmm0\n\t", addr_reg);
+                break;
+            }
+            /* Address may already live in %rax from a fused producer.
+             * Read r1's loc to skip the slot reload in that case. */
+            const char *base_reg = "rcx";
+            if (instr->r1 && instr->r1->loc.kind == IR_LOC_REG &&
+                instr->r1->loc.as.reg)
+            {
+                base_reg = instr->r1->loc.as.reg->data;
+            } else {
+                x86_64LoadToReg(ctx, instr->r1, "rcx");
+            }
+            const char *idx_reg = x86_64IdxReg(ctx, instr);
+            if (instr->dst && irIsFloat(instr->dst->type)) {
+                char mem[48];
+                x86_64FmtMemOperand(mem, sizeof(mem), instr->disp,
+                                    base_reg, idx_reg, instr->scale);
+                aoStrCatFmt(ctx->buf, "movsd   %s, %%xmm0\n\t", mem);
                 x86_64SpillDstFpr(ctx, instr, "xmm0");
                 break;
             }
-            const char *addr_reg;
-            if (instr->flags & IRCG_R1_IN_REG) {
-                /* r1 already lives in %rax from the fused producer
-                 * - we'll load from (%rax) and write the result to
-                 * %rax in the same instruction. */
-                addr_reg = "rax";
-            } else {
-                x86_64LoadToReg(ctx, instr->r1, "rcx");
-                addr_reg = "rcx";
-            }
             u32 size = instr->dst ? instr->dst->as.var.size : 8;
-            x86_64DerefLoadWidth(ctx->buf, size, "rax", addr_reg);
+            x86_64DerefLoadWidth(ctx->buf, size, "rax", base_reg,
+                                 idx_reg, instr->scale, instr->disp);
             x86_64SpillDst(ctx, instr, "rax");
             break;
         }
 
         case IR_STORE_DEREF: {
-            /* Float r1: value goes through xmm0; address stays in
-             * rax (via DST_IN_REG fusion) or rcx as usual. xmm0 and
-             * rax/rcx don't alias so no shuffling is needed. */
-            if (instr->r1 && irIsFloat(instr->r1->type)) {
-                const char *addr_reg;
-                if (instr->flags & IRCG_DST_IN_REG) {
-                    addr_reg = "rax";
-                } else {
-                    x86_64LoadToReg(ctx, instr->dst, "rcx");
-                    addr_reg = "rcx";
+            /* Global address folded in by irFoldGlobalDeref: write
+             * directly to sym(%rip). */
+            if (instr->dst && instr->dst->kind == IR_VAL_GLOBAL) {
+                const char *sym = instr->dst->as.global.name->data;
+                u32 sz = irValueByteSize(instr->r1);
+                if (instr->r1 && irIsFloat(instr->r1->type)) {
+                    x86_64LoadFirstSrcFpr(ctx, instr, instr->r1);
+                    aoStrCatFmt(ctx->buf, "movsd   %%xmm0, %s(%%rip)\n\t", sym);
+                    break;
                 }
-                x86_64LoadFirstSrcFpr(ctx, instr, instr->r1);
-                aoStrCatFmt(ctx->buf, "movsd   %%xmm0, (%%%s)\n\t", addr_reg);
+                s64 imm;
+                if (x86_64IsImm32(instr->r1, &imm)) {
+                    const char *mnem = x86_64GetSizedMov(sz);
+                    aoStrCatFmt(ctx->buf, "%s    $%I, %s(%%rip)\n\t",
+                                mnem, (s64)imm, sym);
+                    break;
+                }
+                x86_64LoadFirstSrc(ctx, instr, instr->r1);
+                x86_64DerefStoreGlobal(ctx->buf, sz, "rax", sym);
                 break;
             }
-            if (instr->flags & IRCG_DST_IN_REG) {
-                /* dst (the destination pointer) is already in %rax
-                 * from the fused producer. Shuffle it to %rcx so
-                 * %rax is free for the value to store. */
-                aoStrCatFmt(ctx->buf, "movq    %%rax, %%rcx\n\t");
-                x86_64LoadFirstSrc(ctx, instr, instr->r1);
-            } else {
-                x86_64LoadFirstSrc(ctx, instr, instr->r1);
-                x86_64LoadToReg(ctx, instr->dst, "rcx");
+
+            /* Address may already live in a register thanks to the
+             * peephole's loc-pinning. Pull it out of there directly
+             * instead of bouncing through a slot reload. */
+            const char *base_reg = "rcx";
+            int addr_in_reg = instr->dst &&
+                              instr->dst->loc.kind == IR_LOC_REG &&
+                              instr->dst->loc.as.reg;
+            if (addr_in_reg) {
+                base_reg = instr->dst->loc.as.reg->data;
+            }
+            const char *idx_reg = x86_64IdxReg(ctx, instr);
+            /* Float r1: value through xmm0. */
+            if (instr->r1 && irIsFloat(instr->r1->type)) {
+                if (!addr_in_reg) {
+                    x86_64LoadToReg(ctx, instr->dst, "rcx");
+                }
+                x86_64LoadFirstSrcFpr(ctx, instr, instr->r1);
+                char mem[48];
+                x86_64FmtMemOperand(mem, sizeof(mem), instr->disp,
+                                    base_reg, idx_reg, instr->scale);
+                aoStrCatFmt(ctx->buf, "movsd   %%xmm0, %s\n\t", mem);
+                break;
             }
             u32 sz = irValueByteSize(instr->r1);
-            x86_64DerefStoreWidth(ctx->buf, sz, "rax", "rcx");
+            /* Immediate value: lay the constant down directly through
+             * the address register (skip the rax bounce). */
+            s64 imm;
+            int has_imm = x86_64IsImm32(instr->r1, &imm);
+            if (!addr_in_reg) {
+                x86_64LoadToReg(ctx, instr->dst, "rcx");
+            }
+            if (has_imm) {
+                x86_64DerefStoreImm(ctx->buf, sz, imm, base_reg,
+                                    idx_reg, instr->scale, instr->disp);
+                break;
+            }
+            /* General path: pick a val_reg that conflicts with
+             * neither base_reg nor idx_reg. Defaults are rcx for the
+             * "addr already in a reg" case, otherwise rax; bump to
+             * rdx when an SIB-pinned idx has stolen our chosen slot
+             * (e.g. idx fused from an immediate producer landed in
+             * %rax). */
+            const char *val_reg = addr_in_reg ? "rcx" : "rax";
+            if (idx_reg && !strcmp(val_reg, idx_reg)) val_reg = "rdx";
+            if (!strcmp(val_reg, base_reg)) val_reg = "rdx";
+            x86_64LoadToReg(ctx, instr->r1, val_reg);
+            x86_64DerefStoreWidth(ctx->buf, sz, val_reg, base_reg,
+                                  idx_reg, instr->scale, instr->disp);
+            break;
+        }
+
+        case IR_RMW_DEREF: {
+            /* `*addr <op>= r1`. Build the memory-operand string for
+             * the addressing mode, then emit through one shared
+             * emitter that picks inc/dec / `op $imm, mem` / `op
+             * %reg, mem` based on r1. */
+            u32 sz = irValueByteSize(instr->r1);
+            IrOp rop = instr->extra.rmw_op;
+            char mem[64];
+            const char *val_reg = "rax";
+
+            if (instr->dst && instr->dst->kind == IR_VAL_GLOBAL) {
+                snprintf(mem, sizeof(mem), "%s(%%rip)",
+                         instr->dst->as.global.name->data);
+            } else {
+                const char *base_reg = "rcx";
+                int addr_in_reg = instr->dst &&
+                                  instr->dst->loc.kind == IR_LOC_REG &&
+                                  instr->dst->loc.as.reg;
+                if (addr_in_reg) base_reg = instr->dst->loc.as.reg->data;
+                else             x86_64LoadToReg(ctx, instr->dst, "rcx");
+
+                const char *idx_reg = x86_64IdxReg(ctx, instr);
+                x86_64FmtMemOperand(mem, sizeof(mem), instr->disp,
+                                    base_reg, idx_reg, instr->scale);
+                /* Pick a val_reg not aliased with base/idx. */
+                val_reg = addr_in_reg ? "rcx" : "rax";
+                if (idx_reg && !strcmp(val_reg, idx_reg)) val_reg = "rdx";
+                if (!strcmp(val_reg, base_reg)) val_reg = "rdx";
+            }
+
+            const char *sfx = x86_64SizedSuffix(sz);
+            s64 imm;
+            if (x86_64IsImm32(instr->r1, &imm)) {
+                int inc = (rop == IR_IADD && imm ==  1) ||
+                          (rop == IR_ISUB && imm == -1);
+                int dec = (rop == IR_IADD && imm == -1) ||
+                          (rop == IR_ISUB && imm ==  1);
+                if (inc || dec) {
+                    aoStrCatFmt(ctx->buf, "%s%s    %s\n\t",
+                                inc ? "inc" : "dec", sfx, mem);
+                } else {
+                    aoStrCatFmt(ctx->buf, "%s%s    $%I, %s\n\t",
+                                x86_64RmwMnem(rop), sfx, (s64)imm, mem);
+                }
+                break;
+            }
+            x86_64LoadToReg(ctx, instr->r1, val_reg);
+            char sub[8];
+            x86_64RegForWidth(val_reg, (int)sz, sub, sizeof(sub));
+            aoStrCatFmt(ctx->buf, "%s%s    %%%s, %s\n\t",
+                        x86_64RmwMnem(rop), sfx, sub, mem);
             break;
         }
 
         case IR_LEA: {
-            /* Peephole may have marked this LEA to inline at its
-             * (single) call-site consumer; in that case the emit
-             * happens there, not here. */
-            if (instr->flags & IRCG_LEA_INLINE_AT_CALL) break;
             x86_64Lea(ctx, instr, "rax");
             x86_64SpillDst(ctx, instr, "rax");
             break;
@@ -801,8 +1079,29 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
             x86_64LoadFirstSrc(ctx, instr, instr->r1);
             s64 imm;
             if (x86_64IsImm32(instr->r2, &imm)) {
-                aoStrCatFmt(ctx->buf, "%s    $%I, %%rax\n\t",
-                            op, (s64)imm);
+                /* +/-1 with IADD/ISUB folds to incq/decq (3 bytes vs
+                 * 4 for `addq $1, %rax`). Logical ops have no such
+                 * single-operand form, so they stay on `op $imm`. */
+                if ((instr->op == IR_IADD && imm == 1) ||
+                    (instr->op == IR_ISUB && imm == -1))
+                {
+                    aoStrCatFmt(ctx->buf, "incq    %%rax\n\t");
+                } else if ((instr->op == IR_IADD && imm == -1) ||
+                           (instr->op == IR_ISUB && imm == 1))
+                {
+                    aoStrCatFmt(ctx->buf, "decq    %%rax\n\t");
+                } else {
+                    aoStrCatFmt(ctx->buf, "%s    $%I, %%rax\n\t",
+                                op, (s64)imm);
+                }
+            } else if (instr->r2->loc.kind == IR_LOC_REG &&
+                       instr->r2->loc.as.reg)
+            {
+                /* r2 already lives in a register (typically an ABI
+                 * arg reg from a forwarded param store). Use it as
+                 * the source operand directly, skips the rcx bounce. */
+                aoStrCatFmt(ctx->buf, "%s    %%%s, %%rax\n\t",
+                            op, instr->r2->loc.as.reg->data);
             } else {
                 x86_64LoadToReg(ctx, instr->r2, "rcx");
                 aoStrCatFmt(ctx->buf, "%s    %%rcx, %%rax\n\t", op);
@@ -815,11 +1114,15 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
             x86_64LoadFirstSrc(ctx, instr, instr->r1);
             s64 imm;
             if (x86_64IsImm32(instr->r2, &imm)) {
-                /* imulq has a 3-operand form with a 32-bit signed
-                 * immediate: dst = src * imm. */
-                aoStrCatFmt(ctx->buf,
-                            "imulq   $%I, %%rax, %%rax\n\t",
+                /* imulq's 3-operand form with a 32-bit immediate:
+                 * dst = src * imm. */
+                aoStrCatFmt(ctx->buf, "imulq   $%I, %%rax, %%rax\n\t",
                             (s64)imm);
+            } else if (instr->r2->loc.kind == IR_LOC_REG &&
+                       instr->r2->loc.as.reg)
+            {
+                aoStrCatFmt(ctx->buf, "imulq   %%%s, %%rax\n\t",
+                            instr->r2->loc.as.reg->data);
             } else {
                 x86_64LoadToReg(ctx, instr->r2, "rcx");
                 aoStrCatFmt(ctx->buf, "imulq   %%rcx, %%rax\n\t");
@@ -926,7 +1229,6 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                 x86_64LoadToReg(ctx, instr->r2, "rcx");
                 aoStrCatFmt(ctx->buf, "cmpq    %%rcx, %%rax\n\t");
             }
-            if (instr->flags & IRCG_CMP_FUSED_BR) break;
             x86_64EmitSetCC(ctx, instr->extra.cmp_kind, 0);
             x86_64SpillDst(ctx, instr, "rax");
             break;
@@ -937,7 +1239,6 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
             x86_64LoadToFpr(ctx, instr->r2, "xmm1");
             /* ucomisd %xmm1, %xmm0 sets flags from (xmm0 cmp xmm1). */
             aoStrCatFmt(ctx->buf, "ucomisd %%xmm1, %%xmm0\n\t");
-            if (instr->flags & IRCG_CMP_FUSED_BR) break;
             x86_64EmitSetCC(ctx, instr->extra.cmp_kind, 1);
             x86_64SpillDst(ctx, instr, "rax");
             break;
@@ -962,29 +1263,29 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
         }
 
         case IR_SITOFP:
-            x86_64LoadToReg(ctx, instr->r1, "rax");
+            x86_64LoadFirstSrc(ctx, instr, instr->r1);
             aoStrCatFmt(ctx->buf, "cvtsi2sdq %%rax, %%xmm0\n\t");
-            x86_64StoreFpr(ctx, instr->dst, "xmm0");
+            x86_64SpillDstFpr(ctx, instr, "xmm0");
             break;
 
         case IR_UITOFP:
             /* x86 has no unsigned int-to-float; treat the source as
              * signed. True U64 -> double for values >= 2^63 would
              * need the signed-bit-fixup dance; not currently needed. */
-            x86_64LoadToReg(ctx, instr->r1, "rax");
+            x86_64LoadFirstSrc(ctx, instr, instr->r1);
             aoStrCatFmt(ctx->buf, "cvtsi2sdq %%rax, %%xmm0\n\t");
-            x86_64StoreFpr(ctx, instr->dst, "xmm0");
+            x86_64SpillDstFpr(ctx, instr, "xmm0");
             break;
 
         case IR_FPTOSI:
-            x86_64LoadToFpr(ctx, instr->r1, "xmm0");
+            x86_64LoadFirstSrcFpr(ctx, instr, instr->r1);
             aoStrCatFmt(ctx->buf, "cvttsd2siq %%xmm0, %%rax\n\t");
             x86_64SpillDst(ctx, instr, "rax");
             break;
 
         case IR_FPTOUI:
             /* Same simplification as UITOFP - signed truncation. */
-            x86_64LoadToFpr(ctx, instr->r1, "xmm0");
+            x86_64LoadFirstSrcFpr(ctx, instr, instr->r1);
             aoStrCatFmt(ctx->buf, "cvttsd2siq %%xmm0, %%rax\n\t");
             x86_64SpillDst(ctx, instr, "rax");
             break;
@@ -993,17 +1294,48 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
             /* Reinterpret 8 bytes between int and fp. x86's movq has a
              * dedicated xmm<->gp form for exactly this. */
             if (instr->dst && irIsFloat(instr->dst->type)) {
-                x86_64LoadToReg(ctx, instr->r1, "rax");
+                x86_64LoadFirstSrc(ctx, instr, instr->r1);
                 aoStrCatFmt(ctx->buf, "movq    %%rax, %%xmm0\n\t");
-                x86_64StoreFpr(ctx, instr->dst, "xmm0");
+                x86_64SpillDstFpr(ctx, instr, "xmm0");
             } else {
-                x86_64LoadToFpr(ctx, instr->r1, "xmm0");
+                x86_64LoadFirstSrcFpr(ctx, instr, instr->r1);
                 aoStrCatFmt(ctx->buf, "movq    %%xmm0, %%rax\n\t");
                 x86_64SpillDst(ctx, instr, "rax");
             }
             break;
 
-        case IR_ZEXT:    case IR_SEXT:
+        case IR_ZEXT:
+        case IR_SEXT: {
+            /* Width-extending int-to-int. Source width comes from r1's
+             * tmp size; we pick the matching movz/movs encoding. */
+            x86_64LoadFirstSrc(ctx, instr, instr->r1);
+            u32 src_sz = instr->r1 ? irValueByteSize(instr->r1) : 8;
+            int signed_ext = (instr->op == IR_SEXT);
+            switch (src_sz) {
+                case 1:
+                    aoStrCatFmt(ctx->buf,
+                                signed_ext ? "movsbq  %%al, %%rax\n\t"
+                                           : "movzbq  %%al, %%rax\n\t");
+                    break;
+                case 2:
+                    aoStrCatFmt(ctx->buf,
+                                signed_ext ? "movswq  %%ax, %%rax\n\t"
+                                           : "movzwq  %%ax, %%rax\n\t");
+                    break;
+                case 4:
+                    aoStrCatFmt(ctx->buf,
+                                signed_ext ? "movslq  %%eax, %%rax\n\t"
+                                           /* movl r32, r32 zero-extends */
+                                           : "movl    %%eax, %%eax\n\t");
+                    break;
+                default:
+                    /* src already 8 bytes: nothing to extend. */
+                    break;
+            }
+            x86_64SpillDst(ctx, instr, "rax");
+            break;
+        }
+
         case IR_FPTRUNC: case IR_FPEXT:
         case IR_PTRTOINT: case IR_INTTOPTR:
             loggerPanic("ir-cg-x86_64: conversion op not yet implemented "
@@ -1024,7 +1356,7 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                 }
             }
             x86_64RestorePinnedRegs(ctx->buf, ctx->pinned_regs);
-            x86_64Epilogue(ctx->buf);
+            x86_64Epilogue(ctx);
             break;
 
         case IR_JMP: {
@@ -1046,49 +1378,13 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
             x86_64BlockLabel(ctx, t, tlbl, sizeof(tlbl));
             x86_64BlockLabel(ctx, f, flbl, sizeof(flbl));
 
-            /* Was the preceding ICMP/FCMP fused into this branch?
-             * If so we walk backwards to find its cmp_kind so we can
-             * emit a direct j<cc> against the still-live EFLAGS. */
-            int fused_br = (instr->flags & IRCG_BR_USE_PRIOR_CMP) != 0;
-            IrCmpKind fused_kind = IR_CMP_INVALID;
-            int fused_is_float = 0;
-            if (fused_br) {
-                for (List *node = ctx->cur_block->instructions->prev;
-                     node != ctx->cur_block->instructions;
-                     node = node->prev)
-                {
-                    IrInstr *prev = (IrInstr *)node->value;
-                    if (prev == instr)   continue;
-                    if (prev->op == IR_NOP) continue;
-                    fused_kind = prev->extra.cmp_kind;
-                    fused_is_float = (prev->op == IR_FCMP);
-                    break;
-                }
-            }
-
-            if (!fused_br)
-                x86_64LoadFirstSrc(ctx, instr, instr->dst);
+            x86_64LoadFirstSrc(ctx, instr, instr->dst);
 
             int t_phi = irBlockHasPhi(t);
             int f_phi = irBlockHasPhi(f);
             if (!t_phi && !f_phi) {
-                if (fused_br) {
-                    const char *cc_t = x86_64CcFor(fused_kind, fused_is_float);
-                    const char *cc_f = x86_64CcInvFor(fused_kind, fused_is_float);
-                    if (ctx->next_block == t) {
-                        aoStrCatFmt(ctx->buf, "j%s     %s\n\t", cc_f, flbl);
-                    } else if (ctx->next_block == f) {
-                        aoStrCatFmt(ctx->buf, "j%s     %s\n\t", cc_t, tlbl);
-                    } else {
-                        aoStrCatFmt(ctx->buf,
-                                    "j%s     %s\n\t"
-                                    "jmp     %s\n\t",
-                                    cc_t, tlbl, flbl);
-                    }
-                    break;
-                }
-                /* Not fused: dst holds a 0/1 in %rax. testq sets ZF
-                 * without clobbering rax; jz/jnz selects the path. */
+                /* dst holds a 0/1 in %rax. testq sets ZF without
+                 * clobbering rax; jz/jnz selects the path. */
                 aoStrCatFmt(ctx->buf, "testq   %%rax, %%rax\n\t");
                 if (ctx->next_block == t) {
                     aoStrCatFmt(ctx->buf, "jz      %s\n\t", flbl);
@@ -1101,23 +1397,78 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                                 flbl, tlbl);
                 }
             } else {
-                /* One arm has phis: we need to land at a dedicated
-                 * shim that materialises them before the real jump. */
+                /* One arm has phis: land at a dedicated shim that
+                 * materialises them before the real jump. */
                 static int br_seq = 0;
                 char else_lbl[64];
                 int br_id = br_seq++;
                 snprintf(else_lbl, sizeof(else_lbl),
                          ".LIRBR%d_E%d", ctx->fn->uuid, br_id);
-                if (fused_br) {
-                    const char *cc_f = x86_64CcInvFor(fused_kind,
-                                                     fused_is_float);
-                    aoStrCatFmt(ctx->buf, "j%s     %s\n\t",
-                                cc_f, else_lbl);
+                aoStrCatFmt(ctx->buf,
+                            "testq   %%rax, %%rax\n\t"
+                            "jz      %s\n\t", else_lbl);
+                x86_64PhiMaterialise(ctx, ctx->cur_block, t);
+                aoStrCatFmt(ctx->buf, "jmp     %s\n", tlbl);
+                aoStrRemovePreviousChar(ctx->buf, '\t');
+                aoStrCatFmt(ctx->buf, "%s:\n\t", else_lbl);
+                x86_64PhiMaterialise(ctx, ctx->cur_block, f);
+                if (ctx->next_block != f) {
+                    aoStrCatFmt(ctx->buf, "jmp     %s\n\t", flbl);
+                }
+            }
+            break;
+        }
+
+        case IR_CMP_BR: {
+            IrBlock *t = instr->extra.cmp_br.target_block;
+            IrBlock *f = instr->extra.cmp_br.fallthrough_block;
+            IrCmpKind kind = instr->extra.cmp_br.cmp_kind;
+            int is_float = instr->r1 && irIsFloat(instr->r1->type);
+            char tlbl[64], flbl[64];
+            x86_64BlockLabel(ctx, t, tlbl, sizeof(tlbl));
+            x86_64BlockLabel(ctx, f, flbl, sizeof(flbl));
+
+            /* Emit the compare. Mirror IR_ICMP / IR_FCMP but skip the
+             * setcc + spill since the result lives in EFLAGS for one
+             * instruction. */
+            if (is_float) {
+                x86_64LoadFirstSrcFpr(ctx, instr, instr->r1);
+                x86_64LoadToFpr(ctx, instr->r2, "xmm1");
+                aoStrCatFmt(ctx->buf, "ucomisd %%xmm1, %%xmm0\n\t");
+            } else {
+                x86_64LoadFirstSrc(ctx, instr, instr->r1);
+                s64 imm;
+                if (x86_64IsImm32(instr->r2, &imm)) {
+                    aoStrCatFmt(ctx->buf, "cmpq    $%I, %%rax\n\t",
+                                (s64)imm);
+                } else {
+                    x86_64LoadToReg(ctx, instr->r2, "rcx");
+                    aoStrCatFmt(ctx->buf, "cmpq    %%rcx, %%rax\n\t");
+                }
+            }
+
+            const char *cc_t = x86_64CcFor(kind, is_float);
+            const char *cc_f = x86_64CcInvFor(kind, is_float);
+            int t_phi = irBlockHasPhi(t);
+            int f_phi = irBlockHasPhi(f);
+            if (!t_phi && !f_phi) {
+                if (ctx->next_block == t) {
+                    aoStrCatFmt(ctx->buf, "j%s     %s\n\t", cc_f, flbl);
+                } else if (ctx->next_block == f) {
+                    aoStrCatFmt(ctx->buf, "j%s     %s\n\t", cc_t, tlbl);
                 } else {
                     aoStrCatFmt(ctx->buf,
-                                "testq   %%rax, %%rax\n\t"
-                                "jz      %s\n\t", else_lbl);
+                                "j%s     %s\n\t"
+                                "jmp     %s\n\t",
+                                cc_t, tlbl, flbl);
                 }
+            } else {
+                static int cb_seq = 0;
+                char else_lbl[64];
+                int br_id = cb_seq++;
+                snprintf(else_lbl, sizeof(else_lbl),
+                         ".LIRCB%d_E%d", ctx->fn->uuid, br_id);
+                aoStrCatFmt(ctx->buf, "j%s     %s\n\t", cc_f, else_lbl);
                 x86_64PhiMaterialise(ctx, ctx->cur_block, t);
                 aoStrCatFmt(ctx->buf, "jmp     %s\n", tlbl);
                 aoStrRemovePreviousChar(ctx->buf, '\t');
@@ -1135,7 +1486,13 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                         "by the IR builder\n");
 
         case IR_CALL: {
-            /* Indirect call: wrap->as.array.label is NULL and the
+            /* Calls clobber all caller-saved regs. Any tmp the
+             * tracker thinks is in %rax / %xmm0 must be considered
+             * gone after the callq itself. The arg-loading sequence
+             * below, though, may legitimately consume a still-live
+             * fused tmp from the prior producer. We don't clear the
+             * tracker yet. We zero it after the callq emit.
+             * For an inndirect call: wrap->as.array.label is NULL and the
              * function-pointer source lives in instr->r2. Load it
              * into %r11 (scratch, outside the arg-reg range) BEFORE
              * the arg loads so subsequent arg evaluation can't
@@ -1199,59 +1556,76 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
             s32 stack_bytes = n_stack_total * 8;
             if (stack_bytes & 15) stack_bytes += 8;
             if (stack_bytes > 0) {
-                aoStrCatFmt(ctx->buf, "subq    $%i, %%rsp\n\t",
-                            stack_bytes);
+                aoStrCatFmt(ctx->buf, "subq    $%i, %%rsp\n\t", stack_bytes);
+            }
+
+            /* If arg[0]'s producer left it in a register (its
+             * IrValue->loc is REG), route it into the first ABI
+             * int-arg register *before* the stack-arg loop, that
+             * loop uses %rax as scratch and would clobber an
+             * %rax-resident value. Only fires for an int arg[0] in
+             * a reg slot. */
+            int arg0_in_reg = 0;
+            if (n > 0 && !is_stack[0]) {
+                IrValue *a0 = vecGet(IrValue *, args, 0);
+                if (a0 && !irIsFloat(a0->type) &&
+                    a0->loc.kind == IR_LOC_REG && a0->loc.as.reg)
+                {
+                    IrRegPool *pool = irRegPoolGet();
+                    const char *src = a0->loc.as.reg->data;
+                    const char *dst_reg =
+                        vecGet(AoStr *, pool->int_arg_regs, 0)->data;
+                    if (strcmp(src, dst_reg) != 0) {
+                        aoStrCatFmt(ctx->buf, "movq    %%%s, %%%s\n\t",
+                                    src, dst_reg);
+                    }
+                    arg0_in_reg = 1;
+                }
             }
 
             /* Place stack args at [rsp + i*8] in source order. */
             s32 stack_idx = 0;
-            int tail_in_rax = (instr->flags &
-                               IRCG_CALL_TAIL_ARG_IN_REG) != 0;
             for (u64 i = 0; i < n; ++i) {
                 if (!is_stack[i]) continue;
                 IrValue *a = vecGet(IrValue *, args, i);
                 s32 slot_off = stack_idx * 8;
                 if (irIsFloat(a->type)) {
                     x86_64LoadToFpr(ctx, a, "xmm0");
-                    aoStrCatFmt(ctx->buf,
-                                "movsd   %%xmm0, %i(%%rsp)\n\t",
-                                slot_off);
+                    aoStrCatFmt(ctx->buf, "movsd   %%xmm0, %i(%%rsp)\n\t", slot_off);
                 } else {
-                    int skip_load = (tail_in_rax && i == n - 1);
-                    if (!skip_load) {
-                        if (!x86_64InlinedLea(ctx, a, "rax")) {
-                            x86_64LoadToReg(ctx, a, "rax");
-                        }
-                    }
-                    aoStrCatFmt(ctx->buf,
-                                "movq    %%rax, %i(%%rsp)\n\t",
-                                slot_off);
+                    x86_64LoadToReg(ctx, a, "rax");
+                    aoStrCatFmt(ctx->buf, "movq    %%rax, %i(%%rsp)\n\t", slot_off);
                 }
                 stack_idx++;
             }
 
             /* Reg args. Hidden struct-return pointer (when present)
              * is args[0] and naturally lands in %rdi. No special
-             * handling needed (unlike aarch64's x8). */
-            int int_idx = 0, float_idx = 0;
+             * handling needed (unlike aarch64's x8). The backend's
+             * IrRegPool descriptor supplies the ABI mapping so this
+             * loop stays target-agnostic. */
+            IrRegPool *pool = irRegPoolGet();
+            int int_idx = arg0_in_reg ? 1 : 0;
+            int float_idx = 0;
             int xmm_used = 0;
             for (u64 i = 0; i < n; ++i) {
                 if (is_stack[i]) continue;
+                if (i == 0 && arg0_in_reg) continue;
                 IrValue *a = vecGet(IrValue *, args, i);
                 if (irIsFloat(a->type)) {
-                    if (float_idx >= 8) {
+                    if ((u64)float_idx >= pool->float_arg_regs->size) {
                         loggerPanic("ir-cg-x86_64: too many float args\n");
                     }
-                    x86_64LoadToFpr(ctx, a, kXmmRegs[float_idx++]);
+                    AoStr *r = vecGet(AoStr *, pool->float_arg_regs,
+                                      float_idx++);
+                    x86_64LoadToFpr(ctx, a, r->data);
                     xmm_used++;
                 } else {
-                    if (int_idx >= 6) {
+                    if ((u64)int_idx >= pool->int_arg_regs->size) {
                         loggerPanic("ir-cg-x86_64: too many int args\n");
                     }
-                    const char *target = kIntRegs64[int_idx++];
-                    if (!x86_64InlinedLea(ctx, a, target)) {
-                        x86_64LoadToReg(ctx, a, target);
-                    }
+                    AoStr *r = vecGet(AoStr *, pool->int_arg_regs, int_idx++);
+                    x86_64LoadToReg(ctx, a, r->data);
                 }
             }
 
@@ -1260,8 +1634,7 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
              * spill the right registers; cheap to set unconditionally
              * for any variadic call. */
             if (extern_variadic || holyc_variadic) {
-                aoStrCatFmt(ctx->buf, "movb    $%i, %%al\n\t",
-                            xmm_used);
+                aoStrCatFmt(ctx->buf, "movb    $%i, %%al\n\t", xmm_used);
             }
 
             if (indirect) {
@@ -1270,14 +1643,16 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                 aoStrCatFmt(ctx->buf, "callq   %s\n\t",
                             asmNormaliseFunctionName(ctx->cc, fname));
             }
-
+            /* The call clobbered all caller-saved regs; any prior
+             * FUSE_TO_NEXT producer's value is gone. */
             if (stack_bytes > 0) {
-                aoStrCatFmt(ctx->buf, "addq    $%i, %%rsp\n\t",
-                            stack_bytes);
+                aoStrCatFmt(ctx->buf, "addq    $%i, %%rsp\n\t", stack_bytes);
             }
 
             if (instr->dst && instr->dst->type != IR_TYPE_VOID &&
-                instr->dst->kind == IR_VAL_TMP)
+                (instr->dst->kind == IR_VAL_TMP ||
+                 instr->dst->kind == IR_VAL_LOCAL ||
+                 instr->dst->kind == IR_VAL_PARAM))
             {
                 if (irIsFloat(instr->dst->type)) {
                     x86_64SpillDstFpr(ctx, instr, "xmm0");
@@ -1333,70 +1708,7 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                         "(not currently emitted by IR builder; "
                         "matches aarch64)\n", instr->op);
     }
-}
 
-/* On entry, each parameter lives in its ABI-mandated home register
- * (rdi/rsi/rdx/rcx/r8/r9 for int, xmm0-7 for FP). Spill each into
- * its frame slot (or its pinned register, when the user annotated
- * the param with `<Type> reg <REG>`) so the function body can see
- * a stable, addressable location. Mirrors aarch64ParamSpills modulo
- * register-set differences. */
-static void x86_64ParamSpills(AoStr *buf, Ast *func) {
-    int int_idx = 0, float_idx = 0;
-
-    AstType *rt = func->type ? func->type->rettype : NULL;
-    if (rt &&
-        (rt->kind == AST_TYPE_CLASS || rt->kind == AST_TYPE_UNION) &&
-        !rt->is_intrinsic && rt->size > 0)
-    {
-        /* SysV x86_64: the hidden out-pointer for struct-by-value
-         * returns arrives in %rdi - which IS the first int arg slot
-         * (unlike aarch64's separate x8). Save it to the function's
-         * local slot and advance int_idx past rdi so user-visible
-         * params start at rsi. */
-        x86_64FrameStoreWidth(buf, func->loff, 8, "rdi");
-        int_idx = 1;
-    }
-    if (!func->params)
-        return;
-
-    for (u64 i = 0; i < func->params->size; ++i) {
-        Ast *p = vecGet(Ast *, func->params, i);
-
-        if (p->kind == AST_VAR_ARGS) {
-            /* HolyC variadic ABI: argc in the next int reg, argv on
-             * the caller's stack frame. */
-            x86_64FrameStoreWidth(buf, p->argc->loff, 8,
-                                  kIntRegs64[int_idx++]);
-            continue;
-        }
-
-        /* Register-pinned param: move from the ABI arg reg straight
-         * into the user-named register. No slot, no loff. */
-        if (p->kind == AST_LVAR && p->pinned_kind == LVAR_REG &&
-            p->pinned_reg)
-        {
-            aoStrCatFmt(buf, "movq    %%%s, %%%S\n\t",
-                        kIntRegs64[int_idx], p->pinned_reg);
-            int_idx++;
-            continue;
-        }
-
-        AstType *ptype = (p->kind == AST_DEFAULT_PARAM)
-                         ? p->declvar->type : p->type;
-        if (ptype && ptype->kind == AST_TYPE_FLOAT) {
-            const char *xmm = kXmmRegs[float_idx++];
-            aoStrCatFmt(buf, "movsd   %%%s, %i(%%rbp)\n\t",
-                        xmm, p->loff);
-        } else {
-            int size = (p->kind == AST_FUNPTR) ? 8 :
-                       (ptype ? ptype->size : 8);
-            if (size != 1 && size != 2 && size != 4) size = 8;
-            x86_64FrameStoreWidth(buf, p->loff, (u32)size,
-                                  kIntRegs64[int_idx]);
-            int_idx++;
-        }
-    }
 }
 
 void x86_64PasteDataSection(Cctrl *cc, AoStr *buf) {
@@ -1423,7 +1735,8 @@ static void x86_64EmitFunctionPrologue(Cctrl *cc,
                                        AoStr *buf,
                                        Ast *func,
                                        u16 total_stack,
-                                       Vec *pinned)
+                                       Vec *pinned,
+                                       int omit_frame)
 {
     char *fname = asmNormaliseFunctionName(cc, func->fname);
     /* .p2align 4 = 16-byte aligned function entries (x86_64
@@ -1432,10 +1745,17 @@ static void x86_64EmitFunctionPrologue(Cctrl *cc,
                 ".text\n\t"
                 ".p2align 4\n\t"
                 ".globl %s\n"
-                "%s:\n\t"
-                "pushq   %%rbp\n\t"
-                "movq    %%rsp, %%rbp\n\t",
+                "%s:\n\t",
                 fname, fname);
+    /* Leaf function with empty frame: skip the rbp dance entirely
+     * (saves 3 instructions per call). Caller-saved rbp survives
+     * untouched, no slot accesses to anchor, no callee-saved regs
+     * to preserve. The matching epilogue is just `retq`. */
+    if (omit_frame) return;
+
+    aoStrCatFmt(buf,
+                "pushq   %%rbp\n\t"
+                "movq    %%rsp, %%rbp\n\t");
     if (total_stack > 0) {
         /* Round up to 16 so rsp stays aligned for inner calls. The
          * call instruction pushes 8 bytes, our pushq %rbp pushes
@@ -1486,10 +1806,19 @@ void x86_64GenerateFunction(IrCgCtx *ctx, Ast *ast) {
         }
     }
 
+    /* Leaf function with zero frame: no stack slots, no pinned regs
+     * to save, no calls (so we don't need rsp realignment) and no
+     * VARGS area. Skip the rbp prologue/epilogue. */
+    ctx->omit_frame = (fn->stack_space == 0)
+                      && (ctx->pinned_regs == NULL
+                          || ctx->pinned_regs->size == 0)
+                      && !irFnHasCalls(fn)
+                      && (ast->loff == 0);
+
     x86_64EmitFunctionPrologue(ctx->cc, buf, ast,
                                fn->stack_space,
-                               ctx->pinned_regs);
-    x86_64ParamSpills(buf, ast);
+                               ctx->pinned_regs,
+                               ctx->omit_frame);
 
     Set *referenced = irCgComputeReferencedBlocks(fn);
 
@@ -1514,12 +1843,10 @@ void x86_64GenerateFunction(IrCgCtx *ctx, Ast *ast) {
 
     /* If the function body didn't end with an explicit ret, emit
      * the epilogue ourselves so we don't fall through. */
-    if (!x86_64HasRet(buf)) {
+    if (!x86_64HasRet(ctx)) {
         x86_64RestorePinnedRegs(buf, ctx->pinned_regs);
-        x86_64Epilogue(buf);
+        x86_64Epilogue(ctx);
     }
-
-    mapRelease(ctx->lea_inline_map);
 }
 
 void x86_64InitialiseEmptyGlobal(Cctrl *cc,
@@ -1659,6 +1986,7 @@ static void x86_64PasteAsmBlocks(AoStr *buf, Cctrl *cc) {
 
 AoStr *x86_64AsmGenerate(Cctrl *cc) {
     AoStr *buf = aoStrAlloc(2048);
+    x86_64InitRegPool();
     x86_64PasteDataSection(cc, buf);
     x86_64PasteAsmBlocks(buf, cc);
 

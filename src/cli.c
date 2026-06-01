@@ -483,8 +483,7 @@ void cliArgsInit(CliArgs *args) {
 #if IS_ARM_64 && IS_LINUX
     args->target = TARGET_AARCH64_UNKNOWN_LINUX_GNU;
 #elif IS_ARM_64 && IS_BSD
-    /* Let rosetta work its magic */
-    args->target = TARGET_X86_64_APPLE_DARWIN;
+    args->target = TARGET_AARCH64_APPLE_DARWIN;
 #elif IS_X86_64 && IS_LINUX
     args->target = TARGET_X86_64_UNKNOWN_LINUX_GNU;
 #elif IS_X86_64 && IS_BSD

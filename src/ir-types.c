@@ -69,6 +69,18 @@ Vec *irValueVecNew(void) {
     return vecNew(&vec_ir_value_type);
 }
 
+static void vecAoStrToString(AoStr *buf, void *_s) {
+    if (_s) aoStrCatAoStr(buf, (AoStr *)_s);
+}
+
+/* `Vec<AoStr *>` opaque-ownership; backend retains the storage. */
+VecType vec_aostr_type = {
+    .stringify = vecAoStrToString,
+    .match     = NULL,
+    .release   = NULL,
+    .type_str  = "AoStr *",
+};
+
 int irBlockVecMatch(void *_bb1, void *_bb2) {
     IrBlock *bb1 = (IrBlock *)_bb1;
     IrBlock *bb2 = (IrBlock *)_bb2;
@@ -228,6 +240,22 @@ u8 irIsTmp(IrValue *val) {
     return val && val->kind == IR_VAL_TMP;
 }
 
+u32 irVarId(IrValue *val) {
+    return val ? val->as.var.id : 0;
+}
+
+u32 irDstVarId(IrInstr *instr) {
+    return irVarId(instr->dst);
+}
+
+u32 irR1VarId(IrInstr *instr) {
+    return irVarId(instr->r1);
+}
+
+u32 irR2VarId(IrInstr *instr) {
+    return irVarId(instr->r2);
+}
+
 u8 irIsStore(IrOp opcode) {
     return opcode = IR_STORE;
 }
@@ -256,10 +284,13 @@ u8 irIsConst(IrValueKind ir_value_kind) {
 }
 
 IrBlock *irInstrGetTargetBlock(IrInstr *instr) {
+    if (instr->op == IR_CMP_BR) return instr->extra.cmp_br.target_block;
     return instr->extra.blocks.target_block;
 }
 
 IrBlock *irInstrGetFallthroughBlock(IrInstr *instr) {
+    if (instr->op == IR_CMP_BR)
+        return instr->extra.cmp_br.fallthrough_block;
     return instr->extra.blocks.fallthrough_block;
 }
 
@@ -654,6 +685,8 @@ IrCtx *irCtxNew(Cctrl *cc) {
     ctx->cc = cc;
     ctx->loop_depth = 0;
     memset(ctx->loop_stack, 0, sizeof(ctx->loop_stack));
+    ctx->labels = NULL;
+    ctx->escape_set = NULL;
     return ctx;
 }
 

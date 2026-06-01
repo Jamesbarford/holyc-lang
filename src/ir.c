@@ -6,8 +6,7 @@
 #include "ast.h"
 #include "ir.h"
 #include "ir-eval.h"
-#include "ir-mem2reg.h"
-#include "ir-peephole.h"
+#include "ir-optimise.h"
 #include "ir-regalloc.h"
 #include "ir-types.h"
 #include "ir-debug.h"
@@ -168,13 +167,82 @@ static IrValue *irNarrowToTargetWidth(IrCtx *ctx,
         return val;
     }
 
-    if (val->kind == IR_VAL_TMP && val->as.var.size > (u64)target_ty->size) {
+    if (irIsTmp(val) && val->as.var.size > (u64)target_ty->size) {
         IrValue *narrow = irTmp(narrow_ty, target_ty->size);
         irBlockAddInstr(ctx, irInstrNew(IR_TRUNC, narrow, val, NULL));
         return narrow;
     }
 
     return val;
+}
+
+/* Widen a value to match a target slot's width. Caller supplies the
+ * source AST type so we know whether to zero- or sign-extend. Needed
+ * before IR_STORE into a wider slot: the codegen sizes the store from
+ * the value's byte size, so storing an i8 into an i64 slot leaves the
+ * top 7 bytes stale. Without explicit widening (or mem2reg promotion),
+ * a subsequent full-width read of that slot gets garbage. */
+static IrValue *irWidenToTargetWidth(IrCtx *ctx,
+                                     IrValue *val,
+                                     AstType *src_ty,
+                                     AstType *target_ty)
+{
+    if (!val || !target_ty || target_ty->size <= 0) return val;
+    if (irIsFloat(val->type)) return val;
+    if (!irIsTmp(val)) return val;
+    if (val->as.var.size >= (u64)target_ty->size) return val;
+
+    IrValueType wide_ty = irConvertType(target_ty);
+    IrValue *wide = irTmp(wide_ty, target_ty->size);
+    int sext = src_ty && src_ty->issigned;
+    IrOp ext = sext ? IR_SEXT : IR_ZEXT;
+    irBlockAddInstr(ctx, irInstrNew(ext, wide, val, NULL));
+    return wide;
+}
+
+/* Redirect the most recent value-producing instruction's dst to
+ * `target`. Returns 1 on success (caller can skip emitting an IR_STORE
+ * since the producer wrote straight into the slot), 0 if no redirect
+ * was possible (constant, slot-direct read, value produced elsewhere,
+ * unsafe op like PHI). The "safe to redirect" set matches the DCE
+ * pass's pure-value-producer list. */
+static int irRedirectLastDst(IrCtx *ctx, IrValue *val, IrValue *target) {
+    if (!val || !target) return 0;
+    if (!irIsTmp(val)) return 0;
+    if (!ctx->cur_block || listEmpty(ctx->cur_block->instructions)) return 0;
+    for (List *node = ctx->cur_block->instructions->prev;
+         node != ctx->cur_block->instructions;
+         node = node->prev)
+    {
+        IrInstr *I = (IrInstr *)node->value;
+        if (I->op == IR_NOP) continue;
+        if (I->dst != val) return 0;
+        switch (I->op) {
+            case IR_LOAD:
+            case IR_LOAD_DEREF:
+            case IR_LEA:
+            case IR_IADD: case IR_ISUB: case IR_IMUL:
+            case IR_AND:  case IR_OR:   case IR_XOR:
+            case IR_SHL:  case IR_SHR:  case IR_SAR:
+            case IR_IDIV: case IR_UDIV: case IR_IREM: case IR_UREM:
+            case IR_INEG: case IR_NOT:
+            case IR_ICMP: case IR_FCMP:
+            case IR_FADD: case IR_FSUB: case IR_FMUL:
+            case IR_FDIV: case IR_FNEG:
+            case IR_TRUNC: case IR_ZEXT: case IR_SEXT:
+            case IR_FPTRUNC: case IR_FPEXT:
+            case IR_FPTOSI: case IR_FPTOUI:
+            case IR_SITOFP: case IR_UITOFP:
+            case IR_PTRTOINT: case IR_INTTOPTR:
+            case IR_BITCAST:
+            case IR_CALL:
+                I->dst = target;
+                return 1;
+            default:
+                return 0;
+        }
+    }
+    return 0;
 }
 
 static int irBinOpIsCompoundAssign(AstBinOp op) {
@@ -227,7 +295,7 @@ static void irEmitMemcpy(IrCtx *ctx,
 
     /* MEMCPY's return is `U0 *` (the dst pointer); we don't consume
      * it. The codegen reserves a slot for the dst tmp anyway, but the
-     * use-counting + zero-use slot-skip in irCgAnnotate will prune
+     * use-counting + zero-use slot-skip in irOptDeadCodeElim will prune
      * it. */
     IrValue *ret = irTmp(IR_TYPE_PTR, 8);
     IrInstr *call = irInstrNew(IR_CALL, ret, args_wrap, NULL);
@@ -879,6 +947,24 @@ static IrValue *irLowerAssign(IrCtx *ctx, Ast *ast) {
     }
 
     new_val = irNarrowToTargetWidth(ctx, new_val, tgt.type);
+    new_val = irWidenToTargetWidth(ctx, new_val, ast->right->type, tgt.type);
+
+    /* Direct-write: only safe when the target is a real lvar slot
+     * (IR_VAL_LOCAL or IR_VAL_PARAM). For GEP-aliased field stores
+     * (stack-class fields) the target is an IR_VAL_TMP whose loff
+     * came from `IR_GEP base, offset`. A virtual alias the codegen
+     * understands but DCE doesn't. If we redirected the producer to
+     * write that tmp's dst, DCE would see "tmp with no later reader"
+     * and drop the producer entirely, and the field never gets
+     * written. Force the IR_STORE path in that case so the side
+     * effect on memory is explicit. */
+    if (!tgt.indirect && !tgt.target->pinned_reg &&
+        (tgt.target->kind == IR_VAL_LOCAL ||
+         tgt.target->kind == IR_VAL_PARAM) &&
+        irRedirectLastDst(ctx, new_val, tgt.target))
+    {
+        return tgt.target;
+    }
 
     IrOp store_op = tgt.indirect ? IR_STORE_DEREF : IR_STORE;
     irBlockAddInstr(ctx, irInstrNew(store_op, tgt.target, new_val, NULL));
@@ -1003,6 +1089,20 @@ IrValue *irLowerLVar(IrCtx *ctx, Ast *ast) {
         IrValue *addr = irTmp(IR_TYPE_PTR, 8);
         irBlockAddInstr(ctx, irInstrNew(IR_LEA, addr, local_var, NULL));
         return addr;
+    }
+
+    /* Operand-direct read: when the lvar's address is never taken, the
+     * value held by its slot can't be mutated by aliasing, so the
+     * consumer can read the slot operand directly and we skip emitting
+     * the IR_LOAD tmp entirely. Intrinsic classes still go through the
+     * load: they carry a class type at the AST level which we coerce to
+     * I64 here, and downstream type-based logic relies on that
+     * coercion. */
+    if (!is_intrinsic_class &&
+        ctx->escape_set &&
+        !setHas(ctx->escape_set, (void *)(u64)ast->lvar_id))
+    {
+        return local_var;
     }
 
     IrValueType ir_value_type = is_intrinsic_class
@@ -1386,6 +1486,33 @@ void irLowerReturn(IrCtx *ctx, Ast *ast) {
             irEmitMemcpy(ctx, dst_addr, src_addr, rt->size);
         } else {
             IrValue *val = irExpr(ctx, ast->retval);
+            IrValue *rv = ctx->cur_func->return_value;
+            /* Convert the return value to the function's return type so
+             * the stored width matches the slot. The codegen sizes a
+             * store from the value's own byte width, so a narrow return
+             * value (e.g. a Bool returned from a helper, or a literal
+             * like FALSE) written into a wider return slot would leave
+             * the slot's upper bytes stale; the epilogue then reads the
+             * slot at full width and returns garbage in those bytes.
+             * Matches C's "the return value is converted to the
+             * function's return type". */
+            if (rv && !irIsFloat(rv->type)) {
+                if (val->kind == IR_VAL_CONST_INT &&
+                    irValueByteSize(val) < irValueByteSize(rv))
+                {
+                    val = irConstInt(rv->type, val->as._i64);
+                } else if (irIsTmp(val) &&
+                           val->as.var.size < (u64)irValueByteSize(rv))
+                {
+                    IrValue *wide = irTmp(rv->type, irValueByteSize(rv));
+                    int sext = ast->retval->type &&
+                               ast->retval->type->issigned;
+                    irBlockAddInstr(ctx,
+                            irInstrNew(sext ? IR_SEXT : IR_ZEXT,
+                                       wide, val, NULL));
+                    val = wide;
+                }
+            }
             IrInstr *st = irStore(ctx->cur_func->return_value, val);
             irBlockAddInstr(ctx, st);
         }
@@ -1646,17 +1773,38 @@ void irLowerDoWhileLoop(IrCtx *ctx, Ast *ast) {
     ctx->cur_block = end;
 }
 
+/* Build the lvar's `IrValue` directly, no IR_ALLOCA emitted. The
+ * stack slot lives implicitly via `irCgComputeAstLayout` (which walks
+ * `ast_func->locals` and assigns each lvar's loff) plus `irCgBindAstLoffs`
+ * (which binds the IrValue.var.id -> loff). The IR instruction stream
+ * doesn't need to mention the slot at all.
+ *
+ * Note: `var_id` is the AST-side lvar id (key in `func->variables`).
+ * The IrValue's own `var.id` is minted from the IR tmp counter so it
+ * doesn't collide with tmp ids in the loff map (the two id spaces both
+ * start at 1). `irFnGetVar(func, lvar_id)` still finds the IrValue;
+ * the codegen looks up loff via `IrValue.var.id`. */
+static IrValue *irMakeLocalSlot(IrCtx *ctx,
+                                IrValueType ir_type,
+                                int size,
+                                u32 var_id)
+{
+    IrValue *local = irTmp(ir_type, size);
+    local->kind = IR_VAL_LOCAL;
+    irFnAddVar(ctx->cur_func, var_id, local);
+    irAddStackSpace(ctx, size);
+    return local;
+}
+
 void irLowerDecl(IrCtx *ctx, Ast *ast) {
     Ast *var = ast->declvar;
     Ast *init = ast->declinit;
-    IrInstr *ir_alloca;
     u32 var_id;
 
     /* Register-pinned local (TempleOS `<Type> reg <REG> name`).
-     * No alloca, no slot - the value lives in the named machine
-     * register for the whole function. Init is performed inline
-     * below as a regular store-to-local (the per-arch emitter sees
-     * the IrValue's `pinned_reg` and writes the register directly). */
+     * No slot - the value lives in the named machine register for the
+     * whole function. The per-arch emitter sees the IrValue's
+     * `pinned_reg` and writes the register directly. */
     if (var->kind == AST_LVAR && var->pinned_kind == LVAR_REG) {
         IrValue *local = irValueNew(irConvertType(var->type), IR_VAL_LOCAL);
         local->as.var.id = var->lvar_id;
@@ -1671,21 +1819,18 @@ void irLowerDecl(IrCtx *ctx, Ast *ast) {
         return;
     }
 
+    IrValue *local;
     if (var->kind == AST_FUNPTR) {
-        /* Function-pointer slot: 8 bytes, treated as a pointer. */
-        IrValue *tmp = irTmp(IR_TYPE_PTR, 8);
-        IrValue *sz = irConstInt(IR_TYPE_PTR, 8);
-        ir_alloca = irInstrNew(IR_ALLOCA, tmp, sz, NULL);
-        irAddStackSpace(ctx, 8);
+        local = irMakeLocalSlot(ctx, IR_TYPE_PTR, 8, var->fn_ptr_id);
         var_id = var->fn_ptr_id;
     } else {
-        ir_alloca = irAlloca(var->type);
-        irAddStackSpace(ctx, var->type->size);
+        local = irMakeLocalSlot(ctx,
+                                irConvertType(var->type),
+                                var->type->size,
+                                var->lvar_id);
         var_id = var->lvar_id;
     }
-    irBlockAddInstr(ctx, ir_alloca);
-    IrValue *local = ir_alloca->dst;
-    irFnAddVar(ctx->cur_func, var_id, local);
+    (void)var_id;
 
     if (init) {
         IrValue *ir_init = NULL;
@@ -1715,16 +1860,17 @@ void irLowerDecl(IrCtx *ctx, Ast *ast) {
                  * hidden out-pointer directly at the local's
                  * slot so the call writes the result in-place
                  * (no temp / memcpy needed). For scalar
-                 * returns, store the call's value into the
-                 * slot as usual. */
+                 * returns, redirect the call's dst at the local's
+                 * slot so the spill writes straight into the frame. */
                 if (init->type && irRetTypeIsAggregate(init->type)) {
                     IrValue *out = irTmp(IR_TYPE_PTR, 8);
                     irBlockAddInstr(ctx, irInstrNew(IR_LEA, out, local, NULL));
                     irFnCallTo(ctx, init, out);
                 } else {
                     IrValue *ret = irLowerFnCall(ctx, init);
-                    IrInstr *ir_store = irStore(local, ret);
-                    irBlockAddInstr(ctx, ir_store);
+                    if (!irRedirectLastDst(ctx, ret, local)) {
+                        irBlockAddInstr(ctx, irStore(local, ret));
+                    }
                 }
                 break;
             }
@@ -1732,8 +1878,14 @@ void irLowerDecl(IrCtx *ctx, Ast *ast) {
             default: {
                 ir_init = irExpr(ctx, init);
                 ir_init = irNarrowToTargetWidth(ctx, ir_init, var->type);
-                IrInstr *ir_store = irStore(local, ir_init);
-                irBlockAddInstr(ctx, ir_store);
+                ir_init = irWidenToTargetWidth(ctx, ir_init,
+                                               init->type, var->type);
+                if (!local->pinned_reg &&
+                    irRedirectLastDst(ctx, ir_init, local))
+                {
+                    break;
+                }
+                irBlockAddInstr(ctx, irStore(local, ir_init));
                 break;
             }
         }
@@ -1949,33 +2101,10 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
             /* Inline `asm { ... }` block. Carry both the text (for
              * legacy/pure asm) and the optional fragment list (when
              * `&var` references need late binding to stack offsets).
-             *
-             * For each UNIQUE `&y` reference we emit ONE "spectator"
-             * IR_LEA. The result is unused, but mem2reg's
-             * other_uses-counter sees the LEA and skips promoting
-             * `y`, so `y` retains a real stack slot the asm can
-             * read/write through. One LEA per local suffices; we
-             * dedupe by lvar_id to avoid emitting N copies of the
-             * same dead `add xN, x29, #imm` when the asm uses `&y`
-             * multiple times. */
-            if (ast->asm_fragments) {
-                Set *seen = setNew(8, &set_uint_type);
-                listForEach(ast->asm_fragments) {
-                    AsmFragment *f = (AsmFragment *)it->value;
-                    if (f->kind != ASM_FRAG_LVAR_REF) continue;
-                    if (!f->lvar) continue;
-                    if (setHas(seen, (void *)(u64)f->lvar->lvar_id))
-                        continue;
-                    setAdd(seen, (void *)(u64)f->lvar->lvar_id);
-                    IrValue *slot = irFnGetVar(ctx->cur_func,
-                                                f->lvar->lvar_id);
-                    if (!slot) continue;
-                    IrValue *addr = irTmp(IR_TYPE_PTR, 8);
-                    irBlockAddInstr(ctx,
-                        irInstrNew(IR_LEA, addr, slot, NULL));
-                }
-                setRelease(seen);
-            }
+             * Each lvar referenced in the asm body is already in the
+             * escape set, so it gets a real slot via the usual
+             * layout path the asm fragment renders against that
+             * slot's loff at emit time. */
             IrValue *txt = irValueNew(IR_TYPE_ARRAY, IR_VAL_CONST_STR);
             txt->as.str.str = ast->asm_stmt;
             txt->as.str.label = NULL;
@@ -2064,6 +2193,192 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
     }
 }
 
+/* Escape analysis: walk a function's body and collect lvar_ids whose
+ * address is taken. The downstream lowerer uses this to decide whether
+ * a read of `x` can return x's slot directly (no IR_LOAD tmp) or must
+ * go through the load so aliased writes are observed. */
+static void irEscapeWalk(Ast *ast, Set *escape);
+
+static void irEscapeWalkList(List *l, Set *escape) {
+    if (!l) return;
+    listForEach(l) {
+        irEscapeWalk((Ast *)it->value, escape);
+    }
+}
+
+static void irEscapeWalkVec(Vec *v, Set *escape) {
+    if (!v) return;
+    for (u64 i = 0; i < v->size; ++i) {
+        irEscapeWalk(vecGet(Ast *, v, i), escape);
+    }
+}
+
+static void irEscapeWalk(Ast *ast, Set *escape) {
+    if (!ast) return;
+    switch (ast->kind) {
+        case AST_LVAR:
+        case AST_GVAR:
+        case AST_LITERAL:
+        case AST_STRING:
+        case AST_BREAK:
+        case AST_CONTINUE:
+        case AST_GOTO:
+        case AST_LABEL:
+        case AST_JUMP:
+        case AST_COMMENT:
+        case AST_PLACEHOLDER:
+        case AST_FUNPTR:
+        case AST_FUN_PROTO:
+        case AST_EXTERN_FUNC:
+        case AST_FUNC:
+        case AST_ASM_FUNCDEF:
+        case AST_ASM_FUNC_BIND:
+            return;
+
+        case AST_UNOP: {
+            /* Address-of an lvar (possibly wrapped in a default-param
+             * shim) marks it as escaping. Be conservative on the parser
+             * quirk for &ptr-to-scalar (loads the value) still mark. */
+            if (ast->unop == AST_UN_OP_ADDR_OF && ast->operand) {
+                Ast *target = irUnwrapDefaultParam(ast->operand);
+                if (target && target->kind == AST_LVAR) {
+                    setAdd(escape, (void *)(u64)target->lvar_id);
+                }
+            }
+            irEscapeWalk(ast->operand, escape);
+            return;
+        }
+
+        case AST_CAST: {
+            irEscapeWalk(ast->operand, escape);
+            return;
+        }
+
+        case AST_BINOP: {
+            irEscapeWalk(ast->left, escape);
+            irEscapeWalk(ast->right, escape);
+            return;
+        }
+
+        case AST_FUNCALL:
+        case AST_FUNPTR_CALL:
+        case AST_ASM_FUNCALL: {
+            irEscapeWalkVec(ast->args, escape);
+            irEscapeWalk(ast->ref, escape);
+            return;
+        }
+
+        case AST_RETURN: {
+            irEscapeWalk(ast->retval, escape);
+            return;
+        }
+
+        case AST_IF: {
+            irEscapeWalk(ast->cond, escape);
+            irEscapeWalk(ast->then, escape);
+            irEscapeWalk(ast->els, escape);
+            return;
+        }
+
+        case AST_FOR: {
+            irEscapeWalk(ast->forinit, escape);
+            irEscapeWalk(ast->forcond, escape);
+            irEscapeWalk(ast->forstep, escape);
+            irEscapeWalk(ast->forbody, escape);
+            return;
+        }
+
+        case AST_WHILE:
+        case AST_DO_WHILE: {
+            irEscapeWalk(ast->whilecond, escape);
+            irEscapeWalk(ast->whilebody, escape);
+            return;
+        }
+
+        case AST_TRY: {
+            irEscapeWalk(ast->try_body, escape);
+            irEscapeWalk(ast->catch_body, escape);
+            return;
+        }
+
+        case AST_THROW: {
+            irEscapeWalk(ast->throw_value, escape);
+            return;
+        }
+
+        case AST_COMPOUND_STMT: {
+            irEscapeWalkList(ast->stms, escape);
+            irEscapeWalk(ast->inline_ret, escape);
+            return;
+        }
+
+        case AST_DECL:
+        case AST_DEFAULT_PARAM: {
+            irEscapeWalk(ast->declinit, escape);
+            return;
+        }
+
+        case AST_CLASS_REF: {
+            irEscapeWalk(ast->cls, escape);
+            return;
+        }
+
+        case AST_SWITCH: {
+            irEscapeWalk(ast->switch_cond, escape);
+            irEscapeWalkVec(ast->cases, escape);
+            irEscapeWalk(ast->case_default, escape);
+            return;
+        }
+
+        case AST_CASE:
+        case AST_DEFAULT: {
+            irEscapeWalkList(ast->case_asts, escape);
+            return;
+        }
+
+        case AST_SIZEOF: {
+            /* sizeof's operand isn't evaluated, but `&x` inside still
+             * marks x: cheap and keeps the walker pessimistic. */
+            irEscapeWalk(ast->operand, escape);
+            return;
+        }
+
+        case AST_ASM_STMT: {
+            if (ast->asm_fragments) {
+                listForEach(ast->asm_fragments) {
+                    AsmFragment *f = (AsmFragment *)it->value;
+                    if (f->kind == ASM_FRAG_LVAR_REF && f->lvar) {
+                        setAdd(escape,
+                               (void *)(u64)f->lvar->lvar_id);
+                    }
+                }
+            }
+            return;
+        }
+
+        case AST_ARRAY_INIT: {
+            irEscapeWalkList(ast->arrayinit, escape);
+            return;
+        }
+
+        case AST_VAR_ARGS:
+            return;
+
+        default:
+            /* Unknown kind: safe no-op. Missing a recurse means we
+             * over-load (extra IR_LOADs), never miscompile. */
+            return;
+    }
+}
+
+static Set *irCollectEscapingLVars(Ast *ast_func) {
+    Set *escape = setNew(8, &set_uint_type);
+    if (ast_func && ast_func->body) {
+        irEscapeWalk(ast_func->body, escape);
+    }
+    return escape;
+}
+
 IrFunction *irLowerFunction(IrCtx *ctx, Ast *ast_func) {
     IrFunction *func = irFunctionNew(ast_func->fname);
     IrBlock *entry = irBlockNew();
@@ -2072,25 +2387,67 @@ IrFunction *irLowerFunction(IrCtx *ctx, Ast *ast_func) {
     ctx->cur_block = entry;
     ctx->cur_func = func;
     ctx->labels = NULL; /* fresh label table per function */
+    if (ctx->escape_set) setRelease(ctx->escape_set);
+    ctx->escape_set = irCollectEscapingLVars(ast_func);
     func->entry_block = entry;
     func->exit_block = exit_block;
     irFnAddBlock(func, entry);
 
-    /* Lower parameters into per-id IrValue slots. */
+    /* Lower parameters. Each AST param maps to two IrValues:
+     *
+     *   - arrive  (IR_VAL_PARAM, loc=REG/abi_arg_reg): the value as it
+     *     arrives in the ABI register. Consumed exactly once, by the
+     *     entry IR_STORE below.
+     *   - slot    (IR_VAL_LOCAL, ast-driven loff): the frame slot that
+     *     all body-level references read/write. AST -> IR lookups
+     *     resolve to this.
+     *
+     * The entry IR_STORE `store slot, arrive` makes the param spill an
+     * ordinary IR operation. Codegen needs no special prologue path.
+     * A later store-load forwarding pass collapses the spill+reload
+     * when the value is still live in the ABI register at first use. */
+    IrRegPool *pool = irRegPoolGet();
+    int int_arg_idx = 0, float_arg_idx = 0;
+
+    AstType *rettype = ast_func->type->rettype;
+    int has_hidden_out_ptr = rettype && irRetTypeIsAggregate(rettype);
+    /* Struct-by-value return: the caller passes a hidden out-pointer
+     * in the first int-arg register. Bumps int_arg_idx so the user's
+     * first real int param lands on the second arg reg. */
+    if (has_hidden_out_ptr) int_arg_idx = 1;
+
     for (u64 i = 0; i < ast_func->params->size; ++i) {
         Ast *ast_param = vecGet(Ast *, ast_func->params, i);
+
         if (ast_param->kind == AST_VAR_ARGS) {
             assert(func->has_var_args);
-            /* Materialize argc and argv as ordinary parameter slots. The
-             * codegen prologue (asmFunctionFromIr) is responsible for
-             * spilling the next-int-reg into argc and storing
-             * `&caller_stack` into argv; from the body's perspective they
-             * read like plain int/ptr locals. */
-            IrValue *argc_iv = irTmp(IR_TYPE_I64, 8);
-            argc_iv->kind = IR_VAL_PARAM;
-            irFnAddVar(func, ast_param->argc->lvar_id, argc_iv);
-            vecPush(func->params, argc_iv);
+            /* Apple AArch64 puts ALL variadic args (including HolyC's
+             * implicit argc) on the stack, so argc doesn't arrive in a
+             * register and shouldn't be spilled. Its slot is just a
+             * view of the caller's stack region (loff set by layout). */
+            int apple_aarch64_va = pool && pool->variadic_on_stack;
+
+            IrValue *argc_arrive = irTmp(IR_TYPE_I64, 8);
+            argc_arrive->kind = IR_VAL_PARAM;
+            if (!apple_aarch64_va && pool &&
+                (u64)int_arg_idx < pool->int_arg_regs->size)
+            {
+                argc_arrive->loc.kind = IR_LOC_REG;
+                argc_arrive->loc.as.reg =
+                    vecGet(AoStr *, pool->int_arg_regs, int_arg_idx);
+            }
+            int_arg_idx++;
+
+            IrValue *argc_slot = irTmp(IR_TYPE_I64, 8);
+            argc_slot->kind = IR_VAL_LOCAL;
+            irFnAddVar(func, ast_param->argc->lvar_id, argc_slot);
+            vecPush(func->params, argc_arrive);
             irAddStackSpace(ctx, 8);
+            if (!apple_aarch64_va) {
+                irBlockAddInstr(ctx,
+                                irInstrNew(IR_STORE, argc_slot,
+                                           argc_arrive, NULL));
+            }
 
             IrValue *argv_iv = irTmp(IR_TYPE_PTR, 8);
             argv_iv->kind = IR_VAL_PARAM;
@@ -2105,40 +2462,93 @@ IrFunction *irLowerFunction(IrCtx *ctx, Ast *ast_func) {
             loggerPanic("Unhandled key kind: %s\n",
                     astKindToString(ast_param->kind));
         }
+
         u32 key = irGetParamId(ast_param);
-        IrValue *ir_tmp_var = irTmp(irConvertType(ast_param->type),
-                                    ast_param->type->size);
-        ir_tmp_var->kind = IR_VAL_PARAM;
-        /* Propagate TempleOS-style `<Type> reg <REG> name` pinning
-         * from the AST onto the IrValue so the per-arch codegen can
-         * route reads / writes to the named register and skip the
-         * usual stack-slot spill. Only AST_LVAR params can carry the
-         * modifier; AST_FUNPTR / AST_DEFAULT_PARAM go through their
-         * normal slot paths. */
+        IrValueType ir_type = irConvertType(ast_param->type);
+        u16 size = ast_param->type->size;
+        int is_float = ast_param->type->kind == AST_TYPE_FLOAT;
+
+        /* Allocate this param's ABI arg register up front so the
+         * arrive-IrValue's loc reflects where the caller put it. */
+        AoStr *abi_reg = NULL;
+        if (pool) {
+            if (is_float) {
+                if ((u64)float_arg_idx < pool->float_arg_regs->size)
+                    abi_reg = vecGet(AoStr *, pool->float_arg_regs,
+                                     float_arg_idx);
+                float_arg_idx++;
+            } else {
+                if ((u64)int_arg_idx < pool->int_arg_regs->size)
+                    abi_reg = vecGet(AoStr *, pool->int_arg_regs,
+                                     int_arg_idx);
+                int_arg_idx++;
+            }
+        }
+
+        /* TempleOS-pinned param: the body reads/writes the named
+         * register directly, no stack slot. Still need to copy the
+         * value from the ABI arg reg into the pinned reg at entry,
+         * which we model as an IR_STORE dst=pinned_iv,
+         * r1=arrive. Codegen's IR_STORE recognises pinned_reg
+         * destinations and emits the reg-to-reg move uniformly. */
         if (ast_param->kind == AST_LVAR &&
             ast_param->pinned_kind == LVAR_REG &&
             ast_param->pinned_reg)
         {
-            ir_tmp_var->pinned_reg = ast_param->pinned_reg;
+            IrValue *pin = irTmp(ir_type, size);
+            pin->kind = IR_VAL_PARAM;
+            pin->pinned_reg = ast_param->pinned_reg;
+            irFnAddVar(func, key, pin);
+            vecPush(func->params, pin);
+            irAddStackSpace(ctx, size);
+
+            IrValue *arrive = irTmp(ir_type, size);
+            arrive->kind = IR_VAL_PARAM;
+            if (abi_reg) {
+                arrive->loc.kind = IR_LOC_REG;
+                arrive->loc.as.reg = abi_reg;
+            }
+            irBlockAddInstr(ctx,
+                            irInstrNew(IR_STORE, pin, arrive, NULL));
+            continue;
         }
-        irFnAddVar(func, key, ir_tmp_var);
-        vecPush(func->params, ir_tmp_var);
-        irAddStackSpace(ctx, ast_param->type->size);
+
+        IrValue *arrive = irTmp(ir_type, size);
+        arrive->kind = IR_VAL_PARAM;
+        if (abi_reg) {
+            arrive->loc.kind = IR_LOC_REG;
+            arrive->loc.as.reg = abi_reg;
+        }
+
+        IrValue *slot = irTmp(ir_type, size);
+        slot->kind = IR_VAL_LOCAL;
+        irFnAddVar(func, key, slot);
+        vecPush(func->params, arrive);
+        irAddStackSpace(ctx, size);
+
+        irBlockAddInstr(ctx,
+                        irInstrNew(IR_STORE, slot, arrive, NULL));
     }
 
-     /* Struct-by-value return: instead of an alloca, we synthesize a
-      * hidden out-pointer parameter (8 bytes, ptr-typed, IR_VAL_PARAM).
-      * The codegen prologue spills %rdi into its slot, the body's
-      * AST_RETURN-of-class memcpys the local into *out_ptr, and the exit
-      * block loads the out_ptr's slot into %rax (per SysV "by memory"
-      * return). */
-    AstType *rettype = ast_func->type->rettype;
     IrValue *ir_return_var = NULL;
-    if (rettype && irRetTypeIsAggregate(rettype)) {
-        IrValue *out_ptr = irTmp(IR_TYPE_PTR, 8);
-        out_ptr->kind = IR_VAL_PARAM;
+    if (has_hidden_out_ptr) {
+        /* Hidden out-pointer: arrives in int_arg_regs[0] (rdi), spilled
+         * to a slot via the same arrive+store mechanism as a normal
+         * param. func->return_value is the slot so RET sees a stable
+         * stack location. */
+        IrValue *out_arrive = irTmp(IR_TYPE_PTR, 8);
+        out_arrive->kind = IR_VAL_PARAM;
+        if (pool && pool->int_arg_regs->size > 0) {
+            out_arrive->loc.kind = IR_LOC_REG;
+            out_arrive->loc.as.reg =
+                vecGet(AoStr *, pool->int_arg_regs, 0);
+        }
+        IrValue *out_slot = irTmp(IR_TYPE_PTR, 8);
+        out_slot->kind = IR_VAL_LOCAL;
         irAddStackSpace(ctx, 8);
-        ir_return_var = out_ptr;
+        irBlockAddInstr(ctx,
+                        irInstrNew(IR_STORE, out_slot, out_arrive, NULL));
+        ir_return_var = out_slot;
     } else if (rettype && rettype->kind != AST_TYPE_VOID) {
         IrInstr *ir_return_alloca = irAlloca(rettype);
         irAddStackSpace(ctx, rettype->size);
@@ -2178,141 +2588,13 @@ IrFunction *irLowerFunction(IrCtx *ctx, Ast *ast_func) {
     }
     exit_block->sealed = 1;
 
+    if (ctx->escape_set) {
+        setRelease(ctx->escape_set);
+        ctx->escape_set = NULL;
+    }
     return func;
 }
 
-static void irRemoveAllNops(IrFunction *fn) {
-    listForEach(fn->blocks) {
-        IrBlock *bb = it->value;
-        List *l = bb->instructions;
-        List *it = l->next;
-
-        while (it != l) {
-            List *next = it->next;
-            List *prev = it->prev;
-            IrInstr *I = listValue(IrInstr *, it);
-            if (I->op == IR_NOP) {
-                prev->next = next;
-                next->prev = prev;
-                free(it);
-            }
-            it = next;
-        }
-    }
-}
-
-/* If a blocks instructions match the `removal_id` then we swap it
- * for `target` */
-static void irRemapInstrBlockIds(IrBlock *bb, u64 removal_id, IrBlock *target) {
-    listForEach(bb->instructions) {
-        IrInstr *I = it->value;
-        switch (I->op) {
-            case IR_PHI: {
-                Vec *pairs = I->extra.phi_pairs;
-                for (u64 i = 0; i < pairs->size; ++i) {
-                    IrPair *p = pairs->entries[i];
-                    if (p->ir_block->id == removal_id) {
-                        p->ir_block = target;
-                    }
-                }
-                break;
-            }
-            case IR_BR: {
-                IrBlockPair *blk_pair = &I->extra.blocks;
-                if (blk_pair->target_block->id == removal_id) {
-                    blk_pair->target_block = target;
-                }
-                if (blk_pair->fallthrough_block->id == removal_id) {
-                    blk_pair->fallthrough_block = target;
-                }
-                break;
-            }
-            case IR_JMP: {
-                IrBlockPair *blk_pair = &I->extra.blocks;
-                if (blk_pair->target_block->id == removal_id) {
-                    blk_pair->target_block = target;
-                }
-                break;
-            }
-            default:
-                break;
-        }
-    }
-}
-
-static void irRemoveRedundantBlocks(IrFunction *fn) {
-    Vec *removal = vecNew(&vec_ir_block_type);
-    Map *from_to = mapNew(16, &map_u32_to_ir_block_type);
-
-    listForEach(fn->blocks) {
-        IrBlock *bb = it->value;
-        IrInstr *jmp = irBlockLastInstr(bb);
-
-        if (jmp && jmp->op == IR_JMP) {
-            if (irBlockIsRedundantJump(fn, bb)) {
-                if (jmp->op == IR_JMP) {
-                    IrBlock *R = jmp->extra.blocks.target_block;
-                    IrInstr *first = irBlockFirstInstr(R);
-                    /* We can't remove phis */
-                    if (first && first->op == IR_PHI) {
-                        continue;
-                    }
-
-                    mapAdd(from_to, (void *)(u64)R->id, bb);
-                    vecPush(removal, R);
-                    /* Remove redundant jump */
-                    listPop(bb->instructions);
-                    /* Merge instructions.
-                     * This is destructive and leads R->instructions pointing
-                     * to garbage as it gets freed */
-                    listMergeAppend(bb->instructions, R->instructions);
-                    /* Make the instructions NULL, otherwise if we see this
-                     * block again we could touch invalid memory */
-                    R->instructions = NULL;
-                }
-            }
-        }
-    }
-
-    for (u64 i = 0; i < removal->size; ++i) {
-        IrBlock *R = removal->entries[i];
-        IrBlock *target = mapGet(from_to, (void *)(u64)R->id);
-        listRemoveValue(fn->blocks,removal->entries[i]);
-
-        listForEach(fn->blocks) {
-            IrBlock *bb = it->value;
-            Map *successors = irBlockGetSuccessors(fn, bb);
-            Map *predecessors = irBlockGetPredecessors(fn, bb);
-
-            /* Remap sucessors */
-            if (successors && mapHasInt(successors, R->id)) {
-                irRemapInstrBlockIds(bb, R->id, target);
-                mapRemoveInt(successors, R->id);
-                mapAdd(successors, (void *)(u64)target->id, target);
-            }
-
-            /* Remap predecessors */
-            if (predecessors && mapHasInt(predecessors, R->id)) {
-                irRemapInstrBlockIds(bb, R->id, target);
-                mapRemoveInt(predecessors, R->id);
-                mapAdd(predecessors, (void *)(u64)target->id, target);
-            }
-        }
-    }
-
-    vecRelease(removal);
-    mapRelease(from_to);
-}
-
-void irBasicFunctionOptimisations(IrFunction *fn) {
-    irMem2Reg(fn);
-    irRemoveAllNops(fn);
-    irRemoveRedundantBlocks(fn);
-    irEvalConstantExpressions(fn);
-    // remove unused functions?
-    // create a callgraph?
-    irRemoveAllNops(fn);
-}
 
 /* Per-translation-unit counter so block labels in two functions
  * compiled together can't collide. */
@@ -2328,31 +2610,10 @@ void irFunctionPrepForCodeGen(IrCgCtx *ctx, IrFunction *fn, Ast *ast_fn) {
     fn->ra.id_to_loff = mapNew(32, &map_uint_to_uint_type);
     fn->ra.extra_stack = 0;
 
-    irCgClassifyPhis(fn);
-    irCgAnnotate(fn);
-    irPeephole(ctx->cc, fn);
+    irOptPinResultReg(fn);
+    irOptDeadCodeElim(fn);
 
     int locals_params_space = irCgComputeAstLayout(ast_fn, fn);
-
-
-    /* Index every peephole-deferred LEA by its dst tmp id, so the
-     * IR_CALL emit can re-create the leaq into the arg register. */
-    ctx->lea_inline_map = mapNew(8, &map_uint_to_uint_type);
-    listForEach(fn->blocks) {
-        IrBlock *bb = (IrBlock *)it->value;
-        listForEach(bb->instructions) {
-            IrInstr *I = (IrInstr *)it->value;
-            if (I->op != IR_LEA)
-                continue;
-            if (!(I->flags & IRCG_LEA_INLINE_AT_CALL))
-                continue;
-            if (!I->dst || I->dst->kind != IR_VAL_TMP)
-                continue;
-            mapAdd(ctx->lea_inline_map,
-                   (void *)(u64)I->dst->as.var.id,
-                   (void *)I);
-        }
-    }
 
     /* Bind AST-driven loffs (params + alloca'd locals) before walking the
      * IR for tmp slots. An alloca's dst tmp shares its var.id with the AST
@@ -2379,8 +2640,6 @@ void irCgFinishFunction(IrCgCtx *ctx) {
         IrFunction *fn = ctx->fn;
         if (fn->ra.id_to_loff)
             mapRelease(fn->ra.id_to_loff);
-        if (ctx->lea_inline_map)
-            mapRelease(ctx->lea_inline_map);
     }
 }
 
