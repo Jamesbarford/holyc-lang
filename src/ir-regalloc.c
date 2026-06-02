@@ -414,6 +414,9 @@ Set *irCgComputeReferencedBlocks(IrFunction *fn) {
     return referenced;
 }
 
+static int irFnValueIsReferenced(IrFunction *fn, IrValue *target);
+static int irFnLocalSlotNeeded(IrFunction *fn, IrValue *local);
+
 /* Bind every variable known to the IR (params + alloca'd locals) to its
  * AST-driven loff. Walk the AST function's params and locals lists; the
  * eligibility predicate guarantees they're plain AST_LVAR ints. */
@@ -444,6 +447,11 @@ void irCgBindAstLoffs(IrRaCtx *ra, Ast *ast_func) {
             IrValue *iv = irFnGetVar(ra->func, irGetParamId(p));
             /* Pinned param: no slot. */
             if (iv && iv->pinned_reg) continue;
+            /* Unreferenced param: the layout pass assigned it no slot
+             * (left p->loff at 0), so don't bind a bogus loff - it would
+             * make backends think the slot exists and store over the
+             * frame base. Must mirror the layout pass's skip. */
+            if (iv && !irFnValueIsReferenced(ra->func, iv)) continue;
             if (iv) irCgSetLoff(ra, irVarId(iv), p->loff);
         }
     }
@@ -454,6 +462,9 @@ void irCgBindAstLoffs(IrRaCtx *ra, Ast *ast_func) {
         /* Register-pinned locals have no slot - the codegen reads /
          * writes the named register directly. */
         if (iv && iv->pinned_reg) continue;
+        /* Mirror the layout pass: a local that appears nowhere in the
+         * optimised IR got no loff there, so don't bind a bogus one. */
+        if (iv && !irFnLocalSlotNeeded(ra->func, iv)) continue;
         if (iv) irCgSetLoff(ra, irVarId(iv), l->loff);
     }
 }
@@ -496,6 +507,46 @@ static int irFnValueIsReferenced(IrFunction *fn, IrValue *target) {
     return 0;
 }
 
+/* True if `local` is mentioned ANYWHERE in fn's instruction stream:
+ * as the dst of any op, r1, r2, idx, a CALL arg, a phi value, or a
+ * branch/return value. Used to decide whether a local needs a stack
+ * slot at all - after constant folding + store->read forwarding + DSE,
+ * a `I64 x = 10;` whose every store and read has been removed appears
+ * nowhere and its frame slot is pure waste.
+ *
+ * This is deliberately STRICTER than irFnValueIsReferenced (which is
+ * fine for params, as they're never computed into): a local CAN be the
+ * dst of a computational op (`iadd %local, a, b`), and DCE only prunes
+ * dead *tmp* defs - never local ones - so such an op survives and its
+ * codegen will store into the slot. Counting any dst appearance keeps
+ * that slot alive and avoids an `ir-regalloc: no slot` panic. */
+static int irFnLocalSlotNeeded(IrFunction *fn, IrValue *local) {
+    if (!local) return 0;
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (I->op == IR_NOP) continue;
+            if (I->dst == local || I->r1 == local ||
+                I->r2 == local || I->idx == local)
+                return 1;
+            if (I->op == IR_CALL && I->r1 && I->r1->as.array.values) {
+                Vec *args = I->r1->as.array.values;
+                for (u64 k = 0; k < args->size; ++k)
+                    if ((IrValue *)args->entries[k] == local) return 1;
+            }
+            if (I->op == IR_PHI && I->extra.phi_pairs) {
+                Vec *pairs = I->extra.phi_pairs;
+                for (u64 k = 0; k < pairs->size; ++k) {
+                    IrPair *p = (IrPair *)pairs->entries[k];
+                    if (p->ir_value == local) return 1;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
 /* True if fn contains an IR_CALL. The x86_64 prologue uses this to
  * decide whether the leaf-function frame-elision is safe (a call needs
  * the entry rsp to be 8 mod 16, which the rbp push gives us; without
@@ -528,6 +579,12 @@ int irCgComputeAstLayout(Ast *ast_func, IrFunction *ir_func) {
         IrValue *iv = irFnGetVar(ir_func, irGetParamId(l));
         /* Register-pinned local: no stack slot, no loff. */
         if (iv && iv->pinned_reg)
+            continue;
+        /* Local that no longer appears anywhere in the optimised IR
+         * (e.g. `I64 x = 10;` folded + DSE'd away): skip its slot so it
+         * doesn't bloat the frame. Must mirror the identical skip in
+         * irCgBindAstLoffs so both agree on the surviving loffs. */
+        if (iv && !irFnLocalSlotNeeded(ir_func, iv))
             continue;
         total += align(size, 8);
         new_offset -= size;

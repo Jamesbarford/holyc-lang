@@ -16,6 +16,10 @@
 #include "config.h"
 #include "ir.h"
 #include "ir-types.h"
+#ifdef HCC_ENABLE_JIT
+#include "aarch64-jit.h"
+#include "x86_64-jit.h"
+#endif
 #include "lexer.h"
 #include "list.h"
 #include "memory.h"
@@ -24,14 +28,6 @@
 #include "util.h"
 
 int is_terminal;
-
-#if defined(__aarch64__) || defined(__arm64ec__)
-    #define _CC "clang"
-    #define CC_TARGET ""
-#else
-    #define _CC "gcc"
-    #define CC_TARGET ""
-#endif
 
 #define ASM_TMP_FILE "/tmp/holyc-asm.s"
 #define LIB_BUFSIZ 256
@@ -126,9 +122,14 @@ int hccLibInit(Cctrl *cc, hccLib *lib, CliArgs *args, char *name) {
             lib->dylib_name,
             lib->dylib_name);
     aoStrCatPrintf(dylib_cmd," -o %s %s",lib->dylib_name,args->obj_outfile);
+    /* Install the static lib (AOT links this via `-ltos`) AND the
+     * VERSIONED shared object (the JIT dlopen's it - jitLoadLibtos
+     * probes `lib/libtos.so.0.0.1`). Deliberately no unversioned
+     * `libtos.so` symlink: that would make `-ltos` prefer the shared
+     * object over the archive, changing AOT to dynamic linking. */
     aoStrCatPrintf(installcmd,
             "cp -pPR ./%s %s/lib/lib%s",
-            lib->stylib_name,args->install_dir,lib->stylib_name);
+            lib->stylib_name, args->install_dir, lib->stylib_name);
 #else
 #error "System not supported"
 #endif
@@ -177,9 +178,14 @@ void emitFile(Cctrl *cc, AoStr *asmbuf, CliArgs *args) {
     hccLib lib;
     if (args->emit_object) {
         writeAsmToTmp(asmbuf);
+        char *object_file_name = args->output_filename ? 
+                                 args->output_filename :
+                                 args->obj_outfile;
         aoStrCatPrintf(cmd, "%s -c %s "CLIBS" %s -o ./%s",
                 cc->CC,
-                ASM_TMP_FILE,args->clibs,args->obj_outfile);
+                ASM_TMP_FILE,
+                args->clibs,
+                object_file_name);
         safeSystem(cmd->data);
     } else if (args->asm_outfile && args->assemble_only) {
         int fd;
@@ -216,7 +222,7 @@ void emitFile(Cctrl *cc, AoStr *asmbuf, CliArgs *args) {
 #if IS_MACOS
         fprintf(stderr,"%s\n",lib.dylib_cmd);
         safeSystem(lib.dylib_cmd);
-#endif /* ifdef  IS_MACOS */
+#endif
 
         fprintf(stderr,"%s\n",lib.install_cmd);
         safeSystem(lib.install_cmd);
@@ -371,7 +377,8 @@ int main(int argc, char **argv) {
     args.install_dir = INSTALL_PREFIX;
     cliParseArgs(&args,argc,argv);
 
-    cc = cctrlNew();
+    cc = cctrlNew(args.target);
+    cc->install_dir = args.install_dir;
 
     /* Plumb in support for cross compiling... currently does nothing :)*/
     const char *str_target = cliTargetToString(args.target);
@@ -382,7 +389,6 @@ int main(int argc, char **argv) {
         case TARGET_X86_64_UNKNOWN_LINUX_GNU:
         case TARGET_AARCH64_APPLE_DARWIN:
             cc->CC = mprintf("clang --target=%s", str_target);
-            cc->target = args.target;
             break;
     }
 
@@ -429,6 +435,28 @@ int main(int argc, char **argv) {
         irDump(cc);
         goto success;
     }
+
+#ifdef HCC_ENABLE_JIT
+    if (args.jit) {
+#if defined(__aarch64__) || defined(__arm64__)
+        HccJit *jit = aarch64JitCompile(cc);
+#elif defined(__x86_64__)
+        HccJit *jit = x86_64JitCompile(cc);
+#else
+        HccJit *jit = NULL;
+        fprintf(stderr, "hcc: -jit is not supported on this host architecture\n");
+#endif
+        if (!jit) {
+            /* The backend prints its own diagnostic. */
+            memoryRelease();
+            return 1;
+        }
+        int rc = hccJitRunMain(jit, argc, argv);
+        hccJitFree(jit);
+        memoryRelease();
+        return rc;
+    }
+#endif
 
     if (args.cfg_create || args.cfg_create_png || args.cfg_create_svg) {
         Vec *cfgs = cfgConstruct(cc);

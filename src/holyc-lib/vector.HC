@@ -147,12 +147,12 @@ U0 IntVecSort(IntVec *vec)
   QSortGeneric(vec->entries(U0**),vec->size-1,0,&_IntCmp);
 }
 
-I64 IntVecClear(IntVec *vec)
+U0 IntVecClear(IntVec *vec)
 {
   vec->size = 0;
 }
 
-I64 IntVecRelease(IntVec *vec)
+U0 IntVecRelease(IntVec *vec)
 {
   if (vec) {
     Free(vec->entries);
@@ -235,12 +235,12 @@ U0 PtrVecSort(PtrVec *vec, I64 (*_compare_fn)(U0 *_arg1, U0 *_arg2))
   QSortGeneric(vec->entries,vec->size-1,0,_compare_fn);
 }
 
-I64 PtrVecClear(PtrVec *vec)
+U0 PtrVecClear(PtrVec *vec)
 {
   vec->size = 0;
 }
 
-I64 PtrVecRelease(PtrVec *vec, U0 (*_free_value)(U0 *_val) = NULL)
+U0 PtrVecRelease(PtrVec *vec, U0 (*_free_value)(U0 *_val) = NULL)
 { // Optionally pass a callback to free each item in the vector 
   if (vec) {
     if (_free_value) {

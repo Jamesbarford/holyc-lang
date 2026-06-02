@@ -25,6 +25,8 @@ all:
 		-DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
 		-DCMAKE_INSTALL_PREFIX=$(INSTALL_PREFIX) \
 		-DCMAKE_C_FLAGS=$(CFLAGS) \
+		-DCMAKE_EXPORT_COMPILE_COMMANDS=on \
+		-DHCC_ENABLE_JIT=on \
 		&& $(MAKE) -C ./build -j2
 
 install:
@@ -35,6 +37,9 @@ release-unit-test:
 
 unit-test:
 	cd ./src/tests && ../../hcc ./run.HC -o test-runner && ./test-runner && cd ../../
+
+jit-unit-test:
+	cd ./src/tests && ../../hcc ./run_jit.HC -o test-runner-jit && ./test-runner-jit && cd ../../
 
 lib-tos:
 	cd ./src/holyc-lib \

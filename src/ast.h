@@ -536,6 +536,33 @@ AstType *astTypeCheck(AstType *expected, Ast *ast, AstBinOp op);
 /* Queries */
 int astIsIntType(AstType *type);
 int astIsFloatType(AstType *type);
+int astTypeAlign(AstType *type);
+
+/* Iterate a class/union's fields in declaration order. The callback gets
+ * each field's name + type; returning non-zero stops iteration early and
+ * that value is returned (0 if it ran to completion). Beats poking at the
+ * fields Map's index vector by hand at every call site. */
+typedef int (*AstClassFieldCb)(AoStr *field_name, AstType *field, void *ud);
+int astForEachClassField(AstType *cls, AstClassFieldCb cb, void *ud);
+AstType *astClassFieldAt(AstType *cls, int idx);
+
+/* Platform C-ABI classification of an aggregate passed/returned by value:
+ *  - AAPCS_HFA: Homogeneous Floating-point Aggregate (1-4 same FP members)
+ *               -> FP registers; hfa_elem (4/8) + hfa_count written.
+ *  - AAPCS_INTEGER: any other aggregate <= 16 bytes -> 1-2 GP registers.
+ *  - AAPCS_INDIRECT: aggregate > 16 bytes -> passed/returned by reference. */
+typedef enum { AAPCS_INTEGER, AAPCS_HFA, AAPCS_INDIRECT } AapcsClass;
+AapcsClass astAapcsClassify(AstType *type, int *hfa_elem, int *hfa_count);
+
+/* System V AMD64 classification of an aggregate passed/returned by value.
+ * The aggregate is split into 8-byte "eightbytes"; each is classified
+ * SYSV_INTEGER (-> GP reg) or SYSV_SSE (-> XMM reg). Aggregates larger than
+ * 16 bytes (more than two eightbytes) are class SYSV_MEMORY and passed on
+ * the stack by value. astSysvClassify fills `classes[0..*n_eightbytes-1]`
+ * and returns 1 for MEMORY (in which case `classes` is not meaningful), 0
+ * otherwise. */
+typedef enum { SYSV_NO_CLASS, SYSV_INTEGER, SYSV_SSE, SYSV_MEMORY } SysvClass;
+int astSysvClassify(AstType *type, SysvClass *classes, int *n_eightbytes);
 int astTypeIsPtr(AstType *type);
 int astTypeIsArray(AstType *type);
 int astIsIntrinsicClass(AstType *ty);

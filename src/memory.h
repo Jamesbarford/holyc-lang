@@ -3,9 +3,6 @@
 
 #include "types.h"
 
-void *xmalloc(u64 size);
-void xfree(void *ptr);
-
 void globalArenaInit(u32 capacity);
 void *globalArenaAllocate(u32 size);
 void globalArenaRelease(void);

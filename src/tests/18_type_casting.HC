@@ -45,6 +45,7 @@ I64 Varadic(...)
   for (I64 i = 0; i < argc; ++i) {
     argv[i](Ptr *)->x = 10;
   }
+  return argc;
 }
 
 Bool VaradicTest()

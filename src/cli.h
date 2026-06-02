@@ -35,6 +35,7 @@ enum CliArgType {
     CLI_EMIT_OBJECT,
     CLI_HELP,
     CLI_INSTALL_DIR,
+    CLI_JIT,
     CLI_MEM_STATS,
     CLI_OUTPUT_FILENAME,
     CLI_PRINT_AST,
@@ -81,6 +82,7 @@ typedef struct CliArgs {
     int emit_dylib;
     int emit_object;
     int run;
+    int jit;
     int assemble;
     int transpile;
     int to_stdout;

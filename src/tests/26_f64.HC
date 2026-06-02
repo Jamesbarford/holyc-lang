@@ -117,15 +117,36 @@ Bool FloatOperators()
   return tests == correct;
 }
 
+F64 RetD() { return 7.5; }
+I64 RetI() { return 9; }
+
+/* A function's float return assigned to an int variable (and vice versa)
+ * must go through a real conversion (fcvtzs / scvtf), not a raw spill of
+ * the return register. Regression for the decl-initialiser fast path that
+ * used to redirect the call's dst straight into the slot, skipping the
+ * conversion. */
+Bool FloatReturnConversions()
+{
+  I64 tests = 5, correct = 0;
+  I64 a = RetD();          if (a == 7) correct++;     /* F64 call -> int   */
+  F64 b = RetI();          if (b == 9.0) correct++;    /* int call -> F64   */
+  I64 c; c = RetD();       if (c == 7) correct++;      /* assignment form   */
+  I64 d = RetD() + 2;      if (d == 9) correct++;      /* in arithmetic     */
+  F64 e = RetD();
+  I64 f = e;               if (f == 7) correct++;      /* via intermediate  */
+  return tests == correct;
+}
+
 I32 Main()
 {
   "Test - Floating point arithmetic:\n";
-  I64 tests = 5, correct = 0;
+  I64 tests = 6, correct = 0;
   if (FloatAddition()) correct++;
   if (FloatSubraction()) correct++;
   if (FloatDivision()) correct++;
   if (FloatMultiplication()) correct++;
   if (FloatOperators()) correct++;
+  if (FloatReturnConversions()) correct++;
   PrintResult(correct,tests);
   "====\n";
   return 0;

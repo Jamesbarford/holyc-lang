@@ -52,6 +52,7 @@ const char *irValueTypeToString(IrValueType ir_value_type) {
         case IR_TYPE_I16:      type_str = "i16"; break;
         case IR_TYPE_I32:      type_str = "i32"; break;
         case IR_TYPE_I64:      type_str = "i64"; break;
+        case IR_TYPE_F32:      type_str = "f32"; break;
         case IR_TYPE_F64:      type_str = "f64"; break;
         case IR_TYPE_PTR:      type_str = "ptr"; break;
         case IR_TYPE_ARRAY:    type_str = "array"; break;

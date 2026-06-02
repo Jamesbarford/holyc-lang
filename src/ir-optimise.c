@@ -325,26 +325,48 @@ static int irValMatchesSlot(IrValue *v, IrValue *slot) {
            irVarId(v) == irVarId(slot);
 }
 
-static void irRewriteOperands(IrInstr *I, IrValue *slot, IrValue *source) {
+static int irRewriteOperands(IrInstr *I, IrValue *slot, IrValue *source) {
+    int changed = 0;
     /* IR_LEA / IR_GEP / IR_LOAD / IR_STORE_DEREF (address operand) all
      * need their operand to have a real frame loff. They emit
      * `leaq loff(%rbp), ...` and friends. A `loc=REG`-only source
      * (e.g. a param's arrive value) can't satisfy that. */
     if (I->op == IR_LEA || I->op == IR_GEP || I->op == IR_LOAD)
-        return;
-    if (irValMatchesSlot(I->r1, slot) && I->r1 != source) I->r1 = source;
-    if (irValMatchesSlot(I->r2, slot) && I->r2 != source) I->r2 = source;
+        return 0;
+    if (irValMatchesSlot(I->r1, slot) && I->r1 != source) {
+        I->r1 = source;
+        changed = 1;
+    }
+    if (irValMatchesSlot(I->r2, slot) && I->r2 != source) {
+        I->r2 = source;
+        changed = 1;
+    }
     /* IR_BR/IR_RET carry their value operand in dst. STORE_DEREF's
      * dst is the address (needs loff, don't substitute). */
     if ((I->op == IR_BR || I->op == IR_RET) &&
         irValMatchesSlot(I->dst, slot) && I->dst != source)
     {
         I->dst = source;
+        changed = 1;
     }
-    /* CALL args: substituting here is unsafe. The call's per-arg
-     * loading sequence clobbers ABI arg regs in order, so a later
-     * arg whose forwarded source.loc names an earlier arg's target
-     * reg reads garbage. */
+    /* CALL args: forwarding a *register-resident* source here is unsafe -
+     * the call's per-arg loading sequence clobbers ABI arg regs in order,
+     * so a later arg whose forwarded source.loc names an earlier arg's
+     * target reg reads garbage. A *constant* source has no such hazard
+     * (it's materialised fresh as an immediate at the use site), so we can
+     * fold `f(x)` after `x = <const>` into `f(<const>)`. */
+    if (I->op == IR_CALL && irIsConstInt(source) && I->r1 &&
+        I->r1->as.array.values)
+    {
+        Vec *args = I->r1->as.array.values;
+        for (u64 i = 0; i < args->size; ++i) {
+            IrValue *a = (IrValue *)args->entries[i];
+            if (irValMatchesSlot(a, slot) && a != source) {
+                args->entries[i] = source;
+                changed = 1;
+            }
+        }
+    }
     if (I->op == IR_PHI && I->extra.phi_pairs) {
         for (u64 i = 0; i < I->extra.phi_pairs->size; ++i) {
             IrPair *p = vecGet(IrPair *, I->extra.phi_pairs, i);
@@ -352,9 +374,11 @@ static void irRewriteOperands(IrInstr *I, IrValue *slot, IrValue *source) {
                 p->ir_value != source)
             {
                 p->ir_value = source;
+                changed = 1;
             }
         }
     }
+    return changed;
 }
 
 /* True if `v` is pinned to a register the backend declared as
@@ -374,7 +398,8 @@ static int irLocIsScratchClobbered(IrValue *v) {
     return 0;
 }
 
-static void irForwardStoreToReads(IrFunction *fn) {
+static int irForwardStoreToReads(IrFunction *fn) {
+    int changed = 0;
     listForEach(fn->blocks) {
         IrBlock *bb = (IrBlock *)it->value;
 
@@ -389,7 +414,7 @@ static void irForwardStoreToReads(IrFunction *fn) {
             if (I->op == IR_NOP) continue;
 
             for (u64 i = 0; i < n; ++i) {
-                irRewriteOperands(I, slots[i], sources[i]);
+                changed += irRewriteOperands(I, slots[i], sources[i]);
             }
 
             /* Kills clear the entire map. */
@@ -420,13 +445,36 @@ static void irForwardStoreToReads(IrFunction *fn) {
                 }
             }
 
+            /* Redefinition kill: a non-store op whose dst is a tracked
+             * slot (e.g. `iadd l2, l2, 1` writing a param's slot in
+             * place) makes the recorded source stale - the slot now holds
+             * this op's result, not the stored value. Without this, a
+             * later read of the slot is wrongly rewritten to the old
+             * value (`return arg` after `arg += 1` became `ret <param>`).
+             * The IR_STORE case below maintains its own entry. */
+            if (I->op != IR_STORE && I->dst) {
+                for (u64 i = 0; i < n; ++i) {
+                    if (irValMatchesSlot(I->dst, slots[i])) {
+                        slots[i] = slots[n - 1];
+                        sources[i] = sources[n - 1];
+                        n--;
+                        break;
+                    }
+                }
+            }
+
             /* Update map on STORE: dst-slot now holds r1's value.
              * Only forward when the value is 8 bytes wide. A
              * sub-word value (i32 argc, i8 char param) has unspecified
              * upper bits in its ABI arg reg, and a movq forwarding
-             * skips the sign/zero extension a slot read would do. */
+             * skips the sign/zero extension a slot read would do.
+             * Use irValueByteSize, not as.var.size directly: a const
+             * source carries its value in as._i64, so as.var.size
+             * aliases the value's bits (0 for any small constant) and
+             * the old check silently refused to forward constant
+             * stores - `x = 10` never propagated. */
             if (I->op == IR_STORE && I->dst && I->r1 &&
-                I->r1->as.var.size == 8)
+                irValueByteSize(I->r1) == 8)
             {
                 for (u64 i = 0; i < n; ++i) {
                     if (irValMatchesSlot(I->dst, slots[i])) {
@@ -460,6 +508,7 @@ static void irForwardStoreToReads(IrFunction *fn) {
         free(slots);
         free(sources);
     }
+    return changed;
 }
 
 /* Dead store elimination: after forwarding, the original IR_STOREs
@@ -851,9 +900,19 @@ void irBasicFunctionOptimisations(IrFunction *fn) {
     irFoldPassThroughBlocks(fn);
     irRemoveRedundantBlocks(fn);
     irFoldGlobalDeref(fn);
-    irEvalConstantExpressions(fn);
     irForwardReturnSlot(fn);
-    irForwardStoreToReads(fn);
+    /* Constant folding and store->read forwarding feed each other: a
+     * forwarded `store %slot, <const>` turns a downstream `iadd %t,
+     * %slot, %slot2` into a const+const the folder can collapse, and
+     * the folded result is itself a const store the next forwarding
+     * sweep can propagate. Run them to a fixed point so `z = x + y`
+     * over constants reduces all the way to a single value. Each pass
+     * only ever removes/narrows work, so this terminates. */
+    int folded;
+    do {
+        folded  = irEvalConstantExpressions(fn);
+        folded += irForwardStoreToReads(fn);
+    } while (folded);
     irDeadStoreEliminate(fn);
     /* Address-mode + RMW fusion to fixed point. RMW collapses a
      * two-use IADD (used by both load and store on the same addr)
@@ -1112,9 +1171,11 @@ void irOptDeadCodeElim(IrFunction *fn) {
                 case IR_SITOFP: case IR_UITOFP:
                 case IR_PTRTOINT: case IR_INTTOPTR:
                 case IR_BITCAST:
-                    safe = 1; break;
+                    safe = 1;
+                    break;
                 default:
                     safe = 0;
+                    break;
                 }
                 if (!safe) continue;
                 if (!irIsTmp(I->dst)) continue;

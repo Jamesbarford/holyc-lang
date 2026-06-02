@@ -15,18 +15,6 @@
 static Arena global_memory_arena;
 static int global_memory_arena_init = 0;
 
-void *xmalloc(u64 size) {
-    void *ptr = (void *)malloc(size);
-    if (!ptr) {
-        loggerPanic("OOM: %s\n", aoStrError()->data);
-    }
-    return ptr;
-}
-
-void xfree(void *ptr) {
-    if (ptr) free(ptr);
-}
-
 void globalArenaInit(u32 capcity) {
     if (!global_memory_arena_init) {
         arenaInit(&global_memory_arena, capcity);

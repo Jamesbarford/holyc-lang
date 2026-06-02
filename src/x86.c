@@ -1888,7 +1888,7 @@ void asmExpression(Cctrl *cc, AoStr *buf, Ast *ast) {
                 aoStrCatPrintf(buf, ".data\n %s:\n\t"
                                     ".quad 0x%lX #%.9f\n"
                                     ".text\n\t",f64_label,
-                                    ieee754(f),f);
+                                    ieee754_64(f),f);
             }
             aoStrCatPrintf(buf, "movsd    %s(%%rip), %%xmm0\n\t", f64_label);
             break;
@@ -2163,13 +2163,14 @@ void asmDataInternal(AoStr *buf, Ast *data) {
 
     if (data->type->kind == AST_TYPE_FLOAT) {
         aoStrCatPrintf(buf,".quad 0x%lX #%.9f\n\t",
-                ieee754(data->f64),
+                ieee754_64(data->f64),
                 data->f64);
         return;
     }
 
     switch (data->type->size) {
         case 1: aoStrCatPrintf(buf, ".byte %d\n\t", data->i64); break;
+        case 2: aoStrCatPrintf(buf, ".short %d\n\t", data->i64); break;
         case 4: aoStrCatPrintf(buf, ".long %d\n\t", data->i64); break;
         case 8: aoStrCatPrintf(buf, ".quad %d\n\t", data->i64); break;
         default:

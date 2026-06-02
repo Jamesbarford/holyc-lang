@@ -103,7 +103,20 @@ set(HEADERS
     x86_64.h
 )
 
+add_subdirectory(asm)
+
+option(HCC_ENABLE_JIT "Build the optional in-process JIT (aarch64 & x86_64)" OFF)
+if (HCC_ENABLE_JIT)
+    list(APPEND SOURCES jit-common.c aarch64-jit.c x86_64-jit.c)
+    list(APPEND HEADERS jit-common.h aarch64-jit.h x86_64-jit.h)
+endif()
+
 add_executable(hcc ${SOURCES} ${HEADERS})
+
+if (HCC_ENABLE_JIT)
+    target_compile_definitions(hcc PRIVATE HCC_ENABLE_JIT)
+    target_link_libraries(hcc tasm ${CMAKE_DL_LIBS})
+endif()
 
 set(HCC_PATH "${CMAKE_INSTALL_PREFIX}/bin/hcc")
 

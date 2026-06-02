@@ -73,7 +73,7 @@ typedef enum IrOp {
     IR_PTRTOINT,    /* Pointer to integer */
     IR_INTTOPTR,    /* Integer to pointer */
     IR_BITCAST,     /* Reinterpret bits as different type */
-    
+
     /* Control flow operations */
     IR_RET,         /* Return from function */
     IR_BR,          /* Conditional branch off a 0/1 condition value */
@@ -107,7 +107,7 @@ typedef enum IrValueType {
     IR_TYPE_I16,         /* 16-bit integer (short) */
     IR_TYPE_I32,         /* 32-bit integer (int) */
     IR_TYPE_I64,         /* 64-bit integer (long) */
-    // We do not have 32 bit floats...  yet IR_TYPE_F32,        /* 32-bit float */
+    IR_TYPE_F32,        /* 32-bit float */
     IR_TYPE_F64,         /* 64-bit float (double) */
     IR_TYPE_PTR,         /* Pointer type (with element type) */
     IR_TYPE_ARRAY,       /* Array type (with element type and length) */
@@ -231,6 +231,11 @@ struct IrValue {
      * regalloc runs (or for value kinds the regalloc doesn't track,
      * e.g. constants which carry their value in `as` directly). */
     IrLocation loc;
+    /* Source AST type of a struct passed by value as a call argument,
+     * threaded through so the backend can apply the platform C ABI (HFA
+     * / register classification) which it can't derive from IrValueType
+     * alone. NULL for everything that isn't a by-value struct arg. */
+    AstType *byval_struct_type;
 
     union {
         AoStr *name; /* aribitrary string that I seem to have used in my

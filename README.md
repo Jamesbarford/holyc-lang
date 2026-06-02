@@ -132,7 +132,10 @@ to either the Makefile or when configuring cmake.
 Once the compiler has been compiled, aside from compiling `.HC` files, more 
 options can be displayed by running `hcc --help`
 
-## Key Differences between this and TempleOS HolyC
+## Key Differences between this and TempleOS Holy
+- `F32` data type, TempleOS only supports `F64` however a lot of C libraries,
+  like sdl or raylib require `float`. So it's very hand to be able to use
+  these libraries from HolyC code.
 - `auto` key word for type inference, an addition which makes it easier
   to write code.
 - Range based for loops can be used with static arrays and structs with 

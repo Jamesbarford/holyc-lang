@@ -214,7 +214,7 @@ u8 irOpIsCmp(IrOp opcode) {
 }
 
 u8 irIsFloat(IrValueType type) {
-    return type == IR_TYPE_F64;
+    return type == IR_TYPE_F64 || type == IR_TYPE_F32;
 }
 
 u8 irIsInt(IrValueType type) {
@@ -330,7 +330,12 @@ IrValueType irConvertType(AstType *type) {
             }
         }
         case AST_TYPE_CHAR:    return IR_TYPE_I8;
-        case AST_TYPE_FLOAT:   return IR_TYPE_F64;
+        case AST_TYPE_FLOAT: {
+            if (type->size == 8)
+                return IR_TYPE_F64;
+            else
+                return IR_TYPE_F32;
+        }
         case AST_TYPE_ARRAY:   return IR_TYPE_ARRAY;
         case AST_TYPE_POINTER: return IR_TYPE_PTR;
         case AST_TYPE_FUNC:    return IR_TYPE_FUNCTION;
@@ -899,6 +904,7 @@ u32 irValueByteSize(IrValue *v) {
         case IR_TYPE_I8:  return 1;
         case IR_TYPE_I16: return 2;
         case IR_TYPE_I32: return 4;
+        case IR_TYPE_F32: return 4;
         default:          return 8;
     }
 }

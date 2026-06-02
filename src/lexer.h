@@ -131,6 +131,11 @@
  * an asm { } block (no implicit "compiler picks"). */
 #define KW_REG          83
 #define KW_NOREG        84
+/* Extended to have F32 support, a lot of C libraries use floats, so without
+ * an F32 they become very hard to use */
+#define KW_F32          85
+/* Compile-time alignment query: `alignof(<type or expr>)`. */
+#define KW_ALIGNOF      86
 
 /* Compiler Flags*/
 #define CCF_MULTI_CHAR_OP     (1<<0)

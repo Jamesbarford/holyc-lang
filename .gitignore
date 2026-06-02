@@ -19,6 +19,7 @@ compile_commands.json
 scratch
 *.dot
 test-runner
+test-runner-jit
 .idea
 .gdb_history
 build
