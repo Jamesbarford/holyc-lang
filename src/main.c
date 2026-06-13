@@ -225,14 +225,16 @@ void emitFile(Cctrl *cc, AoStr *asmbuf, CliArgs *args) {
             AoStr *run_cmd = aoStrNew();
             writeAsmToTmp(asmbuf);
             if (hccCanLinkLibTos(cc)) {
-                aoStrCatPrintf(run_cmd,"%s -L%s/lib %s "CLIBS" -ltos && ./a.out && rm ./a.out",
+                aoStrCatPrintf(run_cmd,"%s -L%s/lib %s %s "CLIBS" -ltos && ./a.out && rm ./a.out",
                         cc->CC,
                         args->install_dir,
-                        ASM_TMP_FILE);
+                        ASM_TMP_FILE,
+                        args->clibs ? args->clibs : "");
             } else {
-                aoStrCatPrintf(run_cmd,"%s %s "CLIBS" && ./a.out && rm ./a.out",
+                aoStrCatPrintf(run_cmd,"%s %s %s "CLIBS" && ./a.out && rm ./a.out",
                         cc->CC,
-                        ASM_TMP_FILE);
+                        ASM_TMP_FILE,
+                        args->clibs ? args->clibs : "");
             }
             /* Don't use 'safeSystem' else anything other than a '0' exit
              * code will cause a panic which is incorrect... This is a bit of a
