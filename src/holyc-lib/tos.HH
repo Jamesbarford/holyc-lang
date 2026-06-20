@@ -168,8 +168,8 @@ public U64 IntVecCapacity(IntVec *vec);
 public U0 IntVecPush(IntVec *vec, I64 value);
 public I64 IntVecPop(IntVec *vec, Bool *_ok);
 public I64 IntVecGet(IntVec *vec, I64 idx);
-public I64 IntVecClear(IntVec *vec);
-public I64 IntVecRelease(IntVec *vec);
+public U0 IntVecClear(IntVec *vec);
+public U0 IntVecRelease(IntVec *vec);
 public U0 IntVecSort(IntVec *vec);
 
 public PtrVec *PtrVecNew(I64 size = 32);
@@ -177,8 +177,8 @@ public U64 PtrVecCapacity(IntVec *vec);
 public U0 PtrVecPush(PtrVec *vec, U0 *value);
 public U0 *PtrVecPop(PtrVec *vec, Bool *_ok);
 public U0 *PtrVecGet(PtrVec *vec, I64 idx);
-public I64 PtrVecClear(PtrVec *vec);
-public I64 PtrVecRelease(PtrVec *vec, U0 (*_free_value)(U0 *_val) = NULL);
+public U0 PtrVecClear(PtrVec *vec);
+public U0 PtrVecRelease(PtrVec *vec, U0 (*_free_value)(U0 *_val) = NULL);
 public U0 PtrVecSort(PtrVec *vec,
                      I64 (*_compare_fn)(U0 *_arg1, U0 *_arg2));
 
@@ -573,12 +573,12 @@ public extern "c" U0 *memmove(U0 *__dst, U0 *__src, U64 __len);
 public extern "c" U0 free(U0 *ptr);
 public extern "c" U0 *malloc(U64 size);
 
-/* On x86 the core memory ops have hand-rolled asm trampolines so we
- * declare them via `_extern <asm-label>`. On ARM the library
- * provides ordinary HolyC implementations of these names, so just
- * declare the prototypes. */
-#ifdef IS_X86_64
+/* MAlloc has a hand-rolled asm trampoline (`_MALLOC`) on both arches,
+ * so its binding is declared unconditionally. The remaining core memory
+ * ops are asm on x86 but ordinary HolyC on ARM, so those stay split. */
 public _extern _MALLOC U0 *MAlloc(U64 size);
+
+#ifdef IS_X86_64
 public _extern _FREE U0 Free(U0 *ptr);
 public _extern _REALLOC U0 *ReAlloc(U0 *ptr, U64 new_size);
 public _extern _CALLOC U0 *CAlloc(U64 new_size);
@@ -588,7 +588,6 @@ public _extern _MEMSET U0 *MemSet(U0 *dst, I32 ch, U64 len);
 #endif
 
 #ifdef IS_ARM_64
-public U0 *MAlloc(U64 size);
 public U0 Free(U0 *ptr);
 public U0 *ReAlloc(U0 *ptr, U64 new_size);
 public U0 *CAlloc(U64 new_size);

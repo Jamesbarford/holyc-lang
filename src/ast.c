@@ -980,7 +980,9 @@ start_routine:
                         goto error;
                     }
                 case AST_TYPE_FLOAT:
-                    return astTypeCopy(ast_float_type);
+                    /* int/char OP float -> the float type (preserves
+                     * F32 vs F64). ptr2 is the float operand. */
+                    return astTypeCopy(ptr2);
                 case AST_TYPE_ARRAY:
                 case AST_TYPE_POINTER:
                     return ptr2;
@@ -990,7 +992,9 @@ start_routine:
             break;
         case AST_TYPE_FLOAT:
             if (ptr2->kind == AST_TYPE_FLOAT) {
-                return ast_float_type;
+                /* float OP float -> the wider of the two (F32 promotes
+                 * to F64 when mixed, matching C usual conversions). */
+                return astTypeCopy(ptr1->size >= ptr2->size ? ptr1 : ptr2);
             }
             goto error;
         case AST_TYPE_ARRAY:
@@ -1001,6 +1005,17 @@ start_routine:
             ptr2 = ptr2->ptr;
             goto start_routine;
         case AST_TYPE_CLASS:
+            /* Struct/class copy: `dst = src` between two non-intrinsic
+             * classes of the same type is a by-value copy (lowered to a
+             * memcpy in the IR). */
+            if (op == AST_BIN_OP_ASSIGN &&
+                ptr2->kind == AST_TYPE_CLASS &&
+                !ptr1->is_intrinsic && !ptr2->is_intrinsic &&
+                ptr1->clsname && ptr2->clsname &&
+                aoStrCmp(ptr1->clsname, ptr2->clsname))
+            {
+                return astTypeCopy(ptr1);
+            }
             if (ptr1->is_intrinsic && ptr2->is_intrinsic) {
                 return astTypeCopy(ast_int_type);
             } else if (astIsIntType(ptr1) && ptr2->is_intrinsic) {
@@ -1092,6 +1107,11 @@ check_type:
     } else if (astIsFloatType(e) && astIsIntType(a)) {
         ret = e;
         goto out;
+    } else if (astIsIntType(e) && astIsFloatType(a)) {
+        /* float -> int implicit conversion (lossy but valid, as in C);
+         * the lowering inserts an fptosi. */
+        ret = e;
+        goto out;
     } else if (e->kind == a->kind) {
         ret = e;
         goto out;
@@ -1115,6 +1135,164 @@ out:
 
 int astIsFloatType(AstType *type) {
     return type && type->kind == AST_TYPE_FLOAT;
+}
+
+/* ---- AAPCS64 / SysV aggregate classification ----
+ * An HFA (Homogeneous Floating-point Aggregate) is 1-4 members all the
+ * same FP type (recursively through structs/arrays). */
+typedef struct { int elem_size; int count; int ok; } AstHfaAcc;
+static int astHfaInfo(AstType *t, int *elem_size, int *count);
+
+static int astHfaFieldCb(AoStr *name, AstType *field, void *ud) {
+    (void)name;
+    AstHfaAcc *acc = (AstHfaAcc *)ud;
+    int es = 0, c = 0;
+    if (!astHfaInfo(field, &es, &c)) { acc->ok = 0; return 1; }
+    if (acc->elem_size == 0) acc->elem_size = es;
+    else if (acc->elem_size != es) { acc->ok = 0; return 1; }
+    acc->count += c;
+    if (acc->count > 4) { acc->ok = 0; return 1; }
+    return 0;
+}
+
+static int astHfaInfo(AstType *t, int *elem_size, int *count) {
+    if (!t) return 0;
+    if (t->kind == AST_TYPE_FLOAT) {
+        *elem_size = t->size; *count = 1; return 1;
+    }
+    if (t->kind == AST_TYPE_ARRAY) {
+        int es = 0, c = 0;
+        if (t->len <= 0 || !astHfaInfo(t->ptr, &es, &c)) return 0;
+        *elem_size = es; *count = c * t->len;
+        return *count >= 1 && *count <= 4;
+    }
+    if (t->kind == AST_TYPE_CLASS) {
+        AstHfaAcc acc = { 0, 0, 1 };
+        astForEachClassField(t, astHfaFieldCb, &acc);
+        if (!acc.ok || acc.count < 1 || acc.count > 4 || acc.elem_size == 0)
+            return 0;
+        *elem_size = acc.elem_size; *count = acc.count;
+        return 1;
+    }
+    return 0;
+}
+
+AapcsClass astAapcsClassify(AstType *t, int *hfa_elem, int *hfa_count) {
+    int es = 0, c = 0;
+    if (astHfaInfo(t, &es, &c)) {
+        if (hfa_elem) *hfa_elem = es;
+        if (hfa_count) *hfa_count = c;
+        return AAPCS_HFA;
+    }
+    return t->size <= 16 ? AAPCS_INTEGER : AAPCS_INDIRECT;
+}
+
+/* System V AMD64 eightbyte classification. We walk every scalar field
+ * (recursing into nested aggregates/arrays, accumulating absolute byte
+ * offsets) and fold its class into each eightbyte it touches. The SysV
+ * merge rule: INTEGER dominates SSE, an untouched eightbyte defaults to
+ * SSE (padding). */
+typedef struct { SysvClass *classes; int base; } AstSysvAcc;
+static void astSysvMergeField(AstSysvAcc *acc, AstType *ft, int off);
+
+static int astSysvFieldCb(AoStr *name, AstType *field, void *ud) {
+    (void)name;
+    AstSysvAcc *acc = (AstSysvAcc *)ud;
+    astSysvMergeField(acc, field, acc->base + field->offset);
+    return 0;
+}
+
+static void astSysvMergeField(AstSysvAcc *acc, AstType *ft, int off) {
+    if (!ft) return;
+    if (ft->kind == AST_TYPE_CLASS || ft->kind == AST_TYPE_UNION) {
+        AstSysvAcc sub = { acc->classes, off };
+        astForEachClassField(ft, astSysvFieldCb, &sub);
+        return;
+    }
+    if (ft->kind == AST_TYPE_ARRAY) {
+        int es = ft->ptr ? ft->ptr->size : 0;
+        if (es <= 0) return;
+        for (int i = 0; i < ft->len; ++i)
+            astSysvMergeField(acc, ft->ptr, off + i * es);
+        return;
+    }
+    SysvClass c = (ft->kind == AST_TYPE_FLOAT) ? SYSV_SSE : SYSV_INTEGER;
+    int lo = off / 8;
+    int hi = (off + ft->size - 1) / 8;
+    for (int eb = lo; eb <= hi && eb < 2; ++eb) {
+        if (acc->classes[eb] == SYSV_NO_CLASS) acc->classes[eb] = c;
+        else if (acc->classes[eb] == SYSV_INTEGER || c == SYSV_INTEGER)
+            acc->classes[eb] = SYSV_INTEGER;
+        /* both SSE -> stays SSE */
+    }
+}
+
+int astSysvClassify(AstType *t, SysvClass *classes, int *n_eightbytes) {
+    int size = t ? t->size : 0;
+    int n = (size + 7) / 8;
+    if (n_eightbytes) *n_eightbytes = n;
+    if (size > 16 || n > 2 || n < 1) return 1; /* MEMORY */
+    classes[0] = classes[1] = SYSV_NO_CLASS;
+    AstSysvAcc acc = { classes, 0 };
+    astForEachClassField(t, astSysvFieldCb, &acc);
+    for (int i = 0; i < n; ++i)
+        if (classes[i] == SYSV_NO_CLASS) classes[i] = SYSV_SSE;
+    return 0;
+}
+
+/* Return the `idx`-th field's type in declaration order, or NULL if out
+ * of range. Used to pair positional aggregate-initialiser items with the
+ * field they target (so each gets the field's real type and offset). */
+AstType *astClassFieldAt(AstType *cls, int idx) {
+    if (!cls || !cls->fields || !cls->fields->indexes || idx < 0) return NULL;
+    Map *fields = cls->fields;
+    int seen = 0;
+    for (u64 i = 0; i < fields->indexes->size; ++i) {
+        u64 fi = (u64)(uintptr_t)fields->indexes->entries[i];
+        MapNode *node = &fields->entries[fi];
+        if (!node->value) continue;
+        if (seen == idx) return (AstType *)node->value;
+        seen++;
+    }
+    return NULL;
+}
+
+/* Iterate a class/union's fields in declaration order (the fields Map
+ * preserves insertion order in its `indexes` vector). */
+int astForEachClassField(AstType *cls, AstClassFieldCb cb, void *ud) {
+    if (!cls || !cls->fields || !cls->fields->indexes) return 0;
+    Map *fields = cls->fields;
+    for (u64 i = 0; i < fields->indexes->size; ++i) {
+        u64 idx = (u64)(uintptr_t)fields->indexes->entries[i];
+        MapNode *node = &fields->entries[idx];
+        if (!node->value) continue;
+        int stop = cb((AoStr *)node->key, (AstType *)node->value, ud);
+        if (stop) return stop;
+    }
+    return 0;
+}
+
+/* Alignment of a type: scalars/pointers by their width (<=8), arrays by
+ * their element, classes/unions by the alignment recorded during their
+ * own layout. The widest scalar is 8 bytes, so this never exceeds 8. */
+int astTypeAlign(AstType *type) {
+    if (!type) return 1;
+    switch (type->kind) {
+        case AST_TYPE_ARRAY:   return astTypeAlign(type->ptr);
+        case AST_TYPE_POINTER:
+        case AST_TYPE_FUNC:    return 8;
+        case AST_TYPE_CLASS:
+        case AST_TYPE_UNION: {
+            int a = (int)type->alignment;
+            if (a <= 0) a = type->size > 8 ? 8 : type->size;
+            return a > 0 ? a : 1;
+        }
+        default: {
+            int a = type->size;
+            if (a <= 0) return 1;
+            return a > 8 ? 8 : a;
+        }
+    }
 }
 
 int astIsIntType(AstType *type) {
@@ -1207,7 +1385,10 @@ static AoStr *astTypeToAoStrInternal(AstType *type) {
         return str;
 
     case AST_TYPE_FLOAT:
-        aoStrCatLen(str,str_lit("F64"));
+        if (type->size == 8)
+            aoStrCatLen(str,str_lit("F64"));
+        else
+            aoStrCatLen(str,str_lit("F32"));
         return str;
 
     case AST_TYPE_POINTER: {

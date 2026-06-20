@@ -544,6 +544,70 @@ static void parseFlattenDefaultArgs(Ast *def, Vec *argv) {
     }
 }
 
+/* Wrap any fixed-parameter argument that crosses the int/float boundary
+ * in a cast, so codegen converts the value (sitofp/fptosi) instead of
+ * reinterpreting the raw bits. C does this implicitly for prototyped
+ * params - e.g. `Twice(3)` where `Twice` takes an F64 must pass 3.0.
+ * Runs after parseFlattenDefaultArgs so filled-in default values get
+ * coerced too. Variadic extras are left alone (no declared type). */
+/* Promote F32 arguments in variadic positions (index >= from_idx) to
+ * F64. C's default argument promotions widen a float to a double when
+ * passed through `...`, and both the C-extern and HolyC printf read the
+ * slot as 8 bytes - without this an F32 arg prints as garbage. */
+static void parsePromoteVarargFloats(Vec *argv, u64 from_idx) {
+    if (!argv)
+        return;
+    for (u64 i = from_idx; i < argv->size; ++i) {
+        Ast *arg = (Ast *)argv->entries[i];
+        if (!arg || arg->kind == AST_PLACEHOLDER || !arg->type)
+            continue;
+        if (astIsFloatType(arg->type) && arg->type->size < 8) {
+            argv->entries[i] = astCast(arg, ast_float_type);
+        }
+    }
+}
+
+static void parseCoerceArgs(Ast *def, Vec *argv) {
+    Vec *params = parseGetFunctionParams(def);
+    if (!params || !argv)
+        return;
+
+    u64 param_count = params->size;
+    for (u64 i = 0; i < param_count && i < argv->size; ++i) {
+        Ast *param = (Ast *)params->entries[i];
+        if (!param)
+            continue;
+        if (param->kind == AST_VAR_ARGS) {
+            /* Everything from here on is variadic: widen F32 -> F64. */
+            parsePromoteVarargFloats(argv, i);
+            break;
+        }
+
+        Ast *arg = (Ast *)argv->entries[i];
+        if (!arg || arg->kind == AST_PLACEHOLDER || !arg->type)
+            continue;
+
+        AstType *type = param->kind == AST_DEFAULT_PARAM
+                      ? param->declvar->type : param->type;
+        if (!type)
+            continue;
+
+        int want_float = astIsFloatType(type);
+        int want_int   = astIsIntType(type);
+        int got_float  = astIsFloatType(arg->type);
+        int got_int    = astIsIntType(arg->type);
+        if ((want_float && got_int) || (want_int && got_float)) {
+            argv->entries[i] = astCast(arg, type);
+        } else if (want_float && got_float &&
+                   type->size != arg->type->size) {
+            /* float <-> float of a different width (e.g. passing an
+             * F32 where an F64 param is declared): convert, don't
+             * reinterpret the bits. */
+            argv->entries[i] = astCast(arg, type);
+        }
+    }
+}
+
 Vec *parseArgv(Cctrl *cc, Ast *decl, s64 terminator, char *fname, int len) {
     List *var_args = NULL;
     Ast *ast, *param = NULL;
@@ -847,6 +911,7 @@ Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, s64 terminator) {
     if (maybe_fn) {
         parseFunctionArgumentCheck(cc,maybe_fn,argv,fname,len);
         parseFlattenDefaultArgs(maybe_fn, argv);
+        parseCoerceArgs(maybe_fn, argv);
         parsePrintfFormatCheck(cc, maybe_fn, argv, fname, len,
                                fmt_line, fmt_col, fmt_len);
 
@@ -867,6 +932,8 @@ Ast *parseFunctionArguments(Cctrl *cc, char *fname, int len, s64 terminator) {
     if (!maybe_fn) {
         if ((len == 6 && !strncmp(fname,"printf",6))) {
             rettype = ast_int_type;
+            /* Implicit C printf(fmt, ...): widen F32 varargs to F64. */
+            parsePromoteVarargFloats(argv, 1);
             return astFunctionCall(rettype,fname,len,argv);
         }
         /* Walk back untill we fin the missing function */
@@ -1412,6 +1479,24 @@ Ast *parseSizeof(Cctrl *cc) {
     return astI64Type(size);
 }
 
+/* `alignof(<type or expr>)` - mirrors parseSizeof but folds to the
+ * type's alignment. Always a compile-time constant. */
+Ast *parseAlignof(Cctrl *cc) {
+    Lexeme *tok = cctrlTokenGet(cc);
+    Lexeme *peek = cctrlTokenPeek(cc);
+    AstType *type = NULL;
+
+    if (tokenPunctIs(tok,'(') && cctrlIsKeyword(cc,peek->start,peek->len)) {
+        type = parseFullType(cc);
+        cctrlTokenExpect(cc,')');
+    } else {
+        cctrlTokenRewind(cc);
+        type = parseUnaryExpr(cc)->type;
+    }
+
+    return astI64Type(astTypeAlign(type));
+}
+
 Ast *parsePostFixExpr(Cctrl *cc) {
     Ast *ast;
     AstType *type;
@@ -1503,6 +1588,7 @@ Ast *parseUnaryExpr(Cctrl *cc) {
     if (tok->tk_type == TK_KEYWORD) {
         switch (tok->i64) {
             case KW_SIZEOF: return parseSizeof(cc);
+            case KW_ALIGNOF: return parseAlignof(cc);
             case KW_DEFINED: {
                 cctrlTokenExpect(cc,'(');
                 tok = cctrlTokenGet(cc);
@@ -1565,10 +1651,44 @@ Ast *parseUnaryExpr(Cctrl *cc) {
                     lexemePunctToString(tok->i64));
             }
             peek = cctrlTokenPeek(cc);
-            if (tokenPunctIs(peek, '[') && (operand->kind == AST_CLASS_REF ||
-                                            operand->type->kind == AST_TYPE_ARRAY)) {
+            /* Subscript binds tighter than the unary op (C precedence), so
+             * `&t[i]` / `*t[i]` is `&(t[i])` / `*(t[i])`. This must apply to
+             * a POINTER operand too, not just arrays/class-refs: otherwise
+             * `&ptr[i]` parsed as `(&ptr)[i]` = `*((&ptr)+i)`, indexing the
+             * pointer variable's address by sizeof(ptr) instead of computing
+             * `ptr + i*sizeof(*ptr)` - garbage for any non-array pointer.
+             * After the first subscript, keep consuming the postfix chain
+             * (`.field`, `->field`, further `[]`) so `&t[i].x` is
+             * `&(t[i].x)` rather than `(&t[i]).x`. */
+            if (tokenPunctIs(peek, '[') && operand->type &&
+                (operand->kind == AST_CLASS_REF ||
+                 operand->type->kind == AST_TYPE_ARRAY ||
+                 operand->type->kind == AST_TYPE_POINTER)) {
                 cctrlTokenGet(cc);
                 operand = parseSubscriptExpr(cc, operand);
+                while (1) {
+                    peek = cctrlTokenPeek(cc);
+                    if (tokenPunctIs(peek, '[')) {
+                        cctrlTokenGet(cc);
+                        operand = parseSubscriptExpr(cc, operand);
+                    } else if (tokenPunctIs(peek, '.')) {
+                        cctrlTokenGet(cc);
+                        operand = parseGetClassField(cc, operand);
+                    } else if (tokenPunctIs(peek, TK_ARROW)) {
+                        cctrlTokenGet(cc);
+                        if (operand->type->kind != AST_TYPE_POINTER) {
+                            cctrlRaiseException(cc,
+                                "Pointer expected before '->' got a %s",
+                                astTypeKindToHumanReadable(operand->type));
+                        }
+                        operand = astUnaryOperator(operand->type->ptr,
+                                                   AST_UN_OP_DEREF, operand);
+                        operand->deref_symbol = TK_ARROW;
+                        operand = parseGetClassField(cc, operand);
+                    } else {
+                        break;
+                    }
+                }
             }
         }
 

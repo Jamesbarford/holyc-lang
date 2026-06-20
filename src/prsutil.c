@@ -236,6 +236,16 @@ double evalFloatExprOrErr(Ast *ast, int *_ok) {
                 return 0;
             }
         }
+        case AST_UNOP: {
+            switch (ast->unop) {
+                case AST_UN_OP_PLUS:  return +eval(ast->operand, _ok);
+                case AST_UN_OP_MINUS: return -eval(ast->operand, _ok);
+                default: {
+                    *_ok = 0;
+                    return 0;
+                }
+            }
+        }
         case AST_BINOP: {
             switch (ast->binop) {
                 case AST_BIN_OP_MUL: return eval(ast->left, _ok) * eval(ast->right, _ok);

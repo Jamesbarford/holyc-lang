@@ -77,6 +77,11 @@ static int irEvalCmp(IrCmpKind kind, s64 a, s64 b, s64 *out) {
  * identity collapses to `x`. `c` is the constant operand (whichever
  * side of `I`) and `k` is its value. */
 static int irEvalCanFold(IrInstr *I, IrValue *c, s64 k) {
+    /* Never fold away the instruction that defines a by-value struct-arg
+     * address: the dst is a value private to that argument (deliberately
+     * distinct from a shared operand pointer), and forwarding it back to the
+     * shared operand would both re-alias it and drop the byval tag. */
+    if (I->dst && I->dst->byval_struct_type) return 0;
     /* x * 1, x / 1, x /u 1 - div only when divisor is r2. */
     if ((I->op == IR_IMUL || I->op == IR_IDIV || I->op == IR_UDIV) &&
         k == 1 && c == I->r2) return 1;
@@ -95,7 +100,8 @@ static int irEvalCanFold(IrInstr *I, IrValue *c, s64 k) {
     return 0;
 }
 
-void irEvalBlock(IrBlock *bb, Map *resolver) {
+int irEvalBlock(IrBlock *bb, Map *resolver) {
+    int changed = 0;
     listForEach(bb->instructions) {
         IrInstr *I = (IrInstr *)it->value;
 
@@ -148,6 +154,24 @@ void irEvalBlock(IrBlock *bb, Map *resolver) {
             mapAddIntOrErr(resolver, irDstVarId(I), evaled);
             I->op = IR_NOP;
             I->r1 = I->r2 = NULL;
+            changed++;
+            continue;
+        }
+
+        /* Both operands const but the dst is a memory-resident local
+         * (not an SSA temp the resolver can forward). Rather than give
+         * up, lower the op to `store %slot, <const>`. The store->read
+         * forwarding pass then propagates the constant to every reader
+         * of the slot, and dead-store elimination drops the store if it
+         * has none left. Skip by-value aggregates - their dst is a
+         * private struct-arg address, not a plain scalar slot. */
+        if (was_eval && I->dst && I->dst->kind == IR_VAL_LOCAL &&
+            !I->dst->byval_struct_type)
+        {
+            I->op = IR_STORE;
+            I->r1 = irConstInt(I->dst->type, result);
+            I->r2 = NULL;
+            changed++;
             continue;
         }
 
@@ -188,17 +212,23 @@ void irEvalBlock(IrBlock *bb, Map *resolver) {
                     I->r2 = irConstInt(c->type, n);
                     folded = 1;
                 }
-                if (folded) continue;
+                if (folded) {
+                    changed++;
+                    continue;
+                }
             }
         }
     }
+    return changed;
 }
 
-void irEvalConstantExpressions(IrFunction *fn) {
+int irEvalConstantExpressions(IrFunction *fn) {
     Map *resolver = irVarValueMapNew();
+    int changed = 0;
     listForEach(fn->blocks) {
         IrBlock *bb = (IrBlock *)it->value;
-        irEvalBlock(bb,resolver);
+        changed += irEvalBlock(bb,resolver);
     }
     mapRelease(resolver);
+    return changed;
 }

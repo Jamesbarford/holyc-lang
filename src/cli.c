@@ -101,10 +101,12 @@ static CliParser parsers[] = {
     {str_lit("-cfg-svg"),   0, CLI_CFG_CREATE_SVG, "-cfg-png", "Create graphviz control flow graph as a SVG", &cliParseNop},
     {str_lit("-tokens"),    0, CLI_PRINT_TOKENS, "-tokens", "Print the tokens and exit", &cliParseNop},
     {str_lit("-S"),         0, CLI_ASSEMBLE_ONLY, "-S", "Emit assembly only", &cliParseNop},
-    {str_lit("-obj"),       0, CLI_EMIT_OBJECT, "-obj", "Emit an objectfile", &cliParseNop},
+    {str_lit("-obj"),       0, CLI_EMIT_OBJECT, "DEPRICATED use `-c` instead! -obj", "Emit an objectfile", &cliParseNop},
+    {str_lit("-c"),         0, CLI_EMIT_OBJECT, "-o", "Emit an objectfile", &cliParseNop},
     {str_lit("-lib"),       1, CLI_EMIT_DYLIB, "-lib <libname>", "Emit a dynamic and static library: `-lib <libname>`", &cliParseString},
     {str_lit("-clibs"),     1, CLI_CLIBS, "-clibs", "Link c libraries like: -clibs=`-lSDL2 -lxml2 -lcurl...`", &cliParseString},
     {str_lit("-run"),       0, CLI_RUN, "-run", "Immediately run the file (not JIT)", &cliParseNop},
+    {str_lit("-jit"),       0, CLI_JIT, "-jit", "JIT-compile and run main() in-process (aarch64 & x86_64)", &cliParseNop},
     {str_lit("-o"),         1, CLI_OUTPUT_FILENAME, "-o <binary_name>", "Output filename: `-o <name> ./<file>.HC`", &cliParseString},
     {str_lit("-o-"),        0, CLI_TO_STDOUT, "-o-", "Output assembly to stdout, only for use with -S", &cliParseNop},
     {str_lit("-transpile"), 0, CLI_TRANSPILE, "-transpile", "Transpile the code to C, this is best effort", &cliParseNop},
@@ -412,6 +414,7 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
             }
             case CLI_EMIT_OBJECT:        args->emit_object = 1; break;
             case CLI_RUN:                args->run = 1; break;
+            case CLI_JIT:                args->jit = 1; break;
             case CLI_ASSEMBLE:           args->assemble = 1; break;
             case CLI_TRANSPILE:          args->transpile = 1; break;
             case CLI_TO_STDOUT:          args->to_stdout = 1; break;

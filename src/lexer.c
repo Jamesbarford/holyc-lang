@@ -114,6 +114,7 @@ static LexerType lexer_types[] = {
     {"U32",  KW_U32},
     {"I64",  KW_I64},
     {"U64",  KW_U64},
+    {"F32",  KW_F32},
     {"F64",  KW_F64},
 
     {"auto", KW_AUTO},
@@ -163,6 +164,7 @@ static LexerType lexer_types[] = {
     {"#include", KW_PP_INCLUDE},
 
     {"sizeof",   KW_SIZEOF},
+    {"alignof",  KW_ALIGNOF},
     {"inline",   KW_INLINE},
     {"atomic",   KW_ATOMIC},
     {"volatile", KW_VOLATILE},
@@ -520,12 +522,14 @@ AoStr *lexemeToAoStr(Lexeme *tok) {
                 case KW_U32:         aoStrCatPrintf(str,"U32");     break;
                 case KW_I64:         aoStrCatPrintf(str,"I64");     break;
                 case KW_U64:         aoStrCatPrintf(str,"U64");     break;
+                case KW_F32:         aoStrCatPrintf(str,"F32");     break;
                 case KW_F64:         aoStrCatPrintf(str,"F64");     break;
                 case KW_PUBLIC:      aoStrCatPrintf(str,"public");  break;
                 case KW_ATOMIC:      aoStrCatPrintf(str,"atomic");  break;
                 case KW_DEFINE:      aoStrCatPrintf(str,"define");  break;
                 case KW_PP_INCLUDE:     aoStrCatPrintf(str,"include"); break;
                 case KW_SIZEOF:      aoStrCatPrintf(str,"sizeof");  break;
+                case KW_ALIGNOF:     aoStrCatPrintf(str,"alignof"); break;
                 case KW_RETURN:      aoStrCatPrintf(str,"return");  break;
                 case KW_TRY:         aoStrCatPrintf(str,"try");     break;
                 case KW_CATCH:       aoStrCatPrintf(str,"catch");   break;

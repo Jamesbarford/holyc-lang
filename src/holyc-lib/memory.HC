@@ -130,16 +130,23 @@ public _extern _MEMCPY U0 *MemCpy(U0 *dst, U0 *src, U64 len);
 public _extern _MEMSET U0 *MemSet(U0 *dst, I32 ch, U64 len);
 #endif
 
-#ifdef IS_ARM_64
+#ifdef __aarch64__
 /* HolyC fallbacks for non-x86 targets. MAlloc's 8-byte size header
  * is preserved so MSize/Free/ReAlloc remain compatible with code
  * that depends on it. */
-public U0 *MAlloc(U64 size)
-{
-  U64 *p = malloc(size + 8);
-  *p = size;
-  return &p[1];
+asm {
+_MALLOC::
+    STP    X29, X30, [SP, -16]! // save FP/LR - we make a call
+    STR    X0, [SP, -16]!       // save size across the call (X1 is caller-saved)
+    ADD    X0, X0, 8            // add 8, big enough for a U64 header
+    CALL   malloc               // X0 = malloc(size + 8)
+    LDR    X1, [SP], 16         // reload size
+    STR    X1, [X0]             // store the U64 size header at [ptr]
+    ADD    X0, X0, 8            // step the pointer past the header
+    LDP    X29, X30, [SP], 16   // restore FP/LR
+    RET
 }
+public _extern _MALLOC U0 *MAlloc(U64 size);
 
 public U0 Free(U0 *ptr)
 {

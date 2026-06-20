@@ -177,10 +177,15 @@ typedef struct Cctrl {
     
     /* Target triple */
     enum CliTarget target;
+
+    /* Install prefix (`--install-dir`, defaults to INSTALL_PREFIX).
+     * Headers live at <install_dir>/include, libraries at
+     * <install_dir>/lib - the JIT probes the latter for libtos. */
+    char *install_dir;
 } Cctrl;
 
 /* Instantiate a new compiler control struct */
-Cctrl *cctrlNew(void);
+Cctrl *cctrlNew(enum CliTarget target);
 /* Slimmed down Cctrl, for expanding macros */
 Cctrl *ccMacroProcessor(Map *macro_defs);
 Lexeme *cctrlTokenGet(Cctrl *cc);
@@ -199,6 +204,7 @@ int cctrlIsKeyword(Cctrl *cc, char *name, int len);
 AstType *cctrlGetKeyWord(Cctrl *cc, char *name, int len);
 void cctrlInfo(Cctrl *cc, char *fmt, ...);
 void cctrlWarning(Cctrl *cc, char *fmt, ...);
+void cctrlWarningAt(Cctrl *cc, s64 lineno, s64 col, s64 len, char *fmt, ...);
 void cctrlWarningFromTo(Cctrl *cc, char *suggestion, char from, char to, char *fmt, ...);
 __noreturn void cctrlRaiseExceptionFromTo(Cctrl *cc, char *suggestion, char from, char to, char *fmt, ...);
 __noreturn void cctrlRaiseException(Cctrl *cc, char *fmt, ...);

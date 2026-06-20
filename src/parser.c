@@ -106,6 +106,54 @@ void parseTypeCheckClassFieldInitaliser(Cctrl *cc, AstType *cls_field_type, Ast 
     }
 }
 
+/* Fold a constant aggregate-initialiser element to a literal of the
+ * destination element/field type. Global aggregate initialisers are written
+ * out as static data, and the data emitters (aarch64DataInternal /
+ * jitWriteInit) read each entry's literal value and size it by the entry's
+ * own type. Two problems this fixes:
+ *   - a bare `7` parses as the default 8-byte integer, so `I32 a[] = {7,8,9}`
+ *     would emit `.quad` per element and be read back at the wrong stride;
+ *   - an expression element like `-1` or `2+3` is not a literal at all, so
+ *     the emitter would read garbage (writing 0 bytes / wrong value).
+ * Evaluate the constant expression and rebuild a literal carrying the dest
+ * type (masked to width for integers). Non-constant elements are left as-is
+ * for their own branches to handle. */
+static Ast *parseFoldInitElement(Ast *init, AstType *dst) {
+    if (!init || !dst) {
+        return init;
+    }
+    if (init->kind == AST_STRING || init->kind == AST_ARRAY_INIT) {
+        return init;
+    }
+    if (astIsIntType(dst)) {
+        int ok = 1;
+        s64 v = evalIntConstExprOrErr(init, &ok);
+        if (!ok) {
+            return init;
+        }
+        switch (dst->size) {
+            case 1: v = dst->issigned ? (s64)(s8)v  : (s64)(u8)v;  break;
+            case 2: v = dst->issigned ? (s64)(s16)v : (s64)(u16)v; break;
+            case 4: v = dst->issigned ? (s64)(s32)v : (s64)(u32)v; break;
+            default: break;
+        }
+        Ast *lit = astI64Type(v);
+        lit->type = astTypeCopy(dst);
+        return lit;
+    }
+    if (dst->kind == AST_TYPE_FLOAT) {
+        int ok = 1;
+        double d = evalFloatExprOrErr(init, &ok);
+        if (!ok) {
+            return init;
+        }
+        Ast *lit = astF64Type(d);
+        lit->type = astTypeCopy(dst);
+        return lit;
+    }
+    return init;
+}
+
 Ast *parseDeclArrayInitInt(Cctrl *cc, AstType *type) {
     Lexeme *tok = cctrlTokenGet(cc);
     List *initlist;
@@ -132,6 +180,15 @@ Ast *parseDeclArrayInitInt(Cctrl *cc, AstType *type) {
         if (tokenPunctIs(tok, '}')) {
             break;
         }
+        /* C99 designated initialisers (`.field = value`) are not part of
+         * HolyC; reject them with a clear message instead of feeding the
+         * leading `.` into parseExpr (which crashes on the dangling
+         * member access). */
+        if (tokenPunctIs(tok, '.')) {
+            cctrlRaiseException(cc,
+                "Designated initialisers ('.field = value') are not "
+                "supported; use a positional initialiser list");
+        }
         cctrlTokenRewind(cc);
         if (tokenPunctIs(tok,'{')) {
             init = parseDeclArrayInitInt(cc,type->ptr);
@@ -152,6 +209,7 @@ Ast *parseDeclArrayInitInt(Cctrl *cc, AstType *type) {
                           astTypeToString(init->type),
                           astTypeToString(type->ptr));
               }
+              init = parseFoldInitElement(init, type->ptr);
             } else if (type->kind == AST_TYPE_CLASS) {
                 if (i >= cls_fields->indexes->size) {
                     cctrlRaiseException(cc, 
@@ -163,6 +221,7 @@ Ast *parseDeclArrayInitInt(Cctrl *cc, AstType *type) {
                 MapNode *entry = &cls_fields->entries[cls_field_idx];
                 AstType *cls_field_type = entry->value;
                 parseTypeCheckClassFieldInitaliser(cc,cls_field_type,init);
+                init = parseFoldInitElement(init, cls_field_type);
                 i++;
             }
         }
@@ -370,23 +429,28 @@ int CalcPadding(int offset, int size) {
 }
 
 Map *parseClassOffsets(Cctrl *cc,
-                       int *aligned_size, 
-                       List *fields, 
+                       int *aligned_size,
+                       int *out_align,
+                       List *fields,
                        AstType *base_class,
                        AoStr *clsname,
                        int is_intrinsic)
 {
-    int offset,size,padding;
+    int offset;
     AstType *field;
     Map *fields_dict = astTypeMapNew();
+    int max_align = 1;
 
     /* XXX: Assumes the class definition will be made later */
     if (listEmpty(fields)) {
+        *out_align = max_align;
         return fields_dict;
     }
-    
+
     if (base_class) {
         offset = base_class->size;
+        int ba = astTypeAlign(base_class);
+        if (ba > max_align) max_align = ba;
         if (cc->flags & CCTRL_SAVE_ANONYMOUS) {
             mapAdd(fields_dict,astAnnonymousLabel(),base_class);
         }
@@ -397,6 +461,7 @@ Map *parseClassOffsets(Cctrl *cc,
 
     if (is_intrinsic) {
         *aligned_size = 16;
+        *out_align = 8;
         listForEach(fields) {
             ClsField *cls_field = (ClsField *)it->value;
             field = cls_field->type;
@@ -414,17 +479,17 @@ Map *parseClassOffsets(Cctrl *cc,
         ClsField *cls_field = (ClsField *)it->value;
         field = cls_field->type;
         AoStr *field_name = cls_field->field_name;
+        int fa = astTypeAlign(field);
 
         if (field_name == NULL && parseIsClassOrUnion(field->kind)) {
             if (cc->flags & CCTRL_SAVE_ANONYMOUS) {
                 mapAdd(fields_dict,astAnnonymousLabel(),field);
             }
+            offset += CalcPadding(offset, fa);
             parseFlattenAnnonymous(field,fields_dict,offset,0);
             offset += field->size;
-            free(cls_field);
-            continue;
         } else {
-            if (field->kind == AST_TYPE_POINTER && 
+            if (field->kind == AST_TYPE_POINTER &&
                     (field->ptr->kind == AST_TYPE_CLASS || field->ptr->kind == AST_TYPE_UNION)) {
                 if (clsname && field->ptr->clsname) {
                     if (aoStrCmp(field->ptr->clsname, clsname)) {
@@ -433,39 +498,34 @@ Map *parseClassOffsets(Cctrl *cc,
                 }
             }
 
-            /* Align to the type not the size of the array */
-            if (field->kind == AST_TYPE_ARRAY) {
-                size = field->ptr->size;
-            } else {
-                size = field->size;
-            }
-
-            padding = CalcPadding(offset,size);
-            offset += (padding);
+            offset += CalcPadding(offset, fa);
             field->offset = offset;
-            offset += (field->size);
+            offset += field->size;
         }
 
+        if (fa > max_align) max_align = fa;
         if (field_name) {
             mapAdd(fields_dict,field_name->data,field);
         }
         free(cls_field);
     }
 
-    *aligned_size = offset + CalcPadding(offset, 8);
+    *out_align = max_align;
+    *aligned_size = offset + CalcPadding(offset, max_align);
     return fields_dict;
 }
 
-Map *parseUnionOffsets(Cctrl *cc, int *real_size, List *fields) {
-    int max_size;
+Map *parseUnionOffsets(Cctrl *cc, int *real_size, int *out_align, List *fields) {
+    int max_size = 0, max_align = 1;
     AstType *field;
     Map *fields_dict = astTypeMapNew();
 
-    max_size = 0;
     listForEach(fields) {
         ClsField *cls_field = (ClsField *)it->value;
         field = cls_field->type;
         AoStr *field_name = cls_field->field_name;
+        int fa = astTypeAlign(field);
+        if (fa > max_align) max_align = fa;
         if (max_size < field->size) {
             max_size = field->size;
         }
@@ -482,7 +542,8 @@ Map *parseUnionOffsets(Cctrl *cc, int *real_size, List *fields) {
             mapAdd(fields_dict,field_name->data,field);
         }
     }
-    *real_size = max_size;
+    *out_align = max_align;
+    *real_size = max_size + CalcPadding(max_size, max_align);
     return fields_dict;
 }
 
@@ -493,6 +554,7 @@ AstType *parseClassOrUnion(Cctrl *cc, Map *env,
 {
     AoStr *tag = NULL;
     int aligned_size = 0;
+    int aligned = 1;
     u32 class_size;
     Lexeme *tok = cctrlTokenGet(cc);
     AstType *prev = NULL, *ref = NULL, *base_class = NULL;
@@ -547,26 +609,28 @@ AstType *parseClassOrUnion(Cctrl *cc, Map *env,
     }
 
     if (is_class) {
-        fields_dict = parseClassOffsets(cc,&aligned_size,fields,base_class,tag,is_intrinsic);
+        fields_dict = parseClassOffsets(cc,&aligned_size,&aligned,fields,base_class,tag,is_intrinsic);
     } else {
-        fields_dict = parseUnionOffsets(cc,&aligned_size,fields);
+        fields_dict = parseUnionOffsets(cc,&aligned_size,&aligned,fields);
     }
     listRelease(fields,NULL);
 
     if (prev && fields_dict) {
         prev->fields = fields_dict;
         prev->size = aligned_size;
+        prev->alignment = (u32)aligned;
         return prev;
     }
 
     if (fields_dict) {
-        ref = astClassType(fields_dict,tag,aligned_size,is_intrinsic); 
+        ref = astClassType(fields_dict,tag,aligned_size,is_intrinsic);
         if (base_class) {
             ref->size += base_class->size;
         }
     } else {
-        ref = astClassType(NULL,tag,aligned_size,is_intrinsic); 
+        ref = astClassType(NULL,tag,aligned_size,is_intrinsic);
     }
+    ref->alignment = (u32)aligned;
     if (!is_class) ref->kind = AST_TYPE_UNION;
     if (tag) {
         mapAdd(env,tag->data,ref);
@@ -718,33 +782,115 @@ int parseValidPostControlFlowToken(Lexeme *tok) {
     return 0;
 }
 
+/* Parse one clause inside an `if (...)` header - either a declaration
+ * (`Type name [= expr]`, including pointers) or a plain expression - and
+ * report which terminator (';' or ')') closed it. Used to support C++17
+ * style `if (init-statement; condition)` and a declaration used directly
+ * as the condition. The declared variable is registered in the current
+ * (if-scoped) localenv. */
+static Ast *parseIfClause(Cctrl *cc, char *term_out) {
+    Ast *clause;
+    Lexeme *tok = cctrlTokenPeek(cc);
+    if (tok && cctrlIsKeyword(cc, tok->start, tok->len)) {
+        AstType *type = parseDeclSpec(cc);
+        Lexeme *name = cctrlTokenGet(cc);
+        if (!name || name->tk_type != TK_IDENT) {
+            cctrlRaiseException(cc,
+                "Expected identifier in `if` declaration, got `%.*s`",
+                name ? name->len : 0, name ? name->start : "");
+        }
+        Ast *var = astLVar(type, name->start, name->len);
+        if (!mapAddOrErr(cc->localenv, var->lname->data, var)) {
+            cctrlRaiseException(cc, "variable %s already declared",
+                                astLValueToString(var, 0));
+        }
+        if (cc->tmp_locals) {
+            listAppend(cc->tmp_locals, var);
+        }
+        Lexeme *eq = cctrlTokenGet(cc);
+        if (tokenPunctIs(eq, '=')) {
+            Ast *init = parseExpr(cc, 16);
+            clause = astDecl(var, init);
+            if (type->kind == AST_TYPE_AUTO) {
+                parseAssignAuto(cc, clause);
+            }
+        } else {
+            cctrlTokenRewind(cc);
+            clause = astDecl(var, NULL);
+        }
+    } else {
+        clause = parseExpr(cc, 16);
+    }
+
+    Lexeme *t = cctrlTokenGet(cc);
+    if (tokenPunctIs(t, ';'))      *term_out = ';';
+    else if (tokenPunctIs(t, ')')) *term_out = ')';
+    else {
+        cctrlRaiseException(cc,
+            "Expected ';' or ')' in `if (...)`, got `%.*s`",
+            t ? t->len : 0, t ? t->start : "");
+    }
+    return clause;
+}
+
 Ast *parseIfStatement(Cctrl *cc) {
     cctrlTokenExpect(cc,'(');
-    Ast *cond = parseExpr(cc,16);
-    cctrlTokenExpect(cc,')');
+
+    /* C++17 `if (init; cond)`: zero or more `;`-separated init statements
+     * followed by the condition. The init declarations and a
+     * declaration-condition are scoped to the if (and its bodies), so we
+     * open a child environment and, when present, desugar to a block. */
+    cc->localenv = cctrlCreateAstMap(cc->localenv);
+    List *pre = listNew();
+    Ast *cond_clause = NULL;
+    while (1) {
+        char term = 0;
+        Ast *clause = parseIfClause(cc, &term);
+        if (term == ')') { cond_clause = clause; break; }
+        listAppend(pre, clause);   /* an init statement */
+    }
+
+    /* A declaration used as the condition evaluates to the declared
+     * variable; emit the declaration first, then test the variable. */
+    Ast *cond;
+    if (cond_clause->kind == AST_DECL) {
+        listAppend(pre, cond_clause);
+        cond = cond_clause->declvar;
+    } else {
+        cond = cond_clause;
+    }
 
     Lexeme *peek = cctrlTokenPeek(cc);
     if (!parseValidPostControlFlowToken(peek)) {
-        cctrlRaiseException(cc,"Unexpected %s `%.*s` while parsing if body", 
+        cctrlRaiseException(cc,"Unexpected %s `%.*s` while parsing if body",
                 lexemeTypeToString(peek->tk_type), peek->len, peek->start);
     }
 
     Ast *then = parseStatement(cc);
     Lexeme *tok = cctrlTokenGet(cc);
+    Ast *els = NULL;
 
     if (tok && tok->tk_type == TK_KEYWORD && tok->i64 == KW_ELSE) {
-        Lexeme *peek = cctrlTokenPeek(cc);
-        if (!parseValidPostControlFlowToken(peek)) {
+        Lexeme *epeek = cctrlTokenPeek(cc);
+        if (!parseValidPostControlFlowToken(epeek)) {
             cctrlTokenRewind(cc);
             cctrlTokenRewind(cc);
-            cctrlRaiseException(cc,"Unexpected %s `%.*s` while parsing else body", 
-                    lexemeTypeToString(peek->tk_type), peek->len, peek->start);
+            cctrlRaiseException(cc,"Unexpected %s `%.*s` while parsing else body",
+                    lexemeTypeToString(epeek->tk_type), epeek->len, epeek->start);
         }
-        Ast *els = parseStatement(cc);
-        return astIf(cond,then,els);
+        els = parseStatement(cc);
+    } else {
+        cctrlTokenRewind(cc);
     }
-    cctrlTokenRewind(cc);
-    return astIf(cond,then,NULL);
+
+    cc->localenv = cc->localenv->parent;
+
+    Ast *if_ast = astIf(cond, then, els);
+    if (listEmpty(pre)) {
+        return if_ast;
+    }
+    listAppend(pre, if_ast);
+    return astCompountStatement(pre);
 }
 
 Ast *parseOptDeclOrStmt(Cctrl *cc) {
@@ -1674,10 +1820,102 @@ Ast *parseCompoundStatement(Cctrl *cc) {
     return ast_compound;
 }
 
+/* ---- "non-void function falls off the end" analysis ----
+ *
+ * `astStmtFallsThrough` answers: can control flow run off the end of
+ * `s` (i.e. reach the next statement) rather than diverting via
+ * return/throw/goto/infinite-loop? A non-void function whose body falls
+ * through can return an undefined value, which is almost always a
+ * missing `return`. The analysis is deliberately conservative -
+ * anything it can't model returns "falls through" only when that's the
+ * safe assumption, so we under-warn rather than cry wolf. */
+
+static int astIsConstTrueCond(Ast *c) {
+    /* `while(1)` / `for(;1;)` / `for(;;)` style infinite loops. */
+    return c && c->kind == AST_LITERAL && c->type &&
+           c->type->kind == AST_TYPE_INT && c->i64 != 0;
+}
+
+/* Does `s` contain a `break` that targets the *enclosing* loop/switch
+ * (i.e. not one captured by a nested loop/switch of its own)? */
+static int astStmtHasBreak(Ast *s) {
+    if (!s) return 0;
+    switch (s->kind) {
+        case AST_BREAK:
+            return 1;
+        /* Nested loops / switch capture their own breaks. */
+        case AST_FOR:
+        case AST_WHILE:
+        case AST_DO_WHILE:
+        case AST_SWITCH:
+            return 0;
+        case AST_COMPOUND_STMT:
+            if (s->stms) {
+                listForEach(s->stms) {
+                    if (astStmtHasBreak((Ast *)it->value)) return 1;
+                }
+            }
+            return 0;
+        case AST_IF:
+            return astStmtHasBreak(s->then) || astStmtHasBreak(s->els);
+        default:
+            return 0;
+    }
+}
+
+static int astStmtFallsThrough(Ast *s) {
+    if (!s) return 1;
+    switch (s->kind) {
+        case AST_RETURN:
+        case AST_THROW:
+        case AST_JUMP:    /* goto - control leaves, doesn't reach the end */
+            return 0;
+        case AST_COMPOUND_STMT:
+            if (s->stms) {
+                listForEach(s->stms) {
+                    if (!astStmtFallsThrough((Ast *)it->value)) return 0;
+                }
+            }
+            return 1;
+        case AST_IF:
+            /* No else: the condition-false path reaches the end. */
+            if (!s->els) return 1;
+            return astStmtFallsThrough(s->then) ||
+                   astStmtFallsThrough(s->els);
+        case AST_FOR:
+            if ((s->forcond == NULL || astIsConstTrueCond(s->forcond)) &&
+                !astStmtHasBreak(s->forbody))
+                return 0;
+            return 1;
+        case AST_WHILE:
+        case AST_DO_WHILE:
+            if (astIsConstTrueCond(s->whilecond) &&
+                !astStmtHasBreak(s->whilebody))
+                return 0;
+            return 1;
+        case AST_SWITCH:
+            /* A switch with no default leaves the unmatched value to
+             * reach the end. With a default we assume the author
+             * handled every arm (the common exhaustive-switch-with-
+             * returns pattern) rather than risk a false positive. */
+            return s->case_default ? 0 : 1;
+        default:
+            /* Plain statements (calls, decls, assignments, ...). */
+            return 1;
+    }
+}
+
 Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
-        char *fname, int len, Vec *params, int has_var_args, int is_inline) 
+        char *fname, int len, Vec *params, int has_var_args, int is_inline)
 {
     Lexeme *next = cctrlTokenPeek(cc);
+    /* Anchor for the end-of-function missing-return warning: by the time
+     * we know whether the body falls through, the cursor has moved past
+     * the whole function to the next declaration. Snapshot the body's
+     * opening token now so the warning points at this function. */
+    s64 fn_line = next ? next->line : cc->lineno;
+    s64 fn_col  = next ? next->col  : 0;
+    s64 fn_len  = next ? next->len  : 1;
     if (next->tk_type == TK_KEYWORD && next->i64 == KW_ASM) {
         cctrlTokenGet(cc);
         Lexeme *peek = cctrlTokenPeek(cc);
@@ -1709,7 +1947,7 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
              * (6 int arg regs, AT&T "movq %src, %dst" order). */
             const char **kIntArgRegs;
             int max_int_args;
-            int is_x86;
+            int is_x86; /* kept for symmetry with the switch below */
             switch (cc->target) {
                 case TARGET_AARCH64_APPLE_DARWIN:
                 case TARGET_AARCH64_UNKNOWN_LINUX_GNU: {
@@ -1737,6 +1975,7 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
                     max_int_args = 0;
                     is_x86 = 0;
             }
+            (void)is_x86;
 
             if (params && kIntArgRegs) {
                 AoStr *shuffle = aoStrNew();
@@ -1751,17 +1990,11 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
                         continue;
                     }
                     if (int_idx < max_int_args) {
-                        if (is_x86) {
-                            /* AT&T: "movq %src, %dst" => pinned = arg. */
-                            aoStrCatFmt(shuffle,
-                                    "\tmovq    %%%s, %%%S\n",
-                                    kIntArgRegs[int_idx], p->pinned_reg);
-                        } else {
-                            /* AArch64: "mov dst, src" => pinned = arg. */
-                            aoStrCatFmt(shuffle,
-                                    "\tmov     %S, %s\n",
-                                    p->pinned_reg, kIntArgRegs[int_idx]);
-                        }
+                        /* libtasm dialect, both arches: "mov dst, src"
+                         * => pinned = arg. */
+                        aoStrCatFmt(shuffle,
+                                "\tMOV %S, %s\n",
+                                p->pinned_reg, kIntArgRegs[int_idx]);
                     }
                     int_idx++;
                 }
@@ -1906,6 +2139,20 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
                     len, fname);
             }
         }
+    }
+
+    /* Warn when a value-returning function can run off its end without
+     * a `return` - control would then return whatever happens to be in
+     * the return register. `inline` functions return through `retval`
+     * and `asm { }` bodies are opaque, so neither is checked. */
+    AstType *rt = func->type ? func->type->rettype : NULL;
+    if (rt && rt->kind != AST_TYPE_VOID && !(func->flags & AST_FLAG_INLINE) &&
+        !has_asm && astStmtFallsThrough(func_body))
+    {
+        cctrlWarningAt(cc, fn_line, fn_col, fn_len,
+            "control may reach the end of non-void function '%.*s' "
+            "without returning a value",
+            len, fname);
     }
 
     cc->localenv = NULL;
@@ -2143,6 +2390,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
                 case KW_U32:
                 case KW_I64:
                 case KW_U64:
+                case KW_F32:
                 case KW_F64:
                 case KW_AUTO:
                     cctrlTokenRewind(cc);
@@ -2211,6 +2459,11 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
         }
 
         name = cctrlTokenGet(cc);
+        /* End of input mid-definition: stop parsing so any accumulated
+         * diagnostics surface, rather than dereferencing a NULL token. */
+        if (name == NULL) {
+            return NULL;
+        }
 
         if (name->tk_type == TK_KEYWORD) {
             switch (name->i64) {
@@ -2235,15 +2488,57 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
         type = parseArrayDimensions(cc,type);
         tok = cctrlTokenPeek(cc);
 
+        /* Global class/struct/union with an aggregate initialiser:
+         *   Color Black = {0,0,0};
+         * Route through parseVariableInitialiser like arrays do — its
+         * parseVariableAssignment already lowers `{...}` into an ARRAY_INIT
+         * declinit that the data emitters write out. The scalar `=` branch
+         * below parses the RHS with parseExpr, which can't handle `{`.
+         * (peek(1) is the token after `=`, i.e. the `{`.) */
+        if (tokenPunctIs(tok,'=') &&
+            type->kind == AST_TYPE_CLASS && !type->is_intrinsic &&
+            tokenPunctIs(cctrlTokenPeekBy(cc,1),'{'))
+        {
+            variable = astGVar(type,name->start,name->len,0);
+            mapAdd(cc->global_env,variable->gname->data,variable);
+            return parseVariableInitialiser(cc,variable,
+                                            PUNCT_TERM_COMMA|PUNCT_TERM_SEMI);
+        }
+
         if (tokenPunctIs(tok,'=') && type->kind != AST_TYPE_ARRAY) {
             variable = astGVar(type,name->start,name->len,0);
-            if (type->kind == AST_TYPE_AUTO) {
-                cctrlRaiseException(cc,"line auto cannot be used without an initialiser");
-            }
             Ast *ast_decl = astDecl(variable,NULL);
 
             listAppend(cc->ast_list,ast_decl);
             mapAdd(cc->global_env,variable->gname->data,variable);
+
+            /* `auto foo = <expr>;` at file scope: the variable's type
+             * isn't known until the initialiser is parsed, and building
+             * the assignment with an unresolved `auto` LHS makes the
+             * type-checker reject it. Consume the `=`, parse just the
+             * RHS, infer the type, then build the (now well-typed)
+             * assignment by hand. */
+            if (type->kind == AST_TYPE_AUTO) {
+                cctrlTokenGet(cc);                  /* consume '=' */
+                Ast *rhs = parseExpr(cc,16);
+                if (!rhs || !rhs->type) {
+                    cctrlRaiseException(cc,
+                            "auto cannot be used without an initialiser");
+                }
+                variable->type = rhs->type;
+                if (rhs->kind == AST_STRING) {
+                    ast_decl->declinit = rhs;
+                    cctrlTokenExpect(cc,';');
+                    return ast_decl;
+                }
+                int is_err = 0;
+                Ast *assign = astBinaryOp(AST_BIN_OP_ASSIGN, variable,
+                                          rhs, &is_err);
+                *is_global = 1;
+                cctrlTokenExpect(cc,';');
+                return assign;
+            }
+
             cctrlTokenRewind(cc);
 
             Ast *ast_expr = parseExpr(cc,16); // parseVariableInitialiser(cc,variable,PUNCT_TERM_COMMA|PUNCT_TERM_SEMI);

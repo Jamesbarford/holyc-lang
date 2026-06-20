@@ -107,34 +107,65 @@ static BuiltInType built_in_types[] = {
     {"I64",AST_TYPE_INT,8,1},
     {"U64",AST_TYPE_INT,8,0},
     {"F64",AST_TYPE_FLOAT,8,0},
+    {"F32",AST_TYPE_FLOAT,4,0},
     {"inline",AST_TYPE_INLINE,0,0},
     {"public",AST_TYPE_VIS_MODIFIER,0,0},
     {"auto",AST_TYPE_AUTO,0,0},
     {"private",AST_TYPE_VIS_MODIFIER,0,0},
 };
 
+static void cctrlAddX86_64Defines(Cctrl *cc, Lexeme *le) {
+    mapAdd(cc->macro_defs,"IS_X86_64",le);
+    mapAdd(cc->macro_defs,"__x86_64__",le);
+    le = lexemeNew(str_lit("x86_64"));
+    le->tk_type = TK_STR;
+    mapAdd(cc->macro_defs,"__ARCH__",le);
+}
+
+static void cctrlAddAArch64Defines(Cctrl *cc, Lexeme *le) {
+    mapAdd(cc->macro_defs,"IS_ARM_64",le);
+    mapAdd(cc->macro_defs,"__aarch64__",le);
+    le = lexemeNew(str_lit("AArch64"));
+    le->tk_type = TK_STR;
+    mapAdd(cc->macro_defs,"__ARCH__",le);
+}
+
+static void cctrlAddLinuxDefines(Cctrl *cc, Lexeme *le) {
+    mapAdd(cc->macro_defs,"__linux__",le);
+    mapAdd(cc->macro_defs,"IS_LINUX",le);
+}
+
+static void cctrlAddMacOsDefines(Cctrl *cc, Lexeme *le) {
+    mapAdd(cc->macro_defs,"__macos__",le);
+    mapAdd(cc->macro_defs,"IS_MACOS",le);
+}
+
 static void cctrlAddBuiltinMacros(Cctrl *cc) {
     s64 bufsize = sizeof(char)*128;
-
     Lexeme *le = lexemeSentinal();
-    if (IS_BSD)   mapAdd(cc->macro_defs,"IS_BSD",le);
-    if (IS_LINUX) mapAdd(cc->macro_defs,"IS_LINUX",le);
 
-#ifdef IS_MACOS
-    mapAdd(cc->macro_defs,"IS_MACOS",le);
-#endif
-    
-    if (IS_X86_64)      {
-        mapAdd(cc->macro_defs,"IS_X86_64",le);
-        le = lexemeNew("X86_64",6);
-        le->tk_type = TK_STR;
-        mapAdd(cc->macro_defs,"__ARCH__",le);
-    } else if (IS_ARM_64) {
-        mapAdd(cc->macro_defs,"IS_ARM_64",le);
-        le = lexemeNew("ARM_64",6);
-        le->tk_type = TK_STR;
-        mapAdd(cc->macro_defs,"__ARCH__",le);
+    /* This is so we can also cross compile, often the library uses ifdefs but
+     * using what the host platform is would mean for `#ifdefs` on assembly we
+     * can assemble the wrong code for the wrong platform. */
+    switch (cc->target) {
+        case TARGET_AARCH64_APPLE_DARWIN:
+            cctrlAddMacOsDefines(cc, le);
+            cctrlAddAArch64Defines(cc, le);
+            break;
+        case TARGET_AARCH64_UNKNOWN_LINUX_GNU:
+            cctrlAddLinuxDefines(cc, le);
+            cctrlAddAArch64Defines(cc, le);
+            break;
+        case TARGET_X86_64_APPLE_DARWIN:
+            cctrlAddMacOsDefines(cc, le);
+            cctrlAddX86_64Defines(cc, le);
+            break;
+        case TARGET_X86_64_UNKNOWN_LINUX_GNU:
+            cctrlAddLinuxDefines(cc, le);
+            cctrlAddX86_64Defines(cc, le);
+            break;
     }
+
 
     struct timeval tm;
     gettimeofday(&tm,NULL);
@@ -176,7 +207,8 @@ static void cctrlAddBuiltinMacros(Cctrl *cc) {
     mapAdd(cc->macro_defs,"__HCC_LINK_SQLITE3__",le);
 #endif
 
-    le = lexemeNew((char *)cctrlGetVersion(),len);
+    char *version = (char *)cctrlGetVersion();
+    le = lexemeNew(version,strlen(version));
     le->tk_type = TK_STR;
     mapAdd(cc->macro_defs,"__HCC_VERSION__",le);
 }
@@ -207,7 +239,7 @@ Cctrl *ccMacroProcessor(Map *macro_defs) {
 }
 
 /* Instantiate a new compiler control struct */
-Cctrl *cctrlNew(void) {
+Cctrl *cctrlNew(enum CliTarget target) {
     Cctrl *cc = (Cctrl *)malloc(sizeof(Cctrl));
 
     cc->flags = 0;
@@ -270,6 +302,8 @@ Cctrl *cctrlNew(void) {
         type->ptr = NULL;
         mapAdd(cc->symbol_table, built_in->name, type);
     }
+
+    cc->target = target;
 
     cctrlAddBuiltinMacros(cc);
     /* We have no real mechanism of adding compiler builtins */
@@ -480,25 +514,10 @@ Lexeme *cctrlTokenGet(Cctrl *cc) {
 
 /* Should this be at the lexer level? */   
 Lexeme *cctrlAsmTokenGet(Cctrl *cc) {
-    Lexeme *token = cctrlTokenGet(cc);
-    if (token) {
-        /* If the token is a register as defined by the string at the top of 
-         * this file we may it AT&T syntax `RAX` -> `%rax`. Which saves a 
-         * massive headache in prsasm.c */
-        if (setHasLen(cc->x86_registers,token->start,token->len)) {
-            char *reg = mprintFmt("%%%.*s", token->len, token->start);
-            char *ptr = reg;
-            while (*ptr) {
-                *ptr = tolower(*ptr);
-                ptr++;
-            }
-            int register_len = strlen(reg);
-            token->start = reg;
-            token->len = register_len;
-            return token;
-        }
-    }
-    return token;
+    /* Tokens flow through to prsasm.c verbatim - the libtasm assembler
+     * consumes TempleOS-style register spellings directly, so the old
+     * AT&T `RAX` -> `%rax` rewrite is gone. */
+    return cctrlTokenGet(cc);
 }
 
 AoStr *cctrlSeverityMessage(int severity) {
@@ -760,6 +779,34 @@ void cctrlWarning(Cctrl *cc, char *fmt, ...) {
     AoStr *buf = cctrlMessagVnsPrintF(cc,fmt,ap,CCTRL_WARN);
     va_end(ap);
     CctrlDiagnostic *d = cctrlMakeDiag(cc, CCTRL_WARN, buf, NULL);
+    cctrlDiagPush(cc, d);
+}
+
+/* Like cctrlWarning, but anchored at an explicit (line, col) instead of
+ * the current token. Needed when the thing being warned about was parsed
+ * earlier and the cursor has since moved on - e.g. a missing return is
+ * only known after the whole function body is consumed, by which point
+ * the next declaration is the "current" token. */
+void cctrlWarningAt(Cctrl *cc, s64 lineno, s64 col, s64 len, char *fmt, ...) {
+    va_list ap;
+    va_start(ap,fmt);
+    char *msg = mprintVa(fmt, ap, NULL);
+    va_end(ap);
+    AoStr *bold_msg = aoStrNew();
+    aoStrCatColoured(bold_msg, ESC_BOLD, msg);
+    AoStr *rendered = cctrlCreateErrorLineAt(cc, lineno, col, len,
+                                             bold_msg->data, CCTRL_WARN, NULL);
+    aoStrRelease(bold_msg);
+
+    CctrlDiagnostic *d = (CctrlDiagnostic *)calloc(1, sizeof(CctrlDiagnostic));
+    d->severity = CCTRL_WARN;
+    d->message = rendered;
+    d->suggestion = NULL;
+    d->file = cc->lexer_ ? cc->lexer_->cur_file : NULL;
+    d->line = (int)lineno;
+    d->col = (int)col;
+    d->end_line = (int)lineno;
+    d->end_col = (int)(col + (len > 0 ? len : 1));
     cctrlDiagPush(cc, d);
 }
 

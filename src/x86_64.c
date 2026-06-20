@@ -126,7 +126,8 @@ static void x86_64FrameAddr(AoStr *buf, int loff, const char *reg) {
 
 static void x86_64Lea(IrCgCtx *ctx, IrInstr *lea, const char *reg) {
     if (lea->r1 && lea->r1->kind == IR_VAL_GLOBAL) {
-        const char *name = lea->r1->as.global.name->data;
+        const char *name = asmNormaliseGlobalLabel(ctx->cc,
+                lea->r1->as.global.name)->data;
         if (lea->r1->flags & IR_VAL_FLAG_FUNC) {
             name = asmNormaliseFunctionName(ctx->cc,
                     lea->r1->as.global.name);
@@ -328,7 +329,7 @@ static void x86_64LoadToReg(IrCgCtx *ctx, IrValue *val, const char *reg) {
              * - float constants normally go through LoadToFpr but might
              *   be needed in some cases for bitcasts. */
             aoStrCatPrintf(ctx->buf, "movabsq $0x%lX, %%%s\n\t",
-                           (u64)ieee754(val->as._f64), reg);
+                           (u64)ieee754_64(val->as._f64), reg);
             break;
 
         case IR_VAL_CONST_STR:
@@ -393,25 +394,40 @@ static void x86_64SpillDst(IrCgCtx *ctx, IrInstr *instr, const char *reg) {
     x86_64StoreReg(ctx, instr->dst, reg);
 }
 
-/* Materialise a 64-bit double constant in .data and load it via
- * PC-relative addressing. x86_64 movsd <sym>(%rip), %xmm is a
- * single instruction. Bit-pattern dedup: identical doubles share a
- * single .LIRFn slot across the whole translation unit. */
+/* The SSE scalar move mnemonic for a float of `size` bytes:
+ * movss for single (F32), movsd for double (F64). */
+static const char *x86_64FpMov(int size) {
+    return size == 4 ? "movss" : "movsd";
+}
+
+/* Materialise a float constant in .data and load it via PC-relative
+ * addressing. `size` selects single (.long / movss) vs double
+ * (.quad / movsd). Bit-pattern dedup: identical constants share a
+ * single .LIRFn slot across the whole translation unit (4- and 8-byte
+ * pools are kept separate so widths never alias). */
 static void x86_64EmitFloatLiteralData(IrCgCtx *ctx,
                                        const char *xmm_reg,
-                                       f64 f)
+                                       f64 f,
+                                       int size)
 {
     static int float_seq = 0;
-    static Map *bits_to_label = NULL;
-    if (!bits_to_label)
-        bits_to_label = mapNew(16, &map_uint_to_uint_type);
+    static Map *bits_to_label8 = NULL;
+    static Map *bits_to_label4 = NULL;
+    if (!bits_to_label8)
+        bits_to_label8 = mapNew(16, &map_uint_to_uint_type);
+    if (!bits_to_label4)
+        bits_to_label4 = mapNew(16, &map_uint_to_uint_type);
 
-    u64 bits = (u64)ieee754(f);
+    int is_single = (size == 4);
+    Map *bits_to_label = is_single ? bits_to_label4 : bits_to_label8;
+    u64 bits = is_single ? (u64)(u32)ieee754_32((f32)f) : (u64)ieee754_64(f);
+    const char *mov = x86_64FpMov(size);
+
     AoStr *label = (AoStr *)mapGetInt(bits_to_label, bits);
     if (label) {
         /* Already in the data section, just reference it. */
-        aoStrCatFmt(ctx->buf, "movsd   %S(%%rip), %%%s\n\t",
-                    label, xmm_reg);
+        aoStrCatFmt(ctx->buf, "%s   %S(%%rip), %%%s\n\t",
+                    mov, label, xmm_reg);
         return;
     }
     char buf[64];
@@ -420,13 +436,23 @@ static void x86_64EmitFloatLiteralData(IrCgCtx *ctx,
     mapAddIntOrErr(bits_to_label, bits, label);
 
     aoStrRemovePreviousChar(ctx->buf, '\t');
-    aoStrCatPrintf(ctx->buf,
-                   ".data\n\t.p2align 3\n%s:\n\t"
-                   ".quad 0x%lX # %.9f\n"
-                   ".text\n\t"
-                   "movsd   %s(%%rip), %%%s\n\t",
-                   label->data, (unsigned long)bits, f,
-                   label->data, xmm_reg);
+    if (is_single) {
+        aoStrCatPrintf(ctx->buf,
+                       ".data\n\t.p2align 2\n%s:\n\t"
+                       ".long 0x%lX # %.9f\n"
+                       ".text\n\t"
+                       "%s   %s(%%rip), %%%s\n\t",
+                       label->data, (unsigned long)bits, f,
+                       mov, label->data, xmm_reg);
+    } else {
+        aoStrCatPrintf(ctx->buf,
+                       ".data\n\t.p2align 3\n%s:\n\t"
+                       ".quad 0x%lX # %.9f\n"
+                       ".text\n\t"
+                       "%s   %s(%%rip), %%%s\n\t",
+                       label->data, (unsigned long)bits, f,
+                       mov, label->data, xmm_reg);
+    }
 }
 
 /* Load any IrValue into an xmm register. Integer constants are
@@ -440,35 +466,54 @@ static void x86_64LoadToFpr(IrCgCtx *ctx, IrValue *val, const char *xmm_reg) {
             double _f64 = val->kind == IR_VAL_CONST_INT ?
                                        (double)val->as._i64 :
                                        val->as._f64;
-            /* +0.0 (bit pattern 0): xorpd is shorter than a rodata
+            int size = (val->kind == IR_VAL_CONST_FLOAT)
+                     ? (int)irValueByteSize(val) : 8;
+            /* +0.0 (bit pattern 0): xorps/xorpd is shorter than a rodata
              * load and leaves no .LIRF entry behind. -0.0 has the
              * sign bit set, so it must keep the rodata path. */
-            if (ieee754(_f64) == 0) {
-                aoStrCatFmt(ctx->buf, "xorpd   %%%s, %%%s\n\t",
-                            xmm_reg, xmm_reg);
+            if (ieee754_64(_f64) == 0) {
+                aoStrCatFmt(ctx->buf, "%s   %%%s, %%%s\n\t",
+                            size == 4 ? "xorps" : "xorpd", xmm_reg, xmm_reg);
                 break;
             }
-            x86_64EmitFloatLiteralData(ctx, xmm_reg, _f64);
+            x86_64EmitFloatLiteralData(ctx, xmm_reg, _f64, size);
             break;
         }
 
         case IR_VAL_TMP:
         case IR_VAL_LOCAL:
         case IR_VAL_PARAM: {
+            int size = (int)irValueByteSize(val);
+            const char *mov = x86_64FpMov(size);
+            /* gpr<->xmm bit move: movd for 32-bit, movq for 64-bit. */
+            const char *gprmov = size == 4 ? "movd" : "movq";
+            /* Pinned FP local: read it out of the named register.
+             * movss/movsd for an xmm home, movd/movq to pull bits from a
+             * GPR home. The xmm test is case-insensitive (`XMM5`/`xmm5`). */
+            if (val->pinned_reg) {
+                const char *src = val->pinned_reg->data;
+                if (strcmp(src, xmm_reg) != 0) {
+                    const char *mnem =
+                        (src[0] == 'x' || src[0] == 'X') ? mov : gprmov;
+                    aoStrCatFmt(ctx->buf, "%s   %%%s, %%%s\n\t",
+                                mnem, src, xmm_reg);
+                }
+                break;
+            }
             if (val->loc.kind == IR_LOC_REG && val->loc.as.reg) {
                 const char *src = val->loc.as.reg->data;
                 if (strcmp(src, xmm_reg) == 0) break;
-                /* Cross-file move (int reg -> xmm) uses `movq`; same
-                 * register file uses `movsd`. xmm reg names start
+                /* Cross-file move (int reg -> xmm) uses movd/movq; same
+                 * register file uses movss/movsd. xmm reg names start
                  * with 'x'; everything else is a GP reg. */
-                const char *mnem = (src[0] == 'x') ? "movsd" : "movq";
+                const char *mnem = (src[0] == 'x') ? mov : gprmov;
                 aoStrCatFmt(ctx->buf, "%s   %%%s, %%%s\n\t",
                             mnem, src, xmm_reg);
                 break;
             }
             int loff = irCgGetLoff(&ctx->fn->ra, val);
-            aoStrCatFmt(ctx->buf, "movsd   %i(%%rbp), %%%s\n\t",
-                        loff, xmm_reg);
+            aoStrCatFmt(ctx->buf, "%s   %i(%%rbp), %%%s\n\t",
+                        mov, loff, xmm_reg);
             break;
         }
         default:
@@ -477,17 +522,61 @@ static void x86_64LoadToFpr(IrCgCtx *ctx, IrValue *val, const char *xmm_reg) {
     }
 }
 
-static void x86_64StoreFpr(IrCgCtx *ctx, IrValue *dst, const char *xmm_reg) {
+/* `val_size` (0 = derive from dst) is the width of the value stored. When
+ * dst is a gep/pointer tmp aliasing a narrow field, sizing the store from
+ * dst (8 bytes) would clobber the neighbouring field; pass the value width
+ * so a F32 field gets a 4-byte `movss` not an 8-byte `movsd`. */
+static void x86_64StoreFprSized(IrCgCtx *ctx, IrValue *dst,
+                                const char *xmm_reg, int val_size) {
+    int size = val_size > 0 ? val_size : (int)irValueByteSize(dst);
+    const char *mov = x86_64FpMov(size);
+    const char *gprmov = size == 4 ? "movd" : "movq";
+    if (dst->pinned_reg) {
+        const char *home = dst->pinned_reg->data;
+        if (strcmp(home, xmm_reg) != 0) {
+            const char *mnem =
+                (home[0] == 'x' || home[0] == 'X') ? mov : gprmov;
+            aoStrCatFmt(ctx->buf, "%s   %%%s, %%%s\n\t", mnem, xmm_reg, home);
+        }
+        return;
+    }
     if (dst->loc.kind == IR_LOC_REG && dst->loc.as.reg) {
         const char *home = dst->loc.as.reg->data;
         if (strcmp(home, xmm_reg) == 0) return;
-        const char *mnem = (home[0] == 'x') ? "movsd" : "movq";
+        const char *mnem = (home[0] == 'x') ? mov : gprmov;
+        aoStrCatFmt(ctx->buf, "%s   %%%s, %%%s\n\t", mnem, xmm_reg, home);
+        return;
+    }
+    int loff = irCgGetLoff(&ctx->fn->ra, dst);
+    aoStrCatFmt(ctx->buf, "%s   %%%s, %i(%%rbp)\n\t", mov, xmm_reg, loff);
+}
+
+static void x86_64StoreFpr(IrCgCtx *ctx, IrValue *dst, const char *xmm_reg) {
+    int size = (int)irValueByteSize(dst);
+    const char *mov = x86_64FpMov(size);
+    const char *gprmov = size == 4 ? "movd" : "movq";
+    /* Pinned FP local: write the value into the named register.
+     * movss/movsd for an xmm home, movd/movq to push bits into a GPR. */
+    if (dst->pinned_reg) {
+        const char *home = dst->pinned_reg->data;
+        if (strcmp(home, xmm_reg) != 0) {
+            const char *mnem =
+                (home[0] == 'x' || home[0] == 'X') ? mov : gprmov;
+            aoStrCatFmt(ctx->buf, "%s   %%%s, %%%s\n\t",
+                        mnem, xmm_reg, home);
+        }
+        return;
+    }
+    if (dst->loc.kind == IR_LOC_REG && dst->loc.as.reg) {
+        const char *home = dst->loc.as.reg->data;
+        if (strcmp(home, xmm_reg) == 0) return;
+        const char *mnem = (home[0] == 'x') ? mov : gprmov;
         aoStrCatFmt(ctx->buf, "%s   %%%s, %%%s\n\t",
                     mnem, xmm_reg, home);
         return;
     }
     int loff = irCgGetLoff(&ctx->fn->ra, dst);
-    aoStrCatFmt(ctx->buf, "movsd   %%%s, %i(%%rbp)\n\t", xmm_reg, loff);
+    aoStrCatFmt(ctx->buf, "%s   %%%s, %i(%%rbp)\n\t", mov, xmm_reg, loff);
 }
 
 /* Does this value fit in the 32-bit sign-extended immediate form that
@@ -602,29 +691,40 @@ static void x86_64EmitSetCC(IrCgCtx *ctx, IrCmpKind cmp, int is_float) {
                 cc);
 }
 
-/* Save each pinned register with `pushq`. If the count is odd, add a
- * trailing 8-byte pad so the stack stays 16-byte aligned for any
- * downstream call. The restore mirror reverses both halves. */
+/* XMM register names start with x/X; GPR names never do. */
+static int x86_64IsXmmName(const char *r) {
+    return r && (r[0] == 'x' || r[0] == 'X');
+}
+
+static u32 x86_64PinnedSaveBytes(Vec *pinned) {
+    return (u32)((pinned->size * 8 + 15) & ~(u64)15);
+}
+
+/* Preserve every register a local/param is pinned to. XMM regs can't be
+ * pushed, so instead of push/pop we reserve one 8-byte slot per pinned
+ * reg (rounded to 16 for SysV alignment) and spill each with movq (GPR)
+ * or movsd (XMM). rsp stays at the save-area base for the body; the
+ * restore mirror reads the slots back and frees the area. */
 static void x86_64SavePinnedRegs(AoStr *buf, Vec *pinned) {
     if (!pinned || pinned->size == 0) return;
+    aoStrCatFmt(buf, "subq    $%u, %%rsp\n\t", x86_64PinnedSaveBytes(pinned));
     for (u64 i = 0; i < pinned->size; ++i) {
         AoStr *r = (AoStr *)pinned->entries[i];
-        aoStrCatFmt(buf, "pushq   %%%S\n\t", r);
-    }
-    if (pinned->size & 1) {
-        aoStrCatFmt(buf, "subq    $8, %%rsp\n\t");
+        const char *mnem = x86_64IsXmmName(r->data) ? "movsd" : "movq";
+        aoStrCatFmt(buf, "%s    %%%s, %i(%%rsp)\n\t",
+                    mnem, r->data, (int)(i * 8));
     }
 }
 
 static void x86_64RestorePinnedRegs(AoStr *buf, Vec *pinned) {
     if (!pinned || pinned->size == 0) return;
-    if (pinned->size & 1) {
-        aoStrCatFmt(buf, "addq    $8, %%rsp\n\t");
-    }
-    for (s64 i = (s64)pinned->size - 1; i >= 0; --i) {
+    for (u64 i = 0; i < pinned->size; ++i) {
         AoStr *r = (AoStr *)pinned->entries[i];
-        aoStrCatFmt(buf, "popq    %%%S\n\t", r);
+        const char *mnem = x86_64IsXmmName(r->data) ? "movsd" : "movq";
+        aoStrCatFmt(buf, "%s    %i(%%rsp), %%%s\n\t",
+                    mnem, (int)(i * 8), r->data);
     }
+    aoStrCatFmt(buf, "addq    $%u, %%rsp\n\t", x86_64PinnedSaveBytes(pinned));
 }
 
 /* leaveq is `movq %rbp, %rsp; popq %rbp` in one instruction. Saves a
@@ -803,6 +903,299 @@ static s32 x86_64PartitionCallArgs(u8 *is_stack, u64 n, Vec *args,
     return n_stack_total;
 }
 
+/* ---------------- System V struct-by-value passing ----------------
+ *
+ * Mirrors the aarch64 AAPCS path for the x86_64 SysV ABI. Each by-value
+ * aggregate is classified into eightbytes (INTEGER -> GP reg, SSE -> XMM
+ * reg); >16-byte aggregates are MEMORY class and passed on the stack by
+ * value. Struct *returns* keep using the legacy hidden-out-pointer (which
+ * the IR passes as args[0] -> %rdi) + memcpy. Register-only overflow and
+ * scalar stack spilling beyond 6 GP / 8 SSE panic, matching the support
+ * window of the other backends' struct paths. */
+
+static const char *const kSysvGpArg[6] = {
+    "rdi", "rsi", "rdx", "rcx", "r8", "r9"
+};
+
+static int x86_64IsByvalStruct(AstType *t) {
+    return t && (t->kind == AST_TYPE_CLASS || t->kind == AST_TYPE_UNION) &&
+           !t->is_intrinsic;
+}
+
+/* SysV classification of a by-value aggregate with the per-class eightbyte
+ * counts pre-summed, so the caller (sizing + emit) and the callee prologue
+ * share one classification and one reg/stack decision. */
+typedef struct {
+    SysvClass cls[2];  /* per-eightbyte class (valid when !memory) */
+    int neb;           /* number of eightbytes */
+    int gp;            /* INTEGER eightbytes -> GP regs  (0 if memory) */
+    int sse;           /* SSE eightbytes -> XMM regs     (0 if memory) */
+    int memory;        /* 1 -> >16B / otherwise passed on the stack */
+} X86SysvAgg;
+
+static void x86_64ClassifyAgg(AstType *t, X86SysvAgg *a) {
+    a->gp = a->sse = a->neb = 0;
+    a->memory = astSysvClassify(t, a->cls, &a->neb);
+    if (!a->memory) {
+        for (int e = 0; e < a->neb; ++e) {
+            if (a->cls[e] == SYSV_INTEGER) a->gp++;
+            else a->sse++;
+        }
+    }
+}
+
+/* True when the whole aggregate still fits in the remaining argument
+ * registers; otherwise it is passed on the stack by value. */
+static int x86_64AggInRegs(const X86SysvAgg *a, int ngp, int nsse) {
+    return !a->memory && ngp + a->gp <= 6 && nsse + a->sse <= 8;
+}
+
+static void x86_64EmitSysvCall(IrCgCtx *ctx, IrInstr *instr, Vec *args,
+                               AoStr *fname, int indirect)
+{
+    AoStr *buf = ctx->buf;
+    u64 n = args ? args->size : 0;
+
+    /* A <=16-byte aggregate return comes back in registers, so its
+     * destination buffer (args[0]) is NOT an ABI argument: skip it and copy
+     * the result registers into it after the call. A >16-byte (MEMORY)
+     * return keeps args[0] as the hidden out-pointer in rdi. */
+    AstType *ret_st = (instr->flags & IRCG_CALL_AGG_RETURN) && instr->dst
+                      ? instr->dst->byval_struct_type : NULL;
+    int reg_ret = ret_st && ret_st->size <= 16;
+    u64 a0 = reg_ret ? 1 : 0;
+
+    /* Pre-pass: size the stack-argument area. An aggregate is stack-passed
+     * (MEMORY) when it is >16B or doesn't fit in the remaining registers;
+     * a scalar spills when its register class is exhausted. */
+    int nsaa_total = 0;
+    {
+        int g = 0;
+        int s = 0;
+        for (u64 i = a0; i < n; ++i) {
+            IrValue *a = vecGet(IrValue *, args, i);
+            if (a->byval_struct_type) {
+                X86SysvAgg ag; x86_64ClassifyAgg(a->byval_struct_type, &ag);
+                if (x86_64AggInRegs(&ag, g, s)) {
+                    g += ag.gp;
+                    s += ag.sse;
+                } else {
+                    nsaa_total += (a->byval_struct_type->size + 7) & ~7;
+                }
+            } else if (irIsFloat(a->type)) {
+                if (s < 8) s++; else nsaa_total += 8;
+            } else {
+                if (g < 6) g++; else nsaa_total += 8;
+            }
+        }
+    }
+
+    /* Reserve 8 bytes above the stack-arg area to save the register-return
+     * destination pointer across the call (caller-saved regs are clobbered). */
+    int dest_save_off = nsaa_total;
+    int stack_bytes = (nsaa_total + (reg_ret ? 16 : 0) + 15) & ~15;
+    if (stack_bytes > 0)
+        aoStrCatFmt(buf, "subq    $%i, %%rsp\n\t", stack_bytes);
+    int stack_off = 0;
+
+    if (reg_ret) {
+        /* Compute the destination buffer address into r10 (before the arg
+         * loop clobbers r10) and stash it across the call. */
+        x86_64LoadToReg(ctx, vecGet(IrValue *, args, 0), "r10");
+        aoStrCatFmt(buf, "movq    %%r10, %i(%%rsp)\n\t", dest_save_off);
+    }
+
+    int ngp = 0, nsse = 0;
+    for (u64 i = a0; i < n; ++i) {
+        IrValue *a = vecGet(IrValue *, args, i);
+        if (a->byval_struct_type) {
+            AstType *t = a->byval_struct_type;
+            X86SysvAgg ag; x86_64ClassifyAgg(t, &ag);
+            /* The arg value is the struct's address - park it in %r10
+             * (not an arg reg, not %r11 = indirect call target). */
+            x86_64LoadToReg(ctx, a, "r10");
+            if (!x86_64AggInRegs(&ag, ngp, nsse)) {
+                /* On the stack by value. */
+                int words = (t->size + 7) / 8;
+                for (int k = 0; k < words; ++k) {
+                    int off = k * 8;
+                    int rem = t->size - off;
+                    u32 sz = rem >= 8 ? 8 : (u32)rem;
+                    x86_64DerefLoadWidth(buf, sz, "rax", "r10", NULL, 0, off);
+                    x86_64DerefStoreWidth(buf, sz, "rax", "rsp", NULL, 0,
+                                          stack_off + off);
+                }
+                stack_off += (t->size + 7) & ~7;
+                continue;
+            }
+            for (int e = 0; e < ag.neb; ++e) {
+                int off = e * 8;
+                int rem = t->size - off;
+                u32 sz = rem >= 8 ? 8 : (u32)rem;
+                if (ag.cls[e] == SYSV_SSE) {
+                    char mem_s[48];
+                    x86_64FmtMemOperand(mem_s, sizeof(mem_s), off, "r10",
+                                        NULL, 0);
+                    aoStrCatFmt(buf, "%s   %s, %%xmm%i\n\t",
+                                x86_64FpMov(sz == 4 ? 4 : 8), mem_s, nsse);
+                    nsse++;
+                } else {
+                    x86_64DerefLoadWidth(buf, sz, kSysvGpArg[ngp], "r10",
+                                         NULL, 0, off);
+                    ngp++;
+                }
+            }
+            continue;
+        }
+        if (irIsFloat(a->type)) {
+            if (nsse < 8) {
+                char xmm[8];
+                snprintf(xmm, sizeof(xmm), "xmm%d", nsse++);
+                x86_64LoadToFpr(ctx, a, xmm);
+            } else {
+                x86_64LoadToFpr(ctx, a, "xmm0");
+                aoStrCatFmt(buf, "%s   %%xmm0, %i(%%rsp)\n\t",
+                            x86_64FpMov((int)irValueByteSize(a)), stack_off);
+                stack_off += 8;
+            }
+        } else {
+            if (ngp < 6) {
+                x86_64LoadToReg(ctx, a, kSysvGpArg[ngp++]);
+            } else {
+                x86_64LoadToReg(ctx, a, "rax");
+                aoStrCatFmt(buf, "movq    %%rax, %i(%%rsp)\n\t", stack_off);
+                stack_off += 8;
+            }
+        }
+    }
+
+    if (indirect) {
+        aoStrCatFmt(buf, "callq   *%%r11\n\t");
+    } else {
+        aoStrCatFmt(buf, "callq   %s\n\t",
+                    asmNormaliseFunctionName(ctx->cc, fname));
+    }
+
+    if (reg_ret) {
+        /* Reload the destination buffer and copy the SysV result registers
+         * (INTEGER eightbytes -> rax,rdx; SSE -> xmm0,xmm1) into it. */
+        X86SysvAgg ag; x86_64ClassifyAgg(ret_st, &ag);
+        const char *gpr[2] = { "rax", "rdx" };
+        int gpi = 0, ssei = 0;
+        aoStrCatFmt(buf, "movq    %i(%%rsp), %%r10\n\t", dest_save_off);
+        for (int e = 0; e < ag.neb; ++e) {
+            int off = e * 8, rem = ret_st->size - off;
+            u32 sz = rem >= 8 ? 8 : (u32)rem;
+            if (ag.cls[e] == SYSV_SSE) {
+                char mem[48];
+                x86_64FmtMemOperand(mem, sizeof(mem), off, "r10", NULL, 0);
+                aoStrCatFmt(buf, "%s   %%xmm%i, %s\n\t",
+                            x86_64FpMov(sz == 4 ? 4 : 8), ssei, mem);
+                ssei++;
+            } else {
+                x86_64DerefStoreWidth(buf, sz, gpr[gpi], "r10", NULL, 0, off);
+                gpi++;
+            }
+        }
+    }
+
+    if (stack_bytes > 0)
+        aoStrCatFmt(buf, "addq    $%i, %%rsp\n\t", stack_bytes);
+
+    if (reg_ret) {
+        /* dst = destination buffer address (in r10). */
+        if (instr->dst) x86_64SpillDst(ctx, instr, "r10");
+    } else if (instr->dst && instr->dst->type != IR_TYPE_VOID &&
+        (instr->dst->kind == IR_VAL_TMP ||
+         instr->dst->kind == IR_VAL_LOCAL ||
+         instr->dst->kind == IR_VAL_PARAM))
+    {
+        if (irIsFloat(instr->dst->type)) x86_64SpillDstFpr(ctx, instr, "xmm0");
+        else                             x86_64SpillDst(ctx, instr, "rax");
+    }
+}
+
+/* Callee entry: unpack by-value struct params (arrived in GP/XMM regs, or
+ * on the stack for MEMORY class) into their frame slots. */
+static void x86_64EmitSysvParamPrologue(IrCgCtx *ctx, Ast *ast) {
+    if (!ast->params) return;
+    AoStr *buf = ctx->buf;
+    int ngp = 0, nsse = 0;
+
+    AstType *rt = ast->type ? ast->type->rettype : NULL;
+    /* Only an INDIRECT (>16-byte) struct return uses a hidden out-pointer
+     * in rdi; a <=16-byte aggregate comes back in registers. */
+    if (x86_64IsByvalStruct(rt) && rt->size > 16) ngp = 1; /* hidden ret ptr */
+    int incoming_off = 0; /* byte cursor into the incoming stack-arg area */
+
+    for (u64 i = 0; i < ast->params->size; ++i) {
+        Ast *p = vecGet(Ast *, ast->params, i);
+        if (p->kind == AST_VAR_ARGS) break;
+        AstType *t = p->type;
+
+        /* loff is only valid when the param is used; unreferenced params
+         * get no slot. Still advance the ABI counters/cursor, skip stores. */
+        IrValue *slot = irFnGetVar(ctx->fn, irGetParamId(p));
+        int has_slot = slot &&
+            mapHasInt(ctx->fn->ra.id_to_loff, irVarId(slot));
+        int loff = has_slot ? irCgGetLoff(&ctx->fn->ra, slot) : 0;
+
+        if (!x86_64IsByvalStruct(t)) {
+            int is_float = (t->kind == AST_TYPE_FLOAT);
+            if (is_float ? (nsse < 8) : (ngp < 6)) {
+                if (is_float) nsse++; else ngp++; /* reg: arrive+store */
+            } else {
+                if (has_slot) {
+                    u32 sz = (u32)t->size;
+                    x86_64DerefLoadWidth(buf, sz, "rax", "rbp", NULL, 0,
+                                         16 + incoming_off);
+                    x86_64FrameStoreWidth(buf, loff, sz, "rax");
+                }
+                incoming_off += 8;
+            }
+            continue;
+        }
+
+        X86SysvAgg ag; x86_64ClassifyAgg(t, &ag);
+        if (!x86_64AggInRegs(&ag, ngp, nsse)) {
+            /* MEMORY / register overflow: arrived at [rbp+16+incoming_off]. */
+            if (has_slot) {
+                int words = (t->size + 7) / 8;
+                for (int k = 0; k < words; ++k) {
+                    int off = k * 8;
+                    int rem = t->size - off;
+                    u32 sz = rem >= 8 ? 8 : (u32)rem;
+                    x86_64DerefLoadWidth(buf, sz, "rax", "rbp", NULL, 0,
+                                         16 + incoming_off + off);
+                    x86_64FrameStoreWidth(buf, loff + off, sz, "rax");
+                }
+            }
+            incoming_off += (t->size + 7) & ~7;
+            continue;
+        }
+
+        for (int e = 0; e < ag.neb; ++e) {
+            int off = e * 8;
+            int rem = t->size - off;
+            u32 sz = rem >= 8 ? 8 : (u32)rem;
+            if (ag.cls[e] == SYSV_SSE) {
+                if (has_slot) {
+                    char mem_s[48];
+                    x86_64FmtMemOperand(mem_s, sizeof(mem_s), loff + off,
+                                        "rbp", NULL, 0);
+                    aoStrCatFmt(buf, "%s   %%xmm%i, %s\n\t",
+                                x86_64FpMov(sz == 4 ? 4 : 8), nsse, mem_s);
+                }
+                nsse++;
+            } else {
+                if (has_slot)
+                    x86_64FrameStoreWidth(buf, loff + off, sz, kSysvGpArg[ngp]);
+                ngp++;
+            }
+        }
+    }
+}
+
 static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
     switch (instr->op) {
         /* No-ops at codegen: ALLOCA/GEP/PHI/LABEL are all resolved
@@ -829,7 +1222,8 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
             if (instr->dst && irIsFloat(instr->dst->type)) {
                 int loff = irCgGetLoff(&ctx->fn->ra, instr->r1);
                 aoStrCatFmt(ctx->buf,
-                            "movsd   %i(%%rbp), %%xmm0\n\t", loff);
+                            "%s   %i(%%rbp), %%xmm0\n\t",
+                            x86_64FpMov((int)irValueByteSize(instr->dst)), loff);
                 x86_64SpillDstFpr(ctx, instr, "xmm0");
                 break;
             }
@@ -854,31 +1248,33 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
 
             /* Float r1 takes the FP path so a fused producer can hand
              * the value over in xmm0 (movsd xmm0->slot, no rax bounce). */
-            if (instr->r1 && irIsFloat(instr->r1->type) &&
-                !(instr->dst && instr->dst->pinned_reg))
+            if (instr->r1 && irIsFloat(instr->r1->type))
             {
                 if (!src_reg) {
                     x86_64LoadFirstSrcFpr(ctx, instr, instr->r1);
                     src_reg = "xmm0";
                 }
-                x86_64StoreFpr(ctx, instr->dst, src_reg);
+                x86_64StoreFprSized(ctx, instr->dst, src_reg,
+                                    (int)irValueByteSize(instr->r1));
                 break;
             }
 
-            /* Width comes from the value's size, not the destination's:
-             * when dst is a GEP'd pointer to a sub-word slot (e.g.
-             * `I8 a[3]`), forcing an 8-byte store would overrun the
-             * slot and clobber adjacent stack data. */
-            int loff = irCgGetLoff(&ctx->fn->ra, instr->dst);
             if (!src_reg) {
                 x86_64LoadFirstSrc(ctx, instr, instr->r1);
                 src_reg = "rax";
             }
+            /* Pinned destination lives in a register, not a slot - so
+             * check it before asking for a (nonexistent) loff. */
             if (instr->dst && instr->dst->pinned_reg) {
                 aoStrCatFmt(ctx->buf, "movq    %%%s, %%%s\n\t",
                             src_reg, instr->dst->pinned_reg->data);
                 break;
             }
+            /* Width comes from the value's size, not the destination's:
+             * when dst is a GEP'd pointer to a sub-word slot (e.g.
+             * `I8 a[3]`), forcing an 8-byte store would overrun the
+             * slot and clobber adjacent stack data. */
+            int loff = irCgGetLoff(&ctx->fn->ra, instr->dst);
             u32 size = irValueByteSize(instr->r1);
             x86_64FrameStoreWidth(ctx->buf, loff, size, src_reg);
             break;
@@ -890,9 +1286,11 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
              * GLOBAL operand has no current use (the IADD fusion only
              * runs when r1 is a TMP), so we assert it's zero. */
             if (instr->r1 && instr->r1->kind == IR_VAL_GLOBAL) {
-                const char *sym = instr->r1->as.global.name->data;
+                const char *sym = asmNormaliseGlobalLabel(ctx->cc,
+                        instr->r1->as.global.name)->data;
                 if (instr->dst && irIsFloat(instr->dst->type)) {
-                    aoStrCatFmt(ctx->buf, "movsd   %s(%%rip), %%xmm0\n\t", sym);
+                    aoStrCatFmt(ctx->buf, "%s   %s(%%rip), %%xmm0\n\t",
+                                x86_64FpMov((int)irValueByteSize(instr->dst)), sym);
                     x86_64SpillDstFpr(ctx, instr, "xmm0");
                 } else {
                     aoStrCatFmt(ctx->buf, "movq    %s(%%rip), %%rax\n\t",
@@ -916,7 +1314,8 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                 char mem[48];
                 x86_64FmtMemOperand(mem, sizeof(mem), instr->disp,
                                     base_reg, idx_reg, instr->scale);
-                aoStrCatFmt(ctx->buf, "movsd   %s, %%xmm0\n\t", mem);
+                aoStrCatFmt(ctx->buf, "%s   %s, %%xmm0\n\t",
+                            x86_64FpMov((int)irValueByteSize(instr->dst)), mem);
                 x86_64SpillDstFpr(ctx, instr, "xmm0");
                 break;
             }
@@ -931,11 +1330,13 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
             /* Global address folded in by irFoldGlobalDeref: write
              * directly to sym(%rip). */
             if (instr->dst && instr->dst->kind == IR_VAL_GLOBAL) {
-                const char *sym = instr->dst->as.global.name->data;
+                const char *sym = asmNormaliseGlobalLabel(ctx->cc,
+                        instr->dst->as.global.name)->data;
                 u32 sz = irValueByteSize(instr->r1);
                 if (instr->r1 && irIsFloat(instr->r1->type)) {
                     x86_64LoadFirstSrcFpr(ctx, instr, instr->r1);
-                    aoStrCatFmt(ctx->buf, "movsd   %%xmm0, %s(%%rip)\n\t", sym);
+                    aoStrCatFmt(ctx->buf, "%s   %%xmm0, %s(%%rip)\n\t",
+                                x86_64FpMov((int)irValueByteSize(instr->r1)), sym);
                     break;
                 }
                 s64 imm;
@@ -970,7 +1371,8 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                 char mem[48];
                 x86_64FmtMemOperand(mem, sizeof(mem), instr->disp,
                                     base_reg, idx_reg, instr->scale);
-                aoStrCatFmt(ctx->buf, "movsd   %%xmm0, %s\n\t", mem);
+                aoStrCatFmt(ctx->buf, "%s   %%xmm0, %s\n\t",
+                            x86_64FpMov((int)irValueByteSize(instr->r1)), mem);
                 break;
             }
             u32 sz = irValueByteSize(instr->r1);
@@ -1013,7 +1415,8 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
 
             if (instr->dst && instr->dst->kind == IR_VAL_GLOBAL) {
                 snprintf(mem, sizeof(mem), "%s(%%rip)",
-                         instr->dst->as.global.name->data);
+                         asmNormaliseGlobalLabel(ctx->cc,
+                                 instr->dst->as.global.name)->data);
             } else {
                 const char *base_reg = "rcx";
                 int addr_in_reg = instr->dst &&
@@ -1196,10 +1599,11 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
         case IR_FSUB:
         case IR_FMUL:
         case IR_FDIV: {
-            const char *op = (instr->op == IR_FADD) ? "addsd"
-                           : (instr->op == IR_FSUB) ? "subsd"
-                           : (instr->op == IR_FMUL) ? "mulsd"
-                                                    : "divsd";
+            int single = (int)irValueByteSize(instr->dst) == 4;
+            const char *op = (instr->op == IR_FADD) ? (single ? "addss" : "addsd")
+                           : (instr->op == IR_FSUB) ? (single ? "subss" : "subsd")
+                           : (instr->op == IR_FMUL) ? (single ? "mulss" : "mulsd")
+                           : (single ? "divss" : "divsd");
             x86_64LoadFirstSrcFpr(ctx, instr, instr->r1);
             x86_64LoadToFpr(ctx, instr->r2, "xmm1");
             aoStrCatFmt(ctx->buf, "%s   %%xmm1, %%xmm0\n\t", op);
@@ -1208,12 +1612,20 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
         }
 
         case IR_FNEG: {
-            /* No fneg on SSE - flip the sign bit by XORing with
-             * 0x8000000000000000. `sign_bit` is the shared global
-             * emitted by the data-section pass. */
+            /* No fneg on SSE - flip the sign bit. For F64 XOR with
+             * the shared 0x8000000000000000 `sign_bit` global; for F32
+             * flip bit 31 via a gpr round-trip (self-contained, no
+             * extra 32-bit mask global needed). */
             x86_64LoadFirstSrcFpr(ctx, instr, instr->r1);
-            aoStrCatFmt(ctx->buf,
-                        "xorpd   sign_bit(%%rip), %%xmm0\n\t");
+            if ((int)irValueByteSize(instr->dst) == 4) {
+                aoStrCatFmt(ctx->buf,
+                            "movd    %%xmm0, %%eax\n\t"
+                            "xorl    $0x80000000, %%eax\n\t"
+                            "movd    %%eax, %%xmm0\n\t");
+            } else {
+                aoStrCatFmt(ctx->buf,
+                            "xorpd   sign_bit(%%rip), %%xmm0\n\t");
+            }
             x86_64SpillDstFpr(ctx, instr, "xmm0");
             break;
         }
@@ -1237,8 +1649,11 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
         case IR_FCMP: {
             x86_64LoadFirstSrcFpr(ctx, instr, instr->r1);
             x86_64LoadToFpr(ctx, instr->r2, "xmm1");
-            /* ucomisd %xmm1, %xmm0 sets flags from (xmm0 cmp xmm1). */
-            aoStrCatFmt(ctx->buf, "ucomisd %%xmm1, %%xmm0\n\t");
+            /* ucomiss/ucomisd %xmm1, %xmm0 sets flags from
+             * (xmm0 cmp xmm1) at the operand precision. */
+            aoStrCatFmt(ctx->buf, "%s %%xmm1, %%xmm0\n\t",
+                        (int)irValueByteSize(instr->r1) == 4 ? "ucomiss"
+                                                             : "ucomisd");
             x86_64EmitSetCC(ctx, instr->extra.cmp_kind, 1);
             x86_64SpillDst(ctx, instr, "rax");
             break;
@@ -1264,7 +1679,9 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
 
         case IR_SITOFP:
             x86_64LoadFirstSrc(ctx, instr, instr->r1);
-            aoStrCatFmt(ctx->buf, "cvtsi2sdq %%rax, %%xmm0\n\t");
+            aoStrCatFmt(ctx->buf, "%s %%rax, %%xmm0\n\t",
+                        (int)irValueByteSize(instr->dst) == 4 ? "cvtsi2ssq"
+                                                              : "cvtsi2sdq");
             x86_64SpillDstFpr(ctx, instr, "xmm0");
             break;
 
@@ -1273,33 +1690,57 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
              * signed. True U64 -> double for values >= 2^63 would
              * need the signed-bit-fixup dance; not currently needed. */
             x86_64LoadFirstSrc(ctx, instr, instr->r1);
-            aoStrCatFmt(ctx->buf, "cvtsi2sdq %%rax, %%xmm0\n\t");
+            aoStrCatFmt(ctx->buf, "%s %%rax, %%xmm0\n\t",
+                        (int)irValueByteSize(instr->dst) == 4 ? "cvtsi2ssq"
+                                                              : "cvtsi2sdq");
             x86_64SpillDstFpr(ctx, instr, "xmm0");
             break;
 
         case IR_FPTOSI:
             x86_64LoadFirstSrcFpr(ctx, instr, instr->r1);
-            aoStrCatFmt(ctx->buf, "cvttsd2siq %%xmm0, %%rax\n\t");
+            aoStrCatFmt(ctx->buf, "%s %%xmm0, %%rax\n\t",
+                        (int)irValueByteSize(instr->r1) == 4 ? "cvttss2siq"
+                                                             : "cvttsd2siq");
             x86_64SpillDst(ctx, instr, "rax");
             break;
 
         case IR_FPTOUI:
             /* Same simplification as UITOFP - signed truncation. */
             x86_64LoadFirstSrcFpr(ctx, instr, instr->r1);
-            aoStrCatFmt(ctx->buf, "cvttsd2siq %%xmm0, %%rax\n\t");
+            aoStrCatFmt(ctx->buf, "%s %%xmm0, %%rax\n\t",
+                        (int)irValueByteSize(instr->r1) == 4 ? "cvttss2siq"
+                                                             : "cvttsd2siq");
             x86_64SpillDst(ctx, instr, "rax");
             break;
 
+        case IR_FPTRUNC:
+            /* F64 -> F32. */
+            x86_64LoadFirstSrcFpr(ctx, instr, instr->r1);
+            aoStrCatFmt(ctx->buf, "cvtsd2ss %%xmm0, %%xmm0\n\t");
+            x86_64SpillDstFpr(ctx, instr, "xmm0");
+            break;
+
+        case IR_FPEXT:
+            /* F32 -> F64. */
+            x86_64LoadFirstSrcFpr(ctx, instr, instr->r1);
+            aoStrCatFmt(ctx->buf, "cvtss2sd %%xmm0, %%xmm0\n\t");
+            x86_64SpillDstFpr(ctx, instr, "xmm0");
+            break;
+
         case IR_BITCAST:
-            /* Reinterpret 8 bytes between int and fp. x86's movq has a
-             * dedicated xmm<->gp form for exactly this. */
+            /* Reinterpret bits between int and fp. movd for 4-byte
+             * (F32/I32), movq for 8-byte (F64/I64). */
             if (instr->dst && irIsFloat(instr->dst->type)) {
+                int single = (int)irValueByteSize(instr->dst) == 4;
                 x86_64LoadFirstSrc(ctx, instr, instr->r1);
-                aoStrCatFmt(ctx->buf, "movq    %%rax, %%xmm0\n\t");
+                aoStrCatFmt(ctx->buf, "%s    %%%s, %%xmm0\n\t",
+                            single ? "movd" : "movq", single ? "eax" : "rax");
                 x86_64SpillDstFpr(ctx, instr, "xmm0");
             } else {
+                int single = (int)irValueByteSize(instr->r1) == 4;
                 x86_64LoadFirstSrcFpr(ctx, instr, instr->r1);
-                aoStrCatFmt(ctx->buf, "movq    %%xmm0, %%rax\n\t");
+                aoStrCatFmt(ctx->buf, "%s    %%xmm0, %%%s\n\t",
+                            single ? "movd" : "movq", single ? "eax" : "rax");
                 x86_64SpillDst(ctx, instr, "rax");
             }
             break;
@@ -1336,14 +1777,37 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
             break;
         }
 
-        case IR_FPTRUNC: case IR_FPEXT:
         case IR_PTRTOINT: case IR_INTTOPTR:
             loggerPanic("ir-cg-x86_64: conversion op not yet implemented "
                         "(IR op %d) - not currently emitted by IR\n",
                         instr->op);
 
         case IR_RET:
-            if (instr->dst) {
+            if (instr->dst && instr->dst->byval_struct_type) {
+                /* <=16-byte struct returned in registers: load its bytes from
+                 * the return slot into rax,rdx (INTEGER) / xmm0,xmm1 (SSE). */
+                AstType *t = instr->dst->byval_struct_type;
+                int loff = irCgGetLoff(&ctx->fn->ra, instr->dst);
+                X86SysvAgg ag; x86_64ClassifyAgg(t, &ag);
+                const char *gpr[2] = { "rax", "rdx" };
+                int gpi = 0, ssei = 0;
+                for (int e = 0; e < ag.neb; ++e) {
+                    int off = e * 8, rem = t->size - off;
+                    u32 sz = rem >= 8 ? 8 : (u32)rem;
+                    if (ag.cls[e] == SYSV_SSE) {
+                        char mem[48];
+                        x86_64FmtMemOperand(mem, sizeof(mem), loff + off,
+                                            "rbp", NULL, 0);
+                        aoStrCatFmt(ctx->buf, "%s   %s, %%xmm%i\n\t",
+                                    x86_64FpMov(sz == 4 ? 4 : 8), mem, ssei);
+                        ssei++;
+                    } else {
+                        x86_64DerefLoadWidth(ctx->buf, sz, gpr[gpi], "rbp",
+                                             NULL, 0, loff + off);
+                        gpi++;
+                    }
+                }
+            } else if (instr->dst) {
                 if (irIsFloat(instr->dst->type)) {
                     x86_64LoadFirstSrcFpr(ctx, instr, instr->dst);
                 } else {
@@ -1434,7 +1898,9 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
             if (is_float) {
                 x86_64LoadFirstSrcFpr(ctx, instr, instr->r1);
                 x86_64LoadToFpr(ctx, instr->r2, "xmm1");
-                aoStrCatFmt(ctx->buf, "ucomisd %%xmm1, %%xmm0\n\t");
+                aoStrCatFmt(ctx->buf, "%s %%xmm1, %%xmm0\n\t",
+                            (int)irValueByteSize(instr->r1) == 4 ? "ucomiss"
+                                                                 : "ucomisd");
             } else {
                 x86_64LoadFirstSrc(ctx, instr, instr->r1);
                 s64 imm;
@@ -1507,6 +1973,22 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                                 "without target\n");
                 }
                 x86_64LoadToReg(ctx, instr->r2, "r11");
+            }
+
+            /* Route through the uniform SysV path when a struct is passed by
+             * value OR returned by value (register-return / hidden-out-ptr). */
+            {
+                int use_sysv = (instr->flags & IRCG_CALL_AGG_RETURN) != 0;
+                for (u64 ai = 0; args && ai < args->size; ++ai) {
+                    if (vecGet(IrValue *, args, ai)->byval_struct_type) {
+                        use_sysv = 1;
+                        break;
+                    }
+                }
+                if (use_sysv) {
+                    x86_64EmitSysvCall(ctx, instr, args, fname, indirect);
+                    break;
+                }
             }
 
             Ast *callee = NULL;
@@ -1591,7 +2073,8 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                 s32 slot_off = stack_idx * 8;
                 if (irIsFloat(a->type)) {
                     x86_64LoadToFpr(ctx, a, "xmm0");
-                    aoStrCatFmt(ctx->buf, "movsd   %%xmm0, %i(%%rsp)\n\t", slot_off);
+                    aoStrCatFmt(ctx->buf, "%s   %%xmm0, %i(%%rsp)\n\t",
+                                x86_64FpMov((int)irValueByteSize(a)), slot_off);
                 } else {
                     x86_64LoadToReg(ctx, a, "rax");
                     aoStrCatFmt(ctx->buf, "movq    %%rax, %i(%%rsp)\n\t", slot_off);
@@ -1671,30 +2154,17 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
          * plain text. Mirrors aarch64's IR_ASM case modulo the
          * frame-relative syntax. */
         case IR_ASM: {
-            aoStrRemovePreviousChar(ctx->buf, '\t');
+            /* Inline `asm { ... }` statement: assemble with libtasm
+             * and emit the bytes in place. */
             if (instr->extra.asm_fragments) {
-                listForEach(instr->extra.asm_fragments) {
-                    AsmFragment *f = (AsmFragment *)it->value;
-                    if (f->kind == ASM_FRAG_TEXT) {
-                        if (f->text) {
-                            aoStrCatLen(ctx->buf,
-                                        f->text->data,
-                                        f->text->len);
-                        }
-                    } else if (f->kind == ASM_FRAG_LVAR_REF) {
-                        if (f->lvar) {
-                            aoStrCatFmt(ctx->buf,
-                                        "%i(%%rbp)",
-                                        f->lvar->loff);
-                        }
-                    }
-                }
-            } else if (instr->r1 && instr->r1->as.str.str) {
-                aoStrCatLen(ctx->buf,
-                            instr->r1->as.str.str->data,
-                            instr->r1->as.str.str->len);
+                loggerPanic("ir-cg-x86_64: `&var` asm fragments are no "
+                            "longer supported; address locals directly\n");
             }
-            aoStrPutChar(ctx->buf, '\n');
+            aoStrRemovePreviousChar(ctx->buf, '\t');
+            if (instr->r1 && instr->r1->as.str.str) {
+                asmEmitBlockBytes(ctx->cc, ctx->buf,
+                                  instr->r1->as.str.str, 0);
+            }
             aoStrPutChar(ctx->buf, '\t');
             break;
         }
@@ -1806,6 +2276,16 @@ void x86_64GenerateFunction(IrCgCtx *ctx, Ast *ast) {
         }
     }
 
+    /* A by-value struct param is unpacked into an rbp-relative slot by
+     * x86_64EmitSysvParamPrologue, so the frame must exist. */
+    int has_struct_param = 0;
+    if (ast->params) {
+        for (u64 i = 0; i < ast->params->size; ++i) {
+            Ast *p = vecGet(Ast *, ast->params, i);
+            if (x86_64IsByvalStruct(p->type)) { has_struct_param = 1; break; }
+        }
+    }
+
     /* Leaf function with zero frame: no stack slots, no pinned regs
      * to save, no calls (so we don't need rsp realignment) and no
      * VARGS area. Skip the rbp prologue/epilogue. */
@@ -1813,12 +2293,14 @@ void x86_64GenerateFunction(IrCgCtx *ctx, Ast *ast) {
                       && (ctx->pinned_regs == NULL
                           || ctx->pinned_regs->size == 0)
                       && !irFnHasCalls(fn)
-                      && (ast->loff == 0);
+                      && (ast->loff == 0)
+                      && !has_struct_param;
 
     x86_64EmitFunctionPrologue(ctx->cc, buf, ast,
                                fn->stack_space,
                                ctx->pinned_regs,
                                ctx->omit_frame);
+    x86_64EmitSysvParamPrologue(ctx, ast);
 
     Set *referenced = irCgComputeReferencedBlocks(fn);
 
@@ -1855,6 +2337,7 @@ void x86_64InitialiseEmptyGlobal(Cctrl *cc,
                                  int zerofill)
 {
     AoStr *label = global->is_static ? global->glabel : global->gname;
+    label = asmNormaliseGlobalLabel(cc, label);
     int size = global->type->size;
 
     if (zerofill && (cc->target == TARGET_AARCH64_APPLE_DARWIN ||
@@ -1882,12 +2365,19 @@ static void x86_64DataInternal(AoStr *buf, Ast *data) {
         return;
     }
     if (data->type->kind == AST_TYPE_FLOAT) {
-        aoStrCatPrintf(buf, ".quad 0x%lX #%.9f\n\t",
-                       ieee754(data->f64), data->f64);
+        if (data->type->size == 4) {
+            aoStrCatPrintf(buf, ".long 0x%lX #%.9f\n\t",
+                           (unsigned long)(u32)ieee754_32((f32)data->f64),
+                           data->f64);
+        } else {
+            aoStrCatPrintf(buf, ".quad 0x%lX #%.9f\n\t",
+                           ieee754_64(data->f64), data->f64);
+        }
         return;
     }
     switch (data->type->size) {
         case 1: aoStrCatPrintf(buf, ".byte %d\n\t", data->i64); break;
+        case 2: aoStrCatPrintf(buf, ".short %d\n\t", data->i64); break;
         case 4: aoStrCatPrintf(buf, ".long %d\n\t", data->i64); break;
         case 8: aoStrCatPrintf(buf, ".quad %d\n\t", data->i64); break;
         default:
@@ -1905,6 +2395,7 @@ void x86_64GlobalVar(Cctrl *cc,
     Ast *declinit = ast->declinit;
     AoStr *varname = declvar->gname;
     AoStr *label = declvar->is_static ? declvar->glabel : declvar->gname;
+    label = asmNormaliseGlobalLabel(cc, label);
 
     if (ast->flags & AST_FLAG_EXTERN) return;
     if (declvar->flags & AST_FLAG_EXTERN) return;
@@ -1919,9 +2410,20 @@ void x86_64GlobalVar(Cctrl *cc,
          declinit->kind == AST_STRING))
     {
         if (declinit->kind == AST_STRING) {
-            aoStrCatFmt(buf,
-                        "%S:\n\t.asciz \"%S\"\n\t",
-                        declvar->gname, declinit->sval);
+            /* `U8 *p = "..."`: the global is a *pointer* to the string
+             * literal (emitted separately in the cstring section), not
+             * inline storage. `U8 buf[] = "..."` keeps the bytes inline. */
+            if (declvar->type && declvar->type->kind == AST_TYPE_POINTER) {
+                if (!declvar->is_static) {
+                    aoStrCatFmt(buf, ".globl %S\n", label);
+                }
+                aoStrCatFmt(buf, ".data\n\t.p2align 3\n%S:\n\t.quad %S\n\t",
+                            label, declinit->slabel);
+            } else {
+                aoStrCatFmt(buf,
+                            "%S:\n\t.asciz \"%S\"\n\t",
+                            label, declinit->sval);
+            }
             return;
         }
         if (!declvar->is_static) {
@@ -1961,6 +2463,9 @@ void x86_64GlobalVar(Cctrl *cc,
     }
 }
 
+/* `asm {}` function blocks: assemble each function chunk with libtasm
+ * and emit the encoded bytes under the function's label. Per-function
+ * encoding scopes `@@N` local labels the TempleOS way. */
 static void x86_64PasteAsmBlocks(AoStr *buf, Cctrl *cc) {
     if (!cc->asm_blocks) return;
     for (List *bl = cc->asm_blocks->next; bl != cc->asm_blocks;
@@ -1976,10 +2481,7 @@ static void x86_64PasteAsmBlocks(AoStr *buf, Cctrl *cc) {
             aoStrCatPrintf(buf, ".globl %s\n",
                            asm_func->asmfname->data);
             aoStrCatPrintf(buf, "%s:\n", asm_func->asmfname->data);
-            aoStrCatLen(buf,
-                        asm_func->body->asm_stmt->data,
-                        asm_func->body->asm_stmt->len);
-            aoStrPutChar(buf, '\n');
+            asmEmitBlockBytes(cc, buf, asm_func->body->asm_stmt, 0);
         }
     }
 }
@@ -1994,17 +2496,7 @@ AoStr *x86_64AsmGenerate(Cctrl *cc) {
      * body of a synthetic `main`. CCTRL_ASM_HAS_INITIALISERS makes
      * asmNormaliseFunctionName rename the user's `Main` to `MainFn`
      * so the symbols don't collide. */
-    Ast *synth_main = NULL;
-    if (!listEmpty(cc->initalisers)) {
-        cc->flags |= CCTRL_ASM_HAS_INITIALISERS;
-        listAppend(cc->initalisers,
-                   astReturn(astI64Type(0), ast_i32_type));
-        Ast *body = astCompountStatement(cc->initalisers);
-        Vec *empty_params = astVecNew();
-        AstType *fn_type = astMakeFunctionType(ast_i32_type, empty_params);
-        synth_main = astFunction(fn_type, "main", 4, empty_params, body,
-                                 cc->initaliser_locals, 0);
-    }
+    Ast *synth_main = asmBuildInitialiserMain(cc);
 
     IrCtx *ir_ctx = irCtxNew(cc);
     IrCgCtx ctx;
@@ -2032,11 +2524,7 @@ AoStr *x86_64AsmGenerate(Cctrl *cc) {
         x86_64GenerateFunction(&ctx, synth_main);
     }
 
-    aoStrCatFmt(buf, ".ident      \"hcc: %s %s %s hash: %s\"\n",
-                OS_STR,
-                cliTargetToString(cc->target),
-                cctrlGetVersion(),
-                HCC_GIT_HASH);
+    asmEmitAsmInfo(cc, buf);
     setRelease(seen_globals);
     return buf;
 }
