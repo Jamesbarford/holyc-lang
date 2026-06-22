@@ -1158,6 +1158,7 @@ static int lexCore(Lexer *l, Lexeme *le) {
                 }
                 break;
 
+            case '\t':
             case ' ':
                 if (l->flags & (CCF_ACCEPT_WHITESPACE)) {
                     lexemeAssignOp(le,start,1,ch,l->lineno);
@@ -1974,6 +1975,14 @@ int lexPreProcBoolean(Lexer *l, Map *macro_defs, Lexeme *le) {
     }
 }
 
+void lexSetAsmFlags(Lexer *l) {
+    l->flags |= (CCF_MULTI_COLON|CCF_ACCEPT_NEWLINES|CCF_ASM_BLOCK);
+}
+
+void lexUnSetAsmFlags(Lexer *l) {
+    l->flags &= ~(CCF_MULTI_COLON|CCF_ACCEPT_WHITESPACE|CCF_ACCEPT_NEWLINES|CCF_ASM_BLOCK);
+}
+
 Lexeme *lexToken(Map *macro_defs, Lexer *l) {
     Lexeme le,next,*copy;
 
@@ -1987,14 +1996,14 @@ Lexeme *lexToken(Map *macro_defs, Lexer *l) {
         if (l->flags & (CCF_ASM_BLOCK) && tokenPunctIs(&le, '}')) {
             copy = lexemeCopy(&le);
             /* turn off assembly lexing */
-            l->flags &= ~(CCF_MULTI_COLON|CCF_ACCEPT_NEWLINES|CCF_ASM_BLOCK);
+            lexUnSetAsmFlags(l);
             return copy;
         }
 
         if (le.tk_type == TK_KEYWORD) {
             switch (le.i64) {
                 case KW_ASM:
-                    l->flags |= (CCF_MULTI_COLON|CCF_ACCEPT_NEWLINES|CCF_ASM_BLOCK);
+                    lexSetAsmFlags(l);
                     copy = lexemeCopy(&le);
                     return copy;
 

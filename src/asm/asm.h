@@ -108,6 +108,7 @@ typedef enum {
 typedef struct AsmLine {
     AsmLineKind kind;
     int line; /* source line for diagnostics */
+    int col; /* source line column */
     /* INSTR: mnemonic + operands. */
     char *mnemonic;       /* owned; lowercase canonical form (kept around for
                            * diagnostics so error messages print the user's

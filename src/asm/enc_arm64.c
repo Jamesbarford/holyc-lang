@@ -44,12 +44,82 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <limits.h>
 
 #include "asm.h"
 #include "asm_enc.h"
 #include "enc_arm64.h"
 #include "tasm_util.h"
+
+/* ---------- operand helpers ---------- */
+/* Helper for parsing a conditional suffix */
+static int
+aarch64_parse_cond_suffix(const char *mn, A64Cond *out)
+{
+    const char *cc = mn;
+    if      (!strcasecmp(cc, "eq")) *out = A_EQ;
+    else if (!strcasecmp(cc, "ne")) *out = A_NE;
+    else if (!strcasecmp(cc, "cs") || !strcasecmp(cc, "hs")) *out = A_CS;
+    else if (!strcasecmp(cc, "cc") || !strcasecmp(cc, "lo")) *out = A_CC;
+    else if (!strcasecmp(cc, "mi")) *out = A_MI;
+    else if (!strcasecmp(cc, "pl")) *out = A_PL;
+    else if (!strcasecmp(cc, "vs")) *out = A_VS;
+    else if (!strcasecmp(cc, "vc")) *out = A_VC;
+    else if (!strcasecmp(cc, "hi")) *out = A_HI;
+    else if (!strcasecmp(cc, "ls")) *out = A_LS;
+    else if (!strcasecmp(cc, "ge")) *out = A_GE;
+    else if (!strcasecmp(cc, "lt")) *out = A_LT;
+    else if (!strcasecmp(cc, "gt")) *out = A_GT;
+    else if (!strcasecmp(cc, "le")) *out = A_LE;
+    else if (!strcasecmp(cc, "al")) *out = A_AL;
+    else return 0;
+    return 1;
+}
+
+
+/* True for any SIMD/FP register (B/H/S/D/Q/V). */
+static int
+aarch64_is_simd_reg(AsmOperand *o)
+{
+    if (!asm_is_reg(o)) return 0;
+    AsmRegClass c = o->reg.cls;
+    return c == AR_A64_B ||
+           c == AR_A64_H ||
+           c == AR_A64_S ||
+           c == AR_A64_D ||
+           c == AR_A64_Q ||
+           c == AR_A64_V;
+}
+
+/* Width of a scalar SIMD/FP register in bytes (1/2/4/8/16); 0 for V (V is
+ * vector-form only - caller must look at v_lane_bits/v_n_lanes). */
+static int
+aarch64_simd_scalar_width(AsmReg r)
+{
+    switch (r.cls) {
+        case AR_A64_B: return 1;
+        case AR_A64_H: return 2;
+        case AR_A64_S: return 4;
+        case AR_A64_D: return 8;
+        case AR_A64_Q: return 16;
+        default: return 0;
+    }
+}
+
+/* Translate an A64 register operand to its 0..31 hardware number. */
+static int
+aarch64_reg_num(AsmReg r)
+{
+    return r.num & 0x1F;
+}
+
+static int
+aarch64_is_x_or_sp(AsmReg r)
+{
+    return r.cls == AR_A64_X ||
+           r.cls == AR_A64_SP;
+}
 
 /*----------- Instruction encoders ------*/
 
@@ -68,6 +138,18 @@ aarch64_mov_wide(int sf, uint32_t opc, A64Reg rd, uint16_t imm16, int hw)
            ((uint32_t)(hw & 3) << 21) |
            ((uint32_t)imm16 << 5) |
            ((uint32_t)rd & 0x1F);
+}
+
+static int
+aarch64_is_32bit_reg(AsmOperand *op)
+{
+    return op->reg.cls == AR_A64_W;
+}
+
+static int
+aarch64_is_64bit_reg(AsmOperand *op)
+{
+    return op->reg.cls == AR_A64_X;
 }
 
 static size_t
@@ -315,6 +397,51 @@ size_t
 aarch64_enc_sxtw(AsmEnc *e, A64Reg rd, A64Reg rn)
 {
     return put_word(e, aarch64_sxt(31, rd, rn));
+}
+
+int
+aarch64_validate_and_enc_stx(AsmEnc *e, AsmLine *ln)
+{
+    if (ln->n_operands != 2) {
+        char *msg = asm_tmp_printf("`%s` needs 2 operands: `<Xd>, <Xn>`");
+        asm_err_at(e, ln, msg);
+        return 0;
+    }
+    AsmOperand *rd = &ln->operands[0];
+    AsmOperand *rn = &ln->operands[1];
+
+    if (!asm_is_reg(rd) || !asm_is_reg(rn)) {
+        char *msg = asm_tmp_printf("`%s` expects 2 registers: `<Xd|Wd>, <Xn|Wn>`");
+        asm_err_at(e, ln, msg);
+        return 0;
+    }
+
+    /* We know we are looking at a correct mnemonic_id */
+    switch (ln->mnemonic_id) {
+        case A64MN_SXTB: {
+            if (aarch64_is_32bit_reg(rd) && aarch64_is_32bit_reg(rn)) {
+                return aarch64_enc_sxtb(e, aarch64_reg_num(rd->reg), aarch64_reg_num(rn->reg));
+            } else {
+                asm_err_at(e, ln, "`SXTB` expects all registers to be 32bit");
+            }
+            break;
+        }
+        case A64MN_SXTH:
+            if (aarch64_is_32bit_reg(rd) && aarch64_is_32bit_reg(rn)) {
+                return aarch64_enc_sxth(e, aarch64_reg_num(rd->reg), aarch64_reg_num(rn->reg));
+            } else {
+                asm_err_at(e, ln, "`SXTH` expects all registers to be 32bit");
+            }
+            break;
+        case A64MN_SXTW:
+            if (aarch64_is_64bit_reg(rd) && aarch64_is_32bit_reg(rn)) {
+                return aarch64_enc_sxtw(e, aarch64_reg_num(rd->reg), aarch64_reg_num(rn->reg));
+            } else {
+                asm_err_at(e, ln, "`SXTW` expects Rd to be 64bits and Rn to be 32bits");
+            }
+            break;
+    }
+    return 0;
 }
 
 /* ================================================================ loads /
@@ -1681,6 +1808,63 @@ aarch64_enc_cset(AsmEnc *e, A64Reg rd, A64Cond cc)
     return put_word(e, w);
 }
 
+size_t
+aarch64_enc_csel(AsmEnc *e, int sf, A64Reg rd, A64Reg rn, A64Reg rm,
+                 A64Cond cond)
+{
+    /* CSEL  <Xd>, <Xn>, <Xm>, <cond> (also has a 32 bit variant) *
+     * encoding: sf | 0 | 0 | 1 1 0 1 0 1 0 0 | Rm | cond | 0 0 | Rn | Rd */
+    uint32_t sf_bit = sf ? 1u : 0u;
+    uint32_t w = (sf_bit         << 31) |
+                 (0xD4           << 21) |
+                 ((uint32_t)rm   << 16) |
+                 ((uint32_t)cond << 12) |
+                 ((uint32_t)rn   << 5)  |
+                 ((uint32_t)rd & 0x1F);
+    return put_word(e, w);
+}
+
+static size_t
+aarch64_validate_and_enc_csel(AsmEnc *e, AsmLine *ln)
+{
+    if (ln->n_operands != 4) {
+        asm_err_at(e, ln, "`CSEL` needs 4 operands; `<Xd>, <Xn>, <Xm>, <cond>`");
+        return 0;
+    }
+    AsmOperand *rd = &ln->operands[0];
+    AsmOperand *rn = &ln->operands[1];
+    AsmOperand *rm = &ln->operands[2];
+    /* Not sure what this comes through as yet... */
+    AsmOperand *cond = &ln->operands[3];
+    A64Cond cc;
+
+    if (!asm_is_reg(rd) || !asm_is_reg(rn) || !asm_is_reg(rm)) {
+        asm_err_at(e, ln, "`CSEL` expects 3 registers; `<Xd>, <Xn>, <Xm>, <cond>`");
+        return 0;
+    }
+
+    if (!aarch64_parse_cond_suffix(cond->label_name, &cc)) {
+        asm_err_at(e, ln, "`CSEL` invalid cond");
+        return 0;
+    }
+
+    int sf = 0;
+    if (aarch64_is_32bit_reg(rd) && aarch64_is_32bit_reg(rn) && aarch64_is_32bit_reg(rm)) {
+        sf = 0;
+    } else if (aarch64_is_64bit_reg(rd) && aarch64_is_64bit_reg(rn) && aarch64_is_64bit_reg(rm)) {
+        sf = 1;
+    } else {
+        asm_err_at(e, ln, "`CSEL` expects all registers to be either 32 or 64 bit");
+        return 0;
+    }
+
+    return aarch64_enc_csel(e, sf,
+                            aarch64_reg_num(rd->reg),
+                            aarch64_reg_num(rn->reg),
+                            aarch64_reg_num(rm->reg),
+                            cc);
+}
+
 /* (CBZ/CBNZ encoder lives further up - `aarch64_enc_cbz` takes is_64 +
  * is_nonzero, supporting both X and W variants.  The older X-only stub
  * was removed.) */
@@ -1741,76 +1925,16 @@ aarch64_enc_msr_imm(AsmEnc *e, uint32_t op1, uint32_t op2, uint32_t imm4)
 
 /* ---------- END Instruction encoders - */
 
-/* ---------- operand helpers ---------- */
-
-/* True for any SIMD/FP register (B/H/S/D/Q/V). */
-static int
-aarch64_is_simd_reg(AsmOperand *o)
-{
-    if (!asm_is_reg(o)) return 0;
-    AsmRegClass c = o->reg.cls;
-    return c == AR_A64_B ||
-           c == AR_A64_H ||
-           c == AR_A64_S ||
-           c == AR_A64_D ||
-           c == AR_A64_Q ||
-           c == AR_A64_V;
-}
-
-/* Width of a scalar SIMD/FP register in bytes (1/2/4/8/16); 0 for V (V is
- * vector-form only - caller must look at v_lane_bits/v_n_lanes). */
-static int
-aarch64_simd_scalar_width(AsmReg r)
-{
-    switch (r.cls) {
-        case AR_A64_B: return 1;
-        case AR_A64_H: return 2;
-        case AR_A64_S: return 4;
-        case AR_A64_D: return 8;
-        case AR_A64_Q: return 16;
-        default: return 0;
-    }
-}
-
-/* Translate an A64 register operand to its 0..31 hardware number. */
-static int
-aarch64_reg_num(AsmReg r)
-{
-    return r.num & 0x1F;
-}
-
-static int
-aarch64_is_x_or_sp(AsmReg r)
-{
-    return r.cls == AR_A64_X ||
-           r.cls == AR_A64_SP;
-}
 
 /* ---------- condition-code parsing for B.<cc> ---------- */
 
 static int
-aarch64_parse_cond_suffix(const char *mn, A64Cond *out)
+aarch64_parse_branch_cond_suffix(const char *mn, A64Cond *out)
 {
     /* Mnemonic comes in lowercase; we accept `b.eq`, `b.ne`, etc. */
     if (strncmp(mn, "b.", 2) != 0) return 0;
     const char *cc = mn + 2;
-    if (!strcmp(cc, "eq")) *out = A_EQ;
-    else if (!strcmp(cc, "ne")) *out = A_NE;
-    else if (!strcmp(cc, "cs") || !strcmp(cc, "hs")) *out = A_CS;
-    else if (!strcmp(cc, "cc") || !strcmp(cc, "lo")) *out = A_CC;
-    else if (!strcmp(cc, "mi")) *out = A_MI;
-    else if (!strcmp(cc, "pl")) *out = A_PL;
-    else if (!strcmp(cc, "vs")) *out = A_VS;
-    else if (!strcmp(cc, "vc")) *out = A_VC;
-    else if (!strcmp(cc, "hi")) *out = A_HI;
-    else if (!strcmp(cc, "ls")) *out = A_LS;
-    else if (!strcmp(cc, "ge")) *out = A_GE;
-    else if (!strcmp(cc, "lt")) *out = A_LT;
-    else if (!strcmp(cc, "gt")) *out = A_GT;
-    else if (!strcmp(cc, "le")) *out = A_LE;
-    else if (!strcmp(cc, "al")) *out = A_AL;
-    else return 0;
-    return 1;
+    return aarch64_parse_cond_suffix(cc, out);
 }
 
 /* ---------- branch helpers ---------- */
@@ -2107,10 +2231,16 @@ aarch64_enc_cmp(AsmEnc *e, AsmLine *ln)
         return;
     }
     int is_64 = (a->reg.cls == AR_A64_X);
-    if (asm_is_reg(b)) aarch64_enc_cmp_reg(e, is_64, aarch64_reg_num(a->reg), aarch64_reg_num(b->reg));
-    else if (asm_is_imm(b) && b->imm >= 0 && b->imm <= 0xFFF)
+    if (asm_is_reg(b)) {
+        aarch64_enc_cmp_reg(e, is_64,
+                            aarch64_reg_num(a->reg),
+                            aarch64_reg_num(b->reg));
+
+    } else if (asm_is_imm(b) && b->imm >= 0 && b->imm <= 0xFFF) {
         aarch64_enc_cmp_imm(e, is_64, aarch64_reg_num(a->reg), (uint32_t)b->imm);
-    else asm_err_at(e, ln, "CMP: unsupported rhs");
+    } else {
+        asm_err_at(e, ln, "CMP: unsupported rhs");
+    }
 }
 
 /* LDR/STR (64-bit GPR). Now also handles pre-index / post-index and
@@ -3806,6 +3936,7 @@ aarch64_encode_instr(AsmEnc *e, AsmLine *ln)
         case A64MN_STNP:     aarch64_enc_ldp_stp(e, ln, 0, 1); return;
         case A64MN_SUBS:     aarch64_enc_subs(e, ln); return;
         case A64MN_CBZ:      aarch64_enc_cbz(e, ln, 0); return;
+        case A64MN_CSEL:     aarch64_validate_and_enc_csel(e, ln); return;
         case A64MN_CBNZ:     aarch64_enc_cbz(e, ln, 1); return;
         case A64MN_FABS:     aarch64_enc_fp1src(e, ln, 1); return;  /* opcode6=000001 */
         case A64MN_FNEG:     aarch64_enc_fp1src(e, ln, 2); return;  /* opcode6=000010 */
@@ -3856,6 +3987,14 @@ aarch64_encode_instr(AsmEnc *e, AsmLine *ln)
         case A64MN_MOVK:     aarch64_enc_mov_wide_mn(e, ln, 0x3); return;
         case A64MN_LDUR:     aarch64_enc_ldst_unscaled_mn(e, ln, 1); return;
         case A64MN_STUR:     aarch64_enc_ldst_unscaled_mn(e, ln, 0); return;
+        case A64MN_BNE:      aarch64_enc_branch(e, ln, 0, 1, A_NE); return;
+
+        case A64MN_SXTB:
+        case A64MN_SXTH:
+        case A64MN_SXTW: {
+            aarch64_validate_and_enc_stx(e, ln);
+            return;
+        }
         case A64MN_UNKNOWN:  break; /* fall through to b.cond / error */
     }
 
@@ -3864,17 +4003,17 @@ aarch64_encode_instr(AsmEnc *e, AsmLine *ln)
      * the mnemonic text. */
     A64Cond cc;
     const char *m = ln->mnemonic ? ln->mnemonic : "";
-    if (aarch64_parse_cond_suffix(m, &cc)) {
+    if (aarch64_parse_branch_cond_suffix(m, &cc)) {
         aarch64_enc_branch(e, ln, 0, 1, cc);
         return;
     }
     char err_buf[256];
     if (ln->mnemonic) {
-        snprintf(err_buf, sizeof(err_buf), "unsupported arm64 mnemonic %s", ln->mnemonic);
+        snprintf(err_buf, sizeof(err_buf), "unsupported AArch64 mnemonic `%s`", ln->mnemonic);
     } else if (ln->label_name) {
-        snprintf(err_buf, sizeof(err_buf), "unsupported arm64 mnemonic %s", ln->label_name);
+        snprintf(err_buf, sizeof(err_buf), "unsupported AArch64 mnemonic `%s`", ln->label_name);
     } else {
-        snprintf(err_buf, sizeof(err_buf), "unsupported arm64 mnemonic");
+        snprintf(err_buf, sizeof(err_buf), "unsupported AArch64 mnemonic");
     }
     asm_err_at(e, ln, err_buf);
 }
@@ -3978,6 +4117,7 @@ static const TasmMnemonicEntry aarch64_mnemonic_entries[] = {
     { "bfmmla",   A64MN_BFMMLA },
     { "bl",       A64MN_BL },
     { "blr",      A64MN_BLR },
+    { "bne",      A64MN_BNE },
     { "br",       A64MN_BR },
     /* TempleOS-flavoured asm spells calls the x86 way; accept `call` as
      * an alias for `bl` so the same HolyC source assembles on both
@@ -3986,6 +4126,7 @@ static const TasmMnemonicEntry aarch64_mnemonic_entries[] = {
     { "cbnz",     A64MN_CBNZ },
     { "cbz",      A64MN_CBZ },
     { "cmp",      A64MN_CMP },
+    { "csel",     A64MN_CSEL },
     { "dmb",      A64MN_DMB },
     { "dsb",      A64MN_DSB },
     { "eor",      A64MN_EOR },
@@ -4034,6 +4175,9 @@ static const TasmMnemonicEntry aarch64_mnemonic_entries[] = {
     { "stur",     A64MN_STUR },
     { "sub",      A64MN_SUB },
     { "subs",     A64MN_SUBS },
+    { "sxtb",     A64MN_SXTB },
+    { "sxth",     A64MN_SXTH },
+    { "sxtw",     A64MN_SXTW },
     { "ucvtf",    A64MN_UCVTF },
 };
 

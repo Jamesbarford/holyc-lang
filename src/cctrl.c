@@ -677,14 +677,22 @@ void cctrlCreateColoredLine(Cctrl *cc,
     s64 tok_len = -1;
     Lexeme tok;
     Lexer l;
-    /* Accept whitespace AND comments so we preserve every source character.
+    /* XXX: I don't think this is the best of ideas re-lexing the line, even
+     * if it does mean we have pretty colours. Preserving the current lexer's
+     * flags at least means we parse the line in the same way. However this
+     * will panic presently as `l.cc` has not been set to `cc`.
+     *
+     * Accept whitespace AND comments so we preserve every source character.
      * Without this, comments get silently swallowed during re-lexing and the
      * `^` underline (positioned by source column) lands past the wrong text.
      * Also flip on CCF_PERMISSIVE so malformed escapes (e.g. `"\q"` in the
      * source) don't make the renderer call lexRaise. We're only trying to
      * syntax-colour the line, not to validate it. */
-    lexInit(&l, (char *)line_buffer,
-            CCF_ACCEPT_WHITESPACE|CCF_ACCEPT_COMMENTS|CCF_PERMISSIVE);
+
+    int safer_lexer_flags = CCF_ACCEPT_WHITESPACE|CCF_ACCEPT_COMMENTS|CCF_PERMISSIVE;
+    int current_lexer_flags = cc->lexer_ ? cc->lexer_->flags : 0;
+    lexInit(&l, (char *)line_buffer, safer_lexer_flags|current_lexer_flags);
+
     s64 current_offset = 0;
 
     /* This assumes we want the last match of an error as opposed to the first */

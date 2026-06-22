@@ -48,21 +48,47 @@ Target prsAsmTasmArch(Cctrl *cc) {
     }
 }
 
+void prsAsmCreateErrorLineAt(Cctrl *cc, AsmLine *ln, int len, AoStr *msg) {
+    AoStr *buf = cctrlCreateErrorLineAt(cc,
+                                        ln->line,
+                                        ln->col,
+                                        len,
+                                        msg->data,
+                                        CCTRL_ERROR,
+                                        NULL);
+    CctrlDiagnostic *d = cctrlMakeDiag(cc, CCTRL_ERROR, buf, NULL);
+    if (ln && ln->line > 0) {
+        d->line = ln->line;
+        d->col = ln->col;
+        d->end_line = ln->line;
+        d->end_col = 10;
+    }
+    cctrlDiagPush(cc, d);
+}
+
 void prsAsmDiagSink(void *ctx, AsmLine *ln, const char *msg) {
     Cctrl *cc = (Cctrl *)ctx;
-    AoStr *rendered = aoStrPrintf("%s", msg);
-    CctrlDiagnostic *d = cctrlMakeDiag(cc, CCTRL_ERROR, rendered, NULL);
     /* cctrlMakeDiag defaults the position to the current token, which
      * for an asm error sits PAST the whole block - every mnemonic
      * error then collapses onto the line after `}`. libtasm knows the
      * real source line; use it so errors land on their instructions. */
-    if (ln && ln->line > 0) {
-        d->line = ln->line;
-        d->col = 0;
-        d->end_line = ln->line;
-        d->end_col = 0;
+    AoStr *bold_msg = aoStrNew();
+    aoStrCatColoured(bold_msg, ESC_BOLD, msg);
+
+    switch (ln->kind) {
+        case AINS_NONE:
+            prsAsmCreateErrorLineAt(cc, ln, -1, bold_msg);
+            break;
+        case AINS_INSTR:
+            prsAsmCreateErrorLineAt(cc, ln, strlen(ln->mnemonic), bold_msg);
+            break;
+        case AINS_LABEL_PUBLIC:
+        case AINS_DIRECTIVE:
+        case AINS_LABEL_LOCAL:
+            prsAsmCreateErrorLineAt(cc, ln, strlen(ln->label_name), bold_msg);
+            break;
     }
-    cctrlDiagPush(cc, d);
+    aoStrRelease(bold_msg);
 }
 
 static const char *prsAsmSrcFile(Cctrl *cc) {
@@ -178,7 +204,10 @@ Ast *prsAsm(Cctrl *cc, int parse_one) {
 
     cctrlTokenExpect(cc, '{');
     Lexeme *tok = cctrlAsmTokenGet(cc);
-
+    /* This is so we can preserve column numbers for the assembly parser errors
+     * that parse has a skip whitespace function so there is no harm in using it*/
+    cc->lexer_->flags |= CCF_ACCEPT_WHITESPACE;
+    
     while (tok && !tokenPunctIs(tok, '}')) {
         /* `NAME::` (or `NAME:`) opens a new function. */
         if (tok->tk_type == TK_IDENT) {
@@ -225,7 +254,9 @@ Ast *prsAsm(Cctrl *cc, int parse_one) {
 
     /* Inline statements (parse_one) have no function labels; the whole
      * body is the statement. Validate it as one chunk. */
-    if (!curfunc) prsAsmValidate(cc, block_text, src_line);
+    if (!curfunc) {
+        prsAsmValidate(cc, block_text, src_line);
+    }
 
     return astAsmBlock(block_text, funcs);
 }
