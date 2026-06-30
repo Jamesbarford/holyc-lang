@@ -453,6 +453,7 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
                     loggerPanic("Invalid target: `%s` valid targets are: %s\n",
                             value.str, valid_targets->data);
                 }
+                args->is_cross_compile = 1;
                 break;
             }
             case CLI_INSTALL_DIR: args->install_dir = value.str; break;
