@@ -259,7 +259,7 @@ void emitFile(Cctrl *cc, AoStr *asmbuf, CliArgs *args) {
 
         if (args->clibs) {
             if (hccCanLinkLibTos(cc)) {
-                aoStrCatPrintf(cmd, "%s -L%s/lib %s %s "CLIBS" -ltos -o %s",
+                aoStrCatPrintf(cmd, "%s -L%s/lib %s %s -ltos "CLIBS" -o %s",
                         cc->CC,
                         args->install_dir,
                         ASM_TMP_FILE,args->clibs,args->output_filename);
@@ -274,7 +274,7 @@ void emitFile(Cctrl *cc, AoStr *asmbuf, CliArgs *args) {
         } else {
             if (hccCanLinkLibTos(cc)) {
                 aoStrCatPrintf(cmd,
-                               "%s -L%s/lib %s "CLIBS" -ltos -o %s",
+                               "%s -L%s/lib %s -ltos "CLIBS" -o %s",
                                cc->CC,
                                args->install_dir,
                                ASM_TMP_FILE,
@@ -287,6 +287,7 @@ void emitFile(Cctrl *cc, AoStr *asmbuf, CliArgs *args) {
                                args->output_filename);
             }
         }
+
         safeSystem(cmd->data);
     }
     remove(ASM_TMP_FILE);
@@ -384,14 +385,18 @@ int main(int argc, char **argv) {
 
     /* Plumb in support for cross compiling... currently does nothing :)*/
     const char *str_target = cliTargetToString(args.target);
-    switch (args.target) {
-        /* Let clang do the heavy lifting */
-        case TARGET_AARCH64_UNKNOWN_LINUX_GNU:
-        case TARGET_X86_64_APPLE_DARWIN:
-        case TARGET_X86_64_UNKNOWN_LINUX_GNU:
-        case TARGET_AARCH64_APPLE_DARWIN:
-            cc->CC = mprintf("clang --target=%s", str_target);
-            break;
+    if (args.is_cross_compile) {
+        switch (args.target) {
+            /* Let clang do the heavy lifting */
+            case TARGET_AARCH64_UNKNOWN_LINUX_GNU:
+            case TARGET_X86_64_APPLE_DARWIN:
+            case TARGET_X86_64_UNKNOWN_LINUX_GNU:
+            case TARGET_AARCH64_APPLE_DARWIN:
+                cc->CC = mprintf("clang --target=%s", str_target);
+                break;
+        }
+    } else {
+        cc->CC = mprintf("cc");
     }
 
     if (args.use_legacy_x86) {

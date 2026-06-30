@@ -95,6 +95,7 @@ typedef struct CliArgs {
     char *output_filename;
     char *clibs;
     char *install_dir;
+    int is_cross_compile;
     enum CliTarget target;
     List *defines_list;
 } CliArgs;

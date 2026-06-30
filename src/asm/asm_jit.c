@@ -464,6 +464,10 @@ asm_jit_free(AsmJitCode *code)
     code->_mapping_size = 0;
 }
 
+#ifndef RTLD_DEFAULT
+#define RTLD_DEFAULT ((void *) 0)
+#endif
+
 void *
 asm_jit_dlsym_resolver(void *ud, const char *sym)
 {
