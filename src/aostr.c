@@ -121,6 +121,13 @@ void aoStrPoolPrintStats(void) {
            (unsigned long long)aostr_pool_bypass_allocs);
 }
 
+static const int aostr_tmp_buf_size = 512;
+static char *aostr_tmp_buf = NULL;
+
+void aoStrTmpBufInit(void) {
+    aostr_tmp_buf = malloc(sizeof(char) * aostr_tmp_buf_size);
+}
+
 static AoStr *_aoStrAlloc(void) {
     return (AoStr *)globalArenaAllocate(sizeof(AoStr));
 }
@@ -469,19 +476,29 @@ error:
     return NULL;
 }
 
-static char *mprintVaImpl(const char *fmt, va_list ap, u64 *_len, u64 *_allocated) {
+static char *mprintVaImpl(const char *fmt, va_list ap, u64 *_len, u64 *_allocated, int can_resize) {
     va_list copy;
 
-    /* Probably big enough */
-    u64 fmt_len = strlen(fmt);
-    u64 bufferlen = 1024;
-    if (fmt_len > bufferlen) {
-        bufferlen = fmt_len;
-    }
-    int len = 0;
+    u64 bufferlen;
+    char *buf;
     u32 actual = 0;
-    char *buf = aoStrBufferAlloc(bufferlen + 1, &actual);
-    bufferlen = actual;
+
+    if (can_resize) {
+      u64 fmt_len = strlen(fmt);
+      /* Probably big enough */
+        bufferlen = 1024;
+        if (fmt_len > bufferlen) {
+            bufferlen = fmt_len;
+        }
+        buf = aoStrBufferAlloc(bufferlen + 1, &actual);
+        bufferlen = actual;
+    } else {
+        buf = aostr_tmp_buf;
+        actual = aostr_tmp_buf_size;
+        bufferlen = aostr_tmp_buf_size;
+    }
+
+    int len = 0;
 
     while (1) {
         va_copy(copy, ap);
@@ -492,34 +509,45 @@ static char *mprintVaImpl(const char *fmt, va_list ap, u64 *_len, u64 *_allocate
             return NULL;
         }
 
-        if (((size_t)len) >= bufferlen) {
-            /* The current buffer is too small. Recycle it back to the pool
-             * before allocating a larger one. */
-            aoStrPoolFree(buf, (u32)bufferlen);
-            buf = aoStrBufferAlloc(((u64)len) + 2, &actual);
-            bufferlen = actual;
-            if (buf == NULL) {
-                return NULL;
+        if (can_resize) {
+            if (((size_t)len) >= bufferlen) {
+                /* The current buffer is too small. Recycle it back to the pool
+                 * before allocating a larger one. */
+                aoStrPoolFree(buf, (u32)bufferlen);
+                buf = aoStrBufferAlloc(((u64)len) + 2, &actual);
+                bufferlen = actual;
+                if (buf == NULL) {
+                    return NULL;
+                }
+                continue;
             }
-            continue;
         }
         break;
     }
 
-    if (_len) *_len = len;
+    if (_len)       *_len = len;
     if (_allocated) *_allocated = bufferlen;
     buf[len] = '\0';
     return buf;
 }
 
 char *mprintVa(const char *fmt, va_list ap, s64 *_len) {
-    return mprintVaImpl(fmt,ap,(u64 *)_len,NULL);
+    return mprintVaImpl(fmt,ap,(u64 *)_len,NULL,1);
+}
+
+char *tprintf(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap,fmt);
+    /* This is the temporary buffer that we now have a format string in */
+    char *buffer = mprintVaImpl(fmt,ap,NULL,NULL,0);
+    va_end(ap);
+    return buffer;
 }
 
 static AoStr *aoStrPrintfVa(const char *fmt, va_list ap) {
     u64 len = 0;
     u64 capacity = 0;
-    char *new_buf = mprintVaImpl(fmt,ap,&len,&capacity);
+    char *new_buf = mprintVaImpl(fmt,ap,&len,&capacity,1);
     AoStr *buffer = _aoStrAlloc();
     buffer->data = new_buf;
     buffer->len = len;

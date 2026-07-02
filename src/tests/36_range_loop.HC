@@ -12,6 +12,7 @@ Bool TestContainerLoop(U0)
 {
   Container *c = MAlloc(sizeof(Container));
   c->entries = MAlloc(sizeof(I64) * TEST_CAPACITY);
+  c->size = 0;
   c->entries[c->size++] = 11;
   c->entries[c->size++] = 22;
   c->entries[c->size++] = 32;
@@ -40,7 +41,7 @@ class StaticContainer
 Bool TestStaticContainerEntriesLoop(U0)
 {
   StaticContainer *c = MAlloc(sizeof(StaticContainer));
-
+  c->size = 0;
   c->entries[c->size++] = 91;
   c->entries[c->size++] = 79;
   c->entries[c->size++] = 33;
