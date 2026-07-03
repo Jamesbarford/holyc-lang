@@ -666,6 +666,15 @@ char *lexReadfile(char *path, s64 *_len) {
     *_len = len;
     buf[len] = '\0';
     close(fd);
+
+    /* Allow the file to be run as a script via a shebang, e.g.
+     * `#!/usr/bin/env -S hcc -jit`. `#!` ... Jsut skip the line */
+    if (len >= 2 && buf[0] == '#' && buf[1] == '!') {
+        for (int i = 0; i < len && buf[i] != '\n'; ++i) {
+            buf[i] = ' ';
+        }
+    }
+
     return buf;
 }
 
