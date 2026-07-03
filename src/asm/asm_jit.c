@@ -473,17 +473,26 @@ asm_jit_dlsym_resolver(void *ud, const char *sym)
 {
     (void)ud;
     if (!sym) return NULL;
-    /* macOS C symbols are emitted with a leading underscore in asm; the
-     * matching dlsym lookup wants the unprefixed name. */
-    const char *lookup = (sym[0] == '_') ? sym + 1 : sym;
-    void *p = dlsym(RTLD_DEFAULT, lookup);
+    /* Try the name exactly as emitted first. On ELF/Linux a leading
+     * underscore can be part of the real symbol name - e.g. libtos's
+     * hand-rolled `_MALLOC`/`_FREE` trampolines are exported as
+     * `_MALLOC`/`_FREE` - so stripping it up front would break the
+     * lookup. */
+    void *p = dlsym(RTLD_DEFAULT, sym);
     if (p) return p;
+    /* macOS emits C symbols with a leading underscore in asm while the
+     * matching dlsym lookup wants the unprefixed name, so fall back to
+     * the stripped form. */
+    if (sym[0] == '_') {
+        p = dlsym(RTLD_DEFAULT, sym + 1);
+        if (p) return p;
+    }
 #if defined(__APPLE__)
     /* dlsym can't see underscore-less Mach-O names (e.g. hcc's global
      * variables like libtos's `Fs`). Fall back to a raw symbol-table
      * scan, trying the name as emitted and the unprefixed form. */
     p = jit_macho_symtab_lookup(sym);
-    if (!p && sym != lookup) p = jit_macho_symtab_lookup(lookup);
+    if (!p && sym[0] == '_') p = jit_macho_symtab_lookup(sym + 1);
     if (p) return p;
 #endif
     return NULL;

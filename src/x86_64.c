@@ -114,7 +114,6 @@ static void x86_64RegForWidth(const char *reg64,
 /* leaq <sym>(%rip), %<reg64>. Caller has already normalised the
  * symbol name */
 static void x86_64GlobalAddr(IrCgCtx *ctx, const char *sym, const char *reg) {
-    (void)ctx;
     aoStrCatFmt(ctx->buf, "leaq    %s(%%rip), %%%s\n\t", sym, reg);
 }
 
@@ -442,7 +441,8 @@ static void x86_64EmitFloatLiteralData(IrCgCtx *ctx,
                        ".long 0x%lX # %.9f\n"
                        ".text\n\t"
                        "%s   %s(%%rip), %%%s\n\t",
-                       label->data, (unsigned long)bits, f,
+                       label->data,
+                       (unsigned long)bits, f,
                        mov, label->data, xmm_reg);
     } else {
         aoStrCatPrintf(ctx->buf,
@@ -450,7 +450,8 @@ static void x86_64EmitFloatLiteralData(IrCgCtx *ctx,
                        ".quad 0x%lX # %.9f\n"
                        ".text\n\t"
                        "%s   %s(%%rip), %%%s\n\t",
-                       label->data, (unsigned long)bits, f,
+                       label->data,
+                       (unsigned long)bits, f,
                        mov, label->data, xmm_reg);
     }
 }
@@ -1290,7 +1291,8 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                         instr->r1->as.global.name)->data;
                 if (instr->dst && irIsFloat(instr->dst->type)) {
                     aoStrCatFmt(ctx->buf, "%s   %s(%%rip), %%xmm0\n\t",
-                                x86_64FpMov((int)irValueByteSize(instr->dst)), sym);
+                                x86_64FpMov((int)irValueByteSize(instr->dst)),
+                                sym);
                     x86_64SpillDstFpr(ctx, instr, "xmm0");
                 } else {
                     aoStrCatFmt(ctx->buf, "movq    %s(%%rip), %%rax\n\t",

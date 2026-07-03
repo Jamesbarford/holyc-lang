@@ -182,6 +182,9 @@ typedef struct Cctrl {
      * Headers live at <install_dir>/include, libraries at
      * <install_dir>/lib - the JIT probes the latter for libtos. */
     char *install_dir;
+
+    /* Are we compiling position independent code? */
+    int is_pic;
 } Cctrl;
 
 /* Instantiate a new compiler control struct */
@@ -264,5 +267,9 @@ void cctrlSyncStatement(Cctrl *cc);
 
 Map *cctrlCreateAstMap(Map *parent);
 Map *cctrlCreateLexemeMap(void);
+/* True/False for whether this is position independent code */
+int cctrlfPIC(Cctrl *cc);
+/* Are we targeting linux? */
+int cctrlTargetLinux(Cctrl *cc);
 
 #endif // !CCTRL_H

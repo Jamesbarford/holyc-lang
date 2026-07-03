@@ -94,6 +94,10 @@ const char *cliTargetToString(enum CliTarget target) {
     }
 }
 
+#define CliNopParser(flag, enum_val, help) \
+    {str_lit(flag), 0, enum_val, flag, help, &cliParseNop}
+    
+
 static CliParser parsers[] = {
     {str_lit("-ast"),       0, CLI_PRINT_AST, "-ast", "Print the ast and exit", &cliParseNop},
     {str_lit("-cfg"),       0, CLI_CFG_CREATE, "-cfg", "Create graphviz control flow graph", &cliParseNop},
@@ -103,6 +107,7 @@ static CliParser parsers[] = {
     {str_lit("-S"),         0, CLI_ASSEMBLE_ONLY, "-S", "Emit assembly only", &cliParseNop},
     {str_lit("-obj"),       0, CLI_EMIT_OBJECT, "DEPRICATED use `-c` instead! -obj", "Emit an objectfile", &cliParseNop},
     {str_lit("-c"),         0, CLI_EMIT_OBJECT, "-o", "Emit an objectfile", &cliParseNop},
+    CliNopParser("-fPIC", CLI_fPIC, "For use when making making an object file, indicates the code shall be position independent"),
     {str_lit("-lib"),       1, CLI_EMIT_DYLIB, "-lib <libname>", "Emit a dynamic and static library: `-lib <libname>`", &cliParseString},
     {str_lit("-clibs"),     1, CLI_CLIBS, "-clibs", "Link c libraries like: -clibs=`-lSDL2 -lxml2 -lcurl...`", &cliParseString},
     {str_lit("-run"),       0, CLI_RUN, "-run", "Immediately run the file (not JIT)", &cliParseNop},
@@ -111,7 +116,7 @@ static CliParser parsers[] = {
     {str_lit("-o-"),        0, CLI_TO_STDOUT, "-o-", "Output assembly to stdout, only for use with -S", &cliParseNop},
     {str_lit("-transpile"), 0, CLI_TRANSPILE, "-transpile", "Transpile the code to C, this is best effort", &cliParseNop},
     {str_lit("--target"),   0, CLI_TARGET, "--target", "Select the target, `x86_64-apple-darwin`, `aarch64-apple-darwin`, `x86_64-unknown-linux-gnu` this follows llvm style target triples", &cliParseString},
-    {str_lit("--install-dir"), 0, CLI_INSTALL_DIR, "--install-dir <path>", "Override the install prefix (header dir = <path>/include, lib dir = <path>/lib). Defaults to /usr/local.", &cliParseString},
+    {str_lit("--install-dir"), 1, CLI_INSTALL_DIR, "--install-dir <path>", "Override the install prefix (header dir = <path>/include, lib dir = <path>/lib). Defaults to /usr/local.", &cliParseString},
     {str_lit("-D"),         0, CLI_DEFINES_LIST, "-D<VAR>", "Set a compiler #define (does not accept a value)", &cliParseDefine},
     {str_lit("--dump-ir"),  0, CLI_DUMP_IR, "--dump-ir", "Dump ir to stdout" , &cliParseNop},
     {str_lit("--mem-stats"),  0, CLI_MEM_STATS, "--mem-stats", "Stats about memory usage when compiling" , &cliParseNop},
@@ -413,6 +418,7 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
                 break;
             }
             case CLI_EMIT_OBJECT:        args->emit_object = 1; break;
+            case CLI_fPIC:               args->fPIC = 1; break;
             case CLI_RUN:                args->run = 1; break;
             case CLI_JIT:                args->jit = 1; break;
             case CLI_ASSEMBLE:           args->assemble = 1; break;

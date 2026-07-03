@@ -33,6 +33,7 @@ enum CliArgType {
     CLI_DUMP_IR,
     CLI_EMIT_DYLIB,
     CLI_EMIT_OBJECT,
+    CLI_fPIC,
     CLI_HELP,
     CLI_INSTALL_DIR,
     CLI_JIT,
@@ -87,6 +88,7 @@ typedef struct CliArgs {
     int transpile;
     int to_stdout;
     int use_legacy_x86;
+    int fPIC;
     char *infile;
     char *infile_no_ext;
     char *asm_outfile;

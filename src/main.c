@@ -44,8 +44,10 @@ int is_terminal;
 #define CLIBS CLIBS_BASE
 #endif
 
-void safeSystem(const char *cmd) {
+void safeSystem(const char *cmd, int print_cmd) {
     int ok = system(cmd);
+    if (print_cmd)
+        fprintf(stderr, "%s\n", cmd);
     if (ok != 0) {
         loggerPanic("Failed to execute command: '%s'\n", cmd);
     }
@@ -111,25 +113,50 @@ int hccLibInit(Cctrl *cc, hccLib *lib, CliArgs *args, char *name) {
             lib->dylib_name);
 
 #elif IS_LINUX
-    snprintf(lib->stylib_name,LIB_BUFSIZ,"%s.a",name);
-    snprintf(lib->dylib_name,LIB_BUFSIZ,"%s.so",name);
-    snprintf(lib->dylib_version_name,LIB_BUFSIZ,"%s.so.0.0.1",name);
+    snprintf(lib->stylib_name,LIB_BUFSIZ,"lib%s.a",name);
+    snprintf(lib->dylib_name,LIB_BUFSIZ,"lib%s.so",name);
+    snprintf(lib->dylib_version_name,LIB_BUFSIZ,"lib%s.so.0.0.1",name);
+
+    char *lib_install_dir = tprintf("%s/lib", args->install_dir);
+
+    /* `-Bsymbolic` binds libtos's internal global references (e.g. the
+     * `Fs` exception object shared by HCC_PushFrame/HCC_Throw) to
+     * libtos's own definitions. That makes those symbols non-preemptible,
+     * which is what lets the code generators use direct RIP-relative /
+     * adrp+add addressing (already position independent) rather than
+     * routing every global access through the GOT. The symbols stay in
+     * the dynamic table, so the JIT can still dlsym them (e.g. `Fs`). */
     aoStrCatPrintf(dylib_cmd,
-            "%s -fPIC -shared -Wl,-soname,%s/lib/%s -o %s "CLIBS,
+            "%s -fPIC -shared -Wl,-Bsymbolic -Wl,-soname,%s %s -o %s "CLIBS,
             cc->CC,
-            args->install_dir,
-            name,
-            lib->dylib_name,
+            lib->dylib_version_name,
+            args->obj_outfile,
             lib->dylib_name);
-    aoStrCatPrintf(dylib_cmd," -o %s %s",lib->dylib_name,args->obj_outfile);
-    /* Install the static lib (AOT links this via `-ltos`) AND the
-     * VERSIONED shared object (the JIT dlopen's it - jitLoadLibtos
-     * probes `lib/libtos.so.0.0.1`). Deliberately no unversioned
-     * `libtos.so` symlink: that would make `-ltos` prefer the shared
-     * object over the archive, changing AOT to dynamic linking. */
+
+    /* Install two artefacts:
+     *   - the static archive `libtos.a`, which AOT links via `-ltos`.
+     *   - the VERSIONED shared object `libtos.so.0.0.1`, which the JIT
+     *     dlopen's (jitLoadLibtos probes `lib/libtos.so.0.0.1`).
+     *
+     * Deliberately NO unversioned `libtos.so` symlink: that would make
+     * `-ltos` prefer the shared object and dynamic-link AOT. Because
+     * libtos is built with `-Bsymbolic` (see above), a dynamically
+     * linked executable gets a COPY relocation for exported data like
+     * `Fs` while libtos's own functions keep writing their internal
+     * copy - two `Fs` objects, so the first `throw` null-derefs. Static
+     * linking keeps a single `Fs`; `-ltos` finds the archive because no
+     * `libtos.so` exists beside it. */
     aoStrCatPrintf(installcmd,
-            "cp -pPR ./%s %s/lib/lib%s",
-            lib->stylib_name, args->install_dir, lib->stylib_name);
+            "cp -pPR ./%s %s/%s && ",
+            lib->stylib_name,
+            lib_install_dir,
+            lib->stylib_name);
+
+    /* Copy the versioned .so file to somewhere like /usr/local/lib */
+    aoStrCatPrintf(installcmd, "cp -pPR ./%s %s/%s",
+            lib->dylib_name,
+            lib_install_dir,
+            lib->dylib_version_name);
 #else
 #error "System not supported"
 #endif
@@ -181,12 +208,14 @@ void emitFile(Cctrl *cc, AoStr *asmbuf, CliArgs *args) {
         char *object_file_name = args->output_filename ? 
                                  args->output_filename :
                                  args->obj_outfile;
-        aoStrCatPrintf(cmd, "%s -c %s "CLIBS" %s -o ./%s",
+        char *fPIC = args->fPIC ? "-fPIC -shared" : "";
+        aoStrCatPrintf(cmd, "%s -c %s %s "CLIBS" %s -o ./%s",
                 cc->CC,
+                fPIC,
                 ASM_TMP_FILE,
                 args->clibs,
                 object_file_name);
-        safeSystem(cmd->data);
+        safeSystem(cmd->data, 0);
     } else if (args->asm_outfile && args->assemble_only) {
         int fd;
         u64 flags = O_CREAT|O_RDWR|O_TRUNC;
@@ -211,21 +240,13 @@ void emitFile(Cctrl *cc, AoStr *asmbuf, CliArgs *args) {
     } else if (args->emit_dylib) {
         writeAsmToTmp(asmbuf);
         hccLibInit(cc, &lib,args,args->lib_name);
-        aoStrCatPrintf(cmd, "%s -fPIC -c %s -o ./%s",
+        aoStrCatPrintf(cmd, "%s -shared -fPIC -c %s -o ./%s",
                 cc->CC,
                 ASM_TMP_FILE,args->obj_outfile);
-        fprintf(stderr,"%s\n",cmd->data);
-        safeSystem(cmd->data);
-        fprintf(stderr,"%s\n",lib.stylib_cmd);
-        safeSystem(lib.stylib_cmd);
-
-#if IS_MACOS
-        fprintf(stderr,"%s\n",lib.dylib_cmd);
-        safeSystem(lib.dylib_cmd);
-#endif
-
-        fprintf(stderr,"%s\n",lib.install_cmd);
-        safeSystem(lib.install_cmd);
+        safeSystem(cmd->data,1);
+        safeSystem(lib.dylib_cmd, 1);
+        safeSystem(lib.stylib_cmd, 1);
+        safeSystem(lib.install_cmd, 1);
     } else {
         if (args->run) {
             AoStr *run_cmd = aoStrNew();
@@ -288,7 +309,7 @@ void emitFile(Cctrl *cc, AoStr *asmbuf, CliArgs *args) {
             }
         }
 
-        safeSystem(cmd->data);
+        safeSystem(cmd->data, 0);
     }
     remove(ASM_TMP_FILE);
     aoStrRelease(cmd);
@@ -328,7 +349,7 @@ void assemble(Cctrl *cc, CliArgs *args) {
         } else {
             aoStrCatPrintf(run_cmd, "%s %s "CLIBS, cc->CC, args->infile);
         }
-        safeSystem(run_cmd->data);
+        safeSystem(run_cmd->data, 0);
     }
     aoStrRelease(run_cmd);
 }
@@ -339,6 +360,7 @@ void memoryInit(void) {
     lexemeMemoryInit();
     globalArenaInit(4096*10);
     irMemoryInit();
+    aoStrTmpBufInit();
 }
 
 void memoryRelease(void) {
@@ -381,7 +403,9 @@ int main(int argc, char **argv) {
     cliParseArgs(&args,argc,argv);
 
     cc = cctrlNew(args.target);
+
     cc->install_dir = args.install_dir;
+    cc->is_pic = args.fPIC;
 
     /* Plumb in support for cross compiling... currently does nothing :)*/
     const char *str_target = cliTargetToString(args.target);
@@ -474,7 +498,7 @@ int main(int argc, char **argv) {
             char *dot_cmd = mprintf("dot -T%s %s -o ./%s.%s",
                     ext,dot_outfile,args.infile_no_ext,ext);
             printf("Creating %s: %s\n",ext,dot_cmd);
-            safeSystem(dot_cmd);
+            safeSystem(dot_cmd, 0);
             unlink(dot_outfile);
         }
         goto success;

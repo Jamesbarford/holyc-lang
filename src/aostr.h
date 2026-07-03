@@ -23,6 +23,7 @@ AoStr *aoStrAlloc(u64 capacity);
 AoStr *aoStrNew(void);
 void aoStrRelease(AoStr *buf);
 
+void aoStrTmpBufInit(void);
 void aoStrPoolReset(void);
 void aoStrPoolPrintStats(void);
 
@@ -54,6 +55,11 @@ AoStr *aoStrEncode(AoStr *buf);
 
 void aoStrArrayRelease(AoStr **arr, int count);
 AoStr **aoStrSplit(char *to_split, char delimiter, int *count);
+/* Returns a temporary string. The buffer is a fixed size so should only be used
+ * for short strings, useful for strings that have a short lifetime. DO NOT
+ * FREE the buffer. Copy it if you need it to stay around */
+char *tprintf(const char *fmt, ...);
+/* Returns a heap allocated string, thus can handle long strings */
 char *mprintf(const char *fmt, ...);
 char *mprintFmt(const char *fmt, ...);
 char *mprintVa(const char *fmt, va_list ap, s64 *_len);

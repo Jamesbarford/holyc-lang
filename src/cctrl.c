@@ -1216,3 +1216,23 @@ Ast *cctrlGetOrSetString(Cctrl *cc, char *str, int len, s64 real_len) {
     }
     return ast_str;
 }
+
+int cctrlfPIC(Cctrl *cc) {
+    return cc->is_pic;
+}
+
+int cctrlTargetLinux(Cctrl *cc) {
+    static int is_linux = -1;
+    if (is_linux != -1) return is_linux;
+    switch (cc->target) {
+        case TARGET_AARCH64_APPLE_DARWIN:
+        case TARGET_X86_64_APPLE_DARWIN:
+            is_linux = 0;
+            break;
+        case TARGET_AARCH64_UNKNOWN_LINUX_GNU:
+        case TARGET_X86_64_UNKNOWN_LINUX_GNU:
+            is_linux = 1;
+            break;
+    }
+    return is_linux;
+}
