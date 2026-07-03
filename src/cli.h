@@ -100,6 +100,8 @@ typedef struct CliArgs {
     int is_cross_compile;
     enum CliTarget target;
     List *defines_list;
+    List *object_files;
+    List *shared_object_files;
 } CliArgs;
 
 void cliArgsInit(CliArgs *args);

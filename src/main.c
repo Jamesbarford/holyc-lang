@@ -67,11 +67,6 @@ typedef struct hccLib {
     char *install_cmd;
 } hccLib;
 
-static int hccCanLinkLibTos(Cctrl *cc) {
-    (void)cc;
-    return 1;
-}
-
 int hccLibInit(Cctrl *cc, hccLib *lib, CliArgs *args, char *name) { 
     AoStr *dylib_cmd = aoStrNew();
     AoStr *stylib_cmd = aoStrNew();
@@ -248,21 +243,35 @@ void emitFile(Cctrl *cc, AoStr *asmbuf, CliArgs *args) {
         safeSystem(lib.stylib_cmd, 1);
         safeSystem(lib.install_cmd, 1);
     } else {
+        AoStr *ofiles = aoStrNew();
+        
+        /* Concatinate a string with all of the .o and .so files */
+        if (!listEmpty(cc->object_files)) {
+            listForEach(cc->object_files) {
+                AoStr *o = it->value;
+                aoStrCatFmt(ofiles, "%s ", o->data);
+            }
+        }
+        if (!listEmpty(cc->shared_object_files)) {
+            listForEach(cc->shared_object_files) {
+                AoStr *so = it->value;
+                aoStrCatFmt(ofiles, "%s ", so->data);
+            }
+        }
+
+        if (ofiles->len == 0) {
+            aoStrPutChar(ofiles, ' ');
+        }
+
         if (args->run) {
             AoStr *run_cmd = aoStrNew();
             writeAsmToTmp(asmbuf);
-            if (hccCanLinkLibTos(cc)) {
-                aoStrCatPrintf(run_cmd,"%s -L%s/lib %s %s "CLIBS" -ltos && ./a.out && rm ./a.out",
-                        cc->CC,
-                        args->install_dir,
-                        ASM_TMP_FILE,
-                        args->clibs ? args->clibs : "");
-            } else {
-                aoStrCatPrintf(run_cmd,"%s %s %s "CLIBS" && ./a.out && rm ./a.out",
-                        cc->CC,
-                        ASM_TMP_FILE,
-                        args->clibs ? args->clibs : "");
-            }
+            aoStrCatPrintf(run_cmd,"%s -L%s/lib %s %s %s "CLIBS" -ltos && ./a.out && rm ./a.out",
+                    cc->CC,
+                    args->install_dir,
+                    ASM_TMP_FILE,
+                    ofiles->data,
+                    args->clibs ? args->clibs : "");
             /* Don't use 'safeSystem' else anything other than a '0' exit
              * code will cause a panic which is incorrect... This is a bit of a
              * hack as run, in an ideal world, would not be calling out to `_CC` */
@@ -277,37 +286,15 @@ void emitFile(Cctrl *cc, AoStr *asmbuf, CliArgs *args) {
         if (args->output_filename == NULL) {
             args->output_filename = "a.out";
         }
+        char *clibs = args->clibs ? args->clibs : "";
 
-        if (args->clibs) {
-            if (hccCanLinkLibTos(cc)) {
-                aoStrCatPrintf(cmd, "%s -L%s/lib %s %s -ltos "CLIBS" -o %s",
-                        cc->CC,
-                        args->install_dir,
-                        ASM_TMP_FILE,args->clibs,args->output_filename);
-            } else {
-                aoStrCatPrintf(cmd, "%s %s %s "CLIBS" -o %s",
-                        cc->CC,
-                        ASM_TMP_FILE,
-                        args->clibs,
-                        args->output_filename);
-            }
-
-        } else {
-            if (hccCanLinkLibTos(cc)) {
-                aoStrCatPrintf(cmd,
-                               "%s -L%s/lib %s -ltos "CLIBS" -o %s",
-                               cc->CC,
-                               args->install_dir,
-                               ASM_TMP_FILE,
-                               args->output_filename);
-            } else {
-                aoStrCatPrintf(cmd,
-                               "%s %s "CLIBS" -o %s",
-                               cc->CC,
-                               ASM_TMP_FILE,
-                               args->output_filename);
-            }
-        }
+        aoStrCatPrintf(cmd, "%s -L%s/lib %s %s %s -ltos "CLIBS" -o %s",
+                cc->CC,
+                args->install_dir,
+                ASM_TMP_FILE,
+                ofiles->data,
+                clibs,
+                args->output_filename);
 
         safeSystem(cmd->data, 0);
     }
@@ -328,32 +315,20 @@ void assemble(Cctrl *cc, CliArgs *args) {
             .capacity = len,
         };
         writeAsmToTmp(&asm_buf);
-        if (hccCanLinkLibTos(cc)) {
-            aoStrCatPrintf(run_cmd,
-                           "%s -L"INSTALL_PREFIX"/lib %s "CLIBS" -ltos && ./a.out && rm ./a.out",
-                            cc->CC,
-                            ASM_TMP_FILE);
-        } else {
-            aoStrCatPrintf(run_cmd,
-                           "%s %s "CLIBS" && ./a.out && rm ./a.out",
-                           cc->CC,
-                           ASM_TMP_FILE);
-        }
+        aoStrCatPrintf(run_cmd,
+                "%s -L"INSTALL_PREFIX"/lib %s "CLIBS" -ltos && ./a.out && rm ./a.out",
+                cc->CC,
+                ASM_TMP_FILE);
         free(buffer);
         int ret = system(run_cmd->data);
         (void)ret;
     } else {
-        if (hccCanLinkLibTos(cc)) {
-            aoStrCatPrintf(run_cmd, "%s %s -L"INSTALL_PREFIX"/lib "CLIBS" -ltos",
-                    cc->CC, args->infile);
-        } else {
-            aoStrCatPrintf(run_cmd, "%s %s "CLIBS, cc->CC, args->infile);
-        }
+        aoStrCatPrintf(run_cmd, "%s %s -L"INSTALL_PREFIX"/lib "CLIBS" -ltos",
+                cc->CC, args->infile);
         safeSystem(run_cmd->data, 0);
     }
     aoStrRelease(run_cmd);
 }
-
 
 void memoryInit(void) {
     astMemoryInit();
@@ -406,6 +381,9 @@ int main(int argc, char **argv) {
 
     cc->install_dir = args.install_dir;
     cc->is_pic = args.fPIC;
+
+    cc->object_files = args.object_files;
+    cc->shared_object_files = args.shared_object_files;
 
     /* Plumb in support for cross compiling... currently does nothing :)*/
     const char *str_target = cliTargetToString(args.target);

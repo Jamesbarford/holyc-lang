@@ -69,18 +69,6 @@ Vec *irValueVecNew(void) {
     return vecNew(&vec_ir_value_type);
 }
 
-static void vecAoStrToString(AoStr *buf, void *_s) {
-    if (_s) aoStrCatAoStr(buf, (AoStr *)_s);
-}
-
-/* `Vec<AoStr *>` opaque-ownership; backend retains the storage. */
-VecType vec_aostr_type = {
-    .stringify = vecAoStrToString,
-    .match     = NULL,
-    .release   = NULL,
-    .type_str  = "AoStr *",
-};
-
 int irBlockVecMatch(void *_bb1, void *_bb2) {
     IrBlock *bb1 = (IrBlock *)_bb1;
     IrBlock *bb2 = (IrBlock *)_bb2;

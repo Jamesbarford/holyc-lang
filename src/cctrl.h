@@ -185,6 +185,13 @@ typedef struct Cctrl {
 
     /* Are we compiling position independent code? */
     int is_pic;
+
+    /* .so files that may have been passed on the commandline, these should
+     * be usable with the JIT */
+    List *shared_object_files;
+
+    /* .o files that may have been passed on the commandline */
+    List *object_files;
 } Cctrl;
 
 /* Instantiate a new compiler control struct */
