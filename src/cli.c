@@ -18,7 +18,6 @@
 #define BUFFER_INITIAL_CAPACITY 1024
 #define LINELEN_DEFAULT 80
 
-
 char *cliParseAssign(char *arg) {
     while (*arg != '=') arg++;
     return arg;
@@ -306,6 +305,8 @@ enum CliFileType {
     HC_SOURCE,
     HC_HEADER,
     HC_ASSEMBLY,
+    HC_SHARED_OBJECT,
+    HC_OBJECT,
 };
 
 enum CliFileType cliGetFileType(char *filename, u64 filename_len) {
@@ -316,6 +317,10 @@ enum CliFileType cliGetFileType(char *filename, u64 filename_len) {
         return HC_HEADER;
     } else if (tolower(*end) == 's' && *(end-1) == '.') {
         return HC_ASSEMBLY;
+    } else if (tolower(*end) == 'o' && *(end-1) == '.') {
+        return HC_OBJECT;
+    } else if (tolower(*end) == 'o' && *(end-1) == 's' && *(end-2) == '.') {
+        return HC_SHARED_OBJECT;
     } else {
         return HC_INVALID;
     }
@@ -330,8 +335,23 @@ void getASMFileName(CliArgs *args, enum CliFileType file_type, char *filename, u
         case HC_HEADER:
             break;
         case HC_ASSEMBLY:
-        args->assemble = 1;
+            args->assemble = 1;
             break;
+        case HC_OBJECT: {
+            if (listEmpty(args->object_files)) {
+                args->object_files = listNew();
+            }
+            AoStr *object_file_name = aoStrDupRaw(filename, filename_len);
+            listAppend(args->object_files, object_file_name);
+            return;
+        }
+        case HC_SHARED_OBJECT:
+            if (listEmpty(args->shared_object_files)) {
+                args->shared_object_files = listNew();
+            }
+            AoStr *shared_object_file_name = aoStrDupRaw(filename, filename_len);
+            listAppend(args->shared_object_files, shared_object_file_name);
+            return;
     }
 
     char *slashptr = NULL;
@@ -487,6 +507,8 @@ void cliArgsInit(CliArgs *args) {
     memset(args,0,sizeof(CliArgs));
     args->clibs = "";
     args->defines_list = NULL;
+    args->object_files = NULL;
+    args->shared_object_files = NULL;
 
     /* We make a stab at trying to guess the target from what we have
      * discovered in the config file */

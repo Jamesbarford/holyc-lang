@@ -45,6 +45,26 @@ VecType vec_unsigned_long_type = {
     .type_str  = "unsigned long",
 };
 
+static void vecAoStrToString(AoStr *buf, void *_s) {
+    if (_s) aoStrCatAoStr(buf, (AoStr *)_s);
+}
+
+static int vecAoStrMatch(void *s1, void *s2) {
+    return aoStrEq((AoStr *)s1, (AoStr *)s2);
+}
+
+static void vecAoStrRelease(void *s) {
+    aoStrRelease((AoStr *)s);
+}
+
+/* `Vec<AoStr *>` opaque-ownership; backend retains the storage. */
+VecType vec_aostr_type = {
+    .stringify = vecAoStrToString,
+    .match     = vecAoStrMatch,
+    .release   = NULL,
+    .type_str  = "AoStr *",
+};
+
 Vec *vecNew(VecType *type) {
     Vec *vec = (Vec *)malloc(sizeof(Vec));
     vec->size = 0;

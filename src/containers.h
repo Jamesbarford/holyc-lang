@@ -61,6 +61,7 @@ void vecPrint(Vec *vec);
 
 extern VecType vec_long_type;
 extern VecType vec_unsigned_long_type;
+extern VecType vec_aostr_type;
 
 /*================== Generic MAP =============================================*/
 

@@ -432,7 +432,6 @@ typedef struct IrCtx {
 } IrCtx;
 
 extern VecType vec_ir_block_type;
-extern VecType vec_aostr_type;
 extern MapType map_u32_to_ir_block_type;
 
 /* Memory management */
