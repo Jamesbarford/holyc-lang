@@ -402,19 +402,19 @@ static void jitLoadSharedObjects(Cctrl *cc) {
     if (libs_loaded) return;
     libs_loaded = 1;
 
-    fprintf(stderr, "JIT cannot load in object files at this time\n");
     
-    // if (cc->object_files) {
-    //     fprintf(stderr, "Ignoring object files, only shared objects can be "
-    //             "loaded by the JIT\n");
-    // }
+    if (cc->object_files) {
+        fprintf(stderr, "Ignoring object files, only shared objects can be "
+                "loaded by the JIT\n");
+    }
 
-   // if (!listEmpty(cc->shared_object_files)) {
-   //     listForEach(cc->shared_object_files) {
-   //         AoStr *so_file = it->value;
-   //         dlopen(so_file->data, RTLD_LAZY | RTLD_GLOBAL);
-   //     }
-   // }
+    if (!listEmpty(cc->shared_object_files)) {
+        fprintf(stderr, "JIT cannot load in object files at this time\n");
+        //      listForEach(cc->shared_object_files) {
+        //          AoStr *so_file = it->value;
+        //          dlopen(so_file->data, RTLD_LAZY | RTLD_GLOBAL);
+        //      }
+    }
 }
 
 /* ---------------- compile pipeline ---------------- */
