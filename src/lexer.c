@@ -162,9 +162,13 @@ static LexerType lexer_types[] = {
     {"#undef",   KW_PP_UNDEF},
     {"#error",   KW_PP_ERROR},
     {"#include", KW_PP_INCLUDE},
+    {"#link",    KW_PP_LINK},
+    {"#ifjit",   KW_PP_IF_JIT},
+    {"#ifaot",   KW_PP_IF_AOT},
 
     {"sizeof",   KW_SIZEOF},
     {"alignof",  KW_ALIGNOF},
+    {"typeof",   KW_TYPEOF},
     {"inline",   KW_INLINE},
     {"atomic",   KW_ATOMIC},
     {"volatile", KW_VOLATILE},
@@ -279,6 +283,7 @@ __noreturn static void lexRaise(Lexer *l, const char *fmt, ...) {
     fprintf(stderr, "\033[0;31mERROR: \033[0m");
     va_start(ap, fmt);
     vfprintf(stderr, fmt, ap);
+    fprintf(stderr, "\n");
     va_end(ap);
     exit(EXIT_FAILURE);
 }
@@ -319,6 +324,14 @@ void lexInit(Lexer *l, char *source, int flags) {
         LexerType *bilt = &lexer_types[i]; 
         mapAddLen(l->symbol_table, bilt->name, strlen(bilt->name), bilt);
     }
+}
+
+void lexerRelease(Lexer *l) {
+    if (!l) return;
+    lexReleaseAllFiles(l);
+    mapRelease(l->symbol_table);
+    setRelease(l->seen_files);
+    free(l);
 }
 
 void lexSetBuiltinRoot(Lexer *l, char *root) {
@@ -527,9 +540,9 @@ AoStr *lexemeToAoStr(Lexeme *tok) {
                 case KW_PUBLIC:      aoStrCatPrintf(str,"public");  break;
                 case KW_ATOMIC:      aoStrCatPrintf(str,"atomic");  break;
                 case KW_DEFINE:      aoStrCatPrintf(str,"define");  break;
-                case KW_PP_INCLUDE:     aoStrCatPrintf(str,"include"); break;
                 case KW_SIZEOF:      aoStrCatPrintf(str,"sizeof");  break;
                 case KW_ALIGNOF:     aoStrCatPrintf(str,"alignof"); break;
+                case KW_TYPEOF:      aoStrCatPrintf(str,"typeof");  break;
                 case KW_RETURN:      aoStrCatPrintf(str,"return");  break;
                 case KW_TRY:         aoStrCatPrintf(str,"try");     break;
                 case KW_CATCH:       aoStrCatPrintf(str,"catch");   break;
@@ -563,17 +576,21 @@ AoStr *lexemeToAoStr(Lexeme *tok) {
                 case KW_STATIC:      aoStrCatPrintf(str,"static");  break;
                 case KW_DEFINED:     aoStrCatPrintf(str,"defined"); break;
 
-                case KW_PP_IF: aoStrCatPrintf(str,"#if"); break;   
-                case KW_PP_ELSE: aoStrCatPrintf(str,"#else"); break;   
-                case KW_PP_DEFINE: aoStrCatPrintf(str,"#define"); break;  
-                case KW_PP_IF_NDEF: aoStrCatPrintf(str,"#ifndef"); break; 
-                case KW_PP_IF_DEF: aoStrCatPrintf(str,"#ifdef"); break;
-                case KW_PP_ELIF_DEF:aoStrCatPrintf(str,"#elifdef"); break;
-                case KW_PP_ENDIF: aoStrCatPrintf(str,"#endif"); break;   
-                case KW_PP_ELIF: aoStrCatPrintf(str,"#elif"); break;    
-                case KW_PP_DEFINED: aoStrCatPrintf(str,"#defined"); break; 
-                case KW_PP_UNDEF:  aoStrCatPrintf(str,"#undef"); break;  
-                case KW_PP_ERROR: aoStrCatPrintf(str,"#error"); break;   
+                case KW_PP_INCLUDE:  aoStrCatPrintf(str,"#include"); break;
+                case KW_PP_IF:       aoStrCatPrintf(str,"#if"); break;   
+                case KW_PP_ELSE:     aoStrCatPrintf(str,"#else"); break;   
+                case KW_PP_DEFINE:   aoStrCatPrintf(str,"#define"); break;  
+                case KW_PP_IF_NDEF:  aoStrCatPrintf(str,"#ifndef"); break; 
+                case KW_PP_IF_DEF:   aoStrCatPrintf(str,"#ifdef"); break;
+                case KW_PP_ELIF_DEF: aoStrCatPrintf(str,"#elifdef"); break;
+                case KW_PP_ENDIF:    aoStrCatPrintf(str,"#endif"); break;   
+                case KW_PP_ELIF:     aoStrCatPrintf(str,"#elif"); break;    
+                case KW_PP_DEFINED:  aoStrCatPrintf(str,"#defined"); break; 
+                case KW_PP_UNDEF:    aoStrCatPrintf(str,"#undef"); break;  
+                case KW_PP_ERROR:    aoStrCatPrintf(str,"#error"); break;
+                case KW_PP_LINK:     aoStrCatPrintf(str,"#link"); break;
+                case KW_PP_IF_JIT:   aoStrCatPrintf(str,"#ifjit"); break;
+                case KW_PP_IF_AOT:   aoStrCatPrintf(str,"#ifaot"); break;
 
                 default:
                     loggerPanic("line %d: Keyword %.*s: is not defined\n",
@@ -710,6 +727,36 @@ void lexPushFile(Lexer *l, AoStr *filename) {
     l->start = f->ptr;
 }
 
+/* Push an in-memory buffer as if it were a file. The REPL lexes each
+ * input through here rather than lexInit(l, source, ...) because a
+ * bare string source has no LexFile - and the diagnostic renderer
+ * (and `#include` save/restore) both need `l->cur_file` to be real.
+ * `src` is borrowed; it must outlive the parse of this buffer. */
+void lexPushString(Lexer *l, char *name, char *src, s64 len) {
+    LexFile *f = (LexFile *)malloc(sizeof(LexFile));
+    AoStr *src_code = aoStrNew();
+    src_code->data = src;
+    src_code->len = len;
+    src_code->capacity = 0;
+
+    f->ptr = src_code->data;
+    f->src = src_code;
+    f->lineno = 1;
+    f->line_start_ptr = src_code->data;
+    f->filename = aoStrDupRaw(name, strlen(name));
+    if (l->cur_file) {
+        l->cur_file->ptr = l->ptr;
+        l->cur_file->lineno = l->lineno;
+        l->cur_file->line_start_ptr = l->line_start_ptr;
+        listAppend(l->files,l->cur_file);
+    }
+    l->cur_file = f;
+    l->ptr = f->ptr;
+    l->lineno = f->lineno;
+    l->line_start_ptr = f->line_start_ptr;
+    l->start = f->ptr;
+}
+
 static void lexSkipCodeComment(Lexer *l) {
     if (*l->ptr == '/') {
         while (*l->ptr != '\0') {
@@ -780,7 +827,19 @@ static int countNumberLen(Lexer *l, char *ptr, int *isfloat, int *ishex,
             break;
         /* Anything else is invalid */
         default:
-            if (!isHex(*ptr)) {
+            if (*ptr == 'f') {
+                if (*(ptr+1) != '\0' && *(ptr+1) == '3' && 
+                   *(ptr+2) != '\0' && *(ptr+2) == '2') {
+                    ptr += 2;
+                    *isfloat = 1;
+                    break;
+                } else if (*(ptr+1) != '\0' && *(ptr+1) == '6' && 
+                           *(ptr+2) != '\0' && *(ptr+2) == '4') {
+                    ptr += 2;
+                    *isfloat = 1;
+                    break;
+                }
+            } else if (!isHex(*ptr)) {
                 loggerWarning("line %d: Number errored with char: '%c'\n",l->lineno,*ptr);
                 *err = 1;
                 return -1;
@@ -934,13 +993,23 @@ done:
 u64 lexCharConst(Lexer *l) {
     u64 char_const = 0, idx;
     s64 hex_num = 0;
-    s64 len;
+    s64 len, overflowed = 0;
     char ch;
 
-    for (len = 0; len < LEX_CHAR_CONST_LEN; ++len) {
+    for (len = 0; ; ++len) {
         ch = lexNextChar(l);
         if (!ch || ch == '\'') {
             break;
+        }
+        if (len >= LEX_CHAR_CONST_LEN) {
+            /* Absorb through to the closing quote so the raise below
+             * (or the CCF_PERMISSIVE renderer, which only wants a
+             * syntax-coloured echo) resumes after the constant rather
+             * than in the middle of it. Skip the escaped character so
+             * `\'` cannot end the constant early. */
+            overflowed = 1;
+            if (ch == '\\') lexNextChar(l);
+            continue;
         }
         idx = len * 8;
         if (ch == '\\') {
@@ -961,16 +1030,17 @@ u64 lexCharConst(Lexer *l) {
                 case 'f':  char_const |= (unsigned long)'\f' << ((unsigned long)idx); break;
                 case 'x':
                 case 'X':
+                    hex_num = 0;
                     for (int i = 0; i < 2; ++i) {
-                        ch = toupper(lexNextChar(l));
-                        if (isHex(ch)) {
-                            if (ch <= '9') {
-                                hex_num |= (unsigned long)(hex_num<<4)+ch-'0';
-                            } else {
-                                hex_num |= (unsigned long)(hex_num<<4)+ch-'A'+10;
-                            }
-                        } else {
+                        ch = toupper(lexPeek(l));
+                        if (!isHex(ch)) {
                             break;
+                        }
+                        lexNextChar(l);
+                        if (ch <= '9') {
+                            hex_num = (hex_num<<4)+ch-'0';
+                        } else {
+                            hex_num = (hex_num<<4)+ch-'A'+10;
                         }
                     }
                     char_const |= (unsigned long)hex_num << (unsigned long)(idx);
@@ -984,14 +1054,16 @@ u64 lexCharConst(Lexer *l) {
         }
     }
 
-    if (ch != '\'' && lexPeek(l) != '\'') {
-        lexRaise(l, "Char const limited to 8 characters");
+    if (!(l->flags & CCF_PERMISSIVE)) {
+        if (overflowed) {
+            lexRaise(l, "Char const limited to %d characters",
+                     LEX_CHAR_CONST_LEN);
+        }
+        if (!ch) {
+            lexRaise(l, "Unterminated char const");
+        }
     }
 
-    /* Consume next character if it is the end of the char const */
-    if (lexPeek(l) == '\'') {
-        lexNextChar(l);
-    } 
     l->cur_i64 = char_const;
     l->cur_strlen = len;
     return TK_CHAR_CONST;
@@ -1425,6 +1497,68 @@ void lexInclude(Lexer *l) {
     }
 }
 
+static int listContainsAoStr(List *ll, AoStr *needle) {
+    if (listEmpty(ll)) return 0;
+    listForEach(ll) {
+        if (aoStrEq((AoStr *)it->value, needle)) return 1;
+    }
+    return 0;
+}
+
+/* `#link` records a shared library dependency in the source itself:
+ *   #link "./file.so"   - literal path; spliced into the AOT link
+ *                         command verbatim, dlopen'd by the JIT.
+ *   #link <name>        - library name; `-lname` for the AOT linker,
+ *                         dlopen("lib<name>.{dylib,so}") for the JIT.
+ * Duplicates are dropped so headers can #link freely. */
+static void lexLink(Lexer *l) {
+    Lexeme next;
+    AoStr *name;
+    int is_path = 0;
+
+    if (!lex(l, &next)) {
+        lexRaise(l, "Syntax is: #link \"<path>\" or #link <libname>");
+    }
+    if (tokenPunctIs(&next, '<')) {
+        name = aoStrNew();
+        for (;;) {
+            if (!lex(l, &next)) {
+                lexRaise(l, "Unterminated #link <...>");
+            }
+            if (tokenPunctIs(&next, '>')) break;
+            aoStrCatPrintf(name, "%.*s", next.len, next.start);
+        }
+    } else if (next.tk_type == TK_STR) {
+        name = aoStrDupRaw(next.start, next.len);
+        is_path = 1;
+    } else {
+        lexRaise(l,
+                "Syntax is: #link \"<path>\" or #link <libname> got: %s",
+                lexemeToString(&next));
+    }
+
+    /* Standalone lexers (e.g. the `-tokens` dump) have nothing to
+     * link against; parse and drop. */
+    if (!l->cc) {
+        aoStrRelease(name);
+        return;
+    }
+
+    /* Paths ride the existing shared-object plumbing (same list the
+     * CLI's positional `.so` arguments land in); names get their own
+     * list as they need `-l`/dlopen-probe treatment downstream. */
+    List **libs = is_path ? &l->cc->shared_object_files
+                          : &l->cc->link_libs;
+    if (*libs == NULL) {
+        *libs = listNew();
+    }
+    if (!listContainsAoStr(*libs, name)) {
+        listAppend(*libs, name);
+    } else {
+        aoStrRelease(name);
+    }
+}
+
 Lexeme *lexDefine(Map *macro_defs, Lexer *l) {
     int tk_type,iters;
     Lexeme next,*start,*end,*expanded,*macro;
@@ -1551,25 +1685,23 @@ void lexUndef(Map *macro_defs, Lexer *l) {
 }
 
 int lexPreProcIf(Map *macro_defs, Lexer *l) {
-    int tk_type,iters,should_collect;
+    int tk_type,should_collect,in_defined;
     Vec *macro_tokens;
     Lexeme next,*start,*end,*expanded,*macro;
 
     tk_type = -1;
     should_collect = 0;
+    in_defined = 0;
     macro_tokens = lexemeVecNew();
 
     /* An if must be on one line a \n determines the end of a define */
     l->flags |= CCF_ACCEPT_NEWLINES;
-    iters = 0;
 
     if (!lex(l,&next)) {
         lexRaise(l, "Run out of tokens");
     }
 
     while (!tokenPunctIs(&next,'\n') && !tokenPunctIs(&next,'\0')){ 
-        iters++;
-
         if (tokenPunctIs(&next,'\\')) {
             if (!lex(l,&next)) break;
             if (!tokenPunctIs(&next,'\n')) {
@@ -1581,11 +1713,35 @@ int lexPreProcIf(Map *macro_defs, Lexer *l) {
         } 
 
         if (next.tk_type == TK_IDENT) {
-            if ((macro = mapGetLen(macro_defs,next.start,next.len)) != NULL) {
+            macro = mapGetLen(macro_defs,next.start,next.len);
+            if (in_defined) {
+                /* `defined(X)` works by presence: the parser sees
+                 * `defined()` for an undefined X (the identifier is
+                 * dropped) and `defined(<value>)` for a defined one.
+                 * Don't substitute literals here. */
+                if (macro != NULL) vecPush(macro_tokens,lexemeCopy(macro));
+            } else if (macro != NULL && macro->tk_type != -1) {
                 vecPush(macro_tokens,lexemeCopy(macro));
                 tk_type = macro->tk_type;
+            } else {
+                /* Valueless flag macros (`#define FOO`, the builtin
+                 * platform defines - stored as sentinels) count as 1;
+                 * undefined identifiers count as 0, as in C.
+                 * Substituting a literal keeps the expression
+                 * well-formed either way. */
+                Lexeme *lit = lexemeCopy(&next);
+                lit->tk_type = TK_I64;
+                lit->i64 = (macro != NULL);
+                vecPush(macro_tokens,lit);
+                if (tk_type == -1) tk_type = TK_I64;
             }
             if (!lex(l,&next)) break;
+            /* Re-check the loop condition rather than falling through:
+             * if the identifier was the last token on the line, the
+             * unconditional advance at the bottom of the loop would
+             * swallow the newline and start consuming the NEXT source
+             * line into this expression. */
+            continue;
         }
 
         if (tk_type == -1) {
@@ -1599,25 +1755,47 @@ int lexPreProcIf(Map *macro_defs, Lexer *l) {
         }
         if (!tokenPunctIs(&next,'\n') && !tokenPunctIs(&next,'\0')) {
             vecPush(macro_tokens,lexemeCopy(&next));
+            if (next.tk_type == TK_KEYWORD && next.i64 == KW_DEFINED) {
+                in_defined = 1;
+            } else if (tokenPunctIs(&next,')')) {
+                in_defined = 0;
+            }
         }
         if (!lex(l,&next)) break;
     }
     /* Turn off the flag */
     l->flags &= ~CCF_ACCEPT_NEWLINES;
 
-    start = macro_tokens->entries[0];
-    end = macro_tokens->entries[macro_tokens->size-1];
-
-    if (start == end && iters == 1) {
+    /* Guard BEFORE touching entries: `#if` with nothing on the line
+     * used to read entries[0] / entries[-1] of an empty vector. A
+     * single-token expression (`#if 1`, `#if FLAG`) is legal. */
+    if (macro_tokens->size == 0) {
         lexRaise(l, "a #if must evaluate some expression");
         return 0;
     }
+
+    start = macro_tokens->entries[0];
+    end = macro_tokens->entries[macro_tokens->size-1];
     cctrlInitMacroProcessor(macro_proccessor);
-    macro_proccessor->token_buffer->entries = (Lexeme **)macro_tokens->entries;
+    /* Hand the parser a ring padded out with sentinels: parsePrimary
+     * rewinds one slot to inspect the token preceding an expression
+     * (and error paths rewind further), so every slot the ring can
+     * reach must hold a valid lexeme. The +1 also guarantees capacity
+     * exceeds size - with capacity == size the rewind lands on the
+     * expression's own last token. */
+    u64 ring_cap = roundUpToNextPowerOf2(macro_tokens->size + 1);
+    Lexeme **ring = (Lexeme **)malloc(ring_cap * sizeof(Lexeme *));
+    for (u64 i = 0; i < ring_cap; ++i) {
+        ring[i] = i < macro_tokens->size
+                  ? (Lexeme *)macro_tokens->entries[i]
+                  : lexemeSentinal();
+    }
+    macro_proccessor->token_buffer->entries = ring;
     macro_proccessor->token_buffer->size = macro_tokens->size;
-    macro_proccessor->token_buffer->capacity = roundUpToNextPowerOf2(macro_tokens->size);
+    macro_proccessor->token_buffer->capacity = ring_cap;
 
     Ast *ast = parseExpr(macro_proccessor,16);
+    free(ring);
     expanded = lexemeNew(start->start,end->len-start->len);
     expanded->tk_type = tk_type;
 
@@ -1645,6 +1823,13 @@ int lexPreProcIf(Map *macro_defs, Lexer *l) {
 int lexPreProcBoolean(Lexer *l, Map *macro_defs, Lexeme *le) {
     Lexeme next,*macro;
 
+    /* The skip loops feed every token from a dead `#if` region through
+     * here. `i64` only holds a keyword id for TK_KEYWORD tokens - for
+     * identifiers it's whatever was left in the union, which can
+     * collide with a KW_PP_* value and re-trigger directive parsing on
+     * arbitrary skipped text. */
+    if (le->tk_type != TK_KEYWORD) return 0;
+
     switch (le->i64) {
         case KW_PP_IF: {
             int ok = lexPreProcIf(macro_defs,l);
@@ -1664,7 +1849,26 @@ int lexPreProcBoolean(Lexer *l, Map *macro_defs, Lexeme *le) {
                 l->collecting = 1;
                 l->skip_else = 1;
                 return 1;
-            } 
+            }
+
+            l->collecting = 0;
+            l->skip_else = 0;
+            return 0;
+        }
+
+        case KW_PP_IF_JIT:
+        case KW_PP_IF_AOT: {
+            /* `#ifdef` with an implicit identifier: main() defines
+             * exactly one of __HCC_JIT__ / __HCC_AOT__, so each form
+             * is the other's negation and both compose with
+             * #else / #endif through the shared skip machinery. */
+            char *flag = le->i64 == KW_PP_IF_JIT ? "__HCC_JIT__"
+                                                 : "__HCC_AOT__";
+            if (mapGetLen(macro_defs,flag,(s64)strlen(flag)) != NULL) {
+                l->collecting = 1;
+                l->skip_else = 1;
+                return 1;
+            }
 
             l->collecting = 0;
             l->skip_else = 0;
@@ -1752,6 +1956,10 @@ Lexeme *lexToken(Map *macro_defs, Lexer *l) {
                     lexInclude(l);
                     continue;
                 }
+                case KW_PP_LINK: {
+                    lexLink(l);
+                    continue;
+                }
                 case KW_PP_DEFINE: {
                     copy = lexDefine(macro_defs,l);
                     continue;
@@ -1786,6 +1994,8 @@ Lexeme *lexToken(Map *macro_defs, Lexer *l) {
 
                 case KW_PP_IF_DEF:
                 case KW_PP_IF_NDEF:
+                case KW_PP_IF_JIT:
+                case KW_PP_IF_AOT:
                 case KW_PP_IF: {
                     int line = le.line;
                     while ((lexPreProcBoolean(l,macro_defs,&le)) != 1) {

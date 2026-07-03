@@ -37,10 +37,12 @@ enum CliArgType {
     CLI_HELP,
     CLI_INSTALL_DIR,
     CLI_JIT,
+    CLI_MEMSAFE,
     CLI_MEM_STATS,
     CLI_OUTPUT_FILENAME,
     CLI_PRINT_AST,
     CLI_PRINT_TOKENS,
+    CLI_REPL,
     CLI_RUN,
     CLI_TARGET,
     CLI_TERRY,
@@ -48,6 +50,7 @@ enum CliArgType {
     CLI_TRANSPILE,
     CLI_USE_LEGACY_X86,
     CLI_VERSION,
+    CLI_WERROR,
 };
 
 typedef struct CliValue {
@@ -84,11 +87,14 @@ typedef struct CliArgs {
     int emit_object;
     int run;
     int jit;
+    int memsafe;
+    int repl;
     int assemble;
     int transpile;
     int to_stdout;
     int use_legacy_x86;
     int fPIC;
+    int werror;
     char *infile;
     char *infile_no_ext;
     char *asm_outfile;

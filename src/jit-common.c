@@ -9,10 +9,12 @@
 #include "aostr.h"
 #include "asm.h"
 #include "cli.h"
+#include "config.h"
 #include "prsasm.h"
 #include "ir-optimise.h"
 #include "jit-common.h"
 #include "list.h"
+#include "memsafe.h"
 #include "util.h"
 
 /* Internal labels (cross-function calls within this TU) are matched
@@ -47,8 +49,10 @@ int hccJitFreshLocalNum(HccJit *jit) {
 }
 
 int hccJitIsInternalFunc(HccJit *jit, const char *sym) {
-    /* Stored as cstring -> any-nonnull-pointer in `symbols`. */
-    return mapGet(jit->symbols, (void *)sym) != NULL;
+    /* "Internal" means defined in the chunk currently being emitted -
+     * those calls route through label fixups. Functions from earlier
+     * chunks resolve through host_symbols like any other host address. */
+    return mapGet(jit->chunk_fns, (void *)sym) != NULL;
 }
 
 /* ---------------- fixup helpers ---------------- */
@@ -185,28 +189,42 @@ int hccJitAssembleText(HccJit *jit, AoStr *text, int src_line) {
 
 /* ---------------- globals layout ---------------- */
 
-/* Estimate the size needed for all globals + string literals. */
-static size_t jitGlobalsSize(Cctrl *cc) {
+/* The mangled arena label of a global decl, or NULL if it doesn't get
+ * a slot (extern, typeless, ...). */
+static AoStr *jitGlobalLabel(Ast *ast) {
+    if (ast->kind != AST_DECL && ast->kind != AST_GVAR) return NULL;
+    Ast *dv = ast->declvar;
+    if (!dv || !dv->type) return NULL;
+    if (ast->flags & AST_FLAG_EXTERN) return NULL;
+    if (dv->flags & AST_FLAG_EXTERN) return NULL;
+    return dv->is_static ? dv->glabel : dv->gname;
+}
+
+/* Estimate the size needed for the not-yet-allocated globals in
+ * (from, sentinel] + string literals. Entries already registered in
+ * host_symbols (allocated by a previous chunk) are skipped. */
+static size_t jitGlobalsSize(HccJit *jit, List *from) {
+    Cctrl *cc = jit->cc;
     size_t total = 0;
-    listForEach(cc->ast_list) {
+    for (List *it = from; it != cc->ast_list; it = it->next) {
         Ast *ast = it->value;
-        if (ast->kind != AST_DECL && ast->kind != AST_GVAR) continue;
-        Ast *dv = ast->declvar;
-        if (!dv || !dv->type) continue;
-        if (ast->flags & AST_FLAG_EXTERN) continue;
-        if (dv->flags & AST_FLAG_EXTERN) continue;
-        total += (dv->type->size + 7) & ~7;  /* 8-byte align */
+        AoStr *label = jitGlobalLabel(ast);
+        if (!label) continue;
+        if (mapGet(jit->host_symbols, (void *)label->data)) continue;
+        total += (ast->declvar->type->size + 7) & ~7;  /* 8-byte align */
     }
-    /* String literals are stored in cc->strs. */
+    /* String literals are stored in cc->strs (accumulates across
+     * chunks; the host_symbols check skips already-laid-out ones). */
     if (cc->strs) {
         MapIter mi; mapIterInit(cc->strs, &mi);
         while (mapIterNext(&mi)) {
             Ast *ast = (Ast *)mi.node->value;
             if (ast->kind != AST_STRING) continue;
+            if (mapGet(jit->host_symbols, (void *)ast->slabel->data)) continue;
             total += ((size_t)ast->sval->len + 1 + 7) & ~7;
         }
     }
-    return total + 64; /* slack */
+    return total;
 }
 
 /* Walk an initialiser AST and write its byte image to `addr`.
@@ -256,16 +274,18 @@ static size_t jitWriteInit(HccJit *jit, uint8_t *addr, Ast *init) {
     return 0;
 }
 
-/* Lay out strings + globals into the arena; register each by its
- * mangled name so the backends' global-address emitters can find them
- * via host_symbols. Strings come first so that AST_ARRAY_INIT
- * initialisers in globals can reference them by their already-known
- * addresses. */
-static int jitAllocateGlobals(HccJit *jit) {
-    size_t sz = jitGlobalsSize(jit->cc);
+/* Lay out the (from, sentinel] range's new strings + globals into a
+ * fresh arena; register each by its mangled name so the backends'
+ * global-address emitters can find them via host_symbols. Strings come
+ * first so that AST_ARRAY_INIT initialisers in globals can reference
+ * them by their already-known addresses. Anything a previous chunk
+ * already laid out keeps its old (registered) address. */
+static int jitAllocateGlobals(HccJit *jit, List *from) {
+    size_t sz = jitGlobalsSize(jit, from);
     if (sz == 0) return 0;
-    jit->globals = calloc(1, sz);
-    jit->globals_size = sz;
+    sz += 64; /* slack */
+    uint8_t *globals = calloc(1, sz);
+    listAppend(jit->globals_arenas, globals);
     size_t off = 0;
 
     if (jit->cc->strs) {
@@ -273,7 +293,8 @@ static int jitAllocateGlobals(HccJit *jit) {
         while (mapIterNext(&mi)) {
             Ast *ast = (Ast *)mi.node->value;
             if (ast->kind != AST_STRING) continue;
-            char *addr = (char *)(jit->globals + off);
+            if (mapGet(jit->host_symbols, (void *)ast->slabel->data)) continue;
+            char *addr = (char *)(globals + off);
             /* The lexer stores escape sequences in their textual form
              * (`\n` is two bytes `\\` `n`). The asm path lets the
              * assembler decode them; we have to do it ourselves here
@@ -338,19 +359,15 @@ static int jitAllocateGlobals(HccJit *jit) {
 
     /* Globals. Strings are now addressable, so AST_ARRAY_INIT
      * containing AST_STRING elements can resolve element addresses. */
-    listForEach(jit->cc->ast_list) {
+    for (List *it = from; it != jit->cc->ast_list; it = it->next) {
         Ast *ast = it->value;
-        if (ast->kind != AST_DECL && ast->kind != AST_GVAR) continue;
-        Ast *dv = ast->declvar;
-        if (!dv || !dv->type) continue;
-        if (ast->flags & AST_FLAG_EXTERN) continue;
-        if (dv->flags & AST_FLAG_EXTERN) continue;
-        AoStr *label = dv->is_static ? dv->glabel : dv->gname;
+        AoStr *label = jitGlobalLabel(ast);
         if (!label) continue;
-        uint8_t *addr = jit->globals + off;
+        if (mapGet(jit->host_symbols, (void *)label->data)) continue;
+        uint8_t *addr = globals + off;
         mapAdd(jit->host_symbols, strdup(label->data), addr);
         jitWriteInit(jit, addr, ast->declinit);
-        off += (dv->type->size + 7) & ~7;
+        off += (ast->declvar->type->size + 7) & ~7;
     }
     return 0;
 }
@@ -397,116 +414,214 @@ static void jitLoadLibtos(Cctrl *cc) {
      * with a precise name if they do. */
 }
 
+/* dlopen one library, making its exports visible to
+ * asm_jit_dlsym_resolver. `name_form` entries came from `#link <name>`
+ * and are probed with the linker's lib prefix + both platforms'
+ * suffixes (dlopen inspects the file, not the extension, so trying
+ * both is harmless); paths load verbatim. Returns 1 on success. */
+static int jitDlopenLib(Cctrl *cc, const char *name, int name_form) {
+    if (!name_form) {
+        return dlopen(name, RTLD_LAZY | RTLD_GLOBAL) != NULL;
+    }
+
+    /* Bare names first: dyld / ld.so search their own default paths
+     * (DYLD_LIBRARY_PATH / LD_LIBRARY_PATH, the dyld shared cache,
+     * the ldconfig cache, ...). */
+    static const char *const fmts[] = { "lib%s.dylib", "lib%s.so", "%s" };
+    char buf[1024];
+    for (size_t i = 0; i < sizeof(fmts)/sizeof(fmts[0]); ++i) {
+        snprintf(buf, sizeof(buf), fmts[i], name);
+        if (dlopen(buf, RTLD_LAZY | RTLD_GLOBAL)) return 1;
+    }
+
+    /* Then the places libraries commonly live that the dynamic linker
+     * does NOT search for bare names: the configured install prefix
+     * (mirrors the AOT `-L<prefix>/lib`), Homebrew (dlopen never
+     * searches /opt/homebrew/lib on Apple Silicon), the classic system
+     * dirs and Debian/Fedora arch dirs. */
+    char prefix_lib[1024];
+    const char *dirs[8];
+    size_t ndirs = 0;
+    if (cc->install_dir && *cc->install_dir) {
+        snprintf(prefix_lib, sizeof(prefix_lib), "%s/lib", cc->install_dir);
+        dirs[ndirs++] = prefix_lib;
+    }
+#ifdef __APPLE__ 
+    dirs[ndirs++] = "/opt/homebrew/lib";
+#endif
+
+    dirs[ndirs++] = "/usr/local/lib";
+    dirs[ndirs++] = "/usr/lib";
+
+#if defined(__x86_64__)
+    dirs[ndirs++] = "/usr/lib/x86_64-linux-gnu";
+#elif defined(__aarch64__) || defined(__arm64__)
+    dirs[ndirs++] = "/usr/lib/aarch64-linux-gnu";
+#endif
+
+    dirs[ndirs++] = "/usr/lib64";
+
+    for (size_t d = 0; d < ndirs; ++d) {
+        char *lib = tprintf("%s/lib%s.dylib", dirs[d], name);
+        if (dlopen(lib, RTLD_LAZY | RTLD_GLOBAL)) return 1;
+        lib = tprintf("%s/lib%s.so", dirs[d], name);
+        if (dlopen(lib, RTLD_LAZY | RTLD_GLOBAL)) return 1;
+    }
+    return 0;
+}
+
+/* Load every shared object the CLI or a `#link` directive asked for.
+ * Called from hccJitNew AND per chunk compile: in the REPL a `#link`
+ * typed mid-session grows the lists after the JIT already exists.
+ * The `loaded` set makes each entry load (and any failure report)
+ * happen exactly once. */
 static void jitLoadSharedObjects(Cctrl *cc) {
-    static int libs_loaded = 0;
-    if (libs_loaded) return;
-    libs_loaded = 1;
+    static Set *loaded = NULL;
+    if (loaded == NULL) loaded = setNew(32, &set_cstring_type);
 
-    fprintf(stderr, "JIT cannot load in object files at this time\n");
-    
-    // if (cc->object_files) {
-    //     fprintf(stderr, "Ignoring object files, only shared objects can be "
-    //             "loaded by the JIT\n");
-    // }
+    if (!listEmpty(cc->object_files)) {
+        static int warned_object_files = 0;
+        if (!warned_object_files) {
+            warned_object_files = 1;
+            fprintf(stderr, "Ignoring object files, only shared objects "
+                    "can be loaded by the JIT\n");
+        }
+    }
 
-   // if (!listEmpty(cc->shared_object_files)) {
-   //     listForEach(cc->shared_object_files) {
-   //         AoStr *so_file = it->value;
-   //         dlopen(so_file->data, RTLD_LAZY | RTLD_GLOBAL);
-   //     }
-   // }
+    if (!listEmpty(cc->shared_object_files)) {
+        listForEach(cc->shared_object_files) {
+            AoStr *so = it->value;
+            if (setHas(loaded, so->data)) continue;
+            setAdd(loaded, so->data);
+            if (!jitDlopenLib(cc, so->data, 0)) {
+                fprintf(stderr, "hcc: #link: failed to load '%s': %s\n",
+                        so->data, dlerror());
+            }
+        }
+    }
+    if (!listEmpty(cc->link_libs)) {
+        listForEach(cc->link_libs) {
+            AoStr *name = it->value;
+            if (setHas(loaded, name->data)) continue;
+            setAdd(loaded, name->data);
+            if (!jitDlopenLib(cc, name->data, 1)) {
+                fprintf(stderr, "hcc: #link: failed to load library '%s' "
+                        "(probed lib%s.{dylib,so} in the dynamic linker's "
+                        "default paths, %s/lib, /opt/homebrew/lib, "
+                        "/usr/local/lib and the system lib dirs)\n",
+                        name->data, name->data,
+                        cc->install_dir ? cc->install_dir : "");
+            }
+        }
+    }
 }
 
 /* ---------------- compile pipeline ---------------- */
 
-HccJit *hccJitCompile(Cctrl *cc, const HccJitBackend *backend) {
+HccJit *hccJitNew(Cctrl *cc, const HccJitBackend *backend) {
     if (!backend->target_ok(cc->target)) {
         fprintf(stderr, "hcc: JIT only supports %s targets\n", backend->name);
         return NULL;
     }
 
     HccJit *jit = calloc(1, sizeof *jit);
-    jit->cc           = cc;
-    jit->symbols      = mapNew(64, &map_cstring_opaque_type);
-    jit->host_symbols = mapNew(64, &map_cstring_opaque_type);
-    jit->block_local  = mapNew(64, &map_uint_to_uint_type);
-    jit->epi_local    = mapNew(16, &map_uint_to_uint_type);
-    jit->next_local   = 0;
+    jit->cc             = cc;
+    jit->backend        = backend;
+    jit->symbols        = mapNew(64, &map_cstring_opaque_type);
+    jit->host_symbols   = mapNew(64, &map_cstring_opaque_type);
+    jit->chunk_fns      = mapNew(64, &map_cstring_opaque_type);
+    jit->chunks         = listNew();
+    jit->globals_arenas = listNew();
+    jit->block_local    = mapNew(64, &map_uint_to_uint_type);
+    jit->epi_local      = mapNew(16, &map_uint_to_uint_type);
+    jit->next_local     = 0;
+    /* Nothing consumed yet: cursors sit on the sentinels so the first
+     * chunk sweeps the whole lists. */
+    jit->ast_cursor     = cc->ast_list;
+    jit->asm_cursor     = cc->asm_blocks;
 
     asm_enc_init(&jit->enc);
     backend->init_reg_pool();
     jitLoadLibtos(cc);
     jitLoadSharedObjects(cc);
+    return jit;
+}
 
-    if (jitAllocateGlobals(jit) != 0) goto fail;
+/* Register a chunk-internal function name (emit-time calls/IR_LEA to
+ * it route through label fixups instead of host_symbols/dlsym). */
+static void jitChunkFnAdd(HccJit *jit, const char *name) {
+    if (!mapHas(jit->chunk_fns, (void *)name)) {
+        mapAdd(jit->chunk_fns, strdup(name), (void *)(uintptr_t)1);
+    }
+}
 
-    /* HolyC "scripting" mode: statements at file scope land in
-     * cc->initalisers and get wrapped into a synthetic `main`. When
-     * this happens the user-supplied Main is renamed to MainFn (see
-     * asmNormaliseFunctionName). We have to apply the same wrapping
-     * before compiling so the entry point we hand to `hccJitRunMain`
-     * actually runs the init statements. */
-    Ast *synth_main = asmBuildInitialiserMain(cc);
+int hccJitCompileChunk(HccJit *jit, Ast *extra_fn) {
+    Cctrl *cc = jit->cc;
+
+    /* Pick up any `#link` libraries recorded since the last chunk
+     * (REPL inputs can add them at any point). */
+    jitLoadSharedObjects(cc);
+
+    /* Reset the per-chunk encoder + internal-function set. */
+    asm_enc_free(&jit->enc);
+    asm_enc_init(&jit->enc);
+    mapClear(jit->chunk_fns);
+
+    /* First unconsumed nodes. The cursors advance immediately: even if
+     * this chunk fails, the next call must not recompile its ASTs. */
+    List *ast_from = jit->ast_cursor->next;
+    List *asm_from = jit->asm_cursor ? jit->asm_cursor->next : NULL;
+    jit->ast_cursor = cc->ast_list->prev;
+    if (cc->asm_blocks) jit->asm_cursor = cc->asm_blocks->prev;
+
+    if (jitAllocateGlobals(jit, ast_from) != 0) return -1;
 
     /* Pre-register every internal function name so emit-time code
-     * (IR_LEA on a function, IR_CALL to another function in this TU)
-     * can route through label fixups rather than dlsym (which doesn't
-     * see this-TU JIT code). The marker value is overwritten with the
-     * real address post-finalize. */
-    listForEach(cc->ast_list) {
+     * (IR_LEA on a function, IR_CALL to another function in this
+     * chunk) can route through label fixups rather than dlsym (which
+     * doesn't see this-chunk JIT code). */
+    for (List *it = ast_from; it != cc->ast_list; it = it->next) {
         Ast *ast = it->value;
         if (ast->kind != AST_FUNC) continue;
-        char *mangled = asmNormaliseFunctionName(cc, ast->fname);
-        if (!mapHas(jit->symbols, mangled)) {
-            mapAdd(jit->symbols, strdup(mangled), (void *)(uintptr_t)1);
-        }
+        jitChunkFnAdd(jit, asmNormaliseFunctionName(cc, ast->fname));
     }
-    if (synth_main) {
-        char *mangled = asmNormaliseFunctionName(cc, synth_main->fname);
-        if (!mapHas(jit->symbols, mangled)) {
-            mapAdd(jit->symbols, strdup(mangled), (void *)(uintptr_t)1);
-        }
+    if (extra_fn) {
+        jitChunkFnAdd(jit, asmNormaliseFunctionName(cc, extra_fn->fname));
     }
 
     /* `asm {}` functions are internal too: register both the raw label
      * name and its platform-mangled form so calls and IR_LEA route
      * through label fixups (the finalize matcher is underscore-
      * tolerant for the raw/mangled difference). */
-    if (cc->asm_blocks) {
-        listForEach(cc->asm_blocks) {
+    if (asm_from) {
+        for (List *it = asm_from; it != cc->asm_blocks; it = it->next) {
             Ast *asm_block = (Ast *)it->value;
             if (!asm_block->funcs) continue;
             for (List *fl = asm_block->funcs->next; fl != asm_block->funcs;
                  fl = fl->next)
             {
                 Ast *fn = (Ast *)fl->value;
-                char *mangled = asmNormaliseFunctionName(cc, fn->asmfname);
-                if (!mapHas(jit->symbols, fn->asmfname->data)) {
-                    mapAdd(jit->symbols, strdup(fn->asmfname->data),
-                           (void *)(uintptr_t)1);
-                }
-                if (!mapHas(jit->symbols, mangled)) {
-                    mapAdd(jit->symbols, strdup(mangled),
-                           (void *)(uintptr_t)1);
-                }
+                jitChunkFnAdd(jit, fn->asmfname->data);
+                jitChunkFnAdd(jit, asmNormaliseFunctionName(cc, fn->asmfname));
             }
         }
     }
 
     IrCtx *ir_ctx = irCtxNew(cc);
-    listForEach(cc->ast_list) {
+    for (List *it = ast_from; it != cc->ast_list; it = it->next) {
         Ast *ast = it->value;
         if (ast->kind != AST_FUNC) continue;
-        if (backend->compile_function(jit, ast, ir_ctx) != 0) goto fail;
+        if (jit->backend->compile_function(jit, ast, ir_ctx) != 0) return -1;
     }
-    if (synth_main) {
-        if (backend->compile_function(jit, synth_main, ir_ctx) != 0) goto fail;
+    if (extra_fn) {
+        if (jit->backend->compile_function(jit, extra_fn, ir_ctx) != 0)
+            return -1;
     }
 
     /* `asm {}` function bodies: define each public label, then splice
      * the libtasm-encoded bytes in. */
-    if (cc->asm_blocks) {
-        listForEach(cc->asm_blocks) {
+    if (asm_from) {
+        for (List *it = asm_from; it != cc->asm_blocks; it = it->next) {
             Ast *asm_block = (Ast *)it->value;
             if (!asm_block->funcs) continue;
             for (List *fl = asm_block->funcs->next; fl != asm_block->funcs;
@@ -515,10 +630,14 @@ HccJit *hccJitCompile(Cctrl *cc, const HccJitBackend *backend) {
                 Ast *fn = (Ast *)fl->value;
                 asm_define_label(&jit->enc, -1, fn->asmfname->data);
                 if (hccJitAssembleText(jit, fn->body->asm_stmt, 0) != 0)
-                    goto fail;
+                    return -1;
             }
         }
     }
+
+    /* Nothing emitted (e.g. the input only declared a class or a
+     * prototype): success, no mapping needed. */
+    if (jit->enc.len == 0) return 0;
 
     /* Dev hex dump of pre-finalize bytes. Triggered by HCC_JIT_DUMP=1. */
     if (getenv("HCC_JIT_DUMP")) {
@@ -537,22 +656,50 @@ HccJit *hccJitCompile(Cctrl *cc, const HccJitBackend *backend) {
         }
     }
 
-    if (asm_jit_finalize(&jit->enc, jitResolveSymbol, jit, &jit->code) != 0) {
-        goto fail;
+    AsmJitCode *code = calloc(1, sizeof *code);
+    if (asm_jit_finalize(&jit->enc, jitResolveSymbol, jit, code) != 0) {
+        free(code);
+        return -1;
     }
+    listAppend(jit->chunks, code);
 
-    /* Each public label now points at (code base + label byte_offset). */
+    /* Each public label now points at (code base + label byte_offset).
+     * Register in `symbols` (hccJitLookup) and in `host_symbols` so
+     * later chunks' emit-time addressing and finalize-time resolver
+     * both see it. A redefinition overwrites: future chunks bind to
+     * the newest body, already-patched code keeps the old one. */
     for (int i = 0; i < jit->enc.n_labels; ++i) {
         AsmLabelDef *L = &jit->enc.labels[i];
         if (!L->name) continue;
-        void *addr = (uint8_t *)jit->code.code + L->byte_offset;
+        void *addr = (uint8_t *)code->code + L->byte_offset;
         mapAdd(jit->symbols, strdup(L->name), addr);
+        mapAdd(jit->host_symbols, strdup(L->name), addr);
+    }
+    return 0;
+}
+
+HccJit *hccJitCompile(Cctrl *cc, const HccJitBackend *backend) {
+    HccJit *jit = hccJitNew(cc, backend);
+    if (!jit) return NULL;
+
+    /* -Memsafe: install the tracking allocator before the chunk
+     * compiles, so every call site binds to it at finalize. */
+    if (cc->flags & CCTRL_MEMSAFE)
+        memsafeInit(jit);
+
+    /* HolyC "scripting" mode: statements at file scope land in
+     * cc->initalisers and get wrapped into a synthetic `main`. When
+     * this happens the user-supplied Main is renamed to MainFn (see
+     * asmNormaliseFunctionName). We have to apply the same wrapping
+     * before compiling so the entry point we hand to `hccJitRunMain`
+     * actually runs the init statements. */
+    Ast *synth_main = asmBuildInitialiserMain(cc);
+
+    if (hccJitCompileChunk(jit, synth_main) != 0) {
+        hccJitFree(jit);
+        return NULL;
     }
     return jit;
-
-fail:
-    hccJitFree(jit);
-    return NULL;
 }
 
 /* ---------------- public accessors ---------------- */
@@ -570,9 +717,60 @@ void *hccJitLookup(HccJit *jit, const char *name) {
     return NULL;
 }
 
+AsmJitCode *hccJitFindChunk(HccJit *jit, void *pc) {
+    if (!jit || !pc) return NULL;
+    listForEach(jit->chunks) {
+        AsmJitCode *chunk = (AsmJitCode *)it->value;
+        uint8_t *base = (uint8_t *)chunk->code;
+        if ((uint8_t *)pc >= base &&
+            (uint8_t *)pc < base + chunk->size + chunk->veneer_size)
+        {
+            return chunk;
+        }
+    }
+    return NULL;
+}
+
+const char *hccJitFindSymbolForAddr(HccJit *jit, void *pc, size_t *off_out) {
+    if (off_out) *off_out = 0;
+    AsmJitCode *chunk = hccJitFindChunk(jit, pc);
+    if (chunk == NULL) return NULL;
+    /* Veneers belong to the chunk, not to whichever function happens
+     * to be emitted last - don't attribute them. */
+    if ((uint8_t *)pc >= (uint8_t *)chunk->code + chunk->size) return NULL;
+
+    const char *best = NULL;
+    uint8_t *best_addr = NULL;
+    MapIter mi;
+    mapIterInit(jit->symbols, &mi);
+    while (mapIterNext(&mi)) {
+        uint8_t *sym = (uint8_t *)mi.node->value;
+        if (sym <= (uint8_t *)pc && sym >= (uint8_t *)chunk->code &&
+            (best_addr == NULL || sym > best_addr))
+        {
+            best_addr = sym;
+            best = (const char *)mi.node->key;
+        }
+    }
+    if (best && off_out) *off_out = (size_t)((uint8_t *)pc - best_addr);
+    return best;
+}
+
 void hccJitDefineSymbol(HccJit *jit, const char *name, void *addr) {
     if (!jit || !name) return;
+    /* Register BOTH spellings: HolyC-compiled call sites arrive
+     * platform-mangled (`_free` on Mach-O) while `asm {}` blocks emit
+     * the symbol verbatim (`CALL malloc` -> `malloc`). The resolver's
+     * host_symbols lookup is exact, so one spelling would miss the
+     * other's callers. */
     mapAdd(jit->host_symbols, strdup(name), addr);
+    if (name[0] != '_') {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "_%s", name);
+        mapAdd(jit->host_symbols, strdup(buf), addr);
+    } else {
+        mapAdd(jit->host_symbols, strdup(name + 1), addr);
+    }
 }
 
 union JitMainFunction {
@@ -590,10 +788,18 @@ int hccJitRunMain(HccJit *jit, int argc, char **argv) {
 void hccJitFree(HccJit *jit) {
     if (!jit) return;
     asm_enc_free(&jit->enc);
-    asm_jit_free(&jit->code);
-    if (jit->globals) free(jit->globals);
+    if (jit->chunks) {
+        listForEach(jit->chunks) {
+            AsmJitCode *code = (AsmJitCode *)it->value;
+            asm_jit_free(code);
+            free(code);
+        }
+        listRelease(jit->chunks, NULL);
+    }
+    if (jit->globals_arenas) listRelease(jit->globals_arenas, free);
     if (jit->symbols) mapRelease(jit->symbols);
     if (jit->host_symbols) mapRelease(jit->host_symbols);
+    if (jit->chunk_fns) mapRelease(jit->chunk_fns);
     if (jit->block_local) mapRelease(jit->block_local);
     if (jit->epi_local) mapRelease(jit->epi_local);
     free(jit);

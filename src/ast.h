@@ -583,6 +583,8 @@ int astIsBinOpKind(Ast *ast, AstBinOp op);
 
 int astIsBinOpCmp(Ast *ast);
 
+int astIsFnLike(Ast *maybe_fn);
+
 AoStr *astMakeLabel(void);
 AoStr *astMakeTmpName(void);
 Ast *astGlobalCmdArgs(void);
@@ -612,6 +614,7 @@ char *astToString(Ast *ast);
 AoStr *astToAoStr(Ast *ast);
 char *astLValueToString(Ast *ast, u64 lexme_flags);
 AoStr *astLValueToAoStr(Ast *ast, u64 lexeme_flags);
+AoStr *astClassToAoStr(AstType *cls);
 void astPrint(Ast *ast);
 void astTypePrint(AstType *type);
 void astKindPrint(int kind);

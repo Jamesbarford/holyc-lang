@@ -1401,7 +1401,7 @@ Ast *parseCaseLabel(Cctrl *cc, Lexeme *tok) {
         case_->type = ast_void_type;
     } else {
         case_ = astCase(label,begining,end,stmts);
-        assertUniqueSwitchCaseLabels(cc->tmp_case_list,case_);
+        assertUniqueSwitchCaseLabels(cc,cc->tmp_case_list,case_);
     }
 
     vecPush(cc->tmp_case_list,case_);
@@ -1905,6 +1905,45 @@ static int astStmtFallsThrough(Ast *s) {
     }
 }
 
+/* Naked `asm { }` functions get no compiler-generated epilogue - the
+ * body is pasted verbatim, so a missing `RET` lets the CPU fall off the
+ * end into whatever follows (typically a SIGILL). Heuristic: scan for a
+ * whole-word control transfer that ends the function - RET/ERET/IRET or
+ * a tail branch (JMP/B/BR) - case-insensitive. A tail branch counts so
+ * legitimate tail-call exits don't trip the warning. */
+static int asmTextHasReturn(AoStr *text) {
+    static const char *exits[] = { "ret", "eret", "iret", "jmp", "br", "b" };
+    if (!text || !text->data) return 0;
+    const char *s = text->data;
+    int n = (int)text->len;
+    for (int i = 0; i < n; i++) {
+        if (i > 0) {
+            char p = s[i - 1];   /* only test at a word start */
+            if ((p >= 'A' && p <= 'Z') || (p >= 'a' && p <= 'z') ||
+                (p >= '0' && p <= '9') || p == '_')
+                continue;
+        }
+        for (size_t k = 0; k < sizeof(exits) / sizeof(exits[0]); k++) {
+            const char *w = exits[k];
+            int wl = (int)strlen(w);
+            if (i + wl > n) continue;
+            int match = 1;
+            for (int j = 0; j < wl; j++) {
+                char a = s[i + j];
+                if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+                if (a != w[j]) { match = 0; break; }
+            }
+            if (!match) continue;
+            char after = (i + wl < n) ? s[i + wl] : '\0';   /* whole word */
+            if ((after >= 'A' && after <= 'Z') || (after >= 'a' && after <= 'z') ||
+                (after >= '0' && after <= '9') || after == '_')
+                continue;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
         char *fname, int len, Vec *params, int has_var_args, int is_inline)
 {
@@ -2027,6 +2066,15 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
             if (is_inline) {
                 asm_func->flags = AST_FLAG_INLINE;
             }
+
+            if (!asmTextHasReturn(asm_block->asm_stmt)) {
+                cctrlWarningAt(cc, fn_line, fn_col, fn_len,
+                    "asm function '%.*s' has no RET; execution runs off the "
+                    "end of the function - naked asm functions get no "
+                    "epilogue, so add a `RET` yourself",
+                    len, fname);
+            }
+
             cctrlTokenExpect(cc,'}');
             cc->tmp_asm_fname = prev_asm_name;
             return asm_func;
@@ -2060,6 +2108,19 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
                 cctrlRaiseException(cc,"Cannot redefine extern function: %.*s",len,fname);
 
             case AST_FUNC:
+                if (cc->flags & CCTRL_REPL) {
+                    /* REPL: shadow the old definition with a fresh
+                     * function AST. Code already compiled against the
+                     * old body keeps its old address; anything parsed
+                     * from here on binds to this one. */
+                    cc->tmp_params = params;
+                    cc->tmp_rettype = rettype;
+                    fn_type = astMakeFunctionType(cc->tmp_rettype, params);
+                    func = astFunction(fn_type,fname,len,params,NULL,locals,
+                            has_var_args);
+                    mapAdd(cc->global_env, func->fname->data, func);
+                    break;
+                }
                 cctrlRaiseException(cc,"Cannot redefine function: %.*s",len,fname);
 
             case AST_ASM_FUNC_BIND:
@@ -2417,6 +2478,22 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
                     *is_global = 1;
                     return parseForStatement(cc);
 
+                case KW_SIZEOF:
+                case KW_ALIGNOF:
+                case KW_TYPEOF:
+                    /* Floating `sizeof(x);` / `typeof(x);` - in the
+                     * REPL these are expressions to evaluate + echo,
+                     * same as `2+2;`. */
+                    if (cc->flags & CCTRL_REPL) {
+                        cctrlTokenRewind(cc);
+                        ast = parseExpr(cc,16);
+                        cctrlTokenExpect(cc,';');
+                        *is_global = 1;
+                        return ast;
+                    }
+                    cctrlRaiseException(cc,"Unexpected floating keyword: %.*s",
+                            tok->len,tok->start);
+
                 default:
                     cctrlRaiseException(cc,"Unexpected floating keyword: %.*s",
                             tok->len,tok->start);
@@ -2453,9 +2530,46 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
             *is_global = 1;
             return ast;
         } else if (tok->tk_type == TK_I64) {
+            if (cc->flags & CCTRL_REPL) {
+                /* REPL: `2+2;` is an expression to evaluate + echo. */
+                cctrlTokenRewind(cc);
+                ast = parseExpr(cc,16);
+                cctrlTokenExpect(cc,';');
+                *is_global = 1;
+                return ast;
+            }
             cctrlRaiseException(cc,"Floating integer constant '%ld' cannot be used in this context", tok->i64);
         } else if (tok->tk_type == TK_F64) {
+            if (cc->flags & CCTRL_REPL) {
+                cctrlTokenRewind(cc);
+                ast = parseExpr(cc,16);
+                cctrlTokenExpect(cc,';');
+                *is_global = 1;
+                return ast;
+            }
             cctrlRaiseException(cc,"Floating float constant '%f' cannot be used in this context", tok->f64);
+        } else if (tokenPunctIs(tok,TK_PLUS_PLUS) ||
+                   tokenPunctIs(tok,TK_MINUS_MINUS))
+        {
+            /* `++x;` / `--x;` - a side-effecting statement, legal at
+             * the top level in scripting mode. */
+            cctrlTokenRewind(cc);
+            ast = parseExpr(cc,16);
+            cctrlTokenExpect(cc,';');
+            *is_global = 1;
+            return ast;
+        } else if ((cc->flags & CCTRL_REPL) &&
+                   (tokenPunctIs(tok,'(') || tokenPunctIs(tok,'-') ||
+                    tokenPunctIs(tok,'+') || tokenPunctIs(tok,'~') ||
+                    tokenPunctIs(tok,'!') || tokenPunctIs(tok,'*') ||
+                    tokenPunctIs(tok,'&')))
+        {
+            /* REPL: unary/parenthesised expression at the top level. */
+            cctrlTokenRewind(cc);
+            ast = parseExpr(cc,16);
+            cctrlTokenExpect(cc,';');
+            *is_global = 1;
+            return ast;
         }
 
         name = cctrlTokenGet(cc);
@@ -2485,6 +2599,16 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
             cctrlRaiseException(cc,"Identifier expected: got %s",lexemeToString(name));
         }
 
+        /* Every legitimate route to the declaration code below parsed a
+         * type first. Reaching here without one means the input opened
+         * with a punct we don't treat as a statement (`*p = ...;` at
+         * the top level, say) - raise instead of dereferencing NULL. */
+        if (type == NULL) {
+            cctrlRaiseException(cc,
+                    "Expected a type declaration before `%.*s`",
+                    name->len, name->start);
+        }
+
         type = parseArrayDimensions(cc,type);
         tok = cctrlTokenPeek(cc);
 
@@ -2501,6 +2625,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
         {
             variable = astGVar(type,name->start,name->len,0);
             mapAdd(cc->global_env,variable->gname->data,variable);
+            cc->tmp_gvar_decl = variable;
             return parseVariableInitialiser(cc,variable,
                                             PUNCT_TERM_COMMA|PUNCT_TERM_SEMI);
         }
@@ -2511,6 +2636,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
 
             listAppend(cc->ast_list,ast_decl);
             mapAdd(cc->global_env,variable->gname->data,variable);
+            cc->tmp_gvar_decl = variable;
 
             /* `auto foo = <expr>;` at file scope: the variable's type
              * isn't known until the initialiser is parsed, and building
@@ -2555,6 +2681,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
         } else if (type->kind == AST_TYPE_ARRAY) {
             variable = astGVar(type,name->start,name->len,0);
             mapAdd(cc->global_env,variable->gname->data,variable);
+            cc->tmp_gvar_decl = variable;
             ast = parseVariableInitialiser(cc,variable,PUNCT_TERM_COMMA|PUNCT_TERM_SEMI);
             if (type->kind == AST_TYPE_AUTO) {
                 parseAssignAuto(cc,ast);
@@ -2580,6 +2707,15 @@ void parseToAst(Cctrl *cc) {
     Ast *ast;
     Lexeme *tok;
     int is_global = 0;
+
+    /* The previous parse can leave these dangling: the loop below
+     * only resets them when it keeps iterating, not when it breaks at
+     * EOF. A stale tmp_locals is fatal for the next parse (the REPL) -
+     * the first global statement would listMergeAppend (and free!) a
+     * list that may already have been merged and recycled. */
+    cc->tmp_locals = NULL;
+    cc->localenv = NULL;
+    cc->tmp_gvar_decl = NULL;
 
     /* Top-level recovery point. cctrlRaiseException longjmps here
      * once a CctrlDiagnostic is queued; we wipe function-scoped state
@@ -2609,6 +2745,13 @@ void parseToAst(Cctrl *cc) {
             cc->tmp_rettype = NULL;
             cc->tmp_loop_begin = NULL;
             cc->tmp_loop_end = NULL;
+            /* The lists below roll back the half-built AST_DECL; the
+             * variable's global_env entry must go with it, or later
+             * statements can reference storage that no longer exists. */
+            if (cc->tmp_gvar_decl) {
+                mapRemove(cc->global_env, cc->tmp_gvar_decl->gname->data);
+                cc->tmp_gvar_decl = NULL;
+            }
             if (cc->ast_list && ast_tail) {
                 ast_tail->next = cc->ast_list;
                 cc->ast_list->prev = ast_tail;
@@ -2628,6 +2771,7 @@ void parseToAst(Cctrl *cc) {
         }
 
         ast = parseToplevelDef(cc, &is_global);
+        cc->tmp_gvar_decl = NULL; /* decl completed - nothing to roll back */
         if (ast == NULL) break;
         if (is_global) {
             listAppend(cc->initalisers,ast);

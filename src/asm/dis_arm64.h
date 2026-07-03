@@ -23,4 +23,10 @@ int aarch64_disasm(uint32_t insn, char *out, size_t outsz);
  * instruction, prefixed with byte offset and raw hex word. */
 void aarch64_disasm_buf(const uint8_t *bytes, size_t len, FILE *f);
 
+/* Same, but a non-zero `base` replaces the offset column with the
+ * absolute address `base + off` (hex) - pass the buffer's runtime
+ * address to label JIT code with real addresses. base 0 == offsets. */
+void aarch64_disasm_buf_at(const uint8_t *bytes, size_t len, uint64_t base,
+                           FILE *f);
+
 #endif

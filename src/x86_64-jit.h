@@ -18,4 +18,8 @@
  * hccJitLookup / hccJitFree on the result. */
 HccJit *x86_64JitCompile(Cctrl *cc);
 
+/* The backend vtable, for incremental compilation via hccJitNew /
+ * hccJitCompileChunk (the REPL). NULL on non-x86_64 hosts. */
+const HccJitBackend *x86_64JitBackend(void);
+
 #endif

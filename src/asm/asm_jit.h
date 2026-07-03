@@ -24,6 +24,9 @@ void *asm_jit_dlsym_resolver(void *ud, const char *sym);
 typedef struct {
     void *code;
     size_t size;
+    /* Bytes of out-of-range branch veneers emitted after `size` (the
+     * region [code+size, code+size+veneer_size) is live executable code). */
+    size_t veneer_size;
     void *_mapping;
     size_t _mapping_size;
 } AsmJitCode;

@@ -2,6 +2,7 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <unistd.h>
 
 #include "aostr.h"
@@ -927,6 +928,13 @@ int astIsIntrinsicClass(AstType *ty) {
     return ty && ty->kind == AST_TYPE_CLASS && ty->is_intrinsic;
 }
 
+int astIsFnLike(Ast *maybe_fn) {
+    return maybe_fn && (maybe_fn->kind == AST_FUNC ||
+                        maybe_fn->kind == AST_ASM_FUNCDEF ||
+                        maybe_fn->kind == AST_FUN_PROTO ||
+                        maybe_fn->kind == AST_EXTERN_FUNC);
+}
+
 /* This is pretty gross to look at but, eliminated recursion */
 AstType *astGetResultType(AstBinOp op, AstType *a, AstType *b) {
     AstType *tmp;
@@ -1487,7 +1495,7 @@ AoStr *astTypeToColorAoStr(AstType *type) {
         str->data[str->len] = '\0';
     }
 
-    aoStrCatPrintf(buf,"\033[0;34m%s\033[0m",str->data);
+    aoStrCatPrintf(buf,ESC_BLUE"%s"ESC_RESET,str->data);
     if (star_count) {
         aoStrPutChar(buf, ' ');
         while (star_count > 0) {
@@ -1531,16 +1539,35 @@ static char *astParamsToString(Vec *params) {
             int is_last = i+1 == params->size;
             if (!param) break;
             if (param->kind == AST_VAR_ARGS) {
-                if (!is_last) aoStrCatPrintf(str,"..., ");
-                else          aoStrCatPrintf(str,"..."); 
+                if (!is_last) aoStrCatFmt(str,"..., ");
+                else          aoStrCatFmt(str,"..."); 
             } else {
-                tmp = astTypeToString(param->type);
-                if (!is_last) aoStrCatPrintf(str,"%s, ",tmp);
-                else          aoStrCatPrintf(str,"%s",tmp); 
+                char *label = astLValueToString(param,0);
+                AoStr *tmp = astTypeToColorAoStr(param->type);
+                if (astTypeIsPtr(param->type)) {
+                    /* We don't want spaces between the stars */
+                    if (!is_last && label) aoStrCatFmt(str,"%S%s, ",tmp, label);
+                    else if (!is_last && !label) aoStrCatFmt(str,"%S, ",tmp);
+                    else if (label)              aoStrCatFmt(str,"%S%s",tmp, label);     
+                    else                         aoStrCatFmt(str,"%S",tmp); 
+                } else {
+                    if (!is_last && label) aoStrCatFmt(str,"%S %s, ",tmp, label);
+                    else if (!is_last && !label) aoStrCatFmt(str,"%S, ",tmp);
+                    else if (label)              aoStrCatFmt(str,"%S% s",tmp, label);     
+                    else                         aoStrCatFmt(str,"%S",tmp); 
+                }
             }
         }
     }
     return aoStrMove(str);
+}
+
+static char *astExternCToString(void) {
+    if (!isatty(STDOUT_FILENO)) {
+        return "extern \"c\"";
+    } else {
+        return ESC_BLUE"extern"ESC_RESET ESC_GREEN" \"c\""ESC_RESET;
+    }
 }
 
 static char *astFunctionToStringInternal(Ast *func, AstType *type) {
@@ -1548,6 +1575,9 @@ static char *astFunctionToStringInternal(Ast *func, AstType *type) {
     char *strparams = NULL;
 
     AoStr *tmp = astTypeToColorAoStr(type);
+    if (func->kind == AST_EXTERN_FUNC) {
+        aoStrCatPrintf(str,"%s ", astExternCToString());
+    }
     if (tmp->data[tmp->len - 1] == '*') {
         aoStrCatPrintf(str,"%s%s",tmp->data,func->fname->data);
     } else {
@@ -1563,6 +1593,7 @@ static char *astFunctionToStringInternal(Ast *func, AstType *type) {
 
         case AST_FUNC:
         case AST_FUN_PROTO:
+        case AST_EXTERN_FUNC:
             strparams = astParamsToString(func->params);
             break;
         default:
@@ -1571,9 +1602,9 @@ static char *astFunctionToStringInternal(Ast *func, AstType *type) {
     }
 
     if (strparams) {
-        aoStrCatPrintf(str,"(%s)",strparams);
+        aoStrCatPrintf(str,"(%s);",strparams);
     } else {
-        aoStrCatPrintf(str,"(U0)");
+        aoStrCatPrintf(str,"(U0);");
     }
     return aoStrMove(str);
 }
@@ -2617,4 +2648,76 @@ const char *astKindToHumanReadable(Ast *ast) {
         case AST_UNOP: return "unary op";
         default: return "unknown AST kind";
     }
+}
+
+static void astClassFieldsToString(Map *fields,
+                                   Set *seen,
+                                   char *clsname,
+                                   AoStr *buf,
+                                   s64 *indent)
+{
+    /* Fields */
+    MapIter it;
+    mapIterInit(fields, &it);
+    while (mapIterNext(&it)) {
+        MapNode *n = it.node;
+        AstType *field = n->value;
+        char *field_name = n->key;
+        
+        /* So we do not double up. This code is very similar to that in
+         * transpile.c */
+        if (setHasLen(seen,n->key,n->key_len))
+            continue;
+
+        aoStrCatRepeat(buf, " ", *indent);
+        if (!strncmp(field_name, str_lit("cls_label "))) {
+            if (field->kind == AST_TYPE_UNION) {
+                aoStrCatFmt(buf, "%sunion {%s\n", clr(ESC_BLUE), clr(ESC_RESET));
+            } else {
+                aoStrCatFmt(buf, "%sclass%s {\n", clr(ESC_BLUE), clr(ESC_RESET));
+            }
+            *indent += 2;
+            astClassFieldsToString(field->fields,seen,clsname,buf,indent);
+            *indent -= 2;
+            aoStrCatRepeat(buf, " ", *indent);
+            aoStrCatLen(buf, str_lit("};\n"));
+        } else {
+            AoStr *ty_str = astTypeToColorAoStr(field);
+            if (astTypeIsPtr(field)) {
+                aoStrCatFmt(buf, "%S%s;\n", ty_str, field_name);
+            } else {
+                aoStrCatFmt(buf, "%S %s;\n", ty_str, field_name);
+            }
+            aoStrRelease(ty_str);
+        }
+        setAdd(seen, field_name);
+    }
+}
+
+/* An accurate HolyC printing of a class i.e;
+ * ```
+ * class Foo
+ * {
+ *   I64 x;
+ *   I64 y;
+ * };
+ * ```
+ * Can't preserve commas for definitions of fields.
+ * */
+AoStr *astClassToAoStr(AstType *cls) {
+    AoStr *s = aoStrNew();
+    if (cls->kind == AST_TYPE_UNION) {
+        aoStrCatFmt(s, "%sunion%s %S\n", clr(ESC_BLUE), clr(ESC_RESET), cls->clsname);
+    } else {
+        aoStrCatFmt(s, "%sclass%s %S\n", clr(ESC_BLUE), clr(ESC_RESET), cls->clsname);
+    }
+    aoStrCatFmt(s, "{\n");
+    /* Due to our rather hammer approach to parsing classes we will never have
+     * a nested class or struct with duplicate field names. So one `Set` will
+     * suffice. Else we'd need one set for each depth. */
+    Set *seen = setNew(16,&set_cstring_type);
+    s64 indent = 2;
+    astClassFieldsToString(cls->fields,seen,cls->clsname->data,s,&indent);
+    aoStrCatFmt(s, "};");
+    return s;
 }

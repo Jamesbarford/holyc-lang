@@ -140,6 +140,11 @@ static void cctrlAddMacOsDefines(Cctrl *cc, Lexeme *le) {
     mapAdd(cc->macro_defs,"IS_MACOS",le);
 }
 
+void cctrlAddDefine(Cctrl *cc, char *name) {
+    Lexeme *le = lexemeSentinal();
+    mapAdd(cc->macro_defs,name,le);
+}
+
 static void cctrlAddBuiltinMacros(Cctrl *cc) {
     s64 bufsize = sizeof(char)*128;
     Lexeme *le = lexemeSentinal();
@@ -266,10 +271,16 @@ Cctrl *cctrlNew(enum CliTarget target) {
     cc->tmp_loop_begin = NULL;
     cc->tmp_loop_end = NULL;
     cc->tmp_func = NULL;
+    cc->tmp_gvar_decl = NULL;
     cc->token_buffer = NULL;
     cc->diagnostics = vecNew(&vec_diagnostic_type);
     cc->n_errors = 0;
     cc->current_recovery = NULL;
+    /* main() overwrites the first two with the CLI's lists; `#link`
+     * appends to all three during lexing (creating on demand). */
+    cc->object_files = NULL;
+    cc->shared_object_files = NULL;
+    cc->link_libs = NULL;
 
     int len;
     AoStr **str_array = aoStrSplit(x86_registers,',',&len);
@@ -776,10 +787,18 @@ void cctrlInfo(Cctrl *cc, char *fmt, ...) {
 void cctrlWarning(Cctrl *cc, char *fmt, ...) {
     va_list ap;
     va_start(ap,fmt);
-    AoStr *buf = cctrlMessagVnsPrintF(cc,fmt,ap,CCTRL_WARN);
+    /* If we are in a repl we are super conservative and treat warnings
+     * as errors. This is so the reepl is _less_ likey to crash.
+     * A bit like -Werror in C */
+    int is_werror = cc->flags & (CCTRL_WERROR);
+    int severity = is_werror ? CCTRL_ERROR : CCTRL_WARN;
+    AoStr *buf = cctrlMessagVnsPrintF(cc,fmt,ap,severity);
     va_end(ap);
-    CctrlDiagnostic *d = cctrlMakeDiag(cc, CCTRL_WARN, buf, NULL);
+    CctrlDiagnostic *d = cctrlMakeDiag(cc, severity, buf, NULL);
     cctrlDiagPush(cc, d);
+    if (severity == CCTRL_ERROR) {
+        cctrlTerminate(cc);
+    }
 }
 
 /* Like cctrlWarning, but anchored at an explicit (line, col) instead of
@@ -794,12 +813,14 @@ void cctrlWarningAt(Cctrl *cc, s64 lineno, s64 col, s64 len, char *fmt, ...) {
     va_end(ap);
     AoStr *bold_msg = aoStrNew();
     aoStrCatColoured(bold_msg, ESC_BOLD, msg);
+    int is_werror = cc->flags & (CCTRL_WERROR);
+    int severity = is_werror ? CCTRL_ERROR : CCTRL_WARN;
     AoStr *rendered = cctrlCreateErrorLineAt(cc, lineno, col, len,
-                                             bold_msg->data, CCTRL_WARN, NULL);
+                                             bold_msg->data, severity, NULL);
     aoStrRelease(bold_msg);
 
     CctrlDiagnostic *d = (CctrlDiagnostic *)calloc(1, sizeof(CctrlDiagnostic));
-    d->severity = CCTRL_WARN;
+    d->severity = severity;
     d->message = rendered;
     d->suggestion = NULL;
     d->file = cc->lexer_ ? cc->lexer_->cur_file : NULL;
@@ -808,6 +829,9 @@ void cctrlWarningAt(Cctrl *cc, s64 lineno, s64 col, s64 len, char *fmt, ...) {
     d->end_line = (int)lineno;
     d->end_col = (int)(col + (len > 0 ? len : 1));
     cctrlDiagPush(cc, d);
+    if (severity == CCTRL_ERROR) {
+        cctrlTerminate(cc);
+    }
 }
 
 CctrlDiagnostic *cctrlMakeDiag(Cctrl *cc,
@@ -861,6 +885,35 @@ int cctrlDiagFlush(Cctrl *cc) {
         }
     }
     return cc->n_errors;
+}
+
+/* Drop all queued diagnostics and reset the error count. The REPL
+ * calls this between inputs so one bad line doesn't poison (or
+ * re-print with) the next. */
+void cctrlDiagClear(Cctrl *cc) {
+    if (!cc) return;
+    if (cc->diagnostics) vecClear(cc->diagnostics);
+    cc->n_errors = 0;
+}
+
+/* Empty the token ring buffer. After an errored parse the buffer can
+ * still hold tokens from the abandoned input; a fresh REPL parse must
+ * not see them. The freed slots are filled with a sentinel rather
+ * than NULL: parsePrimary rewinds one token to inspect what preceded
+ * an expression, and when the expression opens the input that step
+ * walks into the ring's history - which must therefore always hold
+ * valid lexemes. */
+void cctrlResetTokenBuffer(Cctrl *cc) {
+    TokenRingBuffer *ring = cc->token_buffer;
+    if (!ring) return;
+    static Lexeme *filler = NULL;
+    if (filler == NULL) filler = lexemeSentinal();
+    ring->tail = 0;
+    ring->head = 0;
+    ring->size = 0;
+    for (s64 i = 0; i < ring->capacity; ++i) {
+        ring->entries[i] = filler;
+    }
 }
 
 __noreturn void cctrlTerminate(Cctrl *cc) {
@@ -1014,9 +1067,15 @@ void cctrlRewindUntilPunctMatch(Cctrl *cc, s64 ch, int *_count) {
 void cctrlRewindUntilStrMatch(Cctrl *cc, char *str, int len, int *_count) {
     int count = 0;
     Lexeme *peek = cctrlTokenPeek(cc);
-    while (!(peek->len == len && memcmp(peek->start,str,len) == 0)) {
+    /* `peek` is NULL when the ring is fully drained. A single line
+     * input will hit this when the error fires at the end of a statement.
+     * */
+    while (peek == NULL ||
+           !(peek->len == len && memcmp(peek->start,str,len) == 0)) {
         cctrlTokenRewind(cc);
-        peek = cctrlTokenPeek(cc);
+        Lexeme *new_peek = cctrlTokenPeek(cc);
+        if (new_peek == peek) break;
+        peek = new_peek;
         count++;
         if (count > 5) break; // has to be some limit
     }
@@ -1122,15 +1181,20 @@ void cctrlRaiseExceptionFromTo(Cctrl *cc, char *suggestion, char from, char to, 
 void cctrlWarningFromTo(Cctrl *cc, char *suggestion, char from, char to, char *fmt, ...) {
     va_list ap;
     va_start(ap,fmt);
-    AoStr *buf = cctrlRaiseFromTo(cc,CCTRL_WARN,suggestion,from,to,fmt,ap);
+    int is_werror = cc->flags & (CCTRL_WERROR);
+    int severity = is_werror ? CCTRL_ERROR : CCTRL_WARN;
+    AoStr *buf = cctrlRaiseFromTo(cc,severity,suggestion,from,to,fmt,ap);
     va_end(ap);
 
     /* Warnings accumulate but never longjmp as the parser keeps going.
      * `cctrlDiagFlush(...)` prints them alongside the errors at the end of
      * compilation. */
     AoStr *sug = suggestion ? aoStrPrintf("%s", suggestion) : NULL;
-    CctrlDiagnostic *d = cctrlMakeDiag(cc, CCTRL_WARN, buf, sug);
+    CctrlDiagnostic *d = cctrlMakeDiag(cc, severity, buf, sug);
     cctrlDiagPush(cc, d);
+    if (severity == CCTRL_ERROR) {
+        cctrlTerminate(cc);
+    }
 }
 
 /* Get variable either from the local or global scope */
@@ -1215,24 +1279,4 @@ Ast *cctrlGetOrSetString(Cctrl *cc, char *str, int len, s64 real_len) {
         ast_str = astString(str,len,real_len);
     }
     return ast_str;
-}
-
-int cctrlfPIC(Cctrl *cc) {
-    return cc->is_pic;
-}
-
-int cctrlTargetLinux(Cctrl *cc) {
-    static int is_linux = -1;
-    if (is_linux != -1) return is_linux;
-    switch (cc->target) {
-        case TARGET_AARCH64_APPLE_DARWIN:
-        case TARGET_X86_64_APPLE_DARWIN:
-            is_linux = 0;
-            break;
-        case TARGET_AARCH64_UNKNOWN_LINUX_GNU:
-        case TARGET_X86_64_UNKNOWN_LINUX_GNU:
-            is_linux = 1;
-            break;
-    }
-    return is_linux;
 }

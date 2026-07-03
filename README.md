@@ -28,10 +28,11 @@ A holyc compiler built from scratch in C. Basic optimisations like constant,
 folding and some dead code elimination occurs. But broadly it should be easy
 to see how the assembly maps to the source code. It works by creating an AST,
 lowering to an SSA based IR and emitting x86_64/AArch64 assembly code as text
-which is fed into gcc to assemble. Floating point arithmetic is supported as
-are most of the major language features. There is experimental support for
-transpiling HolyC to C, which is in varying states of broken and not properly
-supported.
+which is fed into gcc to assemble. Alternatively a JIT can be invoked which
+maps machine code to executable memory and then runs it, this is done with a
+builtin assembler. Floating point arithmetic is supported as are most of the
+major language features. There is experimental support for transpiling HolyC to
+C, which is in varying states of broken and not properly supported.
 
 ## Example
 Below is a snippet of code showing some of the features supported by this holyc
@@ -70,8 +71,6 @@ ExampleFunction;
 Currently this holyc compiler will compile holyc source code to an
 x86_64/AArch64 compatible binary which has been tested on amd linux and an
 intel mac. An M1 mac and fedora linux on an M4 using QEMU.
-
-Assembly is not yet supported in AArch64.
 
 ## Building
 ### Operating Systems:
@@ -132,17 +131,73 @@ to either the Makefile or when configuring cmake.
 Once the compiler has been compiled, aside from compiling `.HC` files, more 
 options can be displayed by running `hcc --help`
 
+For an interactive session run `hcc -repl` (requires a JIT-enabled build,
+which is the Makefile default). Functions, classes, globals and `#define`s
+accumulate as you type, statements execute immediately and the value of a
+trailing expression is echoed. Line editing, persistent history
+(`~/.hcc_repl_history`) and tab completion over everything you've defined
+are built in. `Uf("Name");` disassembles a JIT-compiled function and
+`ReplDel("name");` removes a global, function, class, union or `#define`
+from the session so the name can be redefined from scratch. An `rc` file
+can be placed in `~/.hcc_rc.HC` with any HolyC functions you may want for the
+repl. To silence the welcome message use `#define HCC_NO_REPL_HELLO` in the rc
+file. Memory in this state is semi-managed in a best effort way to prevent
+crashes. The shell can be invoked by calling `Sh(...)` or `@ <shell commands>`.
+Where the `@ ` prefix denotes the syntax for invoking your environments shell.
+
+### Linking against shared libraries
+The `#link` directive records a shared library dependency in the source
+itself, so neither the compile command nor the REPL needs extra flags:
+
+```hc
+#link "./mylib.so"   /* literal path, relative to the working directory */
+#link <sdl2>         /* library name, like a linker's -lsdl2 */
+
+extern "c" I64 MyLibAdd(I64 a, I64 b);
+```
+
+For AOT builds the path form is passed to the linker verbatim and the name
+form becomes `-l<name>` (with `-L` for Homebrew/`/usr/local` added when
+present). In the JIT and the REPL the library is `dlopen`'d - the name form
+probes `lib<name>.{dylib,so}` in the dynamic linker's default paths, the
+configured install prefix, `/opt/homebrew/lib`, `/usr/local/lib` and the
+system lib dirs. Duplicate `#link`s are ignored, so headers can `#link`
+the library they wrap. Note the JIT can only load shared libraries -
+`.o` files still have to go on an AOT command line.
+
+### Conditional compilation on the execution mode
+`#ifjit` / `#ifaot` select code depending on whether the program is being
+JIT-compiled (`hcc -jit`, the REPL) or built ahead-of-time - shorthand for
+`#ifdef __HCC_JIT__` / `#ifdef __HCC_AOT__`, exactly one of which is always
+defined. They compose with `#else` / `#endif` like any other conditional:
+
+```hc
+U8 *Mode()
+{
+#ifjit
+  return "jit";
+#else
+  return "aot";
+#endif
+}
+```
+
 ## Key Differences between this and TempleOS Holy
 - `F32` data type, TempleOS only supports `F64` however a lot of C libraries,
-  like sdl or raylib require `float`. So it's very hand to be able to use
-  these libraries from HolyC code.
+  like sdl or raylib require `float`. It's very handy to be able to use these
+  libraries from HolyC code. Hence `F32` exists.
 - `auto` key word for type inference, an addition which makes it easier
   to write code.
+- `typeof(<type or expr>)` folds, at compile time, to a string literal
+  naming the type: `typeof(1+1)` is `"I64"`, `typeof(&x)` is `"I64 *"`.
+  The operand is only type-checked, never evaluated.
 - Range based for loops can be used with static arrays and structs with 
   an `entries` field with an accompanying `size` field: `for (auto it : <var>)`
 - You can call any libc code by declaring the prototype with 
   `extern "c" <type> <function_name>`. Then call the function as you usually
   would. See [here](https://holyc-lang.com/docs/language-spec/learn-functions) for examples.
+- `#link` for shared objects and libraries, useful to be able to use things like
+   curl, psql etc... in the JIT, repl and AOT.
 
 
 ## Control Flow Graph Example
@@ -281,6 +336,7 @@ and resources that I have found particularly useful for learning.
 - [cc65](https://cc65.github.io/)
 - [shecc](https://github.com/sysprog21/shecc/tree/master)
 - [JS c compiler](https://github.com/Captainarash/CaptCC)
+- [linenoise](https://github.com/antirez/linenoise)
 
 ### Want to ask questions?
 Find me on twitch: https://www.twitch.tv/Jamesbarford

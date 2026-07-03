@@ -480,7 +480,7 @@ int assertLValue(Ast *ast) {
     }
 }
 
-void assertUniqueSwitchCaseLabels(Vec *case_vector, Ast *case_) {
+void assertUniqueSwitchCaseLabels(Cctrl *cc, Vec *case_vector, Ast *case_) {
     for (u64 i = 0; i < case_vector->size; ++i) {
         Ast *cur = case_vector->entries[i];
         if (case_->case_end < cur->case_begin ||
@@ -491,9 +491,9 @@ void assertUniqueSwitchCaseLabels(Vec *case_vector, Ast *case_) {
             for (u64 j = 0; j < case_vector->size; ++j) {
                 astPrint(case_vector->entries[i]);
             }
-            loggerPanic("Duplicate case value: %ld\n",case_->case_begin);
+            cctrlRaiseException(cc,"Duplicate case value: %s\n",case_->case_label->data);
         }
-        loggerPanic("Duplicate case value: %ld\n",case_->case_begin);
+        cctrlRaiseException(cc, "Duplicate case value: %s\n",case_->case_label->data);
     }
 }
 

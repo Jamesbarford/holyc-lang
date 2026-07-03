@@ -37,7 +37,7 @@ int astIsArithmetic(Ast *ast, int is_float);
 void assertTokenIsTerminator(Cctrl *cc, Lexeme *tok, s64 terminator_flags);
 void assertTokenIsTerminatorWithMsg(Cctrl *cc, Lexeme *tok,
         s64 terminator_flags, const char *fmt, ...);
-void assertUniqueSwitchCaseLabels(Vec *case_vector, Ast *case_);
+void assertUniqueSwitchCaseLabels(Cctrl *cc, Vec *case_vector, Ast *case_);
 void assertIsFloatOrInt(Ast *ast, s64 lineno);
 void assertIsInt(Ast *ast, s64 lineno);
 void assertIsFloat(Ast *ast, s64 lineno);

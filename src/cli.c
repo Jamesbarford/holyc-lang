@@ -103,6 +103,7 @@ static CliParser parsers[] = {
     {str_lit("-cfg-png"),   0, CLI_CFG_CREATE_PNG, "-cfg-svg", "Create graphviz control flow graph as a PNG", &cliParseNop},
     {str_lit("-cfg-svg"),   0, CLI_CFG_CREATE_SVG, "-cfg-png", "Create graphviz control flow graph as a SVG", &cliParseNop},
     {str_lit("-tokens"),    0, CLI_PRINT_TOKENS, "-tokens", "Print the tokens and exit", &cliParseNop},
+    CliNopParser("-Werror", CLI_WERROR, "-Werror all warnings are treated as errors"),
     {str_lit("-S"),         0, CLI_ASSEMBLE_ONLY, "-S", "Emit assembly only", &cliParseNop},
     {str_lit("-obj"),       0, CLI_EMIT_OBJECT, "DEPRICATED use `-c` instead! -obj", "Emit an objectfile", &cliParseNop},
     {str_lit("-c"),         0, CLI_EMIT_OBJECT, "-o", "Emit an objectfile", &cliParseNop},
@@ -111,6 +112,8 @@ static CliParser parsers[] = {
     {str_lit("-clibs"),     1, CLI_CLIBS, "-clibs", "Link c libraries like: -clibs=`-lSDL2 -lxml2 -lcurl...`", &cliParseString},
     {str_lit("-run"),       0, CLI_RUN, "-run", "Immediately run the file (not JIT)", &cliParseNop},
     {str_lit("-jit"),       0, CLI_JIT, "-jit", "JIT-compile and run main() in-process (aarch64 & x86_64)", &cliParseNop},
+    {str_lit("-Memsafe"),   0, CLI_MEMSAFE, "-Memsafe", "With -jit: track MAlloc/Free, report double/wild frees and leaks at exit (the REPL always tracks)", &cliParseNop},
+    {str_lit("-repl"),      0, CLI_REPL, "-repl", "Start an interactive HolyC REPL on top of the JIT (aarch64 & x86_64)", &cliParseNop},
     {str_lit("-o"),         1, CLI_OUTPUT_FILENAME, "-o <binary_name>", "Output filename: `-o <name> ./<file>.HC`", &cliParseString},
     {str_lit("-o-"),        0, CLI_TO_STDOUT, "-o-", "Output assembly to stdout, only for use with -S", &cliParseNop},
     {str_lit("-transpile"), 0, CLI_TRANSPILE, "-transpile", "Transpile the code to C, this is best effort", &cliParseNop},
@@ -321,6 +324,10 @@ enum CliFileType cliGetFileType(char *filename, u64 filename_len) {
         return HC_OBJECT;
     } else if (tolower(*end) == 'o' && *(end-1) == 's' && *(end-2) == '.') {
         return HC_SHARED_OBJECT;
+    } else if (filename_len >= 7 && *(end-5) == '.' && *(end-4) == 'd' &&
+                                    *(end-3) == 'y' && *(end-2) == 'l' && 
+                                    *(end-1) == 'i' && *end     == 'b') {
+        return HC_SHARED_OBJECT;
     } else {
         return HC_INVALID;
     }
@@ -432,6 +439,7 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
             case CLI_CFG_CREATE_SVG:     args->cfg_create_svg = 1; break;
             case CLI_ASM_DEBUG_COMMENTS: args->asm_debug_comments = 1; break;
             case CLI_ASSEMBLE_ONLY:      args->assemble_only = 1; break;
+            case CLI_WERROR:             args->werror = 1; break;
             case CLI_EMIT_DYLIB: {
                 args->emit_dylib = 1;
                 args->lib_name = mprintf("%s",value.str);
@@ -441,6 +449,8 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
             case CLI_fPIC:               args->fPIC = 1; break;
             case CLI_RUN:                args->run = 1; break;
             case CLI_JIT:                args->jit = 1; break;
+            case CLI_MEMSAFE:            args->memsafe = 1; break;
+            case CLI_REPL:               args->repl = 1; break;
             case CLI_ASSEMBLE:           args->assemble = 1; break;
             case CLI_TRANSPILE:          args->transpile = 1; break;
             case CLI_TO_STDOUT:          args->to_stdout = 1; break;
@@ -497,7 +507,8 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
                  "printing assembly to stdout\n");
     }
 
-    if (args->infile == NULL) {
+    /* The REPL reads from stdin - it's the one mode with no input file. */
+    if (args->infile == NULL && !args->repl) {
         cliNoInputFiles();
     }
     return 1;

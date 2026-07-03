@@ -24,6 +24,7 @@
 #if !defined(__aarch64__)
 
 HccJit *aarch64JitCompile(Cctrl *cc) { (void)cc; return NULL; }
+const HccJitBackend *aarch64JitBackend(void) { return NULL; }
 
 #else /* __aarch64__ && HCC_ENABLE_JIT */
 
@@ -1453,7 +1454,13 @@ static void jitEmitInstr(JitFnCtx *ctx, IrInstr *instr) {
                 if (irIsFloat(instr->dst->type)) jitLoadFirstSrcFpr(ctx, instr->dst);
                 else                              jitLoadFirstSrc(ctx, instr->dst);
             }
-            jitEmitBranchLocal(ctx, hccJitEpilogueLocalNum(jit, ctx->fn));
+            /* The epilogue label is defined straight after the last block,
+             * so a ret ending that block falls through to it. */
+            if (ctx->next_block != NULL ||
+                ctx->cur_block->instructions->prev->value != (void *)instr)
+            {
+                jitEmitBranchLocal(ctx, hccJitEpilogueLocalNum(jit, ctx->fn));
+            }
             break;
 
         case IR_TRUNC: case IR_ZEXT: case IR_SEXT:
@@ -1763,6 +1770,10 @@ static const HccJitBackend aarch64_jit_backend = {
 
 HccJit *aarch64JitCompile(Cctrl *cc) {
     return hccJitCompile(cc, &aarch64_jit_backend);
+}
+
+const HccJitBackend *aarch64JitBackend(void) {
+    return &aarch64_jit_backend;
 }
 
 #endif /* __aarch64__ && HCC_ENABLE_JIT */

@@ -25,6 +25,16 @@
  * legacy path will be deleted once the IR backend has full unit-
  * test coverage; until then this flag stays as a debugging tool. */
 #define CCTRL_USE_LEGACY_X86       (1<<5)
+/* REPL mode: re-defining a function replaces the previous definition
+ * instead of raising "Cannot redefine function", and floating
+ * expressions (`2+2;`, `(x*3);`) are legal at the top level so they
+ * can be evaluated and echoed. */
+#define CCTRL_REPL                 (1<<6)
+/* Treat warnings as errors */
+#define CCTRL_WERROR               (1<<7)
+/* Create wrappers over MAlloc/Free and friends for tracking allocations
+ * JIT only presently */
+#define CCTRL_MEMSAFE              (1<<8)
 
 /* For messages */
 #define CCTRL_ICE   0
@@ -134,6 +144,12 @@ typedef struct Cctrl {
     /* Function being parsed */
     Ast *tmp_func;
 
+    /* Global variable whose declaration is mid-parse. If the
+     * initialiser errors, top-level recovery unregisters it from
+     * global_env. Otherwise later code could name a variable whose
+     * storage (the AST_DECL) was rolled back. */
+    Ast *tmp_gvar_decl;
+
     /* When parsing & converting to assembly these keep a reference to the
      * current loop's labels */
     AoStr *tmp_loop_begin;
@@ -186,12 +202,18 @@ typedef struct Cctrl {
     /* Are we compiling position independent code? */
     int is_pic;
 
-    /* .so files that may have been passed on the commandline, these should
-     * be usable with the JIT */
+    /* .so files that may have been passed on the commandline or recorded
+     * by a `#link "<path>"` directive, these should be usable with the
+     * JIT */
     List *shared_object_files;
 
     /* .o files that may have been passed on the commandline */
     List *object_files;
+
+    /* Library names recorded by `#link <name>` directives. AOT passes
+     * each as `-l<name>` to the linker; the JIT probes
+     * lib<name>.{dylib,so} with dlopen. */
+    List *link_libs;
 } Cctrl;
 
 /* Instantiate a new compiler control struct */
@@ -243,6 +265,11 @@ void cctrlDiagPush(Cctrl *cc, CctrlDiagnostic *d);
 /* prints every queued diagnostic to stderr (in source order) and returns the
  * number of CCTRL_ERROR entries. */
 int cctrlDiagFlush(Cctrl *cc);
+/* Drop queued diagnostics and reset the error count (REPL: between inputs). */
+void cctrlDiagClear(Cctrl *cc);
+/* Empty the token ring buffer so a fresh parse doesn't consume tokens
+ * left over from a previous (possibly errored) one. */
+void cctrlResetTokenBuffer(Cctrl *cc);
 
 /* Build a CctrlDiagnostic from a pre-rendered message and the current source
  * position. Takes ownership of `rendered` and `suggestion`. */
@@ -274,9 +301,6 @@ void cctrlSyncStatement(Cctrl *cc);
 
 Map *cctrlCreateAstMap(Map *parent);
 Map *cctrlCreateLexemeMap(void);
-/* True/False for whether this is position independent code */
-int cctrlfPIC(Cctrl *cc);
-/* Are we targeting linux? */
-int cctrlTargetLinux(Cctrl *cc);
+void cctrlAddDefine(Cctrl *cc, char *name);
 
 #endif // !CCTRL_H

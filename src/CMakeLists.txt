@@ -107,8 +107,13 @@ add_subdirectory(asm)
 
 option(HCC_ENABLE_JIT "Build the optional in-process JIT (aarch64 & x86_64)" OFF)
 if (HCC_ENABLE_JIT)
-    list(APPEND SOURCES jit-common.c aarch64-jit.c x86_64-jit.c)
-    list(APPEND HEADERS jit-common.h aarch64-jit.h x86_64-jit.h)
+    list(APPEND SOURCES jit-common.c aarch64-jit.c x86_64-jit.c repl.c
+         memsafe.c linenoise/linenoise.c)
+    list(APPEND HEADERS jit-common.h aarch64-jit.h x86_64-jit.h repl.h
+         memsafe.h linenoise/linenoise.h)
+    # Vendored (antirez/linenoise) - don't hold it to our warning bar.
+    set_source_files_properties(linenoise/linenoise.c
+                                PROPERTIES COMPILE_FLAGS "-w")
 endif()
 
 add_executable(hcc ${SOURCES} ${HEADERS})

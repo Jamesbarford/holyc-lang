@@ -24,6 +24,7 @@
 #if !defined(__x86_64__) || !defined(HCC_ENABLE_JIT)
 
 HccJit *x86_64JitCompile(Cctrl *cc) { (void)cc; return NULL; }
+const HccJitBackend *x86_64JitBackend(void) { return NULL; }
 
 #else /* __x86_64__ && HCC_ENABLE_JIT */
 
@@ -1250,7 +1251,8 @@ static void jitEmitInstr(JitFnCtx *ctx, IrInstr *instr) {
                 SysvClass cl[2]; int neb = 0;
                 astSysvClassify(t, cl, &neb);
                 int gpret[2] = { R_RAX, R_RDX };
-                int gpi = 0, ssei = 0;
+                int gpi = 0;
+                int ssei = 0;
                 for (int e = 0; e < neb; ++e) {
                     int off = e * 8, rem = (int)t->size - off;
                     int sz = rem >= 8 ? 8 : rem;
@@ -1267,7 +1269,13 @@ static void jitEmitInstr(JitFnCtx *ctx, IrInstr *instr) {
                 if (irIsFloat(instr->dst->type)) jitLoadFirstSrcFpr(ctx, instr->dst);
                 else                              jitLoadFirstSrc(ctx, instr->dst);
             }
-            jitEmitBranchLocal(ctx, hccJitEpilogueLocalNum(jit, ctx->fn));
+            /* The epilogue label is defined straight after the last block,
+             * so a ret ending that block falls through to it. */
+            if (ctx->next_block != NULL ||
+                ctx->cur_block->instructions->prev->value != (void *)instr)
+            {
+                jitEmitBranchLocal(ctx, hccJitEpilogueLocalNum(jit, ctx->fn));
+            }
             break;
 
         case IR_TRUNC: {
@@ -1657,6 +1665,10 @@ static const HccJitBackend x86_64_jit_backend = {
 
 HccJit *x86_64JitCompile(Cctrl *cc) {
     return hccJitCompile(cc, &x86_64_jit_backend);
+}
+
+const HccJitBackend *x86_64JitBackend(void) {
+    return &x86_64_jit_backend;
 }
 
 #endif /* __x86_64__ && HCC_ENABLE_JIT */
