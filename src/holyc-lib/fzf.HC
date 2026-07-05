@@ -70,7 +70,7 @@ class FzFString
 
 class FzFTerm
 {
-  FzFResult *(*fn)(FzFResult *res, Bool case_sensitive,
+  U0 (*fn)(FzFResult *res, Bool case_sensitive,
       FzFString *text, FzFString *pattern, FzFPosition *pos, FzFSlab *slab);
   Bool inv;
   U8 *ptr;
@@ -709,7 +709,7 @@ FzFPattern *FzFParsePattern(I32 case_mode, U8 *pattern, Bool fuzzy=TRUE)
   Bool switch_set = FALSE;
   Bool after_bar = FALSE;
   while (ptr != NULL) {
-    FzFResult *(*fn)(FzFResult *res, Bool _case_sensitive,
+    U0 (*fn)(FzFResult *res, Bool _case_sensitive,
         FzFString *_text, FzFString *_pattern,
         FzFPosition *_pos, FzFSlab *_slab) = &FzFFuzzyMatchV1;
 

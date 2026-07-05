@@ -663,8 +663,8 @@ IntSet *IntSetSymDiff(IntSet *s1, IntSet *s2)
     }
   }
 
-  IntSetRelease(i1);
-  IntSetRelease(i2);
+  IntSetIterRelease(i1);
+  IntSetIterRelease(i2);
   return sym_diff_set;
 }
 
