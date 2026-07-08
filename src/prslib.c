@@ -1497,6 +1497,35 @@ Ast *parseAlignof(Cctrl *cc) {
     return astI64Type(astTypeAlign(type));
 }
 
+/* `typeof(<type or expr>)` - same operand handling as sizeof/alignof
+ * but folds to a string literal naming the type: typeof(1+1) == "I64",
+ * typeof("s") == "U8[2]", typeof(&f) == "F64 *". The expression is
+ * only type-checked, never evaluated. */
+Ast *parseTypeof(Cctrl *cc) {
+    Lexeme *tok = cctrlTokenGet(cc);
+    Lexeme *peek = cctrlTokenPeek(cc);
+    AstType *type = NULL;
+
+    if (tokenPunctIs(tok,'(') && cctrlIsKeyword(cc,peek->start,peek->len)) {
+        type = parseFullType(cc);
+        cctrlTokenExpect(cc,')');
+    } else {
+        cctrlTokenRewind(cc);
+        Ast *ast = parseUnaryExpr(cc);
+        type = ast ? ast->type : NULL;
+    }
+
+    if (!type) {
+        cctrlRaiseException(cc,
+                "typeof: could not determine the type of the operand");
+    }
+
+    AoStr *name = astTypeToAoStr(type);
+    /* real_len is the unescaped byte length + NUL; type names contain
+     * no escapes so it's just len + 1. */
+    return cctrlGetOrSetString(cc, name->data, name->len, name->len + 1);
+}
+
 Ast *parsePostFixExpr(Cctrl *cc) {
     Ast *ast;
     AstType *type;
@@ -1589,6 +1618,7 @@ Ast *parseUnaryExpr(Cctrl *cc) {
         switch (tok->i64) {
             case KW_SIZEOF: return parseSizeof(cc);
             case KW_ALIGNOF: return parseAlignof(cc);
+            case KW_TYPEOF: return parseTypeof(cc);
             case KW_DEFINED: {
                 cctrlTokenExpect(cc,'(');
                 tok = cctrlTokenGet(cc);

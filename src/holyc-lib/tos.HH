@@ -81,6 +81,13 @@ public I64 CsvParse(CsvParser *p, CsvSlice *s);
 #define CDATE_YEAR_DAYS_INT    36524225
 #define CDATE_BASE_DAY_OF_WEEK 0
 
+/* XXX: Normalise stat ? */
+public class cTimespec
+{
+  I64 tv_sec;
+  I64 tv_nsec;
+};
+
 public class timeval
 { // c compatability
   I64 tv_sec;        /* seconds since Jan. 1, 1970 */
@@ -127,6 +134,7 @@ public I64 LastDayOfMon(I64 i);
 public I32 FirstDayOfYear(I64 i);
 public I64 LastDayOfYear(I64 i);
 public CDate Now();
+public U0 IsoFromTimespec(cTimespec *ts, U8 *buf);
 
 #define HT_LOAD  0.60
 #define HT_DELETED 0x7fffffffffffffff
@@ -474,6 +482,9 @@ public U0 Exit(I64 exit_code = EXIT_FAIL);
 public I64 Write(I64 fd, U8 *buf, I64 len);
 public I64 System(U8 *command);
 #endif
+
+public I32 Sh(U8 *fmt, ...);
+public U8 *Shlurp(U8 *fmt, ...);
 
 /* TempleOS-style try/catch/throw. CatchFrame is 256 bytes (matches
  * what the compiler reserves per `try` block); the runtime stores its
@@ -844,12 +855,6 @@ public extern "c" I32 closedir(cDIR *dir);
 public extern "c" U0 rewinddir(cDIR *dir);
 public extern "c" U0 seekdir(cDIR *dir, I64 pos);
 public extern "c" I64 telldir(cDIR *dir);
-/* XXX: Normalise stat ? */
-public class cTimespec
-{
-  I64 tv_sec;
-  I64 tv_nsec;
-};
 
 #ifdef IS_MACOS
 public class cStat {
@@ -892,6 +897,89 @@ class cStat
   I64 __glibc_reserved[3];
 };
 
+class statx_timestamp
+{
+  I64  tv_sec;
+  U32  tv_nsec;
+  I32  __reserved;
+};
+
+class Statx
+{
+  U32 stx_mask;
+  U32 stx_blksize;
+  U64 stx_attributes;
+  U32 stx_nlink;
+  U32 stx_uid;
+  U32 stx_gid;
+  U16 stx_mode;
+  U16 __spare0[1];
+  U64 stx_ino;
+  U64 stx_size;
+  U64 stx_blocks;
+  U64 stx_attributes_mask;
+  statx_timestamp  stx_atime;
+  statx_timestamp  stx_btime;
+  statx_timestamp  stx_ctime;
+  statx_timestamp  stx_mtime;
+  U32 stx_rdev_major;
+  U32 stx_rdev_minor;
+  U32 stx_dev_major;
+  U32 stx_dev_minor;
+  U64 stx_mnt_id;
+  U32 stx_dio_mem_align;
+  U32 stx_dio_offset_align;
+  U64 stx_subvol;
+  U32 stx_atomic_write_unit_min;
+  U32 stx_atomic_write_unit_max;
+  U32 stx_atomic_write_segments_max;
+  U32 stx_dio_read_offset_align;
+  U32 stx_atomic_write_unit_max_opt;
+  U32 __spare2[1];
+  U64 __spare3[8];
+};
+
+#define STATX_TYPE           0x00000001
+#define STATX_MODE           0x00000002
+#define STATX_NLINK          0x00000004
+#define STATX_UID            0x00000008
+#define STATX_GID            0x00000010
+#define STATX_ATIME          0x00000020
+#define STATX_MTIME          0x00000040
+#define STATX_CTIME          0x00000080
+#define STATX_INO            0x00000100
+#define STATX_SIZE           0x00000200
+#define STATX_BLOCKS         0x00000400
+#define STATX_BASIC_STATS    0x000007ff
+#define STATX_BTIME          0x00000800
+#define STATX_MNT_ID         0x00001000
+#define STATX_DIOALIGN       0x00002000
+#define STATX_MNT_ID_UNIQUE  0x00004000
+#define STATX_SUBVOL         0x00008000
+#define STATX_WRITE_ATOMIC   0x00010000
+#define STATX_DIO_READ_ALIGN 0x00020000
+
+#define STATX__RESERVED             0x80000000
+#define STATX_ALL                   0x00000fff
+#define STATX_ATTR_COMPRESSED       0x00000004
+#define STATX_ATTR_IMMUTABLE        0x00000010
+#define STATX_ATTR_APPEND           0x00000020
+#define STATX_ATTR_NODUMP           0x00000040
+#define STATX_ATTR_ENCRYPTED        0x00000800
+#define STATX_ATTR_AUTOMOUNT        0x00001000
+#define STATX_ATTR_MOUNT_ROOT       0x00002000
+#define STATX_ATTR_VERITY           0x00100000
+#define STATX_ATTR_DAX              0x00200000
+#define STATX_ATTR_WRITE_ATOMIC     0x00400000
+#define STAT_X_AT_FDCWD       -100
+#define AT_STATX_SYNC_AS_STAT 0x0000
+#define STATX_BTIME           0x00000800
+
+public extern "c" I32 statx(I32 __dirfd,
+                            I8 *__path,
+                            I32 __flags,
+                            U32 __mask,
+                            Statx *stx);
 public extern "c" I32 stat(U8 *pathname, cStat *st);
 public extern "c" I32 lstat(U8 *pathname, cStat *st);
 public extern "c" I32 fstat(I32 fd, cStat *st);
@@ -910,6 +998,29 @@ public _extern _stat I32 stat(U8 *pathname, cStat *st);
 public _extern _lstat I32 lstat(U8 *pathname, cStat *st);
 public _extern _fstat I32 fstat(I32 fd, cStat *st);
 #endif
+
+/* Portable (across MacOS and Linux) stat structure */
+class Fstat
+{
+  U64 st_dev;
+  U64 st_ino;
+  U64 st_nlink;
+  U32 st_mode;
+  U32 st_uid;
+  U32 st_gid;
+  U64 st_rdev;
+  I64 st_size;
+  I64 st_blksize;
+  I64 st_blocks;
+  cTimespec st_atim;
+  cTimespec st_mtim;
+  cTimespec st_ctim;
+  cTimespec st_btim;
+};
+
+public I32 Stat(Fstat *fst, U8 *pathname);
+public I64 Dir(U8 *pathname = "./");
+public U8 *Pwd(U8 *buf=NULL, U64 buf_size=0);
 
 public extern "c" I32 mkdir(U8 *dirname, I32 mode = 438);
 public extern "c" I32 unlink(U8 *pathname);

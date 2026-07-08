@@ -62,6 +62,8 @@ void vecPrint(Vec *vec);
 extern VecType vec_long_type;
 extern VecType vec_unsigned_long_type;
 extern VecType vec_aostr_type;
+extern VecType vec_cstring_type;
+extern VecType vec_cstring_owned_type;
 
 /*================== Generic MAP =============================================*/
 
@@ -207,6 +209,8 @@ struct SetNode {
 extern SetType set_aostr_type;
 extern SetType set_int_type;
 extern SetType set_uint_type;
+extern SetType set_cstring_type;
+extern SetType set_cstring_owned_type;
 
 struct Set {
     u64 size;

@@ -1,6 +1,7 @@
 #include <dlfcn.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/mman.h>
@@ -248,6 +249,22 @@ x86_64_emit_veneer(uint8_t *p, void *target)
     p[12] = 0xE3; /* modrm: mod=3 reg=4 rm=3 (r11&7) */
 }
 
+/* One veneer per distinct out-of-range target per mapping: every call
+ * site branching to the same symbol (printf, memcpy, ...) shares a
+ * trampoline. Linear scan - fixup counts are small. */
+struct VeneerSlot {
+    void *target;
+    void *veneer;
+};
+
+static void *
+veneer_lookup(const struct VeneerSlot *vmap, int n, void *target)
+{
+    for (int i = 0; i < n; i++)
+        if (vmap[i].target == target) return vmap[i].veneer;
+    return NULL;
+}
+
 int
 asm_jit_finalize(AsmEnc *enc, asm_jit_resolver_fn resolver, void *ud,
                  AsmJitCode *out)
@@ -256,6 +273,7 @@ asm_jit_finalize(AsmEnc *enc, asm_jit_resolver_fn resolver, void *ud,
 
     out->code = NULL;
     out->size = 0;
+    out->veneer_size = 0;
     out->_mapping = NULL;
     out->_mapping_size = 0;
     if (enc->len == 0) return 0;
@@ -301,6 +319,15 @@ asm_jit_finalize(AsmEnc *enc, asm_jit_resolver_fn resolver, void *ud,
     uint8_t *buf = (uint8_t *)mem;
     size_t veneer_off = enc->len; /* next free veneer slot */
     int rc = 0;
+
+    /* Dedup table, sized for the worst case of one veneer per fixup.
+     * A failed allocation just disables sharing - veneers are then
+     * emitted per call site, which is correct, only bigger. */
+    struct VeneerSlot *vmap = NULL;
+    int n_vmap = 0;
+    if (max_a64_veneers + max_x86_veneers > 0)
+        vmap = calloc((size_t)(max_a64_veneers + max_x86_veneers),
+                      sizeof(*vmap));
 
     for (int i = 0; i < enc->n_fixups; i++) {
         AsmFixup *f = &enc->fixups[i];
@@ -367,13 +394,20 @@ asm_jit_finalize(AsmEnc *enc, asm_jit_resolver_fn resolver, void *ud,
                 int is_bl = (f->reloc == AFR_AARCH64_CALL26);
                 prc = aarch64_patch_branch26(buf, f->patch_offset, target, is_bl);
                 if (prc != 0) {
-                    /* Target out of +/-128MB. Emit a veneer at the end of
-                     * the mapping that loads the full 64-bit target into
-                     * x16 and `br`s to it; then re-patch the original
-                     * BL/B to jump to the veneer instead. */
-                    void *vp = buf + veneer_off;
-                    aarch64_emit_veneer(vp, target);
-                    veneer_off += AARCH64_VENEER_BYTES;
+                    /* Target out of +/-128MB. Re-point the BL/B at a
+                     * veneer at the end of the mapping that loads the
+                     * full 64-bit target into x16 and `br`s to it -
+                     * reusing an already-emitted one for this target. */
+                    void *vp = vmap ? veneer_lookup(vmap, n_vmap, target)
+                                    : NULL;
+                    if (vp == NULL) {
+                        vp = buf + veneer_off;
+                        aarch64_emit_veneer(vp, target);
+                        veneer_off += AARCH64_VENEER_BYTES;
+                        if (vmap)
+                            vmap[n_vmap++] =
+                                (struct VeneerSlot){ target, vp };
+                    }
                     prc = aarch64_patch_branch26(buf, f->patch_offset, vp, is_bl);
                 }
                 break;
@@ -393,15 +427,23 @@ asm_jit_finalize(AsmEnc *enc, asm_jit_resolver_fn resolver, void *ud,
             case AFR_X86_64_SIGNED:
                 prc = x86_64_patch_rel32(buf, f->patch_offset, target);
                 if (prc != 0 && f->reloc != AFR_X86_64_SIGNED) {
-                    /* Target out of +/-2GB. Emit a movabs+jmp veneer and
-                     * redirect the CALL/JMP/Jcc to it.
+                    /* Target out of +/-2GB. Redirect the CALL/JMP/Jcc to
+                     * a movabs+jmp veneer, reusing an already-emitted
+                     * one for this target.
                      *
                      * SIGNED (LEA RIP-rel) can't go through a veneer -
                      * we'd be loading the wrong address - so we surface
                      * that error directly to the caller. */
-                    void *vp = buf + veneer_off;
-                    x86_64_emit_veneer(vp, target);
-                    veneer_off += X86_64_VENEER_BYTES;
+                    void *vp = vmap ? veneer_lookup(vmap, n_vmap, target)
+                                    : NULL;
+                    if (vp == NULL) {
+                        vp = buf + veneer_off;
+                        x86_64_emit_veneer(vp, target);
+                        veneer_off += X86_64_VENEER_BYTES;
+                        if (vmap)
+                            vmap[n_vmap++] =
+                                (struct VeneerSlot){ target, vp };
+                    }
                     prc = x86_64_patch_rel32(buf, f->patch_offset, vp);
                 }
                 break;
@@ -417,6 +459,7 @@ asm_jit_finalize(AsmEnc *enc, asm_jit_resolver_fn resolver, void *ud,
             break;
         }
     }
+    free(vmap);
 
 #if APPLE_SILICON_JIT
     pthread_jit_write_protect_np(1);
@@ -448,6 +491,7 @@ asm_jit_finalize(AsmEnc *enc, asm_jit_resolver_fn resolver, void *ud,
 
     out->code = mem;
     out->size = enc->len;
+    out->veneer_size = veneer_off - enc->len;
     out->_mapping = mem;
     out->_mapping_size = map_size;
     return 0;
@@ -460,6 +504,7 @@ asm_jit_free(AsmJitCode *code)
     munmap(code->_mapping, code->_mapping_size);
     code->code = NULL;
     code->size = 0;
+    code->veneer_size = 0;
     code->_mapping = NULL;
     code->_mapping_size = 0;
 }
@@ -468,32 +513,65 @@ asm_jit_free(AsmJitCode *code)
 #define RTLD_DEFAULT ((void *) 0)
 #endif
 
+/* PRINTREG's runtime helpers live in tasm_debug.c. Nothing in hcc calls
+ * them, so without a direct reference the linker drops that archive
+ * member and the JIT can never resolve `PRINTREG`'s BL. Referencing them
+ * here both keeps them in the binary and resolves them directly - no
+ * dlsym/symtab scan, and platform-independent. The asm emitter branches
+ * to `_tasm_print_*` (Mach-O) or `tasm_print_*` (ELF), so match on the
+ * underscore-stripped C name. */
+void tasm_print_x(uint64_t, int);
+void tasm_print_w(uint32_t, int);
+void tasm_print_s(float, int);
+void tasm_print_d(double, int);
+void tasm_print_v(const void *, int, int, int, int);
+
+static void *jit_builtin_lookup(const char *sym) {
+    if (sym[0] == '_') sym++;
+    if (!strcmp(sym, "tasm_print_x")) return (void *)tasm_print_x;
+    if (!strcmp(sym, "tasm_print_w")) return (void *)tasm_print_w;
+    if (!strcmp(sym, "tasm_print_s")) return (void *)tasm_print_s;
+    if (!strcmp(sym, "tasm_print_d")) return (void *)tasm_print_d;
+    if (!strcmp(sym, "tasm_print_v")) return (void *)tasm_print_v;
+    return NULL;
+}
+
 void *
 asm_jit_dlsym_resolver(void *ud, const char *sym)
 {
     (void)ud;
     if (!sym) return NULL;
-    /* Try the name exactly as emitted first. On ELF/Linux a leading
-     * underscore can be part of the real symbol name - e.g. libtos's
+    void *builtin = jit_builtin_lookup(sym);
+    if (builtin) return builtin;
+#if defined(__APPLE__)
+    /* Mach-O mangles C names with a leading underscore, so the emitted
+     * `sym` is an ASM name whose C-level name is sym+1 - that's the
+     * form dlsym wants, so try it first. Querying dlsym with the exact
+     * form asks for a DIFFERENT C symbol that merely looks like the
+     * mangled spelling: dlsym("_Exit") finds C99 _Exit() in libSystem
+     * (terminate WITHOUT flushing stdio), shadowing libtos's Exit()
+     * and silently dropping buffered output on `Exit(0)` under the
+     * JIT. Hence exact-form dlsym is the LAST resort here, after the
+     * raw symbol-table scan that handles underscore-less Mach-O names
+     * (e.g. libtos's `Fs`). A deliberate `extern "c" _Exit` arrives
+     * already re-mangled as `__Exit`, so the first probe still
+     * resolves it correctly. */
+    void *p;
+    if (sym[0] == '_' && (p = dlsym(RTLD_DEFAULT, sym + 1))) return p;
+    if ((p = jit_macho_symtab_lookup(sym))) return p;
+    if (sym[0] == '_' && (p = jit_macho_symtab_lookup(sym + 1))) return p;
+    return dlsym(RTLD_DEFAULT, sym);
+#else
+    /* ELF: the name as emitted IS the real symbol name - e.g. libtos's
      * hand-rolled `_MALLOC`/`_FREE` trampolines are exported as
-     * `_MALLOC`/`_FREE` - so stripping it up front would break the
-     * lookup. */
+     * `_MALLOC`/`_FREE` - so try it verbatim first and only then the
+     * stripped form. */
     void *p = dlsym(RTLD_DEFAULT, sym);
     if (p) return p;
-    /* macOS emits C symbols with a leading underscore in asm while the
-     * matching dlsym lookup wants the unprefixed name, so fall back to
-     * the stripped form. */
     if (sym[0] == '_') {
         p = dlsym(RTLD_DEFAULT, sym + 1);
         if (p) return p;
     }
-#if defined(__APPLE__)
-    /* dlsym can't see underscore-less Mach-O names (e.g. hcc's global
-     * variables like libtos's `Fs`). Fall back to a raw symbol-table
-     * scan, trying the name as emitted and the unprefixed form. */
-    p = jit_macho_symtab_lookup(sym);
-    if (!p && sym[0] == '_') p = jit_macho_symtab_lookup(sym + 1);
-    if (p) return p;
-#endif
     return NULL;
+#endif
 }

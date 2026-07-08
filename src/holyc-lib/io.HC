@@ -76,6 +76,9 @@ extern "c" I64 read(I32 __fd, U0 *__buf, U64 __nbyte);
 extern "c" I64 write(I32 __fd, U0 *__buf, U64 __nbyte);
 extern "c" I64 lseek(I32 __fd, I64 __offset, I32 __whence);
 extern "c" I32 chdir(U8 *path);
+extern "c" I8 *getcwd(U8 *buf, U64 size);
+extern "c" I8 *getenv(U8 *buf);
+extern "c" I32 isatty(I32 fd);
 
 class iovec
 {
@@ -83,6 +86,83 @@ class iovec
   U64 iov_len;
 };
 
+/* Stantardise the stat function, though `tos.HH` also allows 
+ * calling the libc version. This is just much easier to use.
+ * With the added benifit of including when a file was created 
+ * for linux, which mac includes with `st_birthtimespec` */
+I32 Stat(Fstat *fst, U8 *pathname)
+{
+#if IS_LINUX
+  Statx stx;
+
+  #define AT_FDCWD -100
+  #define AT_STATX_SYNC_AS_STAT 0x0000
+  #define STATX_BTIME 0x0800U
+  #define STATX_ATIME 0x0020U
+  #define STATX_MTIME 0x0040U
+  #define STATX_CTIME 0x0080U
+
+  if (I32 ret = statx(AT_FDCWD, pathname, AT_STATX_SYNC_AS_STAT,
+        STATX_BTIME, &stx); ret != 0) {
+    return ret;
+  }
+
+  U64 st_dev = (stx.stx_dev_minor & 0xFF)           |
+               ((stx.stx_dev_major & 0xFFF) << 8)   |
+               ((stx.stx_dev_minor & ~0xFF)  << 12) |
+               ((stx.stx_dev_major & ~0xFFF) << 32);
+
+  U64 st_rdev = (stx.stx_rdev_minor & 0xFF)           |
+                ((stx.stx_rdev_major & 0xFFF) << 8)   |
+                ((stx.stx_rdev_minor & ~0xFF)  << 12) |
+                ((stx.stx_rdev_major & ~0xFFF) << 32);
+
+  fst->st_dev     = st_dev;
+  fst->st_ino     = stx.stx_ino;
+  fst->st_nlink   = stx.stx_nlink;
+  fst->st_mode    = stx.stx_mode;
+  fst->st_uid     = stx.stx_uid;
+  fst->st_gid     = stx.stx_gid;
+  fst->st_rdev    = st_rdev;
+  fst->st_size    = stx.stx_size;
+  fst->st_blksize = stx.stx_blksize;
+  fst->st_blocks  = stx.stx_blocks;
+  /* statx_timestamp's tv_nsec is a U32 followed by padding - copy
+   * field-wise rather than struct-wise into cTimespec. */
+  fst->st_atim.tv_sec  = stx.stx_atime.tv_sec;
+  fst->st_atim.tv_nsec = stx.stx_atime.tv_nsec;
+  fst->st_mtim.tv_sec  = stx.stx_mtime.tv_sec;
+  fst->st_mtim.tv_nsec = stx.stx_mtime.tv_nsec;
+  fst->st_ctim.tv_sec  = stx.stx_ctime.tv_sec;
+  fst->st_ctim.tv_nsec = stx.stx_ctime.tv_nsec;
+  fst->st_btim.tv_sec  = stx.stx_btime.tv_sec;
+  fst->st_btim.tv_nsec = stx.stx_btime.tv_nsec;
+
+#elif IS_MACOS
+  cStat st;
+  if (I32 ret = stat(pathname, &st); ret != 0) {
+    return ret;
+  }
+
+  fst->st_dev = st.st_dev;
+  fst->st_ino = st.st_ino;
+  fst->st_nlink = st.st_nlink;
+  fst->st_mode = st.st_mode;
+  fst->st_uid = st.st_uid;
+  fst->st_gid = st.st_gid;
+  fst->st_rdev = st.st_rdev;
+  fst->st_size = st.st_size;
+  fst->st_blksize = st.st_blksize;
+  fst->st_blocks = st.st_blocks;
+  fst->st_atim = st.st_atimespec;
+  fst->st_mtim = st.st_mtimespec;
+  fst->st_ctim = st.st_ctimespec;
+  fst->st_btim = st.st_birthtimespec;
+#else
+#error "Unknown platform"
+#endif
+  return 0;
+}
 
 public U8 *FileRead(U8 *path, I64 *_size=NULL)
 {
@@ -154,5 +234,159 @@ public Bool FileWrite(U8 *filename, U8 *buf, I64 size,
 
 public I32 Cd(U8 *path)
 {
-  return chdir(path);
+  U8 *new_path = NULL;
+  U64 len = StrLen(path);
+  if ((len == 1 && path[0] == '~') ||
+      (len == 2 && path[0] == '~' && path[1] == '/')) {
+    U8 *home = getenv("HOME");
+    home = StrNew(home);
+    new_path = home;
+  } else if (len >= 3 && path[0] == '~' && path[1] == '/') {
+    U8 *home = getenv("HOME");
+    U8 *p = path;
+    if (*(p + 2) != '\0') {
+      new_path = StrPrint(,"%s/%s",home,p+2);
+    } else {
+      new_path = StrPrint(,"%s",home);
+    }
+  } else {
+    new_path = path;
+  }
+  I32 ret_val = chdir(new_path);
+  if (new_path != path) {
+    Free(new_path);
+  }
+  return ret_val;
+}
+
+public U8 *Pwd(U8 *buf=NULL, U64 buf_size=0)
+{
+  return getcwd(buf, buf_size);
+}
+
+/* `ls`-style entry colours. */
+#define DIR_COL_DIR "\033[1;34m"  /* directory  - bold blue  */
+#define DIR_COL_LNK "\033[1;36m"  /* symlink    - bold cyan  */
+#define DIR_COL_EXE "\033[1;32m"  /* executable - bold green */
+#define DIR_COL_END "\033[0m"
+
+class DirHuman
+{
+  U8 *pathname;
+  U32 mode;  /* st_mode: file type + permission bits */
+  U8  type;  /* Dirent type - catches symlinks, which Stat() follows */
+};
+
+DirHuman *DirHumanNew(U8 *pathname, Fstat *fst, U8 type)
+{
+  DirHuman *dh = MAlloc(sizeof(DirHuman));
+  dh->pathname = pathname;
+  dh->mode = fst->st_mode;
+  dh->type = type;
+  return dh;
+}
+
+U0 DirHumanRelease(DirHuman *dh)
+{
+  if (dh) {
+    Free(dh->pathname);
+    Free(dh);
+  }
+}
+
+/* The colour `ls` would paint this entry, or NULL for plain. */
+U8 *DirHumanColor(DirHuman *dh)
+{
+  if (dh->type == DT_LNK) return DIR_COL_LNK;
+  if (dh->type == DT_DIR || (dh->mode & S_IFMT) == S_IFDIR) {
+    return DIR_COL_DIR;
+  }
+  if (dh->mode & (S_IXUSR|S_IXGRP|S_IXOTH)) return DIR_COL_EXE;
+  return NULL;
+}
+
+I64 CmpDirHuman(DirHuman *dh1, DirHuman *dh2)
+{
+  U8 *str1 = dh1->pathname;
+  U8 *str2 = dh2->pathname;
+  if ('0'<=*str1<='9' && '0'<=*str2<='9') {
+    I64 n1 = 0, n2 = 0;
+    while ('0'<=*str1<='9') {
+      n1 = (n1 * 10) + (*str1-'0');
+      str1++;
+    }
+    while ('0'<=*str2<='9') {
+      n2 = (n2 * 10) + (*str2-'0');
+      str2++;
+    }
+    return n2 > n1;
+  }
+  /* Non-numeric names: plain lexicographic order. */
+  return StrCmp(str1,str2) < 0;
+}
+
+U0 QSortDirHuman(U0 **arr, I64 high, I64 low=0)
+{
+  if (low < high) {
+    U0 *pivot = arr[high];
+    I64 idx = low;
+
+    for (I64 i = low; i < high; ++i) {
+      if (CmpDirHuman(arr[i],pivot)) {
+        U0 *tmp = arr[i];
+        arr[i] = arr[idx];
+        arr[idx] = tmp;
+        idx++;
+      }
+    }
+
+    arr[high] = arr[idx];
+    arr[idx] = pivot;
+    QSortDirHuman(arr,high,idx+1);
+    QSortDirHuman(arr,idx-1,low);
+  }
+}
+
+public I64 Dir(U8 *pathname = "./")
+{
+  auto dir = opendir(pathname);
+  if (!dir) return 0;
+  auto vec = PtrVecNew();
+  /* Strip a trailing '/' on a copy - the argument is often a string
+   * literal (the default!), and literals live in read-only memory. */
+  U8 *path = StrNew(pathname);
+  U64 len = StrLen(path);
+  if (len > 0 && path[len-1] == '/') {
+    path[len-1] = '\0';
+  }
+  Dirent *ent;
+  while ((ent = readdir(dir)) != NULL) {
+    if (!StrCmp(ent->name,".") || !StrCmp(ent->name,"..")) continue;
+    auto str = StrNew(ent->name);
+    auto full_path = StrPrint(,"%s/%s",path,ent->name);
+    Fstat fst;
+    if (Stat(&fst,full_path) == 0) {
+      DirHuman *dh = DirHumanNew(str, &fst, ent->type);
+      PtrVecPush(vec,dh);
+    } else {
+      Free(str);
+    }
+    Free(full_path);
+  }
+  Free(path);
+  QSortDirHuman(vec->entries(U0 **), vec->size-1);
+  closedir(dir);
+  Bool colors = isatty(1) != 0;
+  for (DirHuman *dh : vec) {
+    U8 *col = NULL;
+    if (colors) col = DirHumanColor(dh);
+    if (col) {
+      "%s%s"DIR_COL_END"\n", col, dh->pathname;
+    } else {
+      "%s\n", dh->pathname;
+    }
+  }
+  I64 nfiles = vec->size;
+  PtrVecRelease(vec,&DirHumanRelease);
+  return nfiles;
 }

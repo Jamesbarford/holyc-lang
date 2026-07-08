@@ -25,4 +25,10 @@ int x86_64_disasm(const uint8_t *bytes, size_t len, char *out, size_t outsz);
  * prefixed with byte offset and raw hex. */
 void x86_64_disasm_buf(const uint8_t *bytes, size_t len, FILE *f);
 
+/* Same, but a non-zero `base` replaces the offset column with the
+ * absolute address `base + off` (hex) - pass the buffer's runtime
+ * address to label JIT code with real addresses. base 0 == offsets. */
+void x86_64_disasm_buf_at(const uint8_t *bytes, size_t len, uint64_t base,
+                          FILE *f);
+
 #endif

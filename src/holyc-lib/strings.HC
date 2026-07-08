@@ -730,18 +730,23 @@ U8 *MPrintQ(U8 *ptr,I64 flags = 0)
 U8 *StrPrintJoin(U8 *_dst, U8 *fmt,I64 argc,I64 *argv)
 {// @TempleOS - Not a 1:1 yet
   if (!fmt) return NULL;
-  U64 uintarg, curlen = 0, memsize;
+  U64 uintarg, curlen = 0;
   F64 farg;
   I64 ch, sp = 0, intarg, U8arg, len, flags, tlen,dec_len,aux_fmt_num;
   U8 *ptr, *strarg, *tmp, *dst, buf[256];
+  U8 **grow;
   CDate cdt;
 
+  /* Growth (SPutChar's MSize/Free dance) is only legal on a buffer WE
+   * MAlloc'd. A caller-provided dst may live on the stack or mid-array,
+   * where MSize reads garbage and Free aborts - so, as in TempleOS, the
+   * caller's buffer is trusted to be big enough and never grown. */
   if (_dst == NULL) {
     dst = MAlloc(STR_LEN);
-    memsize = STR_LEN;
+    grow = &dst;
   } else {
-    memsize = MSize(_dst);
     dst = _dst;
+    grow = NULL;
   }
 
   ptr = dst;
@@ -781,7 +786,7 @@ U8 *StrPrintJoin(U8 *_dst, U8 *fmt,I64 argc,I64 *argv)
 
       switch (*fmt++) {
         case '%': {
-          SPutChar(&ptr,'%',&dst);
+          SPutChar(&ptr,'%',grow);
           break;
         }
 
@@ -862,10 +867,10 @@ U8 *StrPrintJoin(U8 *_dst, U8 *fmt,I64 argc,I64 *argv)
           } while (k<sizeof(buf)-8);
 
           if (flags & PRTF_NEG) {
-            SPutChar(&ptr,'-',&dst);
+            SPutChar(&ptr,'-',grow);
           }
           for (I64 i = k-1;i>=0;--i) {
-            SPutChar(&ptr,buf[i],&dst);
+            SPutChar(&ptr,buf[i],grow);
           }
           break;
         }
@@ -929,21 +934,21 @@ U8 *StrPrintJoin(U8 *_dst, U8 *fmt,I64 argc,I64 *argv)
 
           if (flags & PRTF_PAD_ZERO) {
             if (flags & PRTF_NEG) {
-              SPutChar(&ptr,'-',&dst);
+              SPutChar(&ptr,'-',grow);
             }
             for (;idx < tlen-len; ++idx) {
-              SPutChar(&ptr,'0',&dst);
+              SPutChar(&ptr,'0',grow);
             }
           } else {
             for (;idx < tlen-len; ++idx) {
-              SPutChar(&ptr,CH_SPACE,&dst);
+              SPutChar(&ptr,CH_SPACE,grow);
             }
             if (flags&PRTF_NEG) {
-              SPutChar(&ptr,'-',&dst);
+              SPutChar(&ptr,'-',grow);
             }
           }
           for (idx = len - 1; idx >= 0; --idx) {
-            SPutChar(&ptr,buf[idx],&dst);
+            SPutChar(&ptr,buf[idx],grow);
           }
           break;
         }
@@ -972,15 +977,15 @@ place_hex:
 
           if (flags & PRTF_PAD_ZERO) {
             for (I64 idx = 0; idx < tlen-len; ++idx) {
-              SPutChar(&ptr,'0',&dst);
+              SPutChar(&ptr,'0',grow);
             }
           } else {
             for (I64 idx = 0; idx < tlen-len; ++idx) {
-              SPutChar(&ptr,CH_SPACE,&dst);
+              SPutChar(&ptr,CH_SPACE,grow);
             }
           }
           for (I64 idx = len - 1; idx >= 0; --idx) {
-            SPutChar(&ptr,buf[idx],&dst);
+            SPutChar(&ptr,buf[idx],grow);
           }
           break;
         }
@@ -994,11 +999,11 @@ place_hex:
 
         default:
           "Invalid format char: '%c'\n",*fmt;
-          SPutChar(&ptr,ch,&dst);
+          SPutChar(&ptr,ch,grow);
           break;
       }
     } else {
-      SPutChar(&ptr,ch,&dst);
+      SPutChar(&ptr,ch,grow);
     }
   }
   return dst;

@@ -21,19 +21,39 @@
 typedef struct HccJit {
     Cctrl *cc;
 
-    /* Single accumulating encoder. All function bytes land here in
-     * emission order; public labels carry the function name. */
+    /* The arch backend driving compile_function for every chunk. */
+    const struct HccJitBackend *backend;
+
+    /* Per-chunk accumulating encoder. All function bytes of the chunk
+     * being built land here in emission order; public labels carry the
+     * function name. Reset at the start of every hccJitCompileChunk. */
     AsmEnc enc;
 
-    /* name -> entry address inside the RX mapping. Populated post-finalize. */
+    /* name -> entry address inside an RX mapping. Accumulates across
+     * chunks; redefinitions overwrite so lookups see the newest one. */
     Map *symbols;
-    /* User-defined host symbols (printf etc.) - checked before dlsym. */
+    /* User-defined host symbols (printf etc.) - checked before dlsym.
+     * Finalized functions and globals/string arenas are registered
+     * here too so later chunks can address them. */
     Map *host_symbols;
 
-    /* RW arena for globals + string literals; absolute addresses are
-     * registered in host_symbols so the resolver picks them up. */
-    uint8_t *globals;
-    size_t   globals_size;
+    /* Function names defined in the chunk CURRENTLY being emitted.
+     * These route through label fixups; everything else resolves via
+     * host_symbols/dlsym. Reset per chunk. */
+    Map *chunk_fns;
+
+    /* Finalized RX mappings (AsmJitCode *), one per chunk. Old chunks
+     * stay mapped forever - earlier code may hold pointers into them. */
+    List *chunks;
+
+    /* RW arenas for globals + string literals, one per chunk; the
+     * absolute addresses are registered in host_symbols. */
+    List *globals_arenas;
+
+    /* Incremental cursors: last node of cc->ast_list / cc->asm_blocks
+     * already consumed by a chunk. A chunk compiles (cursor, sentinel]. */
+    List *ast_cursor;
+    List *asm_cursor;
 
     /* Per-IrBlock -> AsmEnc local_num.  Key = (fn_uuid<<32) | block_id;
      * value = small int.  Local nums are pulled from `next_local`. */
@@ -41,8 +61,6 @@ typedef struct HccJit {
     /* Per-function epilogue label local_num. Key = fn_uuid. */
     Map *epi_local;
     int  next_local;
-
-    AsmJitCode code;
 } HccJit;
 
 /* What a per-arch backend plugs into the shared compile pipeline. */
@@ -61,10 +79,38 @@ typedef struct HccJitBackend {
  * for every function in `cc` through `backend`. NULL on error. */
 HccJit *hccJitCompile(Cctrl *cc, const HccJitBackend *backend);
 
+/* Create an empty jit (no code compiled yet) for incremental use.
+ * Checks target compatibility, installs the register pool and loads
+ * libtos. NULL on error. */
+HccJit *hccJitNew(Cctrl *cc, const HccJitBackend *backend);
+
+/* Compile everything appended to cc->ast_list / cc->asm_blocks since
+ * the previous chunk - plus `extra_fn` if non-NULL (a synthetic
+ * function that is NOT in ast_list, e.g. the REPL's per-input
+ * wrapper) - into a fresh RX mapping. New globals and string literals
+ * get slots in a new RW arena. Finalized function addresses are
+ * registered so later chunks (and hccJitLookup) can reach them;
+ * redefinitions rebind the name for future chunks while old code
+ * keeps calling the address it was linked against.
+ *
+ * The cursors advance even on failure so a broken input isn't
+ * recompiled by the next call. Non-zero on error. */
+int hccJitCompileChunk(HccJit *jit, Ast *extra_fn);
+
 /* Look up a public function by name (tries the underscore-prefixed
  * macOS mangling too). The returned pointer is owned by the jit and
  * remains valid until hccJitFree. */
 void *hccJitLookup(HccJit *jit, const char *name);
+
+/* Reverse-map a pc: the chunk whose live executable bytes (code +
+ * veneers) contain it, or NULL if it isn't JIT'd code. */
+AsmJitCode *hccJitFindChunk(HccJit *jit, void *pc);
+
+/* Name of the JIT function containing `pc`: the nearest symbol at or
+ * below it within its chunk's code (veneer pcs return NULL - use
+ * hccJitFindChunk to tell "veneer" from "not ours"). *off_out gets
+ * pc - symbol. */
+const char *hccJitFindSymbolForAddr(HccJit *jit, void *pc, size_t *off_out);
 
 /* Register a host-provided symbol (e.g. printf, malloc, a libtos hook)
  * so JITted code can call it. Overrides dlsym for that name. */

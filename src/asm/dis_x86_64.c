@@ -842,7 +842,7 @@ x86_64_disasm(const uint8_t *bytes, size_t len, char *out, size_t outsz)
 }
 
 void
-x86_64_disasm_buf(const uint8_t *bytes, size_t len, FILE *f)
+x86_64_disasm_buf_at(const uint8_t *bytes, size_t len, uint64_t base, FILE *f)
 {
     if (!f) f = stdout;
     size_t off = 0;
@@ -850,11 +850,21 @@ x86_64_disasm_buf(const uint8_t *bytes, size_t len, FILE *f)
         char text[128];
         int n = x86_64_disasm(bytes + off, len - off, text, sizeof(text));
         if (n <= 0) n = 1;
-        /* Print byte offset, the raw bytes, then the mnemonic. */
-        fprintf(f, "%4zu:", off);
+        /* Print byte offset (or base+off when a base is given), the raw
+         * bytes, then the mnemonic. */
+        if (base)
+            fprintf(f, "0x%llx:", (unsigned long long)(base + off));
+        else
+            fprintf(f, "%4zu:", off);
         for (int i = 0; i < n; i++) fprintf(f, " %02x", bytes[off + i]);
         for (int i = n; i < 8; i++) fputs("   ", f);
         fprintf(f, "  %s\n", text);
         off += (size_t)n;
     }
+}
+
+void
+x86_64_disasm_buf(const uint8_t *bytes, size_t len, FILE *f)
+{
+    x86_64_disasm_buf_at(bytes, len, 0, f);
 }

@@ -46,3 +46,33 @@ public I64 System(U8 *command)
   return system(command);
 }
 #endif
+
+/* Call the shell with `printf`-like formatting */
+public I32 Sh(U8 *fmt, ...)
+{
+  if (!fmt) return -1;
+  if (argc == 0) return System(fmt);
+  U8 *cmd = StrPrintJoin(NULL,fmt,argc,argv);
+  I32 retval = System(cmd);
+  Free(cmd);
+  return retval;
+}
+
+/* Capture whatever is printed to stdout in to a heap allocated buffer */
+public U8 *Shlurp(U8 *fmt, ...)
+{
+  if (!fmt) return -1;
+  if (argc == 0) return System(fmt);
+  /* We redirect stdout to a temporary file, read it and then return the
+   * contents */
+  U8 *cmd = StrPrintJoin(NULL,fmt,argc,argv);
+  cmd = StrPrint(,"%s > /tmp/__hcc_shell_out.txt",cmd);
+  I32 retval = System(cmd);
+  Free(cmd);
+  U64 len = 0;
+  U8 *output = FileRead("/tmp/__hcc_shell_out.txt", &len);
+  if (output[len-1] == '\n') {
+    output[len-1] = '\0';
+  }
+  return output;
+}

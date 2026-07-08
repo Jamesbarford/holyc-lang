@@ -209,3 +209,44 @@ CDate Now()
   cdt=Struct2Date(&ds);
   return cdt;
 }
+
+U0 CivilFromDays(I64 z, I64 *y, I64 *m, I64 *d)
+{
+  z += 719468; // shift epoch to 0000-03-01
+  I64 era;
+
+  if (z >= 0) {
+    era = z / 146097;
+  } else {
+    era = (z - 146096) / 146097;
+  }
+
+  I64 doe = z - era * 146097; // [0, 146096]
+  I64 yoe = (doe - doe/1460 + doe/36524 - doe/146096) / 365;
+  I64 yr  = yoe + era * 400;
+  I64 doy = doe - (365*yoe + yoe/4 - yoe/100); // [0, 365]
+  I64 mp  = (5*doy + 2) / 153;
+  *d = doy - (153*mp + 2)/5 + 1; // [1, 31]
+  // [1, 12]
+  if (mp < 10) {
+    *m = mp + 3;
+  } else {
+    *m = mp - 9;
+  }
+  *y = yr + (*m <= 2);
+}
+
+// Writes e.g. 2026-07-05T14:30:00.123456789Z  (UTC)
+U0 IsoFromTimespec(cTimespec *ts, U8 *buf)
+{
+  I64 sec = ts->tv_sec, nsec = ts->tv_nsec;
+  I64 days = sec / 86400, rem = sec % 86400;
+  if (rem < 0) {
+    rem += 86400;
+    days--;
+  }// floored div, for pre-1970
+  I64 hh = rem/3600, mm = rem%3600/60, ss = rem%60;
+  I64 y, mo, d;
+  CivilFromDays(days, &y, &mo, &d);
+  StrPrint(buf, "%04d-%02d-%02dT%02d:%02d:%02d.%09dZ", y, mo, d, hh, mm, ss, nsec);
+}

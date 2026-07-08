@@ -8,7 +8,7 @@
 #include "list.h"
 
 #define LEX_MAX_IDENT_LEN  128
-#define LEX_CHAR_CONST_LEN 9
+#define LEX_CHAR_CONST_LEN 8
 
 /* TOKENS */
 #define TK_EOF          0
@@ -136,6 +136,18 @@
 #define KW_F32          85
 /* Compile-time alignment query: `alignof(<type or expr>)`. */
 #define KW_ALIGNOF      86
+/* `#link "<path>"` / `#link <libname>` - record a shared library
+ * dependency in the source itself. AOT passes it to the linker,
+ * the JIT dlopen's it. */
+#define KW_PP_LINK      87
+/* `#ifjit` / `#ifaot` - sugar for `#ifdef __HCC_JIT__` /
+ * `#ifdef __HCC_AOT__` (main() defines exactly one of the two).
+ * Compose with #else / #endif like any other #if. */
+#define KW_PP_IF_JIT    88
+#define KW_PP_IF_AOT    89
+/* Compile-time type query: `typeof(<type or expr>)` folds to a string
+ * literal naming the type, e.g. typeof(1+1) == "I64". */
+#define KW_TYPEOF       90
 
 /* Compiler Flags*/
 #define CCF_MULTI_CHAR_OP     (1<<0)
@@ -231,6 +243,7 @@ typedef struct Lexer {
 void lexemeMemoryInit(void);
 void lexemeMemoryRelease(void);
 void lexemeMemoryStats(void);
+void lexerRelease(Lexer *l);
 
 Lexeme *lexemeTokNew(char *start, int len, int line, s64 ch);
 Lexeme *lexemeNew(char *start, int len);
@@ -238,6 +251,9 @@ Lexeme *lexemeSentinal(void);
 void lexSetBuiltinRoot(Lexer *l, char *root);
 void lexInit(Lexer *l, char *source, int flag);
 void lexPushFile(Lexer *l, AoStr *filename);
+/* Push an in-memory buffer as if it were a file (REPL input). `src`
+ * is borrowed and must outlive the parse of this buffer. */
+void lexPushString(Lexer *l, char *name, char *src, s64 len);
 int lex(Lexer *l, Lexeme *le);
 Lexeme *lexToken(Map *macro_defs, Lexer *l);
 void lexemePrint(Lexeme *le);

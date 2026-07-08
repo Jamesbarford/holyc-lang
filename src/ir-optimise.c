@@ -325,6 +325,8 @@ static int irValMatchesSlot(IrValue *v, IrValue *slot) {
            irVarId(v) == irVarId(slot);
 }
 
+static int irLocIsScratchClobbered(IrValue *v);
+
 static int irRewriteOperands(IrInstr *I, IrValue *slot, IrValue *source) {
     int changed = 0;
     /* IR_LEA / IR_GEP / IR_LOAD / IR_STORE_DEREF (address operand) all
@@ -333,11 +335,25 @@ static int irRewriteOperands(IrInstr *I, IrValue *slot, IrValue *source) {
      * (e.g. a param's arrive value) can't satisfy that. */
     if (I->op == IR_LEA || I->op == IR_GEP || I->op == IR_LOAD)
         return 0;
-    if (irValMatchesSlot(I->r1, slot) && I->r1 != source) {
+    /* A source living in a backend scratch register (a param's arrive
+     * reg overlapping x0/x1/x2 on AArch64) only survives until the
+     * consumer's OWN operand materialisation starts writing scratch
+     * regs. r1 of a simple op is loaded first, so it may read the
+     * home reg; r2 is loaded after r1 already landed in scratch 0 -
+     * `D(I64 x){ 10/x }` emitted `mov x0,#10` over the param then
+     * computed 10/10. STORE_DEREF / RMW_DEREF load their value operand
+     * LAST (after address/idx hit x1/x2), so even r1 is unsafe there.
+     * Refuse the hazardous positions; the read then stays on the slot
+     * and the spilling store stays live. */
+    int scratch_src = irLocIsScratchClobbered(source);
+    int r1_loads_first = I->op != IR_STORE_DEREF && I->op != IR_RMW_DEREF;
+    if ((!scratch_src || r1_loads_first) &&
+        irValMatchesSlot(I->r1, slot) && I->r1 != source)
+    {
         I->r1 = source;
         changed = 1;
     }
-    if (irValMatchesSlot(I->r2, slot) && I->r2 != source) {
+    if (!scratch_src && irValMatchesSlot(I->r2, slot) && I->r2 != source) {
         I->r2 = source;
         changed = 1;
     }
@@ -367,7 +383,10 @@ static int irRewriteOperands(IrInstr *I, IrValue *slot, IrValue *source) {
             }
         }
     }
-    if (I->op == IR_PHI && I->extra.phi_pairs) {
+    /* Phi values materialise at the predecessor's terminator - AFTER a
+     * CMP_BR terminator's compare has already run r1/r2 through the
+     * scratch regs - so a scratch-homed source is stale by then. */
+    if (I->op == IR_PHI && I->extra.phi_pairs && !scratch_src) {
         for (u64 i = 0; i < I->extra.phi_pairs->size; ++i) {
             IrPair *p = vecGet(IrPair *, I->extra.phi_pairs, i);
             if (p && irValMatchesSlot(p->ir_value, slot) &&

@@ -19,6 +19,8 @@
 #ifdef HCC_ENABLE_JIT
 #include "aarch64-jit.h"
 #include "x86_64-jit.h"
+#include "memsafe.h"
+#include "repl.h"
 #endif
 #include "lexer.h"
 #include "list.h"
@@ -67,10 +69,37 @@ typedef struct hccLib {
     char *install_cmd;
 } hccLib;
 
-int hccLibInit(Cctrl *cc, hccLib *lib, CliArgs *args, char *name) { 
+/* `-l` flags for every `#link <name>` directive, ready to splice into
+ * a link command. Empty string when nothing was #link'd. Also adds
+ * `-L` for lib dirs the platform linker doesn't necessarily search on
+ * its own (Homebrew on Apple Silicon most notably) - but only ones
+ * that exist, so ld doesn't warn, and only when a `#link <name>` is
+ * actually in play. */
+static AoStr *linkLibFlags(Cctrl *cc) {
+    AoStr *flags = aoStrNew();
+    if (!listEmpty(cc->link_libs)) {
+        static const char *const extra_dirs[] = {
+            "/opt/homebrew/lib",
+            "/usr/local/lib",
+        };
+        for (size_t i = 0; i < sizeof(extra_dirs)/sizeof(extra_dirs[0]); ++i) {
+            if (access(extra_dirs[i], F_OK) == 0) {
+                aoStrCatFmt(flags, "-L%s ", extra_dirs[i]);
+            }
+        }
+        listForEach(cc->link_libs) {
+            AoStr *name = it->value;
+            aoStrCatFmt(flags, "-l%s ", name->data);
+        }
+    }
+    return flags;
+}
+
+int hccLibInit(Cctrl *cc, hccLib *lib, CliArgs *args, char *name) {
     AoStr *dylib_cmd = aoStrNew();
     AoStr *stylib_cmd = aoStrNew();
     AoStr *installcmd = aoStrNew();
+    AoStr *link_flags = linkLibFlags(cc);
     
     /* All literal INSTALL_PREFIX paths are now plumbed through
      * args->install_dir so a `-lib tos --install-dir=X` build lands
@@ -85,7 +114,7 @@ int hccLibInit(Cctrl *cc, hccLib *lib, CliArgs *args, char *name) {
 
     aoStrCatPrintf(dylib_cmd,
             "cp -pPR ./%s %s/lib/lib%s && "
-            "%s -dynamiclib -Wl,-install_name,%s/lib/%s -o %s "CLIBS" -o %s %s",
+            "%s -dynamiclib -Wl,-install_name,%s/lib/%s -o %s "CLIBS" -o %s %s %s",
             lib->stylib_name,
             args->install_dir,
             lib->stylib_name,
@@ -94,7 +123,8 @@ int hccLibInit(Cctrl *cc, hccLib *lib, CliArgs *args, char *name) {
             name,
             lib->dylib_version_name,
             lib->dylib_name,
-            args->obj_outfile);
+            args->obj_outfile,
+            link_flags->data);
 
     aoStrCatPrintf(installcmd,
             "cp -pPR ./%s %s/lib/lib%s && "
@@ -122,11 +152,12 @@ int hccLibInit(Cctrl *cc, hccLib *lib, CliArgs *args, char *name) {
      * routing every global access through the GOT. The symbols stay in
      * the dynamic table, so the JIT can still dlsym them (e.g. `Fs`). */
     aoStrCatPrintf(dylib_cmd,
-            "%s -fPIC -shared -Wl,-Bsymbolic -Wl,-soname,%s %s -o %s "CLIBS,
+            "%s -fPIC -shared -Wl,-Bsymbolic -Wl,-soname,%s %s -o %s "CLIBS" %s",
             cc->CC,
             lib->dylib_version_name,
             args->obj_outfile,
-            lib->dylib_name);
+            lib->dylib_name,
+            link_flags->data);
 
     /* Install two artefacts:
      *   - the static archive `libtos.a`, which AOT links via `-ltos`.
@@ -156,6 +187,7 @@ int hccLibInit(Cctrl *cc, hccLib *lib, CliArgs *args, char *name) {
 #error "System not supported"
 #endif
     aoStrCatPrintf(stylib_cmd,"ar rcs %s %s",lib->stylib_name,args->obj_outfile);
+    aoStrRelease(link_flags);
     lib->install_cmd = aoStrMove(installcmd);
     lib->dylib_cmd = aoStrMove(dylib_cmd);
     lib->stylib_cmd = aoStrMove(stylib_cmd);
@@ -244,7 +276,8 @@ void emitFile(Cctrl *cc, AoStr *asmbuf, CliArgs *args) {
         safeSystem(lib.install_cmd, 1);
     } else {
         AoStr *ofiles = aoStrNew();
-        
+        AoStr *link_flags = linkLibFlags(cc);
+
         /* Concatinate a string with all of the .o and .so files */
         if (!listEmpty(cc->object_files)) {
             listForEach(cc->object_files) {
@@ -266,11 +299,12 @@ void emitFile(Cctrl *cc, AoStr *asmbuf, CliArgs *args) {
         if (args->run) {
             AoStr *run_cmd = aoStrNew();
             writeAsmToTmp(asmbuf);
-            aoStrCatPrintf(run_cmd,"%s -L%s/lib %s %s %s "CLIBS" -ltos && ./a.out && rm ./a.out",
+            aoStrCatPrintf(run_cmd,"%s -L%s/lib %s %s %s %s "CLIBS" -ltos && ./a.out && rm ./a.out",
                     cc->CC,
                     args->install_dir,
                     ASM_TMP_FILE,
                     ofiles->data,
+                    link_flags->data,
                     args->clibs ? args->clibs : "");
             /* Don't use 'safeSystem' else anything other than a '0' exit
              * code will cause a panic which is incorrect... This is a bit of a
@@ -288,11 +322,12 @@ void emitFile(Cctrl *cc, AoStr *asmbuf, CliArgs *args) {
         }
         char *clibs = args->clibs ? args->clibs : "";
 
-        aoStrCatPrintf(cmd, "%s -L%s/lib %s %s %s -ltos "CLIBS" -o %s",
+        aoStrCatPrintf(cmd, "%s -L%s/lib %s %s %s %s -ltos "CLIBS" -o %s",
                 cc->CC,
                 args->install_dir,
                 ASM_TMP_FILE,
                 ofiles->data,
+                link_flags->data,
                 clibs,
                 args->output_filename);
 
@@ -370,7 +405,6 @@ int main(int argc, char **argv) {
     AoStr *asmbuf;
     Cctrl *cc;
 
-
     CliArgs args;
     cliArgsInit(&args);
     /* now parse cli options */
@@ -401,8 +435,16 @@ int main(int argc, char **argv) {
         cc->CC = mprintf("cc");
     }
 
-    if (args.use_legacy_x86) {
-        cc->flags |= CCTRL_USE_LEGACY_X86;
+    if (args.use_legacy_x86) cc->flags |= CCTRL_USE_LEGACY_X86;
+    if (args.werror)         cc->flags |= CCTRL_WERROR;
+    if (args.memsafe)        cc->flags |= CCTRL_MEMSAFE;
+
+    /* Exactly one of the two is always defined; `#ifjit` / `#ifaot`
+     * key off them. The REPL runs on the JIT, so it counts. */
+    if (args.jit || args.repl) {
+        cctrlAddDefine(cc, "__HCC_JIT__");
+    } else {
+        cctrlAddDefine(cc, "__HCC_AOT__");
     }
 
     if (args.assemble) {
@@ -412,6 +454,19 @@ int main(int argc, char **argv) {
 
     if (!listEmpty(args.defines_list)) {
         cctrlSetCommandLineDefines(cc,args.defines_list);
+    }
+
+    if (args.repl) {
+#ifdef HCC_ENABLE_JIT
+        int rc = replRun(cc, &args);
+        memoryRelease();
+        return rc;
+#else
+        fprintf(stderr, "hcc: this build has no JIT; -repl is unavailable "
+                "(rebuild with -DHCC_ENABLE_JIT=on)\n");
+        memoryRelease();
+        return 1;
+#endif
     }
 
     if (args.print_tokens) {
@@ -447,6 +502,8 @@ int main(int argc, char **argv) {
 
 #ifdef HCC_ENABLE_JIT
     if (args.jit) {
+        /* Arm the tracking allocator before compiling - the JIT's
+         * finalize binds MAlloc/Free call sites at chunk compile. */
 #if defined(__aarch64__) || defined(__arm64__)
         HccJit *jit = aarch64JitCompile(cc);
 #elif defined(__x86_64__)
@@ -461,11 +518,17 @@ int main(int argc, char **argv) {
             return 1;
         }
         int rc = hccJitRunMain(jit, argc, argv);
+        if (args.memsafe) memsafeReportLeaks(stderr);
         hccJitFree(jit);
         memoryRelease();
         return rc;
     }
 #endif
+    /* -jit returns above and -repl returned earlier; reaching here
+     * with the flag set means an AOT-style invocation. */
+    if (args.memsafe)
+        fprintf(stderr,
+                "hcc: -Memsafe currently requires -jit or -repl; ignored\n");
 
     if (args.cfg_create || args.cfg_create_png || args.cfg_create_svg) {
         Vec *cfgs = cfgConstruct(cc);

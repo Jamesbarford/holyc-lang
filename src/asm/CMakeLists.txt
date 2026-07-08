@@ -2,6 +2,8 @@ set(TASM_SOURCES
     asm.c
     asm_enc.c
     asm_jit.c
+    dis_arm64.c
+    dis_x86_64.c
     enc_arm64.c
     enc_x86_64.c
     target.c
@@ -13,6 +15,8 @@ set(TASM_HEADERS
     asm.h
     asm_enc.h
     asm_jit.h
+    dis_arm64.h
+    dis_x86_64.h
     enc_arm64.h
     enc_x86_64.h
     target.h

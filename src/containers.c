@@ -53,9 +53,17 @@ static int vecAoStrMatch(void *s1, void *s2) {
     return aoStrEq((AoStr *)s1, (AoStr *)s2);
 }
 
-static void vecAoStrRelease(void *s) {
+static int vecAoStrRelease(void *s) {
     aoStrRelease((AoStr *)s);
+    return 1;
 }
+
+VecType vec_aostr_owned_type = {
+    .stringify = vecAoStrToString,
+    .match     = vecAoStrMatch,
+    .release   = vecAoStrRelease,
+    .type_str  = "`AoStr *",
+};
 
 /* `Vec<AoStr *>` opaque-ownership; backend retains the storage. */
 VecType vec_aostr_type = {
@@ -63,6 +71,39 @@ VecType vec_aostr_type = {
     .match     = vecAoStrMatch,
     .release   = NULL,
     .type_str  = "AoStr *",
+};
+
+int vecCStringMatch(void *_s1, void *_s2) {
+    char *s1 = (char *)_s1;
+    char *s2 = (char *)_s2;
+    long s1len = strlen(s1);
+    long s2len = strlen(s2);
+    return s1len == s2len && !memcmp(s1,s2,s1len);
+}
+
+static void vecCStringToString(AoStr *buf, void *_s) {
+    if (_s) aoStrCat(buf, (char *)_s);
+}
+
+/* `Vec<char *>` opaque-ownership; backend retains the storage. */
+VecType vec_cstring_type = {
+    .stringify = vecCStringToString,
+    .match     = vecCStringMatch,
+    .release   = NULL,
+    .type_str  = "char *",
+};
+
+int vecCStringFree(void *ptr) {
+    free(ptr);
+    return 1;
+}
+
+/* `Vec<char *>` opaque-ownership; backend retains the storage. */
+VecType vec_cstring_owned_type = {
+    .stringify = &vecCStringToString,
+    .match     = &vecCStringMatch,
+    .release   = &vecCStringFree,
+    .type_str  = "char *",
 };
 
 Vec *vecNew(VecType *type) {

@@ -1780,7 +1780,7 @@ aarch64_disasm(uint32_t insn, char *out, size_t outsz)
 }
 
 void
-aarch64_disasm_buf(const uint8_t *bytes, size_t len, FILE *f)
+aarch64_disasm_buf_at(const uint8_t *bytes, size_t len, uint64_t base, FILE *f)
 {
     if (!f) f = stdout;
     for (size_t off = 0; off + 4 <= len; off += 4) {
@@ -1790,6 +1790,16 @@ aarch64_disasm_buf(const uint8_t *bytes, size_t len, FILE *f)
                         ((uint32_t)bytes[off + 3] << 24);
         char text[128];
         aarch64_disasm(insn, text, sizeof(text));
-        fprintf(f, "%4zu: %08x  %s\n", off, insn, text);
+        if (base)
+            fprintf(f, "0x%llx: %08x  %s\n",
+                    (unsigned long long)(base + off), insn, text);
+        else
+            fprintf(f, "%4zu: %08x  %s\n", off, insn, text);
     }
+}
+
+void
+aarch64_disasm_buf(const uint8_t *bytes, size_t len, FILE *f)
+{
+    aarch64_disasm_buf_at(bytes, len, 0, f);
 }
