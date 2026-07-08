@@ -36,6 +36,11 @@
 #include <pthread.h> /* pthread_jit_write_protect_np */
 #endif
 
+#if defined(__linux__) && defined(__x86_64__)
+#define REG_RIP 16
+#define REG_RBP 10
+#endif 
+
 #include "linenoise/linenoise.h"
 
 #include "aostr.h"
