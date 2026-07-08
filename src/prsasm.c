@@ -50,10 +50,19 @@ Target prsAsmTasmArch(Cctrl *cc) {
 
 void prsAsmDiagSink(void *ctx, AsmLine *ln, const char *msg) {
     Cctrl *cc = (Cctrl *)ctx;
-    (void)ln;
-    /* libtasm pre-formats messages with their own file:line prefix. */
     AoStr *rendered = aoStrPrintf("%s", msg);
-    cctrlDiagPush(cc, cctrlMakeDiag(cc, CCTRL_ERROR, rendered, NULL));
+    CctrlDiagnostic *d = cctrlMakeDiag(cc, CCTRL_ERROR, rendered, NULL);
+    /* cctrlMakeDiag defaults the position to the current token, which
+     * for an asm error sits PAST the whole block - every mnemonic
+     * error then collapses onto the line after `}`. libtasm knows the
+     * real source line; use it so errors land on their instructions. */
+    if (ln && ln->line > 0) {
+        d->line = ln->line;
+        d->col = 0;
+        d->end_line = ln->line;
+        d->end_col = 0;
+    }
+    cctrlDiagPush(cc, d);
 }
 
 static const char *prsAsmSrcFile(Cctrl *cc) {
@@ -143,7 +152,16 @@ static void prsAsmFlushFunc(Cctrl *cc, List *funcs, AoStr *curfunc,
     Ast *fn = astAsmFunctionDef(curfunc, cur);
     listAppend(funcs, fn);
     if (!mapAddOrErr(cc->asm_functions, curfunc->data, fn)) {
-        cctrlIce(cc, "Already defined assembly function: %s", curfunc->data);
+        /* REPL/LSP reparse the same buffer against a persistent Cctrl,
+         * so the asm block is genuinely redefined - shadow it like a
+         * function redefinition rather than aborting. */
+        if (cc->flags & CCTRL_REPL) {
+            mapRemove(cc->asm_functions, curfunc->data);
+            mapAdd(cc->asm_functions, curfunc->data, fn);
+        } else {
+            cctrlIce(cc, "Already defined assembly function: %s",
+                     curfunc->data);
+        }
     }
 }
 
@@ -173,7 +191,11 @@ Ast *prsAsm(Cctrl *cc, int parse_one) {
                 cc->tmp_asm_fname = curfunc;
                 cur = aoStrNew();
                 prev_cur = 0;
-                func_line = (int)tok->line;
+                /* `cur` collects the body AFTER the `NAME::\n` label,
+                 * so its first line is the one below the label - anchor
+                 * validation there or every asm error reports one line
+                 * high. */
+                func_line = (int)tok->line + 1;
                 aoStrCatFmt(block_text, "%S::\n", curfunc);
                 prev_block = 0;
                 tok = cctrlAsmTokenGet(cc);

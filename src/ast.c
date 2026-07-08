@@ -139,9 +139,16 @@ Ast *ast_forever_sentinal = &(Ast){ .kind = AST_LITERAL,
 void _astToString(AoStr *str, Ast *ast, int depth);
 char *_astToStringRec(Ast *ast, int depth);
 
+int ast_line_hint = 0;
+int ast_col_hint = 0;
+u32 ast_file_hint = 0;
+
 Ast *astNew(void) {
     Ast *ast = astAlloc();
     memset(ast,0,sizeof(Ast));
+    ast->line = ast_line_hint;
+    ast->col = ast_col_hint;
+    ast->file_id = ast_file_hint;
     return ast;
 }
 

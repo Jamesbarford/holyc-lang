@@ -19,7 +19,10 @@ typedef struct Arena {
 } Arena;
 
 void arenaInit(Arena *arena, u32 capacity);
+/* Destructor half of arenaRelease - the arena is UNUSABLE after. */
 void arenaClear(Arena *arena);
+/* Reset for reuse: drop overflow blocks, rewind the head block. */
+void arenaReset(Arena *arena);
 Arena *arenaNew(u32 capacity);
 void *arenaAlloc(Arena *arena, u32 size);
 void arenaRelease(Arena *arena);

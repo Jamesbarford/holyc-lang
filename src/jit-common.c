@@ -562,10 +562,12 @@ int hccJitCompileChunk(HccJit *jit, Ast *extra_fn) {
      * (REPL inputs can add them at any point). */
     jitLoadSharedObjects(cc);
 
-    /* Reset the per-chunk encoder + internal-function set. */
+    /* Reset the per-chunk encoder + internal-function set. Pending
+     * line notes from a failed previous chunk die with it. */
     asm_enc_free(&jit->enc);
     asm_enc_init(&jit->enc);
     mapClear(jit->chunk_fns);
+    jit->n_pending = 0;
 
     /* First unconsumed nodes. The cursors advance immediately: even if
      * this chunk fails, the next call must not recompile its ASTs. */
@@ -663,6 +665,31 @@ int hccJitCompileChunk(HccJit *jit, Ast *extra_fn) {
     }
     listAppend(jit->chunks, code);
 
+    /* Rebase this chunk's pending (enc offset, line) notes onto the
+     * finalized mapping and publish them for pc->line lookups. */
+    if (jit->n_pending) {
+        if (jit->n_lines + jit->n_pending > jit->cap_lines) {
+            jit->cap_lines = jit->cap_lines ? jit->cap_lines * 2 : 128;
+            while (jit->cap_lines < jit->n_lines + jit->n_pending)
+                jit->cap_lines *= 2;
+            jit->lines = realloc(jit->lines,
+                    jit->cap_lines * sizeof(HccJitLine));
+        }
+        for (u32 i = 0; i < jit->n_pending; ++i) {
+            jit->lines[jit->n_lines].addr =
+                (uintptr_t)code->code + jit->pending_lines[i].addr;
+            jit->lines[jit->n_lines].line = jit->pending_lines[i].line;
+            /* HCC_DEBUG_LINES=1 dumps the table as chunks finalize -
+             * pairs with `Uf` output when debugging attribution. */
+            if (getenv("HCC_DEBUG_LINES"))
+                fprintf(stderr, "line-table: %p line %d\n",
+                        (void *)jit->lines[jit->n_lines].addr,
+                        jit->lines[jit->n_lines].line);
+            jit->n_lines++;
+        }
+        jit->n_pending = 0;
+    }
+
     /* Each public label now points at (code base + label byte_offset).
      * Register in `symbols` (hccJitLookup) and in `host_symbols` so
      * later chunks' emit-time addressing and finalize-time resolver
@@ -756,6 +783,45 @@ const char *hccJitFindSymbolForAddr(HccJit *jit, void *pc, size_t *off_out) {
     return best;
 }
 
+void hccJitNoteLine(HccJit *jit, int line) {
+    if (!jit || line <= 0) return;
+    /* Collapse runs: only the line CHANGES matter. */
+    if (jit->n_pending &&
+        jit->pending_lines[jit->n_pending - 1].line == line)
+    {
+        return;
+    }
+    if (jit->n_pending == jit->cap_pending) {
+        jit->cap_pending = jit->cap_pending ? jit->cap_pending * 2 : 64;
+        jit->pending_lines = realloc(jit->pending_lines,
+                jit->cap_pending * sizeof(HccJitLine));
+    }
+    jit->pending_lines[jit->n_pending].addr = (uintptr_t)jit->enc.len;
+    jit->pending_lines[jit->n_pending].line = line;
+    jit->n_pending++;
+}
+
+int hccJitFindLineForAddr(HccJit *jit, void *pc) {
+    if (!jit || !jit->lines) return 0;
+    AsmJitCode *chunk = hccJitFindChunk(jit, pc);
+    if (chunk == NULL) return 0;
+    uintptr_t lo = (uintptr_t)chunk->code;
+    uintptr_t hi = lo + chunk->size; /* veneers carry no lines */
+    uintptr_t p = (uintptr_t)pc;
+    if (p >= hi) return 0;
+    int best_line = 0;
+    uintptr_t best_addr = 0;
+    for (u32 i = 0; i < jit->n_lines; ++i) {
+        HccJitLine *e = &jit->lines[i];
+        if (e->addr < lo || e->addr >= hi) continue; /* other chunk */
+        if (e->addr <= p && e->addr >= best_addr) {
+            best_addr = e->addr;
+            best_line = e->line;
+        }
+    }
+    return best_line;
+}
+
 void hccJitDefineSymbol(HccJit *jit, const char *name, void *addr) {
     if (!jit || !name) return;
     /* Register BOTH spellings: HolyC-compiled call sites arrive
@@ -787,6 +853,8 @@ int hccJitRunMain(HccJit *jit, int argc, char **argv) {
 
 void hccJitFree(HccJit *jit) {
     if (!jit) return;
+    free(jit->lines);
+    free(jit->pending_lines);
     asm_enc_free(&jit->enc);
     if (jit->chunks) {
         listForEach(jit->chunks) {

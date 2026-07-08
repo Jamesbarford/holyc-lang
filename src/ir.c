@@ -1725,6 +1725,11 @@ IrValue *irLowerUnOp(IrCtx *ctx, Ast *ast) {
 }
 
 IrValue *irExpr(IrCtx *ctx, Ast *ast) {
+    /* Variable references are SHARED Ast nodes stamped with their
+     * declaration line - letting them touch the hint would attribute
+     * the rest of the statement (and anything after) to the decl. */
+    if (ast && ast->line && ast->kind != AST_LVAR && ast->kind != AST_GVAR)
+        ir_line_hint = ast->line;
     switch (ast->kind) {
         case AST_BINOP: {
             if (astIsBinOpKind(ast, AST_BIN_OP_ASSIGN) ||
@@ -2427,6 +2432,8 @@ void irLowerSwitch(IrCtx *ctx, Ast *ast) {
 
 void irLowerAst(IrCtx *ctx, Ast *ast) {
     if (!ast) return;
+    if (ast->line && ast->kind != AST_LVAR && ast->kind != AST_GVAR)
+        ir_line_hint = ast->line;
 
     /* Once a block is sealed (it ended in ret/jmp/br) any subsequent
      * statement is unreachable; just drop it. AST_LABEL / AST_CASE /
@@ -2759,6 +2766,10 @@ static Set *irCollectEscapingLVars(Ast *ast_func) {
 }
 
 IrFunction *irLowerFunction(IrCtx *ctx, Ast *ast_func) {
+    /* Prologue instructions attribute to the definition, not to
+     * whatever line the previous function ended on. */
+    ir_line_hint = ast_func->line;
+
     IrFunction *func = irFunctionNew(ast_func->fname);
     IrBlock *entry = irBlockNew();
     IrBlock *exit_block = irBlockNew();

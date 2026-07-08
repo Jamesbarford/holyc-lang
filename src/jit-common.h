@@ -61,7 +61,21 @@ typedef struct HccJit {
     /* Per-function epilogue label local_num. Key = fn_uuid. */
     Map *epi_local;
     int  next_local;
+
+    /* pc -> source line. Backends note (enc offset, line) as they emit
+     * (pending_lines); hccJitCompileChunk rebases the offsets onto the
+     * finalized chunk's address and appends to `lines`. Consulted only
+     * when reporting (faults, memsafe), so a linear scan is fine. */
+    struct HccJitLine *lines;
+    u32 n_lines, cap_lines;
+    struct HccJitLine *pending_lines;
+    u32 n_pending, cap_pending;
 } HccJit;
+
+typedef struct HccJitLine {
+    uintptr_t addr; /* absolute pc in `lines`; enc offset in pending */
+    int line;
+} HccJitLine;
 
 /* What a per-arch backend plugs into the shared compile pipeline. */
 typedef struct HccJitBackend {
@@ -111,6 +125,14 @@ AsmJitCode *hccJitFindChunk(HccJit *jit, void *pc);
  * hccJitFindChunk to tell "veneer" from "not ours"). *off_out gets
  * pc - symbol. */
 const char *hccJitFindSymbolForAddr(HccJit *jit, void *pc, size_t *off_out);
+
+/* Record "code emitted from enc offset jit->enc.len onward is source
+ * line `line`" - called by the backends per IR instruction; consecutive
+ * duplicates collapse. line 0 (synthetic) is ignored. */
+void hccJitNoteLine(HccJit *jit, int line);
+
+/* Source line for a pc inside JIT code, 0 when unknown. */
+int hccJitFindLineForAddr(HccJit *jit, void *pc);
 
 /* Register a host-provided symbol (e.g. printf, malloc, a libtos hook)
  * so JITted code can call it. Overrides dlsym for that name. */

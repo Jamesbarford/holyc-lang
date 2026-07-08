@@ -304,9 +304,14 @@ static void replReportFault(void) {
     const char *sym = jit ? hccJitFindSymbolForAddr(jit, pc, &off) : NULL;
     uint8_t *show = pc; /* where the disassembly window points */
 
-    if      (sym)   fprintf(stderr, " in `%s`+%zu\n", sym, off);
-    else if (chunk) fprintf(stderr, " in a call veneer\n");
-    else {
+    if (sym) {
+        int line = hccJitFindLineForAddr(jit, pc);
+        fprintf(stderr, " in `%s`+%zu", sym, off);
+        if (line) fprintf(stderr, ", line %d", line);
+        fprintf(stderr, "\n");
+    } else if (chunk) {
+        fprintf(stderr, " in a call veneer\n");
+    } else {
         /* pc is host/libc code - the handler already walked the frame
          * chain (while the faulting frames were still intact) to find
          * the HolyC frame that called out. */
@@ -316,8 +321,17 @@ static void replReportFault(void) {
             sym = hccJitFindSymbolForAddr(jit, (void *)frame, &off);
             show = (uint8_t *)frame;
             fprintf(stderr, " in host code,\n    called from ");
-            if (sym) fprintf(stderr, "`%s`+%zu\n", sym, off);
-            else     fprintf(stderr, "%p in JIT code\n", (void *)frame);
+            if (sym) {
+                /* `frame` is a return address - the call is the
+                 * instruction before it, so attribute to addr-1. */
+                int line = hccJitFindLineForAddr(jit,
+                                                 (void *)(frame - 1));
+                fprintf(stderr, "`%s`+%zu", sym, off);
+                if (line) fprintf(stderr, ", line %d", line);
+                fprintf(stderr, "\n");
+            } else {
+                fprintf(stderr, "%p in JIT code\n", (void *)frame);
+            }
         } else {
             fprintf(stderr, " (no JIT frame on the stack - possibly an hcc bug)\n");
         }

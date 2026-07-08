@@ -292,6 +292,10 @@ List *parseClassOrUnionFields(Cctrl *cc, AoStr *name,
     while (1) {
         /* Peek not a consume */
         tok_name = cctrlTokenPeek(cc);
+        if (tok_name == NULL) {
+            cctrlRaiseException(cc,
+                    "Unexpected end of input in class/union body");
+        }
         if (tokenPunctIs(tok_name,'}')) {
             break;
         } else if (cctrlIsKeyword(cc,tok_name->start,tok_name->len)) {
@@ -355,6 +359,11 @@ List *parseClassOrUnionFields(Cctrl *cc, AoStr *name,
             }
 
             field_type = astMakeClassField(next_type, 0);
+            /* Field provenance for jump-to-definition: the name token
+             * is in hand ('(' for fn-pointer fields - same line). */
+            field_type->line = tok_name->line;
+            field_type->col = tok_name->col;
+            field_type->file_id = ast_file_hint;
             if (next_type && next_type->clsname) {
                 field_type->clsname = next_type->clsname;
             }
@@ -562,8 +571,18 @@ AstType *parseClassOrUnion(Cctrl *cc, Map *env,
     Map *fields_dict;
     cc->localenv = cctrlCreateAstMap(cc->localenv);
 
+    if (tok == NULL) {
+        cctrlRaiseException(cc,
+                "Unexpected end of input in class/union definition");
+    }
+    /* Provenance of the tag token, for jump-to-definition. */
+    int tag_line = 0, tag_col = 0;
+    u32 tag_file = 0;
     if (tok->tk_type == TK_IDENT) {
         tag = aoStrDupRaw(tok->start,tok->len);
+        tag_line = tok->line;
+        tag_col = tok->col;
+        tag_file = ast_file_hint;
 
         tok = cctrlTokenGet(cc);
         if (tokenPunctIs(tok, ':')) { // Class inheritance
@@ -599,6 +618,9 @@ AstType *parseClassOrUnion(Cctrl *cc, Map *env,
     if (tag && !prev) {
         prev = astClassType(NULL, tag, 0, is_intrinsic);
         if (!is_class) prev->kind = AST_TYPE_UNION;
+        prev->line = tag_line;
+        prev->col = tag_col;
+        prev->file_id = tag_file;
         mapAdd(env, tag->data, prev);
     }
 
@@ -619,6 +641,13 @@ AstType *parseClassOrUnion(Cctrl *cc, Map *env,
         prev->fields = fields_dict;
         prev->size = aligned_size;
         prev->alignment = (u32)aligned;
+        /* A forward-declared tag now has its full definition HERE -
+         * repoint the provenance at it. */
+        if (tag_line > 0) {
+            prev->line = tag_line;
+            prev->col = tag_col;
+            prev->file_id = tag_file;
+        }
         return prev;
     }
 
@@ -632,6 +661,9 @@ AstType *parseClassOrUnion(Cctrl *cc, Map *env,
     }
     ref->alignment = (u32)aligned;
     if (!is_class) ref->kind = AST_TYPE_UNION;
+    ref->line = tag_line;
+    ref->col = tag_col;
+    ref->file_id = tag_file;
     if (tag) {
         mapAdd(env,tag->data,ref);
     }
@@ -736,6 +768,10 @@ Ast *parseDecl(Cctrl *cc) {
         return NULL;
     }
     var = astLVar(type,varname->start,varname->len);
+    /* astNew stamped the CURRENT token (post-name); anchor the decl
+     * to the name itself for jump-to-definition. */
+    var->line = varname->line;
+    var->col = varname->col;
     if (!mapAddOrErr(cc->localenv,var->lname->data,var)) {
         cctrlRaiseException(cc,"variable %s already declared",astLValueToString(var,0));
     }
@@ -750,6 +786,7 @@ Ast *parseDecl(Cctrl *cc) {
 }
 
 int parseValidPostControlFlowToken(Lexeme *tok) {
+    if (tok == NULL) return 0; /* EOF - caller raises */
     if (tok->tk_type == TK_IDENT) return 1;
     if (tok->tk_type == TK_STR) return 1;
     if (tok->tk_type == TK_PUNCT) {
@@ -800,6 +837,8 @@ static Ast *parseIfClause(Cctrl *cc, char *term_out) {
                 name ? name->len : 0, name ? name->start : "");
         }
         Ast *var = astLVar(type, name->start, name->len);
+        var->line = name->line;
+        var->col = name->col;
         if (!mapAddOrErr(cc->localenv, var->lname->data, var)) {
             cctrlRaiseException(cc, "variable %s already declared",
                                 astLValueToString(var, 0));
@@ -861,6 +900,9 @@ Ast *parseIfStatement(Cctrl *cc) {
     }
 
     Lexeme *peek = cctrlTokenPeek(cc);
+    if (peek == NULL) {
+        cctrlRaiseException(cc, "Unexpected end of input");
+    }
     if (!parseValidPostControlFlowToken(peek)) {
         cctrlRaiseException(cc,"Unexpected %s `%.*s` while parsing if body",
                 lexemeTypeToString(peek->tk_type), peek->len, peek->start);
@@ -1162,6 +1204,9 @@ Ast *parseForStatement(Cctrl *cc) {
     cctrlTokenExpect(cc,')');
 
     Lexeme *peek = cctrlTokenPeek(cc);
+    if (peek == NULL) {
+        cctrlRaiseException(cc, "Unexpected end of input");
+    }
     if (!parseValidPostControlFlowToken(peek)) {
         cctrlRaiseException(cc,"Unexpected %s `%.*s` while parsing for loop body", 
                 lexemeTypeToString(peek->tk_type), peek->len, peek->start);
@@ -1193,6 +1238,9 @@ Ast *parseWhileStatement(Cctrl *cc) {
     cctrlTokenExpect(cc,')');
 
     Lexeme *peek = cctrlTokenPeek(cc);
+    if (peek == NULL) {
+        cctrlRaiseException(cc, "Unexpected end of input");
+    }
     if (!parseValidPostControlFlowToken(peek)) {
         cctrlRaiseException(cc,"Unexpected %s `%.*s` while parsing while loop body", 
                 lexemeTypeToString(peek->tk_type), peek->len, peek->start);
@@ -1223,6 +1271,9 @@ Ast *parseDoWhileStatement(Cctrl *cc) {
     cc->localenv = cctrlCreateAstMap(cc->localenv);
 
     Lexeme *peek = cctrlTokenPeek(cc);
+    if (peek == NULL) {
+        cctrlRaiseException(cc, "Unexpected end of input");
+    }
     if (!parseValidPostControlFlowToken(peek)) {
         cctrlRewindUntilStrMatch(cc,peek->start,peek->len,NULL);
         cctrlRaiseException(cc,"Unexpected %s `%.*s` while parsing do while loop body", 
@@ -1528,6 +1579,10 @@ Ast *parseStatement(Cctrl *cc) {
     Map *env;
     tok = cctrlTokenGet(cc);
 
+    if (tok == NULL) {
+        cctrlRaiseException(cc, "Unexpected end of input, expected a "
+                "statement");
+    }
     if (tok->tk_type == TK_KEYWORD) {
         switch (tok->i64) {
             case KW_IF:       return parseIfStatement(cc);
@@ -1621,6 +1676,10 @@ Ast *parseStatement(Cctrl *cc) {
 
             case KW_GOTO: {
                 tok = cctrlTokenGet(cc);
+                if (tok == NULL) {
+                    cctrlRaiseException(cc,
+                            "Unexpected end of input after `goto`");
+                }
                 label = createFunctionLevelGotoLabel(cc,tok);
                 ret = astGoto(label);
                 cctrlTokenExpect(cc,';');
@@ -1757,6 +1816,8 @@ void parseCompoundStatementInternal(Cctrl *cc, Ast *body) {
                     }
                     type = parseArrayDimensions(cc,next_type);
                     var = astLVar(type,varname->start,varname->len);
+                    var->line = varname->line;
+                    var->col = varname->col;
                     var->pinned_kind = pinned_kind;
                     var->pinned_reg = pinned_reg;
                     if (!mapAddOrErr(cc->localenv,var->lname->data,var)) {
@@ -1955,6 +2016,10 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
     s64 fn_line = next ? next->line : cc->lineno;
     s64 fn_col  = next ? next->col  : 0;
     s64 fn_len  = next ? next->len  : 1;
+    if (next == NULL) {
+        cctrlRaiseException(cc,
+                "Unexpected end of input in function definition");
+    }
     if (next->tk_type == TK_KEYWORD && next->i64 == KW_ASM) {
         cctrlTokenGet(cc);
         Lexeme *peek = cctrlTokenPeek(cc);
@@ -2055,12 +2120,23 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
                     astMakeFunctionType(rettype, params),
                     asm_fname,asm_fname,params);
 
+            /* REPL/LSP: a reparse redefines; shadow rather than abort. */
             if (!mapAddOrErr(cc->asm_functions, asm_fname->data, asm_func)) {
-                cctrlIce(cc, "Already defined assembly function: %s", asm_fname->data);
+                if (cc->flags & CCTRL_REPL) {
+                    mapRemove(cc->asm_functions, asm_fname->data);
+                    mapAdd(cc->asm_functions, asm_fname->data, asm_func);
+                } else {
+                    cctrlIce(cc, "Already defined assembly function: %s", asm_fname->data);
+                }
             }
 
             if (!mapAddOrErr(cc->global_env, fname_duped->data, asm_func)) {
-                cctrlIce(cc, "Already defined assembly function: %s as a non Assembly function", asm_fname->data);
+                if (cc->flags & CCTRL_REPL) {
+                    mapRemove(cc->global_env, fname_duped->data);
+                    mapAdd(cc->global_env, fname_duped->data, asm_func);
+                } else {
+                    cctrlIce(cc, "Already defined assembly function: %s as a non Assembly function", asm_fname->data);
+                }
             }
 
             if (is_inline) {
@@ -2247,6 +2323,13 @@ Ast *parseExternFunctionProto(Cctrl *cc, AstType *rettype, char *fname, int len)
 }
 
 Ast *parseFunctionOrDef(Cctrl *cc, AstType *rettype, char *fname, int len, int is_inline) {
+    /* Anchor: the name token was just consumed, so the cursor still
+     * sits on its line - stamp the function Ast with the NAME's
+     * position, not the body's `{` (which is where the node is
+     * actually astNew'd). Jump-to-definition wants the name. */
+    int name_line = cc->lineno;
+    int name_col  = ast_col_hint; /* last consumed token = the name */
+    u32 name_file = ast_file_hint;
     int has_var_args = 0;
     cctrlTokenExpect(cc,'(');
     cc->localenv = cctrlCreateAstMap(cc->localenv);
@@ -2258,7 +2341,14 @@ Ast *parseFunctionOrDef(Cctrl *cc, AstType *rettype, char *fname, int len, int i
     Vec *params = parseParams(cc,')',&has_var_args,1);
     Lexeme *tok = cctrlTokenGet(cc);
     if (tokenPunctIs(tok, '{')) {
-        return parseFunctionDef(cc,rettype,fname,len,params,has_var_args,is_inline);
+        Ast *fn = parseFunctionDef(cc,rettype,fname,len,params,
+                                   has_var_args,is_inline);
+        if (fn) {
+            fn->line = name_line;
+            fn->col = name_col;
+            fn->file_id = name_file;
+        }
+        return fn;
     } else if (tokenPunctIs(tok, ';')) {
         if (rettype->kind == AST_TYPE_AUTO) {
             cctrlRaiseException(cc,"auto cannot be used with a function prototype %.*s() at this time",
@@ -2301,7 +2391,14 @@ Ast *parseAsmFunctionBinding(Cctrl *cc) {
                 tok->len,tok->start);
     }
 
-    asm_fname = aoStrDupRaw(tok->start,tok->len);
+    asm_fname = aoStrDupRaw(tok->start, tok->len);
+    /* No existence check here, deliberately: a binding's label is
+     * usually EXTERNAL - stdlib headers bind `_extern _MALLOC`-style
+     * labels whose bodies live in libtos, and the lib itself binds
+     * straight to C symbols (`_extern _opendir`). Only the linker can
+     * tell a dangling label from an external one; a parse-time raise
+     * broke every AOT compile. A typo'd in-file label still surfaces:
+     * the asm block's own errors are reported on their lines. */
     Ast *asm_blk = mapGetLen(cc->asm_functions, asm_fname->data, asm_fname->len);
 
     rettype = parseDeclSpec(cc);
@@ -2316,6 +2413,7 @@ Ast *parseAsmFunctionBinding(Cctrl *cc) {
         cctrlRaiseException(cc,"line %d: ASM function requires c function name");
     }
     c_fname = aoStrDupRaw(tok->start,tok->len);
+    int name_line = tok->line, name_col = tok->col;
     cc->localenv = cctrlCreateAstMap(cc->localenv);
     cctrlTokenExpect(cc,'(');
 
@@ -2324,6 +2422,10 @@ Ast *parseAsmFunctionBinding(Cctrl *cc) {
     asm_func = astAsmFunctionBind(
             astMakeFunctionType(rettype, params),
             asm_fname,c_fname,params);
+    /* Anchor to the C-name token so jump-to-def on e.g. MAlloc lands
+     * on the name inside the prototype. */
+    asm_func->line = name_line;
+    asm_func->col = name_col;
 
     /* update the assembly block so it knows the HC function name */
     if (asm_blk && asm_blk->fname == NULL) {
@@ -2412,8 +2514,10 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
                     type = parseFullType(cc);
                     name = cctrlTokenGet(cc);
                     
-                    ast = parseFunctionOrDef(cc,type,name->start,name->len,1); 
+                    ast = parseFunctionOrDef(cc,type,name->start,name->len,1);
                     ast->flags |= AST_FLAG_INLINE;
+                    ast->line = name->line;
+                    ast->col = name->col;
                     return ast;
                 }
                 case KW_PUBLIC:
@@ -2690,7 +2794,15 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
         }
 
         if (tokenPunctIs(tok, '(')) {
-            return parseFunctionOrDef(cc,type,name->start,name->len,0); 
+            Ast *fn = parseFunctionOrDef(cc,type,name->start,name->len,0);
+            /* Anchor to the name token - covers prototypes too, and
+             * corrects the in-function anchor (a token get+rewind
+             * between name and call left the hint on the `(`). */
+            if (fn) {
+                fn->line = name->line;
+                fn->col = name->col;
+            }
+            return fn;
         }
 
         if (tokenPunctIs(tok,';') || tokenPunctIs(tok, ',')) {

@@ -24,6 +24,7 @@
 #endif
 #include "lexer.h"
 #include "list.h"
+#include "lsp.h"
 #include "memory.h"
 #include "transpiler.h"
 #include "types.h"
@@ -271,8 +272,10 @@ void emitFile(Cctrl *cc, AoStr *asmbuf, CliArgs *args) {
                 cc->CC,
                 ASM_TMP_FILE,args->obj_outfile);
         safeSystem(cmd->data,1);
-        safeSystem(lib.dylib_cmd, 1);
+        /* The archive first: dylib_cmd's leading `cp` ships it, so
+         * running it second means shipping a stale (or absent) one. */
         safeSystem(lib.stylib_cmd, 1);
+        safeSystem(lib.dylib_cmd, 1);
         safeSystem(lib.install_cmd, 1);
     } else {
         AoStr *ofiles = aoStrNew();
@@ -410,6 +413,14 @@ int main(int argc, char **argv) {
     /* now parse cli options */
     args.install_dir = INSTALL_PREFIX;
     cliParseArgs(&args,argc,argv);
+
+    /* The LSP owns its Cctrl lifecycle (fresh one after a parser
+     * crash), so it dispatches before the shared `cc` is made. */
+    if (args.lsp) {
+        int rc = lspRun(&args);
+        memoryRelease();
+        return rc;
+    }
 
     cc = cctrlNew(args.target);
 

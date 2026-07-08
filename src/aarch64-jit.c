@@ -78,6 +78,37 @@ static int jitIsAddImm(s64 v) {
     return 0;
 }
 
+/* Can `[base, #disp]` encode for a `size`-byte access? Unscaled
+ * (ldur/stur) covers signed -256..255; the scaled unsigned form
+ * covers size-aligned 0..4095*size. */
+static int jitIsMemDisp(s32 disp, int size) {
+    if (disp >= -256 && disp <= 255) return 1;
+    if (disp >= 0 && (disp % size) == 0 && disp <= 4095 * size) return 1;
+    return 0;
+}
+
+/* sp -=/+= n for any n up to 16MB, via the imm12 (+ lsl #12) split.
+ * The register form is a trap here: reg 31 in ADD/SUB
+ * (shifted-register) decodes as XZR, not SP, so `sub sp, sp, x9`
+ * assembles to a silent no-op. The immediate form treats 31 as SP. */
+static void jitSpAdjust(AsmEnc *enc, int is_sub, u64 n) {
+    if (n == 0) return;
+    if ((n >> 12) > 0xFFF) {
+        loggerPanic("jit-aarch64: stack adjustment %llu exceeds 16MB\n",
+                    (unsigned long long)n);
+    }
+    u64 hi = n & ~0xFFFULL; /* 4096-aligned: encoder picks the sh=1 form */
+    u64 lo = n & 0xFFF;
+    if (hi) {
+        if (is_sub) aarch64_enc_sub_imm(enc, 1, A_SP, A_SP, (uint32_t)hi);
+        else        aarch64_enc_add_imm(enc, 1, A_SP, A_SP, (uint32_t)hi);
+    }
+    if (lo) {
+        if (is_sub) aarch64_enc_sub_imm(enc, 1, A_SP, A_SP, (uint32_t)lo);
+        else        aarch64_enc_add_imm(enc, 1, A_SP, A_SP, (uint32_t)lo);
+    }
+}
+
 /* Parse a register name like "x9", "w0", "d0", "s3" into an A64Reg
  * (which carries just the numeric index 0..31).  Used to translate
  * the pinned-reg / IR_LOC_REG `AoStr *reg` fields into encoder regs. */
@@ -279,9 +310,25 @@ static void jitDerefLoad(AsmEnc *enc, int size, A64Reg dst, A64Reg base,
         return;
     }
     if (disp != 0) {
-        /* Imm offset form. ldur (imm9 unscaled) for negative or
-         * misaligned; ldr/ldrb/ldrh (scaled) for positive aligned. */
-        if (disp < 0 || disp > 32760) {
+        int ok_scaled = disp >= 0 && (disp % size) == 0 &&
+                        disp <= 4095 * size;
+        if (!ok_scaled && !jitIsMemDisp(disp, size)) {
+            /* Out of every immediate form's range: register-offset
+             * via x10. base may be a live allocated register (must
+             * not be mutated) and x9 can hold a store value. */
+            jitEmitMovImm(enc, A_X10, (s64)disp);
+            if (size == 4) {
+                aarch64_enc_ldst_regoff(enc, 0, 1, 4, 0, dst, base, A_X10);
+                aarch64_enc_sxtw(enc, dst, dst);
+            } else {
+                aarch64_enc_ldst_regoff(enc, 0, 1, size, 0, dst, base, A_X10);
+                if (size == 1) aarch64_enc_uxtb(enc, 0, dst, dst);
+                else if (size == 2) aarch64_enc_uxth(enc, dst, dst);
+            }
+            return;
+        }
+        if (!ok_scaled) {
+            /* Small negative or misaligned: ldur (imm9 unscaled). */
             aarch64_enc_ldur(enc, size == 4 ? 4 : size, dst, base, disp);
             if (size == 4) aarch64_enc_sxtw(enc, dst, dst);
             else if (size == 1) aarch64_enc_uxtb(enc, 0, dst, dst);
@@ -316,7 +363,16 @@ static void jitDerefStore(AsmEnc *enc, int size, A64Reg val, A64Reg base,
         return;
     }
     if (disp != 0) {
-        if (disp < 0 || disp > 32760) {
+        int ok_scaled = disp >= 0 && (disp % size) == 0 &&
+                        disp <= 4095 * size;
+        if (!ok_scaled && !jitIsMemDisp(disp, size)) {
+            /* See jitDerefLoad: x10, never mutate base, x9 may be
+             * the value. */
+            jitEmitMovImm(enc, A_X10, (s64)disp);
+            aarch64_enc_ldst_regoff(enc, 0, 0, size, 0, val, base, A_X10);
+            return;
+        }
+        if (!ok_scaled) {
             aarch64_enc_stur(enc, size, val, base, disp);
             return;
         }
@@ -1174,8 +1230,15 @@ static void jitEmitInstr(JitFnCtx *ctx, IrInstr *instr) {
                     aarch64_enc_ldst_regoff(enc, 1, 1, fsz, sh ? 1 : 0,
                                             A_X0 /*d0*/, base, idx);
                 } else if (instr->disp != 0) {
-                    aarch64_enc_fp_ldst_imm(enc, 1, fsz, A_X0 /*d0*/, base,
-                                            (uint32_t)instr->disp);
+                    if (instr->disp >= 0 && (instr->disp % fsz) == 0 &&
+                        instr->disp <= 4095 * fsz) {
+                        aarch64_enc_fp_ldst_imm(enc, 1, fsz, A_X0 /*d0*/,
+                                                base, (uint32_t)instr->disp);
+                    } else {
+                        jitEmitMovImm(enc, A_X10, (s64)instr->disp);
+                        aarch64_enc_ldst_regoff(enc, 1, 1, fsz, 0,
+                                                A_X0 /*d0*/, base, A_X10);
+                    }
                 } else {
                     aarch64_enc_fp_ldst_imm(enc, 1, fsz, A_X0 /*d0*/, base, 0);
                 }
@@ -1219,8 +1282,15 @@ static void jitEmitInstr(JitFnCtx *ctx, IrInstr *instr) {
                     aarch64_enc_ldst_regoff(enc, 1, 0, fsz, sh ? 1 : 0,
                                             A_X0 /*d0*/, base, idx);
                 } else if (instr->disp != 0) {
-                    aarch64_enc_fp_ldst_imm(enc, 0, fsz, A_X0 /*d0*/, base,
-                                            (uint32_t)instr->disp);
+                    if (instr->disp >= 0 && (instr->disp % fsz) == 0 &&
+                        instr->disp <= 4095 * fsz) {
+                        aarch64_enc_fp_ldst_imm(enc, 0, fsz, A_X0 /*d0*/,
+                                                base, (uint32_t)instr->disp);
+                    } else {
+                        jitEmitMovImm(enc, A_X10, (s64)instr->disp);
+                        aarch64_enc_ldst_regoff(enc, 1, 0, fsz, 0,
+                                                A_X0 /*d0*/, base, A_X10);
+                    }
                 } else {
                     aarch64_enc_fp_ldst_imm(enc, 0, fsz, A_X0 /*d0*/, base, 0);
                 }
@@ -1531,14 +1601,7 @@ static void jitEmitInstr(JitFnCtx *ctx, IrInstr *instr) {
             s32 n_stack = jitPartitionCallArgs(is_stack, n, args, callee_va,
                                                named_count, force_va_stack);
             int stack_bytes = (n_stack * 8 + 15) & ~15;
-            if (stack_bytes > 0) {
-                if (stack_bytes <= 0xFFF) {
-                    aarch64_enc_sub_imm(enc, 1, A_SP, A_SP, (uint32_t)stack_bytes);
-                } else {
-                    jitEmitMovImm(enc, A_X9, (s64)stack_bytes);
-                    aarch64_enc_sub_reg(enc, 1, A_SP, A_SP, A_X9);
-                }
-            }
+            jitSpAdjust(enc, 1, (u64)stack_bytes);
             int stack_idx = 0;
             for (u64 i = 0; i < n; ++i) {
                 if (!is_stack[i]) continue;
@@ -1571,14 +1634,7 @@ static void jitEmitInstr(JitFnCtx *ctx, IrInstr *instr) {
                 size_t off = aarch64_jit_emit_bl_placeholder(enc);
                 hccJitAddCallFixup(enc, off, normalised, AFR_AARCH64_CALL26);
             }
-            if (stack_bytes > 0) {
-                if (stack_bytes <= 0xFFF) {
-                    aarch64_enc_add_imm(enc, 1, A_SP, A_SP, (uint32_t)stack_bytes);
-                } else {
-                    jitEmitMovImm(enc, A_X9, (s64)stack_bytes);
-                    aarch64_enc_add_reg(enc, 1, A_SP, A_SP, A_X9);
-                }
-            }
+            jitSpAdjust(enc, 0, (u64)stack_bytes);
             if (instr->dst && instr->dst->type != IR_TYPE_VOID) {
                 if (irIsFloat(instr->dst->type)) jitSpillDstFpr(ctx, instr, A_X0);
                 else                              jitSpillDst   (ctx, instr, A_X0);
@@ -1624,14 +1680,7 @@ static void jitEmitPrologue(JitFnCtx *ctx) {
     aarch64_enc_add_imm(enc, 1, A_FP, A_SP, 0);
     uint32_t aligned = ((uint32_t)ctx->fn->stack_space + 15u) & ~15u;
     ctx->aligned_frame = aligned;
-    if (aligned > 0) {
-        if (aligned <= 0xFFF) {
-            aarch64_enc_sub_imm(enc, 1, A_SP, A_SP, aligned);
-        } else {
-            jitEmitMovImm(enc, A_X9, (s64)aligned);
-            aarch64_enc_sub_reg(enc, 1, A_SP, A_SP, A_X9);
-        }
-    }
+    jitSpAdjust(enc, 1, aligned);
 }
 
 static void jitEmitEpilogue(JitFnCtx *ctx) {
@@ -1640,14 +1689,7 @@ static void jitEmitEpilogue(JitFnCtx *ctx) {
         aarch64_jit_emit_ret(enc);
         return;
     }
-    if (ctx->aligned_frame > 0) {
-        if (ctx->aligned_frame <= 0xFFF) {
-            aarch64_enc_add_imm(enc, 1, A_SP, A_SP, ctx->aligned_frame);
-        } else {
-            jitEmitMovImm(enc, A_X9, (s64)ctx->aligned_frame);
-            aarch64_enc_add_reg(enc, 1, A_SP, A_SP, A_X9);
-        }
-    }
+    jitSpAdjust(enc, 0, ctx->aligned_frame);
     aarch64_jit_emit_ldp_post(enc, A_FP, A_LR, A_SP, 16);
     aarch64_jit_emit_ret(enc);
 }
@@ -1710,7 +1752,9 @@ static int jitCompileFunction(HccJit *jit, Ast *ast, IrCtx *ir_ctx) {
             asm_define_label(&jit->enc, ln, NULL);
         }
         listForEach(block->instructions) {
-            jitEmitInstr(&ctx, (IrInstr *)it->value);
+            IrInstr *in = (IrInstr *)it->value;
+            hccJitNoteLine(jit, in->line);
+            jitEmitInstr(&ctx, in);
         }
     }
     setRelease(referenced);

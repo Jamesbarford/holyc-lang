@@ -57,8 +57,10 @@ set(SOURCES
     ir-optimise.c
     ir-regalloc.c
     ir-types.c
+    json.c
     lexer.c
     list.c
+    lsp.c
     main.c
     memory.c
     mempool.c
@@ -71,7 +73,7 @@ set(SOURCES
     x86_64.c
 )
 
-set(HEADERS 
+set(HEADERS
     aostr.h
     arena.h
     asm.h
@@ -82,6 +84,8 @@ set(HEADERS
     cli.h
     compile.h
     config.h
+    json.h
+    lsp.h
     containers.h
     ir.h
     ir-debug.h

@@ -775,6 +775,8 @@ void irCtxAddFunction(IrCtx *ctx, IrFunction *func) {
     vecPush(ctx->prog->functions, func);
 }
 
+int ir_line_hint = 0;
+
 IrInstr *irInstrNew(IrOp op, IrValue *dst, IrValue *r1, IrValue *r2) {
     IrInstr *instr = irAlloc(sizeof(IrInstr));
     memset(instr, 0, sizeof(IrInstr));
@@ -783,6 +785,7 @@ IrInstr *irInstrNew(IrOp op, IrValue *dst, IrValue *r1, IrValue *r2) {
     instr->dst = dst;
     instr->r1 = r1;
     instr->r2 = r2;
+    instr->line = ir_line_hint;
     return instr;
 }
 

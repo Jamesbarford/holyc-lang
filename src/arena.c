@@ -90,6 +90,26 @@ void arenaClear(Arena *arena) {
     }
 }
 
+/* Reset for REUSE: free the overflow blocks and rewind the head block
+ * to empty. Unlike arenaClear - which is arenaRelease's destructor
+ * half and leaves head/tail dangling - the arena is as-new afterwards.
+ * The per-message arena pattern: allocate freely, arenaReset between
+ * messages, arenaRelease at the end. */
+void arenaReset(Arena *arena) {
+    if (arena == NULL) return;
+    ArenaBlock *block = arena->tail;
+    while (block) {
+        ArenaBlock *next = block->next;
+        arenaBlockRelease(block);
+        block = next;
+    }
+    arena->tail = NULL;
+    ArenaBlock *head = arena->head;
+    head->mem = ((char *)head->mem) - head->used;
+    head->used = 0;
+    arena->used = 0;
+}
+
 void arenaRelease(Arena *arena) {
     if (arena) {
         arenaClear(arena);
