@@ -566,7 +566,7 @@ void transpileAstInternal(Ast *ast, TranspileCtx *ctx, s64 *indent) {
             for (; i < 8; ++i) {
                 u64 idx = i * 8;
                 char ch2 = ((unsigned long)ch) >> idx & 0xFF;
-                if ((idx > 0 && !ch2) || (ch2 < 0)) break;
+                if ((idx > 0 && !ch2)) break;
                 switch (ch2) {
                     case '\'': { *tmp_ptr++ = '\\'; *tmp_ptr++ = '\''; break; }
                     case '\\': { *tmp_ptr++ = '\\'; *tmp_ptr++ = '\\'; break; }

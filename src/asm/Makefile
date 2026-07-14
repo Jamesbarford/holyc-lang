@@ -1,4 +1,4 @@
-CC     := gcc-15
+CC     := gcc
 CFLAGS := -Wall -Wpedantic -O0 -g -DDEBUG
 OUT    := .
 

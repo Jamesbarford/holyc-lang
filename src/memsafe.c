@@ -173,6 +173,8 @@ static void memsafeReportDoubleFree(void *p, MemsafeEntry *r) {
     fflush(stderr);
 }
 
+/* Linux shouts there is an unused function */
+#if defined(__APPLE__)
 static void memsafeReportWildFree(void *p) {
     uintptr_t here[2] = { 0, 0 };
     memsafeCallSites(here, 2);
@@ -182,6 +184,7 @@ static void memsafeReportWildFree(void *p) {
     fprintf(stderr, " - ignored\n");
     fflush(stderr);
 }
+#endif
 
 /* ---------------- the MAlloc-ABI wrappers ---------------- */
 

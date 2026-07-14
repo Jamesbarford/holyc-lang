@@ -527,12 +527,14 @@ void tasm_print_d(double, int);
 void tasm_print_v(const void *, int, int, int, int);
 
 static void *jit_builtin_lookup(const char *sym) {
+    /* Function-to-object pointer casts go via uintptr_t: ISO C forbids
+     * the direct cast (-Wpedantic) but allows both halves of this one. */
     if (sym[0] == '_') sym++;
-    if (!strcmp(sym, "tasm_print_x")) return (void *)tasm_print_x;
-    if (!strcmp(sym, "tasm_print_w")) return (void *)tasm_print_w;
-    if (!strcmp(sym, "tasm_print_s")) return (void *)tasm_print_s;
-    if (!strcmp(sym, "tasm_print_d")) return (void *)tasm_print_d;
-    if (!strcmp(sym, "tasm_print_v")) return (void *)tasm_print_v;
+    if (!strcmp(sym, "tasm_print_x")) return (void *)(uintptr_t)tasm_print_x;
+    if (!strcmp(sym, "tasm_print_w")) return (void *)(uintptr_t)tasm_print_w;
+    if (!strcmp(sym, "tasm_print_s")) return (void *)(uintptr_t)tasm_print_s;
+    if (!strcmp(sym, "tasm_print_d")) return (void *)(uintptr_t)tasm_print_d;
+    if (!strcmp(sym, "tasm_print_v")) return (void *)(uintptr_t)tasm_print_v;
     return NULL;
 }
 

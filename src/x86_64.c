@@ -1050,7 +1050,7 @@ static void x86_64EmitSysvCall(IrCgCtx *ctx, IrInstr *instr, Vec *args,
         }
         if (irIsFloat(a->type)) {
             if (nsse < 8) {
-                char xmm[8];
+                char xmm[16];
                 snprintf(xmm, sizeof(xmm), "xmm%d", nsse++);
                 x86_64LoadToFpr(ctx, a, xmm);
             } else {
