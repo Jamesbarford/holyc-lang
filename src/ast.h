@@ -161,6 +161,13 @@ typedef struct AstType {
     /* Alignment of a struct or union */
     u32 alignment;
 
+    /* Provenance of the DEFINITION (class/union tag token) for
+     * jump-to-definition; 0 = unknown/builtin. Only stamped for
+     * named class/union definitions - see parseClassOrUnion. */
+    int line;
+    int col;
+    u32 file_id;
+
     /* Value signed or unsigned? */
     int issigned;
 
@@ -216,6 +223,13 @@ typedef struct Ast {
     u64 flags;
     AstType *type;
     int loff;
+    /* Source line of the token being consumed when this node was
+     * created (statement-level accuracy). 0 = unknown/synthetic. */
+    int line;
+    /* 1-based column of that token's first byte. 0 = unknown. */
+    int col;
+    /* Which file (cctrlLookUpFile) - 0 = unknown. */
+    u32 file_id;
     s64 deref_symbol;
     union {
         struct {
@@ -416,6 +430,16 @@ typedef struct Ast {
         };
     };
 } Ast;
+
+/* Source line of the token the parser is currently consuming -
+ * published by cctrlTokenGet, stamped onto every astNew node so the
+ * IR (and ultimately JIT line tables) can attribute code to source. */
+extern int ast_line_hint;
+/* 1-based column of the token being consumed (Lexeme->col). */
+extern int ast_col_hint;
+/* Which cc->file_map entry the parser is currently consuming tokens
+ * from - resolve with cctrlLookUpFile. 0 = unknown. */
+extern u32 ast_file_hint;
 
 extern AstType *ast_int_type;
 extern AstType *ast_uint_type;

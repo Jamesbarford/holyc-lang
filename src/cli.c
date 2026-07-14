@@ -114,6 +114,7 @@ static CliParser parsers[] = {
     {str_lit("-jit"),       0, CLI_JIT, "-jit", "JIT-compile and run main() in-process (aarch64 & x86_64)", &cliParseNop},
     {str_lit("-Memsafe"),   0, CLI_MEMSAFE, "-Memsafe", "With -jit: track MAlloc/Free, report double/wild frees and leaks at exit (the REPL always tracks)", &cliParseNop},
     {str_lit("-repl"),      0, CLI_REPL, "-repl", "Start an interactive HolyC REPL on top of the JIT (aarch64 & x86_64)", &cliParseNop},
+    {str_lit("-lsp"),       0, CLI_LSP, "-lsp", "Run a Language Server Protocol server over stdio (for editor integration)", &cliParseNop},
     {str_lit("-o"),         1, CLI_OUTPUT_FILENAME, "-o <binary_name>", "Output filename: `-o <name> ./<file>.HC`", &cliParseString},
     {str_lit("-o-"),        0, CLI_TO_STDOUT, "-o-", "Output assembly to stdout, only for use with -S", &cliParseNop},
     {str_lit("-transpile"), 0, CLI_TRANSPILE, "-transpile", "Transpile the code to C, this is best effort", &cliParseNop},
@@ -451,6 +452,7 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
             case CLI_JIT:                args->jit = 1; break;
             case CLI_MEMSAFE:            args->memsafe = 1; break;
             case CLI_REPL:               args->repl = 1; break;
+            case CLI_LSP:                args->lsp = 1; break;
             case CLI_ASSEMBLE:           args->assemble = 1; break;
             case CLI_TRANSPILE:          args->transpile = 1; break;
             case CLI_TO_STDOUT:          args->to_stdout = 1; break;
@@ -507,8 +509,9 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
                  "printing assembly to stdout\n");
     }
 
-    /* The REPL reads from stdin - it's the one mode with no input file. */
-    if (args->infile == NULL && !args->repl) {
+    /* The REPL and the LSP read from stdin - the two modes with no
+     * input file. */
+    if (args->infile == NULL && !args->repl && !args->lsp) {
         cliNoInputFiles();
     }
     return 1;

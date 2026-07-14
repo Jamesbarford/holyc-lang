@@ -178,7 +178,8 @@ static I64 CountNumberLen(JsonParser *p, U8 *ptr, Bool *is_hex)
   U8 *start = ptr;
   I32 seen_e = 0, seen_dec = 0, seen_X = 0;
 
-  while (*ptr != ',' && *ptr != ']' && *ptr != '\0' && *ptr != '\n' && *ptr != ' ') {
+  while (*ptr != ',' && *ptr != ']' && *ptr != '}' && *ptr != '\0' &&
+         *ptr != '\n' && *ptr != '\r' && *ptr != '\t' && *ptr != ' ') {
     switch (*ptr) {
       case 'e':
       case 'E':

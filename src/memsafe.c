@@ -93,8 +93,16 @@ static void memsafePrintSite(FILE *f, const uintptr_t *sites, int nsites) {
             ? hccJitFindSymbolForAddr(jit, (void *)sites[i], &off)
             : NULL;
         if (sym && memsafeIsAllocShim(sym)) continue;
-        if (sym) fprintf(f, "in `%s`+%zu", sym, off);
-        else     fprintf(f, "at %p", (void *)sites[i]);
+        if (sym) {
+            /* sites[] are return addresses - the CALL is the
+             * instruction before, so look the line up at addr-1 or
+             * the report reads one statement late. */
+            int line = hccJitFindLineForAddr(jit, (void *)(sites[i] - 1));
+            fprintf(f, "in `%s`+%zu", sym, off);
+            if (line) fprintf(f, ", line %d", line);
+        } else {
+            fprintf(f, "at %p", (void *)sites[i]);
+        }
         return;
     }
     fprintf(f, "at an unknown site");

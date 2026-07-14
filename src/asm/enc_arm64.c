@@ -3868,7 +3868,15 @@ aarch64_encode_instr(AsmEnc *e, AsmLine *ln)
         aarch64_enc_branch(e, ln, 0, 1, cc);
         return;
     }
-    asm_err_at(e, ln, "unsupported arm64 mnemonic");
+    char err_buf[256];
+    if (ln->mnemonic) {
+        snprintf(err_buf, sizeof(err_buf), "unsupported arm64 mnemonic %s", ln->mnemonic);
+    } else if (ln->label_name) {
+        snprintf(err_buf, sizeof(err_buf), "unsupported arm64 mnemonic %s", ln->label_name);
+    } else {
+        snprintf(err_buf, sizeof(err_buf), "unsupported arm64 mnemonic");
+    }
+    asm_err_at(e, ln, err_buf);
 }
 
 /* ---------- entry ---------- */

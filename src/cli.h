@@ -37,6 +37,7 @@ enum CliArgType {
     CLI_HELP,
     CLI_INSTALL_DIR,
     CLI_JIT,
+    CLI_LSP,
     CLI_MEMSAFE,
     CLI_MEM_STATS,
     CLI_OUTPUT_FILENAME,
@@ -87,6 +88,7 @@ typedef struct CliArgs {
     int emit_object;
     int run;
     int jit;
+    int lsp;
     int memsafe;
     int repl;
     int assemble;

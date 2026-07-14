@@ -248,6 +248,7 @@ Cctrl *cctrlNew(enum CliTarget target) {
     Cctrl *cc = (Cctrl *)malloc(sizeof(Cctrl));
 
     cc->flags = 0;
+    cc->file_map = mapNew(16, &map_u32_to_aostr_type);
     cc->global_env = mapNew(32, &map_ast_type);
     cc->clsdefs = mapNew(32, &map_asttype_type);
     cc->uniondefs = mapNew(32, &map_asttype_type);
@@ -504,6 +505,27 @@ void cctrlTokenRewind(Cctrl *cc) {
     }
 }
 
+/* Register `filename` in cc->file_map, returning its 1-based id -
+ * or the existing id if this file was seen before (linear scan;
+ * registration is once per file push, and files are few). */
+u32 cctrlRegisterFile(Cctrl *cc, AoStr *filename) {
+    if (cc == NULL || filename == NULL) return 0;
+    MapIter mi;
+    mapIterInit(cc->file_map, &mi);
+    while (mapIterNext(&mi)) {
+        if (aoStrEq((AoStr *)mi.node->value, filename))
+            return (u32)(u64)mi.node->key;
+    }
+    u32 id = (u32)cc->file_map->size + 1;
+    mapAddIntOrErr(cc->file_map, id, aoStrDup(filename));
+    return id;
+}
+
+AoStr *cctrlLookUpFile(Cctrl *cc, u32 file_id) {
+    if (cc == NULL || file_id == 0) return NULL;
+    return (AoStr *)mapGetInt(cc->file_map, file_id);
+}
+
 Lexeme *cctrlTokenGet(Cctrl *cc) {
     Lexeme *token = tokenRingBufferPeek(cc->token_buffer);
     while (token) {
@@ -518,6 +540,16 @@ Lexeme *cctrlTokenGet(Cctrl *cc) {
             cctrLoadNextTokens(cc,5);
         }
         cc->lineno = token->line;
+        ast_line_hint = token->line;
+        ast_col_hint = token->col;
+        /* Register the lexer's current file lazily; the id rides on
+         * every astNew until the lexer crosses a file boundary. */
+        if (cc->lexer_ && cc->lexer_->cur_file) {
+            LexFile *f = cc->lexer_->cur_file;
+            if (f->file_id == 0)
+                f->file_id = cctrlRegisterFile(cc, f->filename);
+            ast_file_hint = f->file_id;
+        }
         return cctrlMaybeExpandToken(cc, token);
     }
     return NULL;
@@ -990,9 +1022,16 @@ void cctrlIce(Cctrl *cc, char *fmt, ...) {
     va_list ap;
     va_start(ap,fmt);
     AoStr *buf = cctrlMessagVnsPrintF(cc,fmt,ap,CCTRL_ICE);
+    va_end(ap);
+    /* An embedder (REPL/LSP) with a recovery point armed wants the ICE
+     * as a recoverable diagnostic, not a process exit. */
+    if (cc && cc->current_recovery) {
+        CctrlDiagnostic *d = cctrlMakeDiag(cc, CCTRL_ERROR, buf, NULL);
+        cctrlDiagPush(cc, d);
+        cctrlTerminate(cc);
+    }
     fprintf(stderr,"%s\n",buf->data);
     aoStrRelease(buf);
-    va_end(ap);
     exit(EXIT_FAILURE);
 }
 

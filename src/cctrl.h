@@ -84,6 +84,10 @@ typedef struct Cctrl {
     /* key words defined in the language */
     Map *symbol_table;
 
+    /* Every file this compile has lexed: `Map<u32, AoStr *>` keyed by
+     * the 1-based id stamped onto Ast->file_id (0 = unknown). */
+    Map *file_map;
+
     /* Class definitions */
     Map *clsdefs;
 
@@ -220,6 +224,10 @@ typedef struct Cctrl {
 Cctrl *cctrlNew(enum CliTarget target);
 /* Slimmed down Cctrl, for expanding macros */
 Cctrl *ccMacroProcessor(Map *macro_defs);
+/* File-id registry over cc->file_map; ids are what Ast->file_id holds. */
+u32 cctrlRegisterFile(Cctrl *cc, AoStr *filename);
+AoStr *cctrlLookUpFile(Cctrl *cc, u32 file_id);
+
 Lexeme *cctrlTokenGet(Cctrl *cc);
 Lexeme *cctrlAsmTokenGet(Cctrl *cc);
 Lexeme *cctrlTokenPeek(Cctrl *cc);

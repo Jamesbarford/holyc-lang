@@ -159,6 +159,10 @@ Vec *parseParams(Cctrl *cc, s64 terminator, int *has_var_args, int store) {
         AoStr *pinned_reg;
         parseRegModifier(cc, &pinned_kind, &pinned_reg);
         pname = cctrlTokenGet(cc);
+        if (pname == NULL) {
+            cctrlRaiseException(cc,
+                    "Unexpected end of input in parameter list");
+        }
 
         if (tokenPunctIs(pname, ')') && arg_count == 0) {
             if (type->kind == AST_TYPE_VOID) {
@@ -228,6 +232,10 @@ Vec *parseParams(Cctrl *cc, s64 terminator, int *has_var_args, int store) {
             type = astMakePointerType(type->ptr);
         }
         var = astLVar(type,pname->start,pname->len);
+        /* Anchor the param to its name token (astNew stamped whatever
+         * token the parser had just consumed). */
+        var->line = pname->line;
+        var->col = pname->col;
         var->pinned_kind = pinned_kind;
         var->pinned_reg = pinned_reg;
 
@@ -291,6 +299,12 @@ AstType *parseBaseDeclSpec(Cctrl *cc) {
 
 AstType *parseDeclSpec(Cctrl *cc) {
     AstType *type = parseBaseDeclSpec(cc);
+    /* NULL means end-of-input (parseBaseDeclSpec's guard) - no caller
+     * can make progress with a missing type, and several deref it. */
+    if (type == NULL) {
+        cctrlRaiseException(cc,
+                "Unexpected end of input, expected a type");
+    }
     type = parsePointerType(cc,type);
     return type;
 }
@@ -674,6 +688,11 @@ Vec *parseArgv(Cctrl *cc, Ast *decl, s64 terminator, char *fname, int len) {
             break;
         }
 
+        if (tok == NULL) {
+            cctrlRaiseException(cc,
+                    "Unexpected end of input in call to `%.*s` "
+                    "(unterminated `( ... )`?)", len, fname);
+        }
         if (!tokenPunctIs(tok,',')) {
             cctrlRewindUntilPunctMatch(cc, tok->i64, NULL);
             /* We could have a malformed string as a function argument */
@@ -980,6 +999,12 @@ static Ast *parseIdentifierOrFunction(Cctrl *cc,
     if ((ast = cctrlGetVar(cc, name, len)) == NULL) {
         cctrlRewindUntilStrMatch(cc, name, len, NULL);
         peek = cctrlTokenPeek(cc);
+        if (tok == NULL) {
+            /* Identifier at end of input - nothing to suggest from. */
+            cctrlRaiseException(cc,
+                    "Variable or function `%.*s` has not been defined",
+                    len, name);
+        }
         if (tok->tk_type == TK_PUNCT) {
             switch (tok->i64) {
                 case '(': {
@@ -1029,8 +1054,10 @@ static Ast *parseIdentifierOrFunction(Cctrl *cc,
         return ast;
     }
 
-    /* Is a function call if the next char is '(' and the peek is not a type */
-    if (!cctrlIsKeyword(cc,peek->start,peek->len)) {
+    /* Is a function call if the next char is '(' and the peek is not a
+     * type. peek == NULL (end of input) counts as a call attempt - the
+     * argument parser raises the unterminated-`(` diagnostic. */
+    if (peek == NULL || !cctrlIsKeyword(cc,peek->start,peek->len)) {
         return parseFunctionArguments(cc,name,len,')');
     }
 
@@ -1212,6 +1239,10 @@ Ast *parseGetClassField(Cctrl *cc, Ast *cls) {
     type = cls->type;
 
     Lexeme *tok = cctrlTokenGet(cc);
+    if (tok == NULL) {
+        cctrlRaiseException(cc,
+                "Unexpected end of input after '->' or '.'");
+    }
     if (tok->tk_type != TK_IDENT) {
         cctrlRaiseExceptionFromTo(cc,NULL,'-',*tok->start,"Expected class member got %s `%.*s`",
                             lexemeTypeToString(tok->tk_type),
@@ -1452,7 +1483,13 @@ Ast *parseSizeof(Cctrl *cc) {
     AstType *type = NULL;
     Ast *ast = NULL;
 
-    if (tokenPunctIs(tok,'(') && cctrlIsKeyword(cc,peek->start,peek->len)) {
+    /* EOF right after `sizeof`: rewinding and re-parsing would re-read
+     * the `sizeof` keyword and recurse here forever (stack overflow). */
+    if (tok == NULL) {
+        cctrlRaiseException(cc, "Unexpected end of input after `sizeof`");
+    }
+    if (tokenPunctIs(tok,'(') && peek &&
+        cctrlIsKeyword(cc,peek->start,peek->len)) {
         type = parseFullType(cc);
         cctrlTokenExpect(cc,')');
     } else {
@@ -1486,7 +1523,12 @@ Ast *parseAlignof(Cctrl *cc) {
     Lexeme *peek = cctrlTokenPeek(cc);
     AstType *type = NULL;
 
-    if (tokenPunctIs(tok,'(') && cctrlIsKeyword(cc,peek->start,peek->len)) {
+    /* Same EOF-recursion hazard as parseSizeof. */
+    if (tok == NULL) {
+        cctrlRaiseException(cc, "Unexpected end of input after `alignof`");
+    }
+    if (tokenPunctIs(tok,'(') && peek &&
+        cctrlIsKeyword(cc,peek->start,peek->len)) {
         type = parseFullType(cc);
         cctrlTokenExpect(cc,')');
     } else {
@@ -1552,6 +1594,10 @@ Ast *parsePostFixExpr(Cctrl *cc) {
         /* Postfix type cast OR function pointer on a class */
         if (tokenPunctIs(tok,'(')) {
             peek = cctrlTokenPeek(cc);
+            if (peek == NULL) {
+                cctrlRaiseException(cc,
+                        "Unexpected end of input after '('");
+            }
             if (cctrlIsKeyword(cc,peek->start,peek->len)) {
                 type = parseDeclSpec(cc);
                 cctrlTokenExpect(cc,')');

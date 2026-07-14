@@ -41,6 +41,15 @@ unit-test:
 jit-unit-test:
 	cd ./src/tests && ../../hcc ./run_jit.HC -o test-runner-jit && ./test-runner-jit && cd ../../
 
+# Hermetic: builds libtos from the tree into a local prefix and
+# compiles the (HolyC) harness against it, so the suite tests in-tree
+# sources - never whatever happens to be installed in /usr/local.
+lsp-test:
+	mkdir -p ./build/test-prefix/include ./build/test-prefix/lib
+	cp ./src/holyc-lib/tos.HH ./build/test-prefix/include/tos.HH
+	cd ./src/holyc-lib && ../../hcc -lib tos --install-dir=$(CURDIR)/build/test-prefix ./all.HC
+	cd ./src/tests/lsp && ../../../hcc --install-dir=$(CURDIR)/build/test-prefix ./run_lsp_tests.HC -o lsp-test-runner && ./lsp-test-runner
+
 lib-tos:
 	cd ./src/holyc-lib \
 		&& ../../hcc -lib tos ./all.HC \

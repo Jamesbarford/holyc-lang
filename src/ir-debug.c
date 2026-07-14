@@ -620,7 +620,11 @@ AoStr *irBlockToString(IrFunction *func, IrBlock *bb) {
         listForEach(bb->instructions) {
             IrInstr *ir_instr = (IrInstr *)it->value;
             AoStr *ir_instr_str = irInstrToString(ir_instr);
-            aoStrCatFmt(buf, "    %S\n", ir_instr_str);
+            if (ir_instr->line)
+                aoStrCatFmt(buf, "    %S  ; line %i\n", ir_instr_str,
+                            ir_instr->line);
+            else
+                aoStrCatFmt(buf, "    %S\n", ir_instr_str);
             aoStrRelease(ir_instr_str);
         }
     }

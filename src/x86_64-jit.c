@@ -1603,7 +1603,9 @@ static int jitCompileFunction(HccJit *jit, Ast *ast, IrCtx *ir_ctx) {
             asm_define_label(&jit->enc, ln, NULL);
         }
         listForEach(block->instructions) {
-            jitEmitInstr(&ctx, (IrInstr *)it->value);
+            IrInstr *in = (IrInstr *)it->value;
+            hccJitNoteLine(jit, in->line);
+            jitEmitInstr(&ctx, in);
         }
     }
     setRelease(referenced);

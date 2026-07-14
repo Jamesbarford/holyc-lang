@@ -178,6 +178,8 @@ extern MapType map_cstring_cstring_type;
 extern MapType map_cstring_opaque_type;
 /* `Map<u64, u64>` */
 extern MapType map_uint_to_uint_type;
+/* `Map<u32, AoStr *>` - e.g. Cctrl's file_map (file id -> filename) */
+extern MapType map_u32_to_aostr_type;
 
 /*================== Generic SET =============================================*/
 typedef struct Set Set;

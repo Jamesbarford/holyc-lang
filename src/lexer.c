@@ -711,6 +711,7 @@ void lexPushFile(Lexer *l, AoStr *filename) {
     f->lineno = 1;
     f->line_start_ptr = src_code->data;
     f->filename = filename;
+    f->file_id = 0; /* registered lazily by cctrlTokenGet */
     setAdd(l->seen_files,filename->data);
     if (l->cur_file) {
         /* Snapshot the outgoing file's cursor state so column maths
@@ -744,6 +745,7 @@ void lexPushString(Lexer *l, char *name, char *src, s64 len) {
     f->lineno = 1;
     f->line_start_ptr = src_code->data;
     f->filename = aoStrDupRaw(name, strlen(name));
+    f->file_id = 0; /* registered lazily by cctrlTokenGet */
     if (l->cur_file) {
         l->cur_file->ptr = l->ptr;
         l->cur_file->lineno = l->lineno;
@@ -778,12 +780,14 @@ static void lexSkipCodeComment(Lexer *l) {
             }
             l->ptr++;
         }
-        /* Walked off EOF without seeing the closing delimiter.
-         * Bail here rather than silently returning, which leaves
-         * the parser staring at an empty token stream and crashing
-         * on the next peek. */
-        l->lineno = start_line;
-        lexRaise(l, "unterminated block comment");
+        /* Walked off EOF without seeing the closing delimiter: treat
+         * the comment as running to EOF and keep going. This is the
+         * editor reality (the user just typed the opener) - and
+         * raising here proved fatal to embedders: the raise can fire
+         * during token PREFILL when no recovery point is armed, and
+         * cctrlTerminate's fallback is exit(). The parser reports the
+         * truncated input on its own. */
+        (void)start_line;
     }
 }
 
@@ -1100,6 +1104,19 @@ int lexNumeric(Lexer *l, int _isfloat) {
 LexerType *lexPreProcDirective(Lexer *l) {
     Lexeme le;
     if (!lex(l,&le)) return 0;
+
+    /* TempleOS documentation/assertion directives: `#help_index "..."`,
+     * `#help_file "..."` and `#assert <expr>` have no meaning here -
+     * consume to end of line so TempleOS-origin sources parse. NULL
+     * tells the caller to keep lexing. */
+    if ((le.len == 10 && !memcmp(le.start, str_lit("help_index"))) ||
+        (le.len == 9  && !memcmp(le.start, str_lit("help_file")))  ||
+        (le.len == 6  && !memcmp(le.start, str_lit("assert"))))
+    {
+        while (*l->ptr != '\0' && *l->ptr != '\n') l->ptr++;
+        return NULL;
+    }
+
     char buffer[32];
     s64 len = snprintf(buffer,sizeof(buffer),"#%.*s",le.len,le.start);
     LexerType *type = mapGetLen(l->symbol_table,buffer,len);
@@ -1406,6 +1423,11 @@ static int lexCore(Lexer *l, Lexeme *le) {
                     return 1;
                 }
                 type = lexPreProcDirective(l);
+                if (type == NULL) {
+                    /* Skipped directive (#help_index et al) - the
+                     * line is consumed; hand back the next token. */
+                    return lex(l, le);
+                }
                 le->tk_type = TK_KEYWORD;
                 le->i64 = type->kind;
                 return 1;
@@ -1484,6 +1506,24 @@ void lexInclude(Lexer *l) {
         aoStrRelease(ident);
     } else if (next.tk_type == TK_STR) {
         include_path = aoStrDupRaw(next.start, next.len);
+        /* Resolve a relative include against the INCLUDING file's
+         * directory, not the process cwd - and record the joined path
+         * so consumers (LSP uris, diagnostics) get a real location.
+         * Absolute includes pass through untouched. */
+        if (include_path->data[0] != '/' && l->cur_file &&
+            l->cur_file->filename)
+        {
+            char *base = l->cur_file->filename->data;
+            char *slash = strrchr(base, '/');
+            if (slash) {
+                const char *rel = include_path->data;
+                if (rel[0] == '.' && rel[1] == '/') rel += 2;
+                AoStr *joined = aoStrPrintf("%.*s/%s",
+                        (int)(slash - base), base, rel);
+                aoStrRelease(include_path);
+                include_path = joined;
+            }
+        }
     } else {
         lexRaise(l,
                 "Syntax is: #include \"<value>\" got: %s",
@@ -1607,6 +1647,12 @@ Lexeme *lexDefine(Map *macro_defs, Lexer *l) {
     /* Turn off the flag */
     l->flags &= ~CCF_ACCEPT_NEWLINES;
 
+    if (tokens->size == 0) {
+        /* `#define NAME` then newline/EOF: a bare flag define. */
+        mapAdd(macro_defs,ident->data,lexemeSentinal());
+        vecRelease(tokens);
+        return NULL;
+    }
     start = tokens->entries[0]; 
     end = tokens->entries[tokens->size - 1];
 

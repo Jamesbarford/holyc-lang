@@ -1419,6 +1419,27 @@ MapType map_cstring_opaque_type = {
     .value_type      = "void *",
 };
 
+static AoStr *mapAoStrValueToString(void *v) {
+    return aoStrDup((AoStr *)v);
+}
+
+static void mapAoStrValueRelease(void *v) {
+    aoStrRelease((AoStr *)v);
+}
+
+/* `Map<u32, AoStr *>` - e.g. Cctrl's file_map (file id -> filename). */
+MapType map_u32_to_aostr_type = {
+    .match           = mapIntKeyMatch,
+    .hash            = mapIntKeyHash,
+    .get_key_len     = mapIntKeyLen,
+    .key_to_string   = mapIntToString,
+    .key_release     = NULL,
+    .value_to_string = mapAoStrValueToString,
+    .value_release   = mapAoStrValueRelease,
+    .key_type        = "u32",
+    .value_type      = "AoStr *",
+};
+
 /* `Map<u64, u64>` */
 MapType map_uint_to_uint_type = {
     .match           = mapIntKeyMatch,

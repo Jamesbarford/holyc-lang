@@ -24,3 +24,4 @@ test-runner-jit
 .gdb_history
 build
 compile.sh
+lsp-test-runner

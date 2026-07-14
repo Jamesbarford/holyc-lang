@@ -269,33 +269,58 @@ static void aarch64FpFrameStore(AoStr *buf, const char *dreg, u32 size,
     aoStrCatFmt(buf, "%s %s, %s\n\t", op, fpr, mem);
 }
 
-/* Emit `reg += disp` honouring the AArch64 imm12 (optionally lsl 12)
- * restriction. Anything wider materialises through x9. */
+/* Emit `op dst, src, #v` (op is "add"/"sub", v its magnitude, >= 0)
+ * for any v: one instruction when the immediate encodes, the
+ * hi-(lsl #12)+lo two-instruction split up to 16MB, and a
+ * materialise + register form beyond that. The register form is
+ * legal for sp operands too (extended-register encoding). Only the
+ * >16MB path clobbers x9, so src == x9 is safe for real frames. */
+static void aarch64EmitAddSubImm(AoStr *buf, const char *op,
+                                 const char *dst, const char *src, s64 v)
+{
+    if (v < 0) {
+        loggerPanic("ir-cg-aarch64: %s immediate must be a magnitude, "
+                    "got %lld\n", op, (long long)v);
+    }
+    if (v <= 0xFFF) {
+        aoStrCatFmt(buf, "%s %s, %s, #%I\n\t", op, dst, src, v);
+        return;
+    }
+    if ((v >> 12) <= 0xFFF) {
+        aoStrCatFmt(buf, "%s %s, %s, #%I, lsl #12\n\t",
+                    op, dst, src, v >> 12);
+        if (v & 0xFFF) {
+            aoStrCatFmt(buf, "%s %s, %s, #%I\n\t",
+                        op, dst, dst, v & 0xFFF);
+        }
+        return;
+    }
+    aarch64EmitMovImm(buf, "x9", v);
+    aoStrCatFmt(buf, "%s %s, %s, x9\n\t", op, dst, src);
+}
+
+/* Emit `reg += disp` (the in-place form of the above). */
 static void aarch64AddSubImm(AoStr *buf, const char *reg, s64 disp) {
     if (disp == 0) return;
-    const char *mnem = disp < 0 ? "sub" : "add";
-    u64 mag = (u64)(disp < 0 ? -disp : disp);
-    if (mag <= 0xFFF) {
-        aoStrCatFmt(buf, "%s %s, %s, #%I\n\t", mnem, reg, reg, (s64)mag);
-        return;
-    }
-    if ((mag & 0xFFF) == 0 && mag <= 0xFFFULL << 12) {
-        aoStrCatFmt(buf, "%s %s, %s, #%I, lsl #12\n\t",
-                    mnem, reg, reg, (s64)(mag >> 12));
-        return;
-    }
-    if (mag <= 0xFFFFFFULL) {
-        u64 hi = mag >> 12;
-        u64 lo = mag & 0xFFF;
-        aoStrCatFmt(buf, "%s %s, %s, #%I, lsl #12\n\t",
-                    mnem, reg, reg, (s64)hi);
-        if (lo)
-            aoStrCatFmt(buf, "%s %s, %s, #%I\n\t",
-                        mnem, reg, reg, (s64)lo);
-        return;
-    }
-    aarch64EmitMovImm(buf, "x9", (s64)mag);
-    aoStrCatFmt(buf, "%s %s, %s, x9\n\t", mnem, reg, reg);
+    if (disp < 0) aarch64EmitAddSubImm(buf, "sub", reg, reg, -disp);
+    else          aarch64EmitAddSubImm(buf, "add", reg, reg, disp);
+}
+
+/* `dst = x29 + loff` for any signed frame offset. */
+static void aarch64EmitFrameAddr(AoStr *buf, const char *dst, s64 loff)
+{
+    if (loff >= 0) aarch64EmitAddSubImm(buf, "add", dst, "x29", loff);
+    else           aarch64EmitAddSubImm(buf, "sub", dst, "x29", -loff);
+}
+
+/* Can `[base, #disp]` encode for a `size`-byte access? Unscaled
+ * (ldur/stur) covers signed -256..255; the scaled unsigned form
+ * covers size-aligned 0..4095*size. */
+static int aarch64IsMemDisp(s32 disp, u32 size) {
+    if (disp >= -256 && disp <= 255) return 1;
+    if (disp >= 0 && (disp % (s32)size) == 0 &&
+        disp <= 4095 * (s32)size) return 1;
+    return 0;
 }
 
 /* Width-aware load through a register-held address. */
@@ -319,8 +344,14 @@ static void aarch64DerefLoad(AoStr *buf, u32 size, const char *dst_reg,
         else snprintf(mem, sizeof(mem), "[%s, %s, lsl #%d]",
                       base_reg, idx_reg, sh);
         aarch64AddSubImm(buf, base_reg, (s64)disp);
-    } else if (disp != 0) {
+    } else if (disp != 0 && aarch64IsMemDisp(disp, size)) {
         snprintf(mem, sizeof(mem), "[%s, #%d]", base_reg, (int)disp);
+    } else if (disp != 0) {
+        /* Out-of-range displacement: register-offset form via x10 -
+         * base_reg may be a live allocated register, so it must not
+         * be mutated (x10 is free: values use x0/x9, bases x1-x7). */
+        aarch64EmitMovImm(buf, "x10", (s64)disp);
+        snprintf(mem, sizeof(mem), "[%s, x10]", base_reg);
     } else {
         snprintf(mem, sizeof(mem), "[%s]", base_reg);
     }
@@ -352,8 +383,13 @@ static void aarch64DerefStore(AoStr *buf, u32 size, const char *val_reg,
         else snprintf(mem, sizeof(mem), "[%s, %s, lsl #%d]",
                       base_reg, idx_reg, sh);
         aarch64AddSubImm(buf, base_reg, (s64)disp);
-    } else if (disp != 0) {
+    } else if (disp != 0 && aarch64IsMemDisp(disp, size)) {
         snprintf(mem, sizeof(mem), "[%s, #%d]", base_reg, (int)disp);
+    } else if (disp != 0) {
+        /* See aarch64DerefLoad: never mutate base_reg, x10 is free
+         * (the value may be sitting in x9). */
+        aarch64EmitMovImm(buf, "x10", (s64)disp);
+        snprintf(mem, sizeof(mem), "[%s, x10]", base_reg);
     } else {
         snprintf(mem, sizeof(mem), "[%s]", base_reg);
     }
@@ -589,6 +625,7 @@ static int aarch64IsAddImm(s64 v) {
     if ((v & 0xFFF) == 0 && (v >> 12) <= 0xFFF) return 1;
     return 0;
 }
+
 
 /* True if `imm` is encodable as an AArch64 logical bitmask immediate
  * (rotation of N consecutive 1-bits, repeated at 2/4/8/16/32/64 bit
@@ -842,26 +879,42 @@ static void aarch64CopyToSp(AoStr *buf, const char *src_reg, int size, int dst)
 
 /* Copy `size` bytes from [base_reg, #src] to [x29, #dst] using x10 as a
  * scratch register (8/4/2/1-byte chunks). Both src and dst are signed
- * displacements; clang selects ldur/stur for the negative-slot case. */
+ * displacements; clang selects ldur/stur for the negative-slot case.
+ * Either side whose window leaves the always-encodable ldur/stur range
+ * is rebased onto a scratch first (x11 for the source - base_reg may
+ * itself be x9 - and x12 for the frame side; both are free, the
+ * allocator only hands out x0-x7). */
 static void aarch64CopyToSlot(AoStr *buf, const char *base_reg, int size,
                               int src, int dst)
 {
+    const char *dst_base = "x29";
+    if (src < -240 || src + size > 240) {
+        if (src >= 0) aarch64EmitAddSubImm(buf, "add", "x11", base_reg, src);
+        else          aarch64EmitAddSubImm(buf, "sub", "x11", base_reg, -src);
+        base_reg = "x11";
+        src = 0;
+    }
+    if (dst < -240 || dst + size > 240) {
+        aarch64EmitFrameAddr(buf, "x12", dst);
+        dst_base = "x12";
+        dst = 0;
+    }
     int o = 0;
     while (size - o >= 8) {
         aoStrCatFmt(buf, "ldr x10, [%s, #%i]\n\t", base_reg, src + o);
-        aoStrCatFmt(buf, "str x10, [x29, #%i]\n\t", dst + o);
+        aoStrCatFmt(buf, "str x10, [%s, #%i]\n\t", dst_base, dst + o);
         o += 8;
     }
     int rem = size - o;
     if (rem == 4) {
         aoStrCatFmt(buf, "ldr w10, [%s, #%i]\n\t", base_reg, src + o);
-        aoStrCatFmt(buf, "str w10, [x29, #%i]\n\t", dst + o);
+        aoStrCatFmt(buf, "str w10, [%s, #%i]\n\t", dst_base, dst + o);
     } else if (rem == 2) {
         aoStrCatFmt(buf, "ldrh w10, [%s, #%i]\n\t", base_reg, src + o);
-        aoStrCatFmt(buf, "strh w10, [x29, #%i]\n\t", dst + o);
+        aoStrCatFmt(buf, "strh w10, [%s, #%i]\n\t", dst_base, dst + o);
     } else if (rem == 1) {
         aoStrCatFmt(buf, "ldrb w10, [%s, #%i]\n\t", base_reg, src + o);
-        aoStrCatFmt(buf, "strb w10, [x29, #%i]\n\t", dst + o);
+        aoStrCatFmt(buf, "strb w10, [%s, #%i]\n\t", dst_base, dst + o);
     } else if (rem != 0) {
         loggerPanic("ir-cg-aarch64: %d-byte param copy chunk not "
                     "supported\n", rem);
@@ -900,10 +953,10 @@ static void a64TxtEmitInit(A64Emitter *e, IrCgCtx *ctx) {
 
 /* AOT (assembly-text) leaf ops for the shared a64EmitCall lowering. */
 static void a64TxtSubSp(void *be, int n) {
-    aoStrCatFmt(((IrCgCtx *)be)->buf, "sub sp, sp, #%i\n\t", n);
+    aarch64EmitAddSubImm(((IrCgCtx *)be)->buf, "sub", "sp", "sp", n);
 }
 static void a64TxtAddSp(void *be, int n) {
-    aoStrCatFmt(((IrCgCtx *)be)->buf, "add sp, sp, #%i\n\t", n);
+    aarch64EmitAddSubImm(((IrCgCtx *)be)->buf, "add", "sp", "sp", n);
 }
 static void a64TxtLoadStructAddr(void *be, IrValue *a) {
     aarch64LoadToReg((IrCgCtx *)be, a, "x9");
@@ -1002,13 +1055,21 @@ static void a64TxtCallInit(A64CallEmitter *e, IrCgCtx *ctx) {
 /* AOT (assembly-text) leaf ops for the shared a64EmitParamPrologue. */
 static void a64TxtAggStore(void *be, int is_fp, int reg, int loff, int size) {
     AoStr *buf = ((IrCgCtx *)be)->buf;
+    /* Big frames put the slot beyond stur range; rebase onto x9 (free
+     * here - incoming args live in x0-x7/d0-d7). */
+    const char *base = "x29";
+    if (loff < -240 || loff > 240) {
+        aarch64EmitFrameAddr(buf, "x9", loff);
+        base = "x9";
+        loff = 0;
+    }
     if (is_fp)
-        aoStrCatFmt(buf, "str %s%i, [x29, #%i]\n\t", size == 4 ? "s" : "d",
-                    reg, loff);
-    else if (size >= 8) aoStrCatFmt(buf, "str x%i, [x29, #%i]\n\t", reg, loff);
-    else if (size == 4) aoStrCatFmt(buf, "str w%i, [x29, #%i]\n\t", reg, loff);
-    else if (size == 2) aoStrCatFmt(buf, "strh w%i, [x29, #%i]\n\t", reg, loff);
-    else if (size == 1) aoStrCatFmt(buf, "strb w%i, [x29, #%i]\n\t", reg, loff);
+        aoStrCatFmt(buf, "str %s%i, [%s, #%i]\n\t", size == 4 ? "s" : "d",
+                    reg, base, loff);
+    else if (size >= 8) aoStrCatFmt(buf, "str x%i, [%s, #%i]\n\t", reg, base, loff);
+    else if (size == 4) aoStrCatFmt(buf, "str w%i, [%s, #%i]\n\t", reg, base, loff);
+    else if (size == 2) aoStrCatFmt(buf, "strh w%i, [%s, #%i]\n\t", reg, base, loff);
+    else if (size == 1) aoStrCatFmt(buf, "strb w%i, [%s, #%i]\n\t", reg, base, loff);
     else loggerPanic("ir-cg-aarch64: %d-byte struct param chunk not "
                      "supported\n", size);
 }
@@ -1251,9 +1312,15 @@ static void aarch64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                     else
                         aoStrCatFmt(ctx->buf, "ldr %s, [%s, %s]\n\t",
                                     fr, base_reg, idx_reg);
-                } else if (instr->disp != 0) {
+                } else if (instr->disp != 0 &&
+                           aarch64IsMemDisp(instr->disp,
+                               (u32)irValueByteSize(instr->dst))) {
                     aoStrCatFmt(ctx->buf, "ldr %s, [%s, #%i]\n\t",
                                 fr, base_reg, (int)instr->disp);
+                } else if (instr->disp != 0) {
+                    aarch64EmitMovImm(ctx->buf, "x10", (s64)instr->disp);
+                    aoStrCatFmt(ctx->buf, "ldr %s, [%s, x10]\n\t",
+                                fr, base_reg);
                 } else {
                     aoStrCatFmt(ctx->buf, "ldr %s, [%s]\n\t", fr, base_reg);
                 }
@@ -1306,9 +1373,15 @@ static void aarch64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                     else
                         aoStrCatFmt(ctx->buf, "str %s, [%s, %s]\n\t",
                                     fr, base_reg, idx_reg);
-                } else if (instr->disp != 0) {
+                } else if (instr->disp != 0 &&
+                           aarch64IsMemDisp(instr->disp,
+                               (u32)irValueByteSize(instr->r1))) {
                     aoStrCatFmt(ctx->buf, "str %s, [%s, #%i]\n\t",
                                 fr, base_reg, (int)instr->disp);
+                } else if (instr->disp != 0) {
+                    aarch64EmitMovImm(ctx->buf, "x10", (s64)instr->disp);
+                    aoStrCatFmt(ctx->buf, "str %s, [%s, x10]\n\t",
+                                fr, base_reg);
                 } else {
                     aoStrCatFmt(ctx->buf, "str %s, [%s]\n\t", fr, base_reg);
                 }
@@ -1386,12 +1459,7 @@ static void aarch64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                 aarch64GlobalAddr(ctx->cc, ctx->buf, name, "x0");
             } else if (instr->r1) {
                 int loff = irCgGetLoff(&ctx->fn->ra, instr->r1);
-                if (loff < 0 || aarch64IsAddImm(loff)) {
-                    aoStrCatFmt(ctx->buf, "add x0, x29, #%i\n\t", loff);
-                } else {
-                    aarch64EmitMovImm(ctx->buf, "x9", loff);
-                    aoStrCatFmt(ctx->buf, "add x0, x29, x9\n\t");
-                }
+                aarch64EmitFrameAddr(ctx->buf, "x0", loff);
             }
             aarch64SpillDst(ctx, instr, "x0");
             break;
@@ -1575,23 +1643,34 @@ static void aarch64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                 int loff = irCgGetLoff(&ctx->fn->ra, instr->dst);
                 int re = 0, rc = 0;
                 AapcsClass rcls = astAapcsClassify(t, &re, &rc);
+                /* Big frames put the slot beyond ldur/ldr immediate
+                 * range; rebase onto x9 so every chunk offset below
+                 * is small. x9 is dead here (return regs are x0/x1
+                 * or v0..; the epilogue touches only sp/x29/x30). */
+                const char *rbase = "x29";
+                if (loff < -240 || loff > 240) {
+                    aarch64EmitFrameAddr(ctx->buf, "x9", loff);
+                    rbase = "x9";
+                    loff = 0;
+                }
                 if (rcls == AAPCS_HFA) {
                     for (int k = 0; k < rc; ++k)
-                        aoStrCatFmt(ctx->buf, "ldr %s%i, [x29, #%i]\n\t",
-                                    re == 4 ? "s" : "d", k, loff + k * re);
+                        aoStrCatFmt(ctx->buf, "ldr %s%i, [%s, #%i]\n\t",
+                                    re == 4 ? "s" : "d", k, rbase,
+                                    loff + k * re);
                 } else { /* INTEGER, <=16 bytes -> x0,(x1) */
                     int ngp = (t->size + 7) / 8;
                     for (int k = 0; k < ngp; ++k) {
                         int off = k * 8, rem = t->size - off;
                         int at = loff + off;
                         if (rem >= 8)
-                            aoStrCatFmt(ctx->buf, "ldr x%i, [x29, #%i]\n\t", k, at);
+                            aoStrCatFmt(ctx->buf, "ldr x%i, [%s, #%i]\n\t", k, rbase, at);
                         else if (rem == 4)
-                            aoStrCatFmt(ctx->buf, "ldr w%i, [x29, #%i]\n\t", k, at);
+                            aoStrCatFmt(ctx->buf, "ldr w%i, [%s, #%i]\n\t", k, rbase, at);
                         else if (rem == 2)
-                            aoStrCatFmt(ctx->buf, "ldrh w%i, [x29, #%i]\n\t", k, at);
+                            aoStrCatFmt(ctx->buf, "ldrh w%i, [%s, #%i]\n\t", k, rbase, at);
                         else
-                            aoStrCatFmt(ctx->buf, "ldrb w%i, [x29, #%i]\n\t", k, at);
+                            aoStrCatFmt(ctx->buf, "ldrb w%i, [%s, #%i]\n\t", k, rbase, at);
                     }
                 }
             } else if (instr->dst) {
@@ -1712,7 +1791,8 @@ static void aarch64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                                                    force_va_stack);
             int stack_bytes = (n_stack * 8 + 15) & ~15;
             if (stack_bytes > 0) {
-                aoStrCatFmt(ctx->buf, "sub sp, sp, #%i\n\t", stack_bytes);
+                aarch64EmitAddSubImm(ctx->buf, "sub", "sp", "sp",
+                                     stack_bytes);
             }
             int stack_idx = 0;
             for (u64 i = 0; i < n; ++i) {
@@ -1752,7 +1832,8 @@ static void aarch64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                 aoStrCatFmt(ctx->buf, "bl  %s\n\t", normalised);
             }
             if (stack_bytes > 0) {
-                aoStrCatFmt(ctx->buf, "add sp, sp, #%i\n\t", stack_bytes);
+                aarch64EmitAddSubImm(ctx->buf, "add", "sp", "sp",
+                                     stack_bytes);
             }
             if (instr->dst && instr->dst->type != IR_TYPE_VOID) {
                 if (irIsFloat(instr->dst->type)) {
@@ -1844,7 +1925,7 @@ static void aarch64EmitFunctionPrologue(Cctrl *cc, AoStr *buf, Ast *func,
                 "mov x29, sp\n\t");
     if (total_stack > 0) {
         u32 aligned = ((u32)total_stack + 15u) & ~15u;
-        aoStrCatFmt(buf, "sub sp, sp, #%u\n\t", aligned);
+        aarch64EmitAddSubImm(buf, "sub", "sp", "sp", (s64)aligned);
     }
 }
 
@@ -1854,7 +1935,7 @@ static void aarch64Epilogue(IrCgCtx *ctx, int frame_size, int omit_frame) {
         return;
     }
     if (frame_size > 0) {
-        aoStrCatFmt(ctx->buf, "add sp, sp, #%i\n\t", frame_size);
+        aarch64EmitAddSubImm(ctx->buf, "add", "sp", "sp", frame_size);
     }
     aoStrCatFmt(ctx->buf,
                 "ldp x29, x30, [sp], #16\n\t"

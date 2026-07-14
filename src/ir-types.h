@@ -293,6 +293,11 @@ struct IrInstr {
     IrValue *idx;
     u8 scale;
 
+    /* Source line of the Ast being lowered when this instruction was
+     * created (statement-level accuracy). 0 = unknown/synthetic. The
+     * JIT backends turn these into per-chunk pc->line tables. */
+    int line;
+
     union {
         IrBlockPair blocks;
         IrCmpKind cmp_kind;
@@ -498,6 +503,10 @@ Map *irVarValueMapNew(void);
 IrBlockMapping *irBlockMappingNew(int id);
 IrBlock *irBlockNew(void);
 IrValue *irTmp(IrValueType type, u16 size);
+/* Source line currently being lowered - set by ir.c's dispatchers
+ * from Ast->line, stamped onto every irInstrNew instruction. */
+extern int ir_line_hint;
+
 IrInstr *irInstrNew(IrOp op, IrValue *dst, IrValue *r1, IrValue *r2);
 IrFunction *irFunctionNew(AoStr *fname);
 IrValue *irValueNew(IrValueType type, IrValueKind kind);

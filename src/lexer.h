@@ -196,6 +196,9 @@ struct Cctrl;
 
 typedef struct LexFile {
     AoStr *filename; /* name of the file */
+    /* cctrlRegisterFile id, assigned lazily on first token consumed
+     * from this file; 0 = not yet registered. */
+    u32 file_id;
     char *ptr; /* Where we are in the file */
     int lineno; /* line number in the file */
     /* First byte of the current line in `src->data`. Saved/restored
