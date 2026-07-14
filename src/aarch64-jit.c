@@ -619,9 +619,11 @@ static void jitLoadFirstSrcFpr(JitFnCtx *ctx, IrValue *src) {
     jitLoadToFpr(ctx, src, A_X0); /* d0 — same numeric index */
 }
 
-/* idx register for addressing-mode fusion. Returns 1 if `*out` was
- * populated, 0 if no idx component. */
+/* idx register for addressing-mode fusion. Returns 1 if there is an
+ * idx component, 0 otherwise. `*out` is always written so callers can
+ * forward it unconditionally. */
 static int jitIdxReg(JitFnCtx *ctx, IrInstr *instr, A64Reg *out) {
+    *out = A_X2;
     if (!instr->idx || !instr->scale) return 0;
     if (instr->idx->loc.kind == IR_LOC_REG && instr->idx->loc.as.reg) {
         *out = jitRegFromName(instr->idx->loc.as.reg->data);

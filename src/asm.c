@@ -162,6 +162,7 @@ AoStr *asmGenerate(Cctrl *cc) {
             }
             return x86_64AsmGenerate(cc);
     }
+    loggerPanic("asm: unknown target %d\n", (int)cc->target);
 }
 
 /* ---- AOT byte emission for `asm {}` chunks ---- */

@@ -179,8 +179,9 @@ format_mem(Ctx *c, int mod, int rm_lo, char *buf, size_t bufsz)
         disp = (int32_t)d32;
     }
 
-    /* Build the operand string. */
-    char inner[64];
+    /* Build the operand string. Sized so "[" + inner + "]" always fits
+     * the callers' 64-byte rm_buf without truncation. */
+    char inner[62];
     size_t off = 0;
     if (sib_no_base) {
         if (sib_index >= 0)

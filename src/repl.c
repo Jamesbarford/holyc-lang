@@ -272,18 +272,21 @@ static uintptr_t replFaultFindJitFrame(HccJit *jit, uintptr_t fp,
     uintptr_t found = 0;
     if (sigsetjmp(repl_walk_env, 1) == 0) {
         repl_in_walk = 1;
+        /* Walk on a copy: mutating `fp` itself would leave it
+         * indeterminate after the siglongjmp (-Wclobbered). */
+        uintptr_t cur = fp;
         uintptr_t prev = 0;
-        for (int depth = 0; depth < 64 && fp; ++depth) {
-            if (fp & 7) break;              /* torn frame record */
-            if (prev && fp <= prev) break;  /* must move toward base */
-            uintptr_t ret = ((uintptr_t *)fp)[1];
-            uintptr_t next = ((uintptr_t *)fp)[0];
+        for (int depth = 0; depth < 64 && cur; ++depth) {
+            if (cur & 7) break;              /* torn frame record */
+            if (prev && cur <= prev) break;  /* must move toward base */
+            uintptr_t ret = ((uintptr_t *)cur)[1];
+            uintptr_t next = ((uintptr_t *)cur)[0];
             if (ret && hccJitFindChunk(jit, (void *)ret)) {
                 found = ret;
                 break;
             }
-            prev = fp;
-            fp = next;
+            prev = cur;
+            cur = next;
         }
     }
     repl_in_walk = 0;

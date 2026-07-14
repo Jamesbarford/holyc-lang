@@ -1778,8 +1778,10 @@ void parseCompoundStatementInternal(Cctrl *cc, Ast *body) {
          * actually parsed cleanly. Allocations themselves leak
          * into the arena (freed at end of compilation), but the
          * AST no longer points at them. */
-        List *body_tail = (body && body->stms) ? body->stms->prev : NULL;
-        List *locals_tail = cc->tmp_locals ? cc->tmp_locals->prev : NULL;
+        List *volatile body_tail = (body && body->stms) ? body->stms->prev
+                                                        : NULL;
+        List *volatile locals_tail = cc->tmp_locals ? cc->tmp_locals->prev
+                                                    : NULL;
 
         if (setjmp(stmt_recovery) != 0) {
             cc->localenv = block_scope;
@@ -2845,10 +2847,11 @@ void parseToAst(Cctrl *cc) {
          * parseCompoundStatementInternal: if the decl longjmps
          * partway, we truncate any half-built additions so the
          * accumulated program list stays consistent. */
-        List *ast_tail = cc->ast_list ? cc->ast_list->prev : NULL;
-        List *init_tail = cc->initalisers ? cc->initalisers->prev : NULL;
-        List *init_locals_tail = cc->initaliser_locals
-                                 ? cc->initaliser_locals->prev : NULL;
+        List *volatile ast_tail = cc->ast_list ? cc->ast_list->prev : NULL;
+        List *volatile init_tail = cc->initalisers ? cc->initalisers->prev
+                                                   : NULL;
+        List *volatile init_locals_tail = cc->initaliser_locals
+                                          ? cc->initaliser_locals->prev : NULL;
 
         if (setjmp(recovery) != 0) {
             cc->tmp_locals = NULL;
