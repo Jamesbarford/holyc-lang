@@ -67,6 +67,7 @@ static void aarch64InitRegPool(void) {
     pool.float_arg_regs   = aarch64MakeAoStrVec(kFloatRegs,   n_float);
     pool.int_return_reg   = aoStrDupRaw((char *)"x0", 2);
     pool.float_return_reg = aoStrDupRaw((char *)"d0", 2);
+    pool.sret_reg         = aoStrDupRaw((char *)"x8", 2);
     pool.scratch_regs     = aarch64MakeAoStrVec(kScratchRegs, n_scratch);
     pool.variadic_on_stack = 1;
 

@@ -317,9 +317,9 @@ static int irBinOpIsCompoundAssign(AstBinOp op) {
 
 /* True when a function returns a non-intrinsic class / union by value -
  * i.e., the hidden out-pointer convention applies. The caller allocates a
- * buffer of `sizeof(rettype)`, passes its address as a hidden first arg
- * (in `rdi` on `x86_64`), and the callee writes the struct bytes there;
- * the call returns the buffer pointer in `rax`. */
+ * buffer of `sizeof(rettype)` and passes its address as a hidden arg
+ * (`rdi` on x86-64 SysV, which also returns it in `rax`; the dedicated
+ * `x8` on AAPCS64), and the callee writes the struct bytes there. */
 static int irRetTypeIsAggregate(AstType *rettype) {
     if (!rettype) return 0;
     if (rettype->kind != AST_TYPE_CLASS && rettype->kind != AST_TYPE_UNION)
@@ -2805,10 +2805,11 @@ IrFunction *irLowerFunction(IrCtx *ctx, Ast *ast_func) {
      * struct-sized return slot (the scalar-return branch below) and no
      * hidden parameter. */
     int has_hidden_out_ptr = rettype && irRetIsIndirect(rettype);
-    /* Struct-by-value return: the caller passes a hidden out-pointer
-     * in the first int-arg register. Bumps int_arg_idx so the user's
-     * first real int param lands on the second arg reg. */
-    if (has_hidden_out_ptr) int_arg_idx = 1;
+    /* Struct-by-value return: SysV passes the hidden out-pointer in the
+     * first int-arg register, so it consumes an arg slot and the user's
+     * first real int param lands on the second arg reg. An ABI with a
+     * dedicated sret register (AAPCS64: x8) leaves the arg regs alone. */
+    if (has_hidden_out_ptr && !(pool && pool->sret_reg)) int_arg_idx = 1;
 
     for (u64 i = 0; i < ast_func->params->size; ++i) {
         Ast *ast_param = vecGet(Ast *, ast_func->params, i);
@@ -2996,13 +2997,17 @@ IrFunction *irLowerFunction(IrCtx *ctx, Ast *ast_func) {
 
     IrValue *ir_return_var = NULL;
     if (has_hidden_out_ptr) {
-        /* Hidden out-pointer: arrives in int_arg_regs[0] (rdi), spilled
-         * to a slot via the same arrive+store mechanism as a normal
-         * param. func->return_value is the slot so RET sees a stable
-         * stack location. */
+        /* Hidden out-pointer: arrives in the ABI's sret register (x8 on
+         * AAPCS64, int_arg_regs[0] / rdi on SysV), spilled to a slot via
+         * the same arrive+store mechanism as a normal param.
+         * func->return_value is the slot so RET sees a stable stack
+         * location. */
         IrValue *out_arrive = irTmp(IR_TYPE_PTR, 8);
         out_arrive->kind = IR_VAL_PARAM;
-        if (pool && pool->int_arg_regs->size > 0) {
+        if (pool && pool->sret_reg) {
+            out_arrive->loc.kind = IR_LOC_REG;
+            out_arrive->loc.as.reg = pool->sret_reg;
+        } else if (pool && pool->int_arg_regs->size > 0) {
             out_arrive->loc.kind = IR_LOC_REG;
             out_arrive->loc.as.reg =
                 vecGet(AoStr *, pool->int_arg_regs, 0);
