@@ -65,6 +65,7 @@ static void x86_64InitRegPool(void) {
     pool.float_arg_regs   = x86_64MakeAoStrVec(kXmmRegs,     n_float);
     pool.int_return_reg   = aoStrDupRaw((char *)"rax", 3);
     pool.float_return_reg = aoStrDupRaw((char *)"xmm0", 4);
+    pool.sret_reg         = NULL; /* SysV: sret ptr is the first int arg */
     pool.scratch_regs     = x86_64MakeAoStrVec(kScratchRegs, n_scratch);
 
     irRegPoolSet(&pool);

@@ -93,14 +93,17 @@ static inline void a64EmitCall(A64CallEmitter *e, IrInstr *instr,
     u64 n = args ? args->size : 0;
     int ngrn = 0, nsrn = 0;
 
-    /* A <=16-byte aggregate return comes back in registers, so its
-     * destination buffer (args[0]) is NOT an ABI argument: skip it in the
-     * arg passing and copy the result registers into it after the call. A
-     * >16-byte (INDIRECT) return keeps args[0] as the hidden out-pointer. */
+    /* args[0] of an aggregate-returning call is the destination buffer,
+     * and it is never one of the x0-x7 arguments: a <=16-byte return
+     * comes back in registers (copy them into the buffer after the
+     * call), a >16-byte (INDIRECT) return passes the buffer address in
+     * x8, AAPCS64's dedicated indirect-result register. Skip it in the
+     * arg passing either way. */
     AstType *ret_st = (instr->flags & IRCG_CALL_AGG_RETURN) && instr->dst
                       ? instr->dst->byval_struct_type : NULL;
     int reg_ret = ret_st && ret_st->size <= 16;
-    u64 a0 = reg_ret ? 1 : 0;
+    int ind_ret = ret_st && ret_st->size > 16;
+    u64 a0 = ret_st ? 1 : 0;
 
     /* Pre-pass: size the stack-arg area (nsaa_total) and the INDIRECT copy
      * area (indirect_bytes). */
@@ -131,19 +134,25 @@ static inline void a64EmitCall(A64CallEmitter *e, IrInstr *instr,
             }
         }
     }
-    /* Reserve 8 bytes above the arg/copy regions to save the register-return
+    /* Reserve 8 bytes above the arg/copy regions to save the return
      * destination pointer across the call (x9 is caller-saved). */
     int dest_save_off = nsaa_total + indirect_bytes;
-    int total = (nsaa_total + indirect_bytes + (reg_ret ? 16 : 0) + 15) & ~15;
+    int total = (nsaa_total + indirect_bytes + (ret_st ? 16 : 0) + 15) & ~15;
     if (total > 0) e->sub_sp(e->be, total);
     int nsaa = 0, copy_off = 0, copy_base = nsaa_total;
 
-    if (reg_ret) {
+    if (ret_st) {
         /* Compute the destination buffer address into x9 (before the arg
          * loop clobbers x9) and stash it across the call. */
         e->load_struct_addr(e->be, vecGet(IrValue *, args, 0));
         e->stash_dest(e->be, dest_save_off);
     }
+    /* AAPCS64: an INDIRECT return buffer's address goes in x8, the
+     * dedicated indirect-result register (not x0 - that's SysV's rdi
+     * rule). Load it BEFORE the arg loop: args[0] may live in an arg
+     * register (a forwarded LEA), which the loop is about to overwrite;
+     * nothing in the loop touches x8. */
+    if (ind_ret) e->scalar_to_reg(e->be, vecGet(IrValue *, args, 0), 0, 8);
 
     for (u64 i = a0; i < n; ++i) {
         IrValue *a = vecGet(IrValue *, args, i);
@@ -223,14 +232,19 @@ static inline void a64EmitCall(A64CallEmitter *e, IrInstr *instr,
                 e->ret_chunk_store(e->be, 0, k, off, rem >= 8 ? 8 : rem);
             }
         }
+    } else if (ind_ret) {
+        /* The call's dst is the buffer address, but unlike SysV the
+         * callee does NOT return it in x0: reload the stashed copy
+         * while sp is still lowered. */
+        e->unstash_dest(e->be, dest_save_off);   /* x9 = dest buffer */
     }
 
     if (total > 0) e->add_sp(e->be, total);
 
-    if (reg_ret) {
+    if (ret_st) {
         e->spill_struct_dst(e->be, instr);  /* dst = buffer address (x9) */
     } else if (instr->dst && instr->dst->type != IR_TYPE_VOID) {
-        /* Scalar return, or INDIRECT struct return (x0 holds the out-ptr). */
+        /* Scalar return in x0 / d0. */
         e->spill_ret(e->be, instr, irIsFloat(instr->dst->type));
     }
 }
@@ -240,7 +254,7 @@ static inline void a64EmitCall(A64CallEmitter *e, IrInstr *instr,
  *
  * Receives by-value struct params (and register-overflow scalars) into their
  * frame slots. The shared body owns the same ABI accounting as the caller -
- * the hidden-return-pointer reservation, classification, NGRN/NSRN counters,
+ * classification, NGRN/NSRN counters,
  * the incoming-stack cursor (args start at [x29, #16]), and the
  * "unreferenced param -> no slot, still advance the cursor" rule. The backend
  * supplies leaves that store one aggregate chunk / copy a stack param /
@@ -276,10 +290,11 @@ static inline void a64EmitParamPrologue(A64ParamEmitter *e, Ast *ast,
     /* Next stack argument address */
     int nsaa = 0;
 
-    /* Only an INDIRECT (>16-byte) struct return uses a hidden out-pointer
-     * in x0; a <=16-byte aggregate comes back in registers. */
-    AstType *rt = ast->type ? ast->type->rettype : NULL;
-    if (a64IsByvalStruct(rt) && rt->size > 16) ngrn = 1;
+    /* An INDIRECT (>16-byte) struct return's hidden out-pointer arrives
+     * in x8, AAPCS64's dedicated indirect-result register, so it consumes
+     * no argument register (the IR-level arrive+store spills it); a
+     * <=16-byte aggregate comes back in registers. Either way ngrn
+     * starts at 0. */
 
     for (u64 i = 0; i < ast->params->size; ++i) {
         Ast *p = vecGet(Ast *, ast->params, i);

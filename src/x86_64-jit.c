@@ -1669,6 +1669,7 @@ static void jitInitRegPool(void) {
     pool.float_arg_regs   = fv;
     pool.int_return_reg   = aoStrDupRaw((char *)"rax", 3);
     pool.float_return_reg = aoStrDupRaw((char *)"xmm0", 4);
+    pool.sret_reg         = NULL; /* SysV: sret ptr is the first int arg */
     pool.scratch_regs     = sv;
     pool.variadic_on_stack = 0;
     irRegPoolSet(&pool);

@@ -27,6 +27,11 @@ typedef struct IrRegPool {
     Vec *float_arg_regs;
     /* Integer return register (rax on SysV, x0 on AAPCS64). */
     AoStr *int_return_reg;
+    /* Indirect struct-return pointer register, when the ABI dedicates
+     * one outside the argument sequence (AAPCS64: x8). NULL means the
+     * pointer is passed as the first integer argument and consumes
+     * that arg slot (x86-64 SysV: rdi). */
+    AoStr *sret_reg;
     /* Float return register (xmm0 / v0). */
     AoStr *float_return_reg;
     /* Per-instruction scratch surface: registers the codegen clobbers
