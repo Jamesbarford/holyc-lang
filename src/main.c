@@ -78,6 +78,7 @@ typedef struct hccLib {
  * actually in play. */
 static AoStr *linkLibFlags(Cctrl *cc) {
     AoStr *flags = aoStrNew();
+    flags->data[0] = '\0';
     if (!listEmpty(cc->link_libs)) {
         static const char *const extra_dirs[] = {
             "/opt/homebrew/lib",
