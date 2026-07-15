@@ -570,15 +570,27 @@ static void jitEmitSysvCall(JitFnCtx *ctx, IrInstr *instr, Vec *args,
                 SysvClass cl[2]; int neb = 0;
                 int mem = astSysvClassify(t, cl, &neb);
                 int gp = 0, sse = 0;
-                if (!mem)
-                    for (int e = 0; e < neb; ++e)
-                        if (cl[e] == SYSV_INTEGER) gp++; else sse++;
-                if (!mem && g + gp <= 6 && s + sse <= 8) { g += gp; s += sse; }
-                else nsaa_total += (t->size + 7) & ~7;
+                if (!mem) {
+                    for (int e = 0; e < neb; ++e) {
+                        if (cl[e] == SYSV_INTEGER) {
+                            gp++;
+                        } else {
+                            sse++;
+                        }
+                    }
+                }
+                if (!mem && g + gp <= 6 && s + sse <= 8) {
+                    g += gp;
+                    s += sse;
+                } else {
+                    nsaa_total += (t->size + 7) & ~7;
+                }
             } else if (irIsFloat(a->type)) {
-                if (s < 8) s++; else nsaa_total += 8;
+                if   (s < 8) s++;
+                else nsaa_total += 8;
             } else {
-                if (g < 6) g++; else nsaa_total += 8;
+                if (g < 6) g++;
+                else nsaa_total += 8;
             }
         }
     }
@@ -602,9 +614,15 @@ static void jitEmitSysvCall(JitFnCtx *ctx, IrInstr *instr, Vec *args,
             SysvClass cl[2]; int neb = 0;
             int mem = astSysvClassify(t, cl, &neb);
             int gp = 0, sse = 0;
-            if (!mem)
-                for (int e = 0; e < neb; ++e)
-                    if (cl[e] == SYSV_INTEGER) gp++; else sse++;
+            if (!mem) {
+                for (int e = 0; e < neb; ++e) {
+                    if (cl[e] == SYSV_INTEGER) {
+                        gp++;
+                    } else {
+                        sse++;
+                    }
+                }
+            }
             jitLoadToReg(ctx, a, R_R10); /* struct address */
             if (mem || ngp + gp > 6 || nsse + sse > 8) {
                 int words = (t->size + 7) / 8;
@@ -734,9 +752,15 @@ static void jitEmitSysvParamPrologue(JitFnCtx *ctx) {
         int mem = astSysvClassify(t, cl, &neb);
 
         int gp = 0, sse = 0;
-        if (!mem)
-            for (int e = 0; e < neb; ++e)
-                if (cl[e] == SYSV_INTEGER) gp++; else sse++;
+        if (!mem) {
+            for (int e = 0; e < neb; ++e) {
+                if (cl[e] == SYSV_INTEGER) {
+                    gp++;
+                } else {
+                    sse++;
+                }
+            }
+        }
 
         if (mem || ngp + gp > 6 || nsse + sse > 8) {
             if (has_slot) {
