@@ -23,6 +23,15 @@ Main;
 Full documentation for the language and this compiler can be found here: 
 https://holyc-lang.com/
 
+# What's here?
+- AOT compiler (uses clang internally to create and link object files)
+- JIT compiler - `hcc -jit <files...>`
+- [REPL][#repl]
+- [LSP][#lsp] and [see here for setup with neovim][#neovim-lsp-example]
+- Assembler, used in `asm {}` blocks
+- Disassembler
+- A myriad of pernicious bugs
+
 ## Introduction
 A holyc compiler built from scratch in C. Basic optimisations like constant,
 folding and some dead code elimination occurs. But broadly it should be easy
@@ -182,24 +191,6 @@ U8 *Mode()
 }
 ```
 
-## Key Differences between this and TempleOS Holy
-- `F32` data type, TempleOS only supports `F64` however a lot of C libraries,
-  like sdl or raylib require `float`. It's very handy to be able to use these
-  libraries from HolyC code. Hence `F32` exists.
-- `auto` key word for type inference, an addition which makes it easier
-  to write code.
-- `typeof(<type or expr>)` folds, at compile time, to a string literal
-  naming the type: `typeof(1+1)` is `"I64"`, `typeof(&x)` is `"I64 *"`.
-  The operand is only type-checked, never evaluated.
-- Range based for loops can be used with static arrays and structs with 
-  an `entries` field with an accompanying `size` field: `for (auto it : <var>)`
-- You can call any libc code by declaring the prototype with 
-  `extern "c" <type> <function_name>`. Then call the function as you usually
-  would. See [here](https://holyc-lang.com/docs/language-spec/learn-functions) for examples.
-- `#link` for shared objects and libraries, useful to be able to use things like
-   curl, psql etc... in the JIT, repl and AOT.
-
-
 ## Control Flow Graph Example
 Example code:
 ```hc
@@ -228,99 +219,65 @@ Produces the following control flow graph. Note that in order to use
     width="400"/>
 </p>
 
+## LSP
+There is an lsp bundled in with the compiler that can be used with `hcc -lsp`.
+On it's own it's not particularly useful as it's meant to be used with an
+editor.
+
+### neovim lsp example
+Copy and paste this and you should have a mostly functioning LSP. Jump to
+definition and several other useful things are working but it is not yet as
+featureful as say `clangd`.
+
+```lua
+-- .HC files get a filetype; nothing else knows about HolyC
+vim.filetype.add({ extension = { HH = "holyc", HC = "holyc", hc = "holyc" } })
+
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = "holyc",
+  callback = function(ev)
+    vim.lsp.start({
+      name = "hcc",
+      cmd = { "hcc", "-lsp" },
+      root_dir = vim.fs.root(ev.buf, { ".git" })
+                 or vim.fs.dirname(vim.api.nvim_buf_get_name(ev.buf)),
+      -- cmd_env = { HCC_LSP_LOG = "1" },  -- uncomment to trace, view with :LspLog
+    })
+  end,
+})
+
+```
+
+## REPL
+A repl can be used with `hcc -repl`, much like with bash you can have an rc file
+in `~/.hcc_rc.HC` which will be automatically `#include`'d in your session.
+To silence the welcome message put `#define HCC_REPL_NO_HELLO` in it. This is
+TempleOS-like in so much as it immediately executes HolyC from the commandline.
+If you need to use your shell directly you can do `@ <...statements>`, bare in
+mind `cd` will not change directory as under the hood it calls `system(...)`
+with a raw string. See `./src/repl.c` for some built in functions.
+
+## Key Differences between this and TempleOS HolyC
+- `F32` data type, TempleOS only supports `F64` however a lot of C libraries,
+  like sdl or raylib require `float`. It's very handy to be able to use these
+  libraries from HolyC code. Hence `F32` exists.
+- `auto` key word for type inference, an addition which makes it easier
+  to write code.
+- `typeof(<type or expr>)` folds, at compile time, to a string literal
+  naming the type: `typeof(1+1)` is `"I64"`, `typeof(&x)` is `"I64 *"`.
+  The operand is only type-checked, never evaluated.
+- Range based for loops can be used with static arrays and structs with 
+  an `entries` field with an accompanying `size` field: `for (auto it : <var>)`
+- You can call any libc code by declaring the prototype with 
+  `extern "c" <type> <function_name>`. Then call the function as you usually
+  would. See [here](https://holyc-lang.com/docs/language-spec/learn-functions) for examples.
+- `#link` for shared objects and libraries, useful to be able to use things like
+   curl, psql etc... in the JIT, repl and AOT.
+
 ## Experimental Transpiler
 A transpiler can be invoked using `hcc -transpile <file>.HC`, it is best effort 
 however can handle most cases, including assembly. Comments are not preserved
 and some if conditions will require brackets to work correctly
-
-```hc
-asm {
-_TOINT::
-    PUSH    RBP
-    MOV     RBP, RSP
-    MOV     RAX, 0
-    XOR     R8,  R8
-    CMPB    [RDI], '-'
-    JNE     @@01
-    ADD     RDI, 1
-    MOV     R8,  1 // mark as being negative
-@@01:
-    CMPB    [RDI], '0'
-    JL      @@02
-    CMPB    [RDI], '9'
-    JG      @@02
-    MOVB    BL, [RDI]
-    SUBB    BL, '0'
-    MOVZBQ  RBX, BL
-    IMUL    RAX, 10
-    ADD     RAX, RBX
-    ADD     RDI, 1
-    JMP     @@01
-@@02:
-    TEST    R8, R8
-    JZ      @@03
-    NEG     RAX
-@@03:
-    LEAVE
-    RET
-}
-
-public _extern _TOINT I64 ToInt(U8 *str);
-
-U0 Main()
-{ /* entry to function */
-  U8 *number = "12345";
-  auto num = ToInt(number);
-  "%ld\n",num;
-}
-```
-
-Becomes the below:
-```c
-long
-ToInt(unsigned char *str)
-{
-    long retval;
-    __asm__ volatile (
-        "mov $0, %%rax\n\t"
-        "xor %%r8, %%r8\n\t"
-        "cmpb $0x2d, (%%rdi)\n\t"
-        "jne ._toint_1\n\t"
-        "add $1, %%rdi\n\t"
-        "mov $1, %%r8\n\t"
-        "._toint_1:\n\t"
-        "cmpb $0x30, (%%rdi)\n\t"
-        "jl ._toint_2\n\t"
-        "cmpb $0x39, (%%rdi)\n\t"
-        "jg ._toint_2\n\t"
-        "movb (%%rdi), %%bl\n\t"
-        "subb $0x30, %%bl\n\t"
-        "movzbq %%bl, %%rbx\n\t"
-        "imul $10, %%rax\n\t"
-        "add %%rbx, %%rax\n\t"
-        "add $1, %%rdi\n\t"
-        "jmp ._toint_1\n\t"
-        "._toint_2:\n\t"
-        "test %%r8, %%r8\n\t"
-        "jz ._toint_3\n\t"
-        "neg %%rax\n\t"
-        "._toint_3:\n\t"
-        "leave\n\t"
-        "ret\n\t"
-        : "=a"(retval)
-        : "D"(str)
-    );
-    return retval;
-}
-
-int
-main(void)
-{
-    unsigned char *number = "12345";
-    long num = ToInt(number);
-    printf("%ld\n", num);
-}
-```
 
 ## Bugs
 Please open an issue on [github](https://github.com/Jamesbarford/holyc-lang/issues)

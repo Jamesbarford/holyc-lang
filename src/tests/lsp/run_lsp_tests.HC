@@ -21,12 +21,23 @@
  *   hover       function prototype; null off the end of a line
  *   completion  prefix filter; symbols added by a didChange are
  *               visible to an IMMEDIATE completion (flush-before-
- *               query)
+ *               query); member completion after `.`/`->` offers
+ *               exactly the receiver class's fields (prefix-filtered,
+ *               nothing on an untypable receiver, no global noise)
  *   debounce    a keystroke storm publishes ONCE after quiet;
  *               continuous typing still publishes via the max-age cap
  *   survival    a parser-crashing input (function-like macro) yields
  *               diagnostics, not a dead server; queries keep
  *               answering through a crash storm
+ *   rename      locals stay in their function/file; globals span the
+ *               definition file + callers; fields rename their decl +
+ *               typed uses while same-named params survive; collisions
+ *               and invalid names error; prepareRename ranges; stdlib
+ *               symbols are refused
+ *   references  same filtering as rename, read-only: cross-file
+ *               Locations, includeDeclaration honored both ways,
+ *               stdlib symbols ALLOWED (decl synthesized from
+ *               provenance); documentHighlight = one-buffer ranges
  *
  * Allocation discipline: this is a short-lived test process, so
  * allocations are deliberately never freed - keeps the harness free
@@ -73,6 +84,8 @@ U8 *MAIN_HC;
 U8 *BAD_INCLUDE_HC;
 U8 *BROKEN_HC;
 U8 *CRASHER_HC;
+U8 *RENAME_HC;
+U8 *STD_HC;
 
 U0 InitFixtures()
 {
@@ -107,6 +120,24 @@ U0 InitFixtures()
     "#define F(x) ((x)*2)\n"
     "I64 Main() {\n"
     "  return F(2);\n"
+    "}\n";
+  /* Rename traps: Helper's param is named `x` like LibPoint's field,
+   * and `total` must not leak out of Run. */
+  RENAME_HC =
+    "#include \"lib.HC\"\n"
+    "I64 Helper(I64 x) {\n"
+    "  return x + 1;\n"
+    "}\n"
+    "I64 Run() {\n"
+    "  LibPoint p;\n"
+    "  I64 total = LibAdd(3, 4);\n"
+    "  p.x = total;\n"
+    "  return p.x + Helper(total);\n"
+    "}\n";
+  STD_HC =
+    "U0 Go() {\n"
+    "  U8 *m = MAlloc(16);\n"
+    "  Free(m);\n"
     "}\n";
 }
 
@@ -508,6 +539,87 @@ Bool LabelsOk(Json *resp, U8 *prefix, U8 *must1, U8 *must2)
   return has1 && has2;
 }
 
+/* The `"uri":[TextEdit...]` entry of a rename's WorkspaceEdit, or
+ * NULL when the file has no edits. */
+Json *RenameChangesFor(Json *resp, U8 *uri)
+{
+  if (resp == NULL) return NULL;
+  Json *changes = JsonSelect(resp, ".result.changes:o");
+  if (changes == NULL) return NULL;
+  Json *it = changes->object;
+  while (it != NULL) {
+    if (it->key != NULL && StrCmp(it->key, uri) == 0) return it;
+    it = it->next;
+  }
+  return NULL;
+}
+
+I64 RenameFileCount(Json *resp)
+{
+  if (resp == NULL) return -1;
+  Json *changes = JsonSelect(resp, ".result.changes:o");
+  if (changes == NULL) return -1;
+  I64 n = 0;
+  Json *it = changes->object;
+  while (it != NULL) {
+    n++;
+    it = it->next;
+  }
+  return n;
+}
+
+I64 JsonArrayCount(Json *arr)
+{
+  if (arr == NULL) return -1;
+  I64 n = 0;
+  Json *it = arr->array;
+  while (it != NULL) {
+    n++;
+    it = it->next;
+  }
+  return n;
+}
+
+Bool HasEditAt(Json *file_edits, I64 line, I64 chr)
+{
+  if (file_edits == NULL) return FALSE;
+  Json *it = file_edits->array;
+  while (it != NULL) {
+    Json *l = JsonSelect(it, ".range.start.line:i");
+    Json *c = JsonSelect(it, ".range.start.character:i");
+    if (l != NULL && c != NULL && l->i64 == line && c->i64 == chr) {
+      return TRUE;
+    }
+    it = it->next;
+  }
+  return FALSE;
+}
+
+Bool IsErrorResult(Json *resp)
+{
+  if (resp == NULL) return FALSE;
+  return JsonSelect(resp, ".error:o") != NULL;
+}
+
+/* A Location array (references result) contains (uri, line, chr). */
+Bool HasLocation(Json *arr, U8 *uri, I64 line, I64 chr)
+{
+  if (arr == NULL) return FALSE;
+  Json *it = arr->array;
+  while (it != NULL) {
+    Json *u = JsonSelect(it, ".uri:s");
+    Json *l = JsonSelect(it, ".range.start.line:i");
+    Json *c = JsonSelect(it, ".range.start.character:i");
+    if (u != NULL && l != NULL && c != NULL &&
+        StrCmp(u->str, uri) == 0 && l->i64 == line && c->i64 == chr)
+    {
+      return TRUE;
+    }
+    it = it->next;
+  }
+  return FALSE;
+}
+
 /* Diagnostics array of the LAST publish is empty. */
 Bool LastPublishClean(LspClient *l)
 {
@@ -681,6 +793,45 @@ U0 TestHoverCompletion()
   resp = LspPositionRequest(l, "textDocument/completion", uri, line, chr);
   Check("completion right after an edit sees the new symbol",
         LabelsOk(resp, "Lib", "LibMul", NULL));
+
+  /* Member completion: after `p.` the receiver's fields ARE the
+   * namespace - exactly x and y, no global noise. */
+  PosOf(MAIN_HC, "p.x = total", 2, &line, &chr);
+  resp = LspPositionRequest(l, "textDocument/completion", uri, line, chr);
+  Json *items = JsonSelect(resp, ".result.items:a");
+  Check("member completion after `.` offers exactly the fields",
+        JsonArrayCount(items) == 2 && LabelsOk(resp, "", "x", "y"));
+
+  PosOf(MAIN_HC, "p.x = total", 3, &line, &chr);
+  resp = LspPositionRequest(l, "textDocument/completion", uri, line, chr);
+  items = JsonSelect(resp, ".result.items:a");
+  Check("member completion respects the typed prefix",
+        JsonArrayCount(items) == 1 && LabelsOk(resp, "x", "x", NULL));
+
+  /* Each edit EXTENDS the previous text: the REPL-model Cctrl keeps
+   * symbols an edit deletes (with their stale lines), and a stale
+   * function whose line overlaps the new one derails the
+   * enclosing-function heuristic. Supersets mirror real typing. */
+  I64 pcap = StrLen(with_mul) + 128;
+  U8 *with_ptr = MAlloc(pcap);
+  snprintf(with_ptr, pcap, "%sU0 UsePtr(LibPoint *lp) {\n  lp->x = 1;\n}\n",
+           with_mul);
+  LspDidChange(l, uri, with_ptr);
+  PosOf(with_ptr, "lp->x", 4, &line, &chr);
+  resp = LspPositionRequest(l, "textDocument/completion", uri, line, chr);
+  items = JsonSelect(resp, ".result.items:a");
+  Check("member completion after `->`",
+        JsonArrayCount(items) == 2 && LabelsOk(resp, "", "x", "y"));
+
+  /* An untypable receiver offers NOTHING, never the global soup. */
+  U8 *with_bad = MAlloc(pcap + 32);
+  snprintf(with_bad, pcap + 32, "%sU0 Zz() {\n  zz.\n}\n", with_ptr);
+  LspDidChange(l, uri, with_bad);
+  PosOf(with_bad, "zz.", 3, &line, &chr);
+  resp = LspPositionRequest(l, "textDocument/completion", uri, line, chr);
+  items = JsonSelect(resp, ".result.items:a");
+  Check("member completion on an untypable receiver offers nothing",
+        JsonArrayCount(items) == 0);
   Check("clean shutdown", LspClose(l) == 0);
 }
 
@@ -750,6 +901,179 @@ U0 TestSurvival()
   Check("server survives to shut down cleanly", LspClose(l) == 0);
 }
 
+U0 TestRename()
+{
+  "rename\n";
+  LspClient *l = LspStart();
+  U8 *uri = UriOf("rename.HC");
+  U8 *lib_uri = UriOf("lib.HC");
+  LspDidOpen(l, uri, RENAME_HC);
+
+  I64 line;
+  I64 chr;
+  I64 dline;
+  I64 dchr;
+  U8 params[512];
+
+  /* Local: decl + both uses, ONE file, Helper untouched. */
+  PosOf(RENAME_HC, "p.x = total", 6, &line, &chr);
+  snprintf(params, 512,
+           "{\"textDocument\":{\"uri\":\"%s\"},"
+           "\"position\":{\"line\":%lld,\"character\":%lld},"
+           "\"newName\":\"sum\"}", uri, line, chr);
+  Json *resp = LspRequest(l, "textDocument/rename", params);
+  Json *edits = RenameChangesFor(resp, uri);
+  PosOf(RENAME_HC, "I64 total", 4, &dline, &dchr);
+  Check("local rename: decl + both uses in one file",
+        RenameFileCount(resp) == 1 && JsonArrayCount(edits) == 3 &&
+        HasEditAt(edits, dline, dchr));
+
+  /* Global: the definition in lib.HC + the call here. */
+  PosOf(RENAME_HC, "LibAdd(3, 4)", 2, &line, &chr);
+  snprintf(params, 512,
+           "{\"textDocument\":{\"uri\":\"%s\"},"
+           "\"position\":{\"line\":%lld,\"character\":%lld},"
+           "\"newName\":\"LibSum\"}", uri, line, chr);
+  resp = LspRequest(l, "textDocument/rename", params);
+  edits = RenameChangesFor(resp, uri);
+  Json *lib_edits = RenameChangesFor(resp, lib_uri);
+  PosOf(LIB_HC, "LibAdd", 0, &dline, &dchr);
+  Check("global rename spans the definition file and the caller",
+        RenameFileCount(resp) == 2 && JsonArrayCount(edits) == 1 &&
+        JsonArrayCount(lib_edits) == 1 && HasEditAt(lib_edits, dline, dchr));
+
+  /* Field: both p.x uses + the decl in lib.HC; Helper's param `x`
+   * and its use MUST survive. */
+  PosOf(RENAME_HC, "p.x = total", 2, &line, &chr);
+  snprintf(params, 512,
+           "{\"textDocument\":{\"uri\":\"%s\"},"
+           "\"position\":{\"line\":%lld,\"character\":%lld},"
+           "\"newName\":\"px\"}", uri, line, chr);
+  resp = LspRequest(l, "textDocument/rename", params);
+  edits = RenameChangesFor(resp, uri);
+  lib_edits = RenameChangesFor(resp, lib_uri);
+  PosOf(LIB_HC, "I64 x;", 4, &dline, &dchr);
+  Check("field rename: typed uses + declaration, params spared",
+        JsonArrayCount(edits) == 2 && JsonArrayCount(lib_edits) == 1 &&
+        HasEditAt(lib_edits, dline, dchr));
+
+  /* Renaming ONTO something that exists is refused. */
+  PosOf(RENAME_HC, "p.x = total", 6, &line, &chr);
+  snprintf(params, 512,
+           "{\"textDocument\":{\"uri\":\"%s\"},"
+           "\"position\":{\"line\":%lld,\"character\":%lld},"
+           "\"newName\":\"p\"}", uri, line, chr);
+  resp = LspRequest(l, "textDocument/rename", params);
+  Check("rename onto an existing local errors", IsErrorResult(resp));
+
+  snprintf(params, 512,
+           "{\"textDocument\":{\"uri\":\"%s\"},"
+           "\"position\":{\"line\":%lld,\"character\":%lld},"
+           "\"newName\":\"9bad\"}", uri, line, chr);
+  resp = LspRequest(l, "textDocument/rename", params);
+  Check("invalid new name errors", IsErrorResult(resp));
+
+  /* prepareRename: a range + placeholder on a symbol, null off one. */
+  PosOf(RENAME_HC, "LibAdd(3, 4)", 2, &line, &chr);
+  resp = LspPositionRequest(l, "textDocument/prepareRename", uri, line, chr);
+  Json *ph = JsonSelect(resp, ".result.placeholder:s");
+  Check("prepareRename yields the symbol's range",
+        ph != NULL && StrCmp(ph->str, "LibAdd") == 0);
+  resp = LspPositionRequest(l, "textDocument/prepareRename", uri, 0, 0);
+  Check("prepareRename on a non-symbol is null", IsNullResult(resp));
+
+  /* Stdlib guard - only when an installed stdlib was bootstrapped. */
+  if (access("/usr/local/include/tos.HH", 0) == 0) {
+    U8 *suri = UriOf("std.HC");
+    LspDidOpen(l, suri, STD_HC);
+    PosOf(STD_HC, "MAlloc", 0, &line, &chr);
+    snprintf(params, 512,
+             "{\"textDocument\":{\"uri\":\"%s\"},"
+             "\"position\":{\"line\":%lld,\"character\":%lld},"
+             "\"newName\":\"MyAlloc\"}", suri, line, chr);
+    resp = LspRequest(l, "textDocument/rename", params);
+    Check("stdlib symbol rename is refused", IsErrorResult(resp));
+  } else {
+    "  (skipped stdlib rename guard: no installed stdlib)\n";
+  }
+  Check("clean shutdown", LspClose(l) == 0);
+}
+
+U0 TestReferences()
+{
+  "references & highlight\n";
+  LspClient *l = LspStart();
+  U8 *uri = UriOf("rename.HC");
+  U8 *lib_uri = UriOf("lib.HC");
+  LspDidOpen(l, uri, RENAME_HC);
+
+  I64 line;
+  I64 chr;
+  I64 dline;
+  I64 dchr;
+  U8 params[512];
+
+  /* Global fn: the definition in lib.HC + the call here. */
+  PosOf(RENAME_HC, "LibAdd(3, 4)", 2, &line, &chr);
+  snprintf(params, 512,
+           "{\"textDocument\":{\"uri\":\"%s\"},"
+           "\"position\":{\"line\":%lld,\"character\":%lld},"
+           "\"context\":{\"includeDeclaration\":true}}", uri, line, chr);
+  Json *resp = LspRequest(l, "textDocument/references", params);
+  Json *arr = JsonSelect(resp, ".result:a");
+  PosOf(LIB_HC, "LibAdd", 0, &dline, &dchr);
+  Check("references: definition + call site across files",
+        JsonArrayCount(arr) == 2 && HasLocation(arr, lib_uri, dline, dchr));
+
+  snprintf(params, 512,
+           "{\"textDocument\":{\"uri\":\"%s\"},"
+           "\"position\":{\"line\":%lld,\"character\":%lld},"
+           "\"context\":{\"includeDeclaration\":false}}", uri, line, chr);
+  resp = LspRequest(l, "textDocument/references", params);
+  arr = JsonSelect(resp, ".result:a");
+  Check("references: includeDeclaration=false drops the definition",
+        JsonArrayCount(arr) == 1 && !HasLocation(arr, lib_uri, dline, dchr));
+
+  /* Field: decl + both typed uses, the same-named param spared. */
+  PosOf(RENAME_HC, "p.x = total", 2, &line, &chr);
+  snprintf(params, 512,
+           "{\"textDocument\":{\"uri\":\"%s\"},"
+           "\"position\":{\"line\":%lld,\"character\":%lld},"
+           "\"context\":{\"includeDeclaration\":true}}", uri, line, chr);
+  resp = LspRequest(l, "textDocument/references", params);
+  arr = JsonSelect(resp, ".result:a");
+  PosOf(LIB_HC, "I64 x;", 4, &dline, &dchr);
+  Check("references: field decl + typed uses, params spared",
+        JsonArrayCount(arr) == 3 && HasLocation(arr, lib_uri, dline, dchr));
+
+  /* documentHighlight: every occurrence of the local in THIS buffer. */
+  PosOf(RENAME_HC, "p.x = total", 6, &line, &chr);
+  resp = LspPositionRequest(l, "textDocument/documentHighlight", uri,
+                            line, chr);
+  arr = JsonSelect(resp, ".result:a");
+  Check("documentHighlight: all three occurrences of the local",
+        JsonArrayCount(arr) == 3);
+
+  /* Stdlib references ALLOWED (rename refuses these): the use here +
+   * the declaration synthesized from tos.HH provenance. */
+  if (access("/usr/local/include/tos.HH", 0) == 0) {
+    U8 *suri = UriOf("std.HC");
+    LspDidOpen(l, suri, STD_HC);
+    PosOf(STD_HC, "MAlloc", 0, &line, &chr);
+    snprintf(params, 512,
+             "{\"textDocument\":{\"uri\":\"%s\"},"
+             "\"position\":{\"line\":%lld,\"character\":%lld},"
+             "\"context\":{\"includeDeclaration\":true}}", suri, line, chr);
+    resp = LspRequest(l, "textDocument/references", params);
+    arr = JsonSelect(resp, ".result:a");
+    Check("references: stdlib symbol allowed, decl from tos.HH",
+          JsonArrayCount(arr) == 2 && HasLocation(arr, suri, line, chr));
+  } else {
+    "  (skipped stdlib references: no installed stdlib)\n";
+  }
+  Check("clean shutdown", LspClose(l) == 0);
+}
+
 /* ---------------- driver ---------------- */
 
 I32 Main()
@@ -790,6 +1114,10 @@ I32 Main()
   FileWrite(path, BROKEN_HC, StrLen(BROKEN_HC));
   snprintf(path, 512, "%s/crash.HC", g_dir);
   FileWrite(path, CRASHER_HC, StrLen(CRASHER_HC));
+  snprintf(path, 512, "%s/rename.HC", g_dir);
+  FileWrite(path, RENAME_HC, StrLen(RENAME_HC));
+  snprintf(path, 512, "%s/std.HC", g_dir);
+  FileWrite(path, STD_HC, StrLen(STD_HC));
 
   "hcc -lsp tests (%s)\n", g_hcc;
   TestHandshake();
@@ -798,6 +1126,8 @@ I32 Main()
   TestHoverCompletion();
   TestDebounce();
   TestSurvival();
+  TestRename();
+  TestReferences();
 
   snprintf(cmd, 256, "rm -rf %s", tmp);
   System(cmd);

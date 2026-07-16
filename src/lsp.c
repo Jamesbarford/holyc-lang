@@ -1,4 +1,5 @@
-/* LSP server - see lsp.h for scope.
+/* LSP server - this is nasty. Basicly a JSON server with a bunch
+ * of really slow loops constantly scanning a file.
  *
  * Model: ONE persistent Cctrl with CCTRL_REPL set (redefinition
  * replaces instead of erroring - the REPL's proven trick), full
@@ -388,8 +389,9 @@ static void lspCatDiagnostic(AoStr *body, CctrlDiagnostic *d,
      * minus the prefix. */
     const char *m = d->message->data;
     size_t mlen = d->message->len;
-    if (strncmp(m, str_lit("error: ")) == 0)        { m += 7; mlen -= 7; }
+    if      (strncmp(m, str_lit("error: ")) == 0)   { m += 7; mlen -= 7; }
     else if (strncmp(m, str_lit("warning: ")) == 0) { m += 9; mlen -= 9; }
+
     const char *nl = memchr(m, '\n', mlen);
     if (nl) mlen = (size_t)(nl - m);
     jsonEscapeInto(body, m, mlen);
@@ -528,7 +530,8 @@ static AoStr *lspDocGetOrLoad(LspCtx *ctx, const char *uri) {
 }
 
 static void lspDocSet(LspCtx *ctx, const char *uri, const char *text,
-                      size_t len) {
+                      size_t len)
+{
     AoStr *old = (AoStr *)mapGet(ctx->docs, (void *)uri);
     if (old) {
         mapRemove(ctx->docs, (void *)uri);
@@ -589,9 +592,11 @@ static int lspIsIdentChar(char c) {
 
 /* The identifier spanning (line, character) in `text`, copied into
  * `out`. `prefix_only` stops at the cursor (completion wants the
- * typed prefix; hover wants the whole word). 0 when there isn't one. */
+ * typed prefix; hover wants the whole word). `start_col` (nullable)
+ * receives the identifier's 0-based start column - rename needs the
+ * exact range. 0 when there isn't one. */
 static int lspIdentAt(AoStr *text, int line, int character, int prefix_only,
-                      char *out, size_t out_size) {
+                      char *out, size_t out_size, int *start_col) {
     const char *s = text->data;
     size_t n = text->len;
     size_t i = 0;
@@ -614,12 +619,14 @@ static int lspIdentAt(AoStr *text, int line, int character, int prefix_only,
     if (isdigit((unsigned char)s[start])) return 0;
     memcpy(out, s + start, end - start);
     out[end - start] = '\0';
+    if (start_col) *start_col = (int)(start - line_start);
     return 1;
 }
 
 /* Uri + position out of a request's params; 1 on success. */
 static int lspTextDocPosition(Json *params, const char **uri,
-                              int *line, int *character) {
+                              int *line, int *character)
+{
     *uri = jsonStrOr(jsonObjGet(params, "textDocument"), "uri", NULL);
     Json *pos = jsonObjGet(params, "position");
     if (*uri == NULL || pos == NULL) return 0;
@@ -636,7 +643,7 @@ static void lspHover(LspCtx *ctx, Json *id, Json *params) {
     if (ctx->cc_dirty || /* crashed mid-parse; symbol tables suspect */
         !lspTextDocPosition(params, &uri, &line, &character) ||
         (text = lspDocGetOrLoad(ctx, uri)) == NULL ||
-        !lspIdentAt(text, line, character, 0, ident, sizeof(ident)))
+        !lspIdentAt(text, line, character, 0, ident, sizeof(ident), NULL))
     {
         lspRespond(id, "null");
         return;
@@ -695,6 +702,7 @@ static const char *lsp_keywords[] = {
 };
 
 #define HCC_LSP_FUNCTION     3
+#define HCC_LSP_FIELD        5
 #define HCC_LSP_VARIABLE     6
 #define HCC_LSP_CLASS        7
 /* tbh we could double up with out usage of class here */
@@ -704,7 +712,8 @@ static const char *lsp_keywords[] = {
 
 /* One CompletionItem; label escaped, detail optional. */
 static void lspCatCompletion(AoStr *body, int *emitted, const char *label,
-                             int kind, const char *detail) {
+                             int kind, const char *detail)
+{
     if ((*emitted)++) aoStrPutChar(body, ',');
     aoStrCatPrintf(body, "{\"label\":\"");
     jsonEscapeInto(body, label, strlen(label));
@@ -751,13 +760,19 @@ static char *lspConstantSuggestionResolver(Ast *entry, int *_type) {
     return "#define";
 }
 
+/* Defined with the definition machinery below; completion needs it
+ * for member completion (`recv.` / `recv->` field suggestions). */
+static AstType *lspMemberClassAt(LspCtx *ctx, AoStr *text, u32 doc_id,
+                                 int line, int character, int *is_member);
+
 /* Find matching prefix in a symbol table */
 void lspScanMapForSuggestion(Map *suggestions,
                              char *prefix,
                              int plen,
                              AoStr *body,
                              int *_emitted,
-                             char *(lsp_suggestion_resolver)(Ast *entry, int *_type)) {
+                             char *(lsp_suggestion_resolver)(Ast *entry, int *_type))
+{
     MapIter mi;
     int emitted = *_emitted;
     mapIterInit(suggestions, &mi);
@@ -787,8 +802,45 @@ static void lspCompletion(LspCtx *ctx, Json *id, Json *params) {
     }
     /* No identifier under the cursor = empty prefix = offer everything
      * (the client filters as the user types). */
-    lspIdentAt(text, line, character, 1, prefix, sizeof(prefix));
+    lspIdentAt(text, line, character, 1, prefix, sizeof(prefix), NULL);
     size_t plen = strlen(prefix);
+
+    /* Member completion: after `recv.` / `recv->` (plus an optional
+     * partial field prefix) the receiver class's FIELDS are the whole
+     * namespace - global suggestions would be pure noise. An
+     * untypable receiver offers nothing rather than everything. */
+    char *doc_path = lspUriToPath(uri);
+    AoStr path_s = { .data = doc_path, .len = strlen(doc_path),
+                     .capacity = 0 };
+    u32 doc_id = cctrlRegisterFile(ctx->cc, &path_s);
+    free(doc_path);
+    int is_member = 0;
+    AstType *mcls = lspMemberClassAt(ctx, text, doc_id, line, character,
+                                     &is_member);
+    if (is_member) {
+        AoStr *mbody = aoStrNew();
+        aoStrCatPrintf(mbody, "{\"isIncomplete\":false,\"items\":[");
+        int memitted = 0;
+        if (mcls && mcls->fields) {
+            MapIter mi;
+            mapIterInit(mcls->fields, &mi);
+            while (mapIterNext(&mi)) {
+                const char *fname = (const char *)mi.node->key;
+                if (strncmp(fname, prefix, plen) != 0) continue;
+                AstType *ft = (AstType *)mi.node->value;
+                int kind = (ft && ft->kind == AST_TYPE_FUNC)
+                         ? HCC_LSP_FUNCTION : HCC_LSP_FIELD;
+                lspCatCompletion(mbody, &memitted, fname, kind,
+                                 ft ? astTypeToString(ft) : NULL);
+            }
+        }
+        aoStrCatPrintf(mbody, "]}");
+        lspRespond(id, mbody->data);
+        aoStrRelease(mbody);
+        lspLog(ctx, "lsp: member completion '%s' -> %d item(s)",
+               prefix, memitted);
+        return;
+    }
 
     AoStr *body = aoStrNew();
     aoStrCatPrintf(body, "{\"isIncomplete\":false,\"items\":[");
@@ -829,7 +881,8 @@ static void lspCompletion(LspCtx *ctx, Json *id, Json *params) {
  * came from the enclosing function - its file is the document by
  * construction. */
 static Ast *lspResolveValue(LspCtx *ctx, u32 doc_id, int cursor_line,
-                            const char *ident, s64 ilen, int *in_doc) {
+                            const char *ident, s64 ilen, int *in_doc)
+{
     Ast *entry = NULL;
     *in_doc = 0;
 
@@ -982,6 +1035,45 @@ static AstType *lspCanonicalClass(LspCtx *ctx, AstType *t) {
     return t;
 }
 
+/* Type the receiver chain of the member access whose final identifier
+ * sits at (line, character): `a->b(x).c[i]->IDENT` yields the
+ * canonical class carrying IDENT as a field. *is_member distinguishes
+ * "not a member access at all" (0) from "member access we couldn't
+ * type" (1, NULL return) - callers must not fall back to value lookups
+ * for the latter, a field name is not a variable reference. */
+static AstType *lspMemberClassAt(LspCtx *ctx, AoStr *text, u32 doc_id,
+                                 int line, int character, int *is_member)
+{
+    char chain[HCC_LSP_MAX_CHAIN][256];
+    u8 kinds[HCC_LSP_MAX_CHAIN];
+    int nseg = lspMemberChain(text, line, character, chain, kinds);
+    *is_member = nseg > 0;
+    if (nseg == 0) return NULL;
+
+    int in_doc = 0;
+    Ast *r = lspResolveValue(ctx, doc_id, line + 1, chain[0],
+                             (s64)strlen(chain[0]), &in_doc);
+    AstType *ty = NULL;
+    if (r) {
+        /* `Foo()->x`: the head is a call - hop via the return type.
+         * Indexing needs nothing special: the canonical chase strips
+         * pointer/array levels to reach the class. */
+        if (kinds[0] == HCC_LSP_SEG_CALL)
+            ty = (r->type && r->type->rettype)
+              ? lspCanonicalClass(ctx, r->type->rettype) : NULL;
+        else
+            ty = lspCanonicalClass(ctx, r->type);
+    }
+    for (int seg = 1; seg < nseg && ty && ty->fields; ++seg) {
+        AstType *f = (AstType *)mapGetLen(ty->fields, chain[seg],
+                (s64)strlen(chain[seg]));
+        if (f && kinds[seg] == HCC_LSP_SEG_CALL)
+            f = f->rettype; /* fn-pointer field call */
+        ty = f ? lspCanonicalClass(ctx, f) : NULL;
+    }
+    return (ty && ty->fields) ? ty : NULL;
+}
+
 /* If `line` in `text` is an `#include "..."` / `#include <...>`
  * directive, respond with the top of the included file - resolved the
  * way lexInclude does: <> against the builtin include root, "" against
@@ -991,7 +1083,8 @@ static AstType *lspCanonicalClass(LspCtx *ctx, AstType *t) {
  * the target file doesn't exist; the path fragments under the cursor
  * must not fall through to identifier lookup), 0 otherwise. */
 static int lspIncludeDefinition(LspCtx *ctx, Json *id, const char *uri,
-                                AoStr *text, int line) {
+                                AoStr *text, int line)
+{
     const char *s = text->data;
     size_t n = text->len;
     size_t i = 0;
@@ -1072,7 +1165,7 @@ static void lspDefinition(LspCtx *ctx, Json *id, Json *params) {
     /* Anywhere on an #include line jumps to the file itself. */
     if (lspIncludeDefinition(ctx, id, uri, text, line)) return;
     if (ctx->cc_dirty || /* crashed mid-parse; symbol tables suspect */
-        !lspIdentAt(text, line, character, 0, ident, sizeof(ident)))
+        !lspIdentAt(text, line, character, 0, ident, sizeof(ident), NULL))
     {
         lspRespond(id, "null");
         return;
@@ -1098,44 +1191,22 @@ static void lspDefinition(LspCtx *ctx, Json *id, Json *params) {
      * the head variable, hopping class fields, and jump to the FIELD.
      * The canonical class AstTypes are shared with clsdefs, so fields
      * carry the provenance stamped at parse. */
-    char chain[HCC_LSP_MAX_CHAIN][256];
-    u8 kinds[HCC_LSP_MAX_CHAIN];
-    int nseg = lspMemberChain(text, line, character, chain, kinds);
-    if (nseg > 0) {
-        Ast *r = lspResolveValue(ctx, doc_id, cursor_line, chain[0],
-                                 (s64)strlen(chain[0]), &in_doc);
-        AstType *t = NULL;
-        if (r) {
-            /* `Foo()->x`: the head is a call - hop via the return
-             * type. Indexing needs nothing special: the canonical
-             * chase strips pointer/array levels to reach the class. */
-            if (kinds[0] == HCC_LSP_SEG_CALL)
-                t = (r->type && r->type->rettype)
-                  ? lspCanonicalClass(ctx, r->type->rettype) : NULL;
-            else
-                t = lspCanonicalClass(ctx, r->type);
-        }
-        for (int seg = 1; seg < nseg && t && t->fields; ++seg) {
-            AstType *f = (AstType *)mapGetLen(t->fields, chain[seg],
-                    (s64)strlen(chain[seg]));
-            if (f && kinds[seg] == HCC_LSP_SEG_CALL)
-                f = f->rettype; /* fn-pointer field call */
-            t = f ? lspCanonicalClass(ctx, f) : NULL;
-        }
-        if (t && t->fields) {
-            AstType *field = (AstType *)mapGetLen(t->fields, ident, ilen);
-            if (field && field->line > 0) {
-                def_line = field->line;
-                def_col = field->col;
-                def_file = field->file_id;
-            }
+    int is_member = 0;
+    AstType *mcls = lspMemberClassAt(ctx, text, doc_id, line, character,
+                                     &is_member);
+    if (mcls) {
+        AstType *field = (AstType *)mapGetLen(mcls->fields, ident, ilen);
+        if (field && field->line > 0) {
+            def_line = field->line;
+            def_col = field->col;
+            def_file = field->file_id;
         }
     }
 
     /* Plain identifier: values first, then types. A member access
      * that failed to resolve stays null - a field name is not a
      * variable reference, and guessing jumps to wrong classes. */
-    if (nseg == 0 && def_line == 0) {
+    if (!is_member && def_line == 0) {
         in_doc = 0;
         Ast *entry = lspResolveValue(ctx, doc_id, cursor_line, ident, ilen,
                                      &in_doc);
@@ -1187,6 +1258,770 @@ static void lspDefinition(LspCtx *ctx, Json *id, Json *params) {
     aoStrRelease(result);
 }
 
+/* ---------------- rename ----------------
+ *
+ * Occurrences are found TEXTUALLY (a scan that skips strings, char
+ * literals, comments and #include paths) and then filtered
+ * SEMANTICALLY with the same machinery hover/definition use: a value
+ * occurrence must resolve to the SAME Ast as the cursor's symbol, a
+ * field occurrence's receiver chain must type to the SAME canonical
+ * class. That is what keeps `total` in one function from renaming
+ * `total` in another, and `p.x` from renaming an unrelated local `x`.
+ *
+ * Scope: a local never escapes its document; everything else scans
+ * every file the compiler has seen (cc->file_map), with open-editor
+ * buffers taking precedence over disk. The stdlib is excluded - and a
+ * symbol DEFINED there is refused outright, renaming it would edit
+ * the installed header. */
+
+static int lspIsIdentStart(char c) {
+    return isalpha((unsigned char)c) || c == '_';
+}
+
+typedef struct LspOccurrence {
+    int line;   /* 0-based */
+    int col;    /* 0-based byte column of the identifier's first char */
+    u8 member;  /* preceded by `.` / `->`: a field position */
+    u8 hash;    /* directly preceded by `#`: a directive keyword */
+    u8 define;  /* the name slot of a `#define` */
+} LspOccurrence;
+
+
+int lspOccurrenceRelease(void *_occ) {
+    if (_occ) free(_occ);
+    return 1;
+}
+
+VecType vec_lsp_occurrence_type = {
+    .stringify = NULL,
+    .match     = NULL,
+    .release   = &lspOccurrenceRelease,
+    .type_str  = "long",
+};
+
+LspOccurrence *lspOccurrenceNew(int line, int col, u8 member,
+                                u8 is_hash, u8 is_define)
+{
+   LspOccurrence *occ = malloc(sizeof(LspOccurrence));
+   occ->line = line;
+   occ->col = col;
+   occ->member = member;
+   occ->hash = is_hash;
+   occ->define = is_define;
+   return occ;
+}
+
+/* Every identifier-boundary occurrence of `name` in `text`, skipping
+ * string/char literals, comments and #include paths. Returns a
+ * malloc'd array (caller frees), count in *n_out. */
+static Vec *lspFindOccurrences(AoStr *text, const char *name, size_t nlen) {
+    Vec *occs = vecNew(&vec_lsp_occurrence_type);
+    const char *s = text->data;
+    size_t n = text->len;
+    int line = 0;
+    int after_define = 0;
+    size_t line_start = 0;
+    size_t i = 0;
+
+    while (i < n) {
+        char c = s[i];
+        if (c == '\n') {
+            line++;
+            i++;
+            line_start = i;
+            after_define = 0;
+            continue;
+        }
+        if (c == '/' && i + 1 < n && s[i + 1] == '/') {
+            while (i < n && s[i] != '\n') i++;
+            continue;
+        }
+        if (c == '/' && i + 1 < n && s[i + 1] == '*') {
+            i += 2;
+            while (i + 1 < n && !(s[i] == '*' && s[i + 1] == '/')) {
+                if (s[i] == '\n') {
+                    line++;
+                    line_start = i + 1;
+                }
+                i++;
+            }
+            i = (i + 2 <= n) ? i + 2 : n;
+            continue;
+        }
+        if (c == '"' || c == '\'') {
+            char q = c;
+            i++;
+            while (i < n && s[i] != q) {
+                if (s[i] == '\\' && i + 1 < n) i++;
+                else if (s[i] == '\n') {
+                    line++;
+                    line_start = i + 1;
+                }
+                i++;
+            }
+            if (i < n) i++;
+            continue;
+        }
+        if (lspIsIdentStart(c)) {
+            size_t start = i;
+            while (i < n && lspIsIdentChar(s[i])) i++;
+            size_t len = i - start;
+            int is_hash = start > line_start && s[start - 1] == '#';
+            if (is_hash && len == 6 && memcmp(s + start, str_lit("define")) == 0)
+                after_define = 1;
+            if (is_hash && len == 7 && memcmp(s + start, str_lit("include")) == 0) {
+                /* The `<...>` path form isn't a string literal; skip
+                 * the rest of the line so path fragments never match. */
+                while (i < n && s[i] != '\n') i++;
+                continue;
+            }
+            if (len == nlen && memcmp(s + start, name, nlen) == 0) {
+                size_t j = start - (is_hash ? 1 : 0);
+                while (j > line_start && (s[j - 1] == ' ' || s[j - 1] == '\t'))
+                    j--;
+                int member = 0;
+                if (j > line_start && s[j - 1] == '.') {
+                    /* Guard `1.x`-style float fragments. */
+                    member = !(j - 1 > line_start &&
+                               isdigit((unsigned char)s[j - 2]));
+                } else if (j - 1 > line_start && s[j - 1] == '>' &&
+                           s[j - 2] == '-') {
+                    member = 1;
+                }
+                int col = (int)(start - line_start);
+                u8 is_define = (u8)(!is_hash && after_define);
+                LspOccurrence *occ = lspOccurrenceNew(line,col, member,
+                                                      is_hash, is_define);
+                vecPush(occs, occ);
+            }
+            if (!is_hash) after_define = 0; /* only the name slot counts */
+            continue;
+        }
+        i++;
+    }
+    return occs;
+}
+
+#define HCC_LSP_RENAME_NONE  0
+#define HCC_LSP_RENAME_VALUE 1
+#define HCC_LSP_RENAME_FIELD 2
+#define HCC_LSP_RENAME_TYPE  3
+#define HCC_LSP_RENAME_MACRO 4
+
+typedef struct LspRenameTarget {
+    int kind;
+    Ast *value;      /* VALUE: local/param/global/asm prototype */
+    int value_local; /* VALUE came from the enclosing function */
+    AstType *cls;    /* FIELD: the canonical class carrying it */
+    AstType *field;  /* FIELD */
+    AstType *type;   /* TYPE */
+} LspRenameTarget;
+
+/* Is the cursor exactly on a field DECLARATION inside a class/union
+ * body? A rename invoked there has no receiver chain to type, so
+ * match by the provenance stamped on the field at parse. */
+static int lspFieldDeclAt(LspCtx *ctx, u32 doc_id, int line1, int character,
+                          const char *ident, s64 ilen,
+                          AstType **cls_out, AstType **field_out)
+{
+    Map *tables[2] = { ctx->cc->clsdefs, ctx->cc->uniondefs };
+    for (int ti = 0; ti < 2; ++ti) {
+        MapIter mi;
+        mapIterInit(tables[ti], &mi);
+        while (mapIterNext(&mi)) {
+            AstType *cls = (AstType *)mi.node->value;
+            if (cls == NULL || cls->fields == NULL) continue;
+            AstType *f = (AstType *)mapGetLen(cls->fields, (char *)ident,
+                                              ilen);
+            if (f == NULL || f->file_id != doc_id || f->line != line1)
+                continue;
+            if (f->col > 0) {
+                int c0 = f->col - 1;
+                if (character < c0 || character > c0 + (int)ilen) continue;
+            }
+            *cls_out = cls;
+            *field_out = f;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* What does the identifier at the cursor NAME? Priority mirrors
+ * lspDefinition: a field declaration under the cursor, a typed member
+ * access, a value, a class/union, a macro. */
+static LspRenameTarget lspRenameTargetAt(LspCtx *ctx,
+                                         AoStr *text,
+                                         u32 doc_id,
+                                         int line,
+                                         int character,
+                                         const char *ident,
+                                         s64 ilen)
+{
+    LspRenameTarget tg = {0};
+
+    if (lspFieldDeclAt(ctx, doc_id, line + 1, character, ident, ilen,
+                       &tg.cls, &tg.field)) {
+        tg.kind = HCC_LSP_RENAME_FIELD;
+        return tg;
+    }
+    int is_member = 0;
+    AstType *cls = lspMemberClassAt(ctx, text, doc_id, line, character,
+                                    &is_member);
+    if (is_member) {
+        /* An untypable member access must NOT fall through: a field
+         * name is not a variable reference. */
+        AstType *f = cls ? (AstType *)mapGetLen(cls->fields, (char *)ident,
+                                                ilen) : NULL;
+        if (f) {
+            tg.kind = HCC_LSP_RENAME_FIELD;
+            tg.cls = cls;
+            tg.field = f;
+        }
+        return tg;
+    }
+    int in_doc = 0;
+    Ast *entry = lspResolveValue(ctx, doc_id, line + 1, ident, ilen, &in_doc);
+    if (entry) {
+        tg.kind = HCC_LSP_RENAME_VALUE;
+        tg.value = entry;
+        tg.value_local = in_doc;
+        return tg;
+    }
+    AstType *ty = (AstType *)mapGetLen(ctx->cc->clsdefs, (char *)ident, ilen);
+    if (ty == NULL)
+        ty = (AstType *)mapGetLen(ctx->cc->uniondefs, (char *)ident, ilen);
+    if (ty) {
+        tg.kind = HCC_LSP_RENAME_TYPE;
+        tg.type = ty;
+        return tg;
+    }
+    if (mapGetLen(ctx->cc->macro_defs, (char *)ident, ilen))
+        tg.kind = HCC_LSP_RENAME_MACRO;
+    return tg;
+}
+
+static int lspPathInStdlib(LspCtx *ctx, const char *path) {
+    return path && strncmp(path, ctx->root_dir, strlen(ctx->root_dir)) == 0;
+}
+
+static int lspValidNewName(const char *s) {
+    if (s == NULL || !lspIsIdentStart(s[0])) return 0;
+    for (const char *p = s + 1; *p; ++p)
+        if (!lspIsIdentChar(*p)) return 0;
+    for (size_t i = 0; i < sizeof(lsp_keywords) / sizeof(lsp_keywords[0]); ++i)
+        if (strcmp(lsp_keywords[i], s) == 0) return 0;
+    return 1;
+}
+
+/* NULL when `newname` is free to use, else what it collides with.
+ * Scoped per kind: a local only cares about names visible in its own
+ * function, a field about its own class. */
+static const char *lspRenameCollision(LspCtx *ctx, LspRenameTarget *tg,
+                                      u32 doc_id, int line,
+                                      const char *newname, s64 nlen)
+{
+    switch (tg->kind) {
+    case HCC_LSP_RENAME_VALUE: {
+        if (tg->value_local) {
+            int in_doc = 0;
+            Ast *hit = lspResolveValue(ctx, doc_id, line + 1, newname, nlen,
+                                       &in_doc);
+            if (hit && in_doc)
+                return "a local with that name already exists here";
+            return NULL;
+        }
+        if (mapGetLen(ctx->cc->global_env, (char *)newname, nlen) ||
+            mapGetLen(ctx->cc->asm_funcs, (char *)newname, nlen))
+            return "a global with that name already exists";
+        return NULL;
+    }
+    case HCC_LSP_RENAME_FIELD:
+        if (tg->cls->fields &&
+            mapGetLen(tg->cls->fields, (char *)newname, nlen))
+            return "the class already has a field with that name";
+        return NULL;
+    case HCC_LSP_RENAME_TYPE:
+        if (mapGetLen(ctx->cc->clsdefs, (char *)newname, nlen) ||
+            mapGetLen(ctx->cc->uniondefs, (char *)newname, nlen))
+            return "a class/union with that name already exists";
+        return NULL;
+    case HCC_LSP_RENAME_MACRO:
+        if (mapGetLen(ctx->cc->macro_defs, (char *)newname, nlen))
+            return "a macro with that name already exists";
+        return NULL;
+    }
+    return NULL;
+}
+
+/* The freshest text for `path`: an open document's buffer when the
+ * client has one (matched by DECODED path - uri encodings differ),
+ * else disk via the doc cache. *uri_out is the uri to key the
+ * WorkspaceEdit with - for open documents it must be the client's own
+ * uri string or the editor patches a different buffer. NOT owned by
+ * the caller: either borrowed from the docs map or pool-allocated
+ * (mprintf) - free()ing it would hand the pool allocator's memory to
+ * libc. */
+static AoStr *lspTextForPath(LspCtx *ctx, const char *path,
+                             const char **uri_out)
+{
+    MapIter mi;
+    mapIterInit(ctx->docs, &mi);
+    while (mapIterNext(&mi)) {
+        const char *doc_uri = (const char *)mi.node->key;
+        char *doc_path = lspUriToPath(doc_uri);
+        int hit = strcmp(doc_path, path) == 0;
+        free(doc_path);
+        if (hit) {
+            *uri_out = doc_uri;
+            return (AoStr *)mi.node->value;
+        }
+    }
+    char *uri = mprintf("file://%s", (char *)path);
+    AoStr *text = lspDocGetOrLoad(ctx, uri);
+    if (text == NULL) return NULL;
+    *uri_out = uri;
+    return text;
+}
+
+/* Does occurrence `o` (in `text`, registered as `doc_id`) actually
+ * refer to the target? The semantic filter shared by rename,
+ * references and documentHighlight. */
+static int lspOccurrenceMatches(LspCtx *ctx, LspRenameTarget *tg,
+                                u32 doc_id, AoStr *text, LspOccurrence *o,
+                                const char *name, s64 nlen)
+{
+    int in_doc = 0, is_member = 0;
+    switch (tg->kind) {
+    case HCC_LSP_RENAME_VALUE:
+        if (o->member || o->hash) return 0;
+        return lspResolveValue(ctx, doc_id, o->line + 1, name, nlen,
+                               &in_doc) == tg->value;
+    case HCC_LSP_RENAME_FIELD:
+        if (o->hash) return 0;
+        if (doc_id == tg->field->file_id &&
+            o->line + 1 == tg->field->line &&
+            tg->field->col > 0 && o->col == tg->field->col - 1)
+            return 1; /* the declaration itself */
+        if (!o->member) return 0;
+        return lspMemberClassAt(ctx, text, doc_id, o->line, o->col,
+                                &is_member) == tg->cls;
+    case HCC_LSP_RENAME_TYPE:
+        /* A same-named VALUE in scope shadows the type reading -
+         * `Foo p;` never resolves as a value, a local `Foo` does. */
+        return !o->member && !o->hash &&
+               lspResolveValue(ctx, doc_id, o->line + 1, name, nlen,
+                               &in_doc) == NULL;
+    case HCC_LSP_RENAME_MACRO:
+        return !o->member && !o->hash;
+    }
+    return 0;
+}
+
+/* Is this occurrence the target's DECLARATION? references uses it to
+ * honor includeDeclaration=false; the provenance stamped at parse is
+ * the ground truth (macros have none - their #define slot is). */
+static int lspOccurrenceIsDecl(LspRenameTarget *tg, u32 doc_id,
+                               LspOccurrence *o)
+{
+    u32 fid = 0;
+    int line1 = 0, col1 = 0;
+    switch (tg->kind) {
+    case HCC_LSP_RENAME_VALUE:
+        fid = tg->value->file_id;
+        line1 = tg->value->line;
+        col1 = tg->value->col;
+        break;
+    case HCC_LSP_RENAME_FIELD:
+        fid = tg->field->file_id;
+        line1 = tg->field->line;
+        col1 = tg->field->col;
+        break;
+    case HCC_LSP_RENAME_TYPE:
+        fid = tg->type->file_id;
+        line1 = tg->type->line;
+        col1 = tg->type->col;
+        break;
+    case HCC_LSP_RENAME_MACRO:
+        return o->define;
+    }
+    return fid == doc_id &&
+           o->line + 1 == line1 &&
+           col1 > 0 &&
+           o->col == col1 - 1;
+}
+
+/* Scan one file, append its `"uri":[TextEdit...]` entry to `body`
+ * when anything matched. Returns the number of edits. */
+static int lspRenameScanFile(LspCtx *ctx, LspRenameTarget *tg,
+                             const char *uri, const char *path, AoStr *text,
+                             const char *oldname, s64 olen,
+                             const char *newname,
+                             AoStr *body, int *files_emitted, int *def_seen)
+{
+    Vec *occs = lspFindOccurrences(text, oldname, (size_t)olen);
+    if (occs->size == 0) {
+        vecRelease(occs);
+        return 0;
+    }
+    AoStr path_s = { .data = (char *)path, .len = strlen(path),
+                     .capacity = 0 };
+    u32 doc_id = cctrlRegisterFile(ctx->cc, &path_s);
+
+    AoStr *edits = aoStrNew();
+    int emitted = 0;
+    for (u64 k = 0; k < occs->size; ++k) {
+        LspOccurrence *o = occs->entries[k];
+        if (!lspOccurrenceMatches(ctx, tg, doc_id, text, o, oldname, olen))
+            continue;
+        if (o->define) *def_seen = 1;
+        if (emitted++) aoStrPutChar(edits, ',');
+        aoStrCatPrintf(edits,
+            "{\"range\":{\"start\":{\"line\":%d,\"character\":%d},"
+            "\"end\":{\"line\":%d,\"character\":%d}},\"newText\":\"",
+            o->line, o->col, o->line, o->col + (int)olen);
+        jsonEscapeInto(edits, newname, strlen(newname));
+        aoStrCatLen(edits, "\"}", 2);
+    }
+    vecRelease(occs);
+    if (emitted) {
+        if ((*files_emitted)++) aoStrPutChar(body, ',');
+        aoStrPutChar(body, '"');
+        jsonEscapeInto(body, uri, strlen(uri));
+        aoStrCatLen(body, "\":[", 3);
+        aoStrCatLen(body, edits->data, edits->len);
+        aoStrPutChar(body, ']');
+    }
+    aoStrRelease(edits);
+    return emitted;
+}
+
+/* Shared by rename and prepareRename: is this target renameable at
+ * all, or does its definition live in the installed stdlib? */
+static int lspRenameTargetInStdlib(LspCtx *ctx, LspRenameTarget *tg) {
+    u32 def_fid = 0;
+    if (tg->kind == HCC_LSP_RENAME_VALUE)      def_fid = tg->value->file_id;
+    else if (tg->kind == HCC_LSP_RENAME_FIELD) def_fid = tg->field->file_id;
+    else if (tg->kind == HCC_LSP_RENAME_TYPE)  def_fid = tg->type->file_id;
+    if (def_fid == 0) return 0; /* macros: caught via def_seen instead */
+    AoStr *def_file = cctrlLookUpFile(ctx->cc, def_fid);
+    return def_file && lspPathInStdlib(ctx, def_file->data);
+}
+
+static void lspRename(LspCtx *ctx, Json *id, Json *params) {
+    const char *uri;
+    int line, character;
+    char ident[256];
+    AoStr *text;
+    if (ctx->cc_dirty || /* crashed mid-parse; symbol tables suspect */
+        !lspTextDocPosition(params, &uri, &line, &character) ||
+        (text = lspDocGetOrLoad(ctx, uri)) == NULL ||
+        !lspIdentAt(text, line, character, 0, ident, sizeof(ident), NULL))
+    {
+        lspRespond(id, "null");
+        return;
+    }
+    const char *newname = jsonStrOr(params, "newName", NULL);
+    if (newname == NULL || !lspValidNewName(newname)) {
+        lspRespondError(id, -32602,
+                        "the new name is not a valid HolyC identifier");
+        return;
+    }
+    s64 ilen = (s64)strlen(ident);
+    s64 nlen = (s64)strlen(newname);
+    if (ilen == nlen && memcmp(ident, newname, ilen) == 0) {
+        lspRespond(id, "null");
+        return;
+    }
+
+    char *doc_path = lspUriToPath(uri);
+    AoStr path_s = { .data = doc_path, .len = strlen(doc_path),
+                     .capacity = 0 };
+    u32 doc_id = cctrlRegisterFile(ctx->cc, &path_s);
+
+    LspRenameTarget tg = lspRenameTargetAt(ctx, text, doc_id, line, character,
+                                           ident, ilen);
+    if (tg.kind == HCC_LSP_RENAME_NONE) {
+        free(doc_path);
+        lspRespond(id, "null");
+        return;
+    }
+    if (lspRenameTargetInStdlib(ctx, &tg)) {
+        free(doc_path);
+        lspRespondError(id, -32803, "cannot rename a stdlib symbol");
+        return;
+    }
+    const char *clash = lspRenameCollision(ctx, &tg, doc_id, line,
+                                           newname, nlen);
+    if (clash) {
+        free(doc_path);
+        lspRespondError(id, -32803, clash);
+        return;
+    }
+
+    AoStr *body = aoStrNew();
+    aoStrCatPrintf(body, "{\"changes\":{");
+    int files_emitted = 0, def_seen = 0;
+    int total = lspRenameScanFile(ctx, &tg, uri, doc_path, text, ident, ilen,
+                                  newname, body, &files_emitted, &def_seen);
+
+    if (!(tg.kind == HCC_LSP_RENAME_VALUE && tg.value_local)) {
+        MapIter mi;
+        mapIterInit(ctx->cc->file_map, &mi);
+        while (mapIterNext(&mi)) {
+            AoStr *p = (AoStr *)mi.node->value;
+            if (p == NULL || strcmp(p->data, doc_path) == 0) continue;
+            if (lspPathInStdlib(ctx, p->data)) continue;
+            const char *furi = NULL;
+            AoStr *ftext = lspTextForPath(ctx, p->data, &furi);
+            if (ftext == NULL) continue;
+            total += lspRenameScanFile(ctx, &tg, furi, p->data, ftext, ident,
+                                       ilen, newname, body, &files_emitted,
+                                       &def_seen);
+        }
+    }
+    free(doc_path);
+    aoStrCatLen(body, "}}", 2);
+
+    /* A macro carries no provenance, so the stdlib guard can't see it;
+     * instead require its `#define` to be one of the edits - renaming
+     * only the use sites would orphan them. */
+    if (tg.kind == HCC_LSP_RENAME_MACRO && !def_seen) {
+        aoStrRelease(body);
+        lspRespondError(id, -32803,
+                        "the macro's #define is outside the project");
+        return;
+    }
+    if (total == 0) {
+        aoStrRelease(body);
+        lspRespond(id, "null");
+        return;
+    }
+    lspRespond(id, body->data);
+    lspLog(ctx, "lsp: rename %s -> %s: %d edit(s) in %d file(s)",
+           ident, newname, total, files_emitted);
+    aoStrRelease(body);
+}
+
+/* prepareRename: the range to highlight, or null when the position
+ * isn't renameable - the editor learns "no" before prompting. */
+static void lspPrepareRename(LspCtx *ctx, Json *id, Json *params) {
+    const char *uri;
+    int line, character, col0 = 0;
+    char ident[256];
+    AoStr *text;
+    if (ctx->cc_dirty ||
+        !lspTextDocPosition(params, &uri, &line, &character) ||
+        (text = lspDocGetOrLoad(ctx, uri)) == NULL ||
+        !lspIdentAt(text, line, character, 0, ident, sizeof(ident), &col0))
+    {
+        lspRespond(id, "null");
+        return;
+    }
+    s64 ilen = (s64)strlen(ident);
+    char *doc_path = lspUriToPath(uri);
+    AoStr path_s = { .data = doc_path, .len = strlen(doc_path),
+                     .capacity = 0 };
+    u32 doc_id = cctrlRegisterFile(ctx->cc, &path_s);
+    free(doc_path);
+
+    LspRenameTarget tg = lspRenameTargetAt(ctx, text, doc_id, line, character,
+                                           ident, ilen);
+    if (tg.kind == HCC_LSP_RENAME_NONE || lspRenameTargetInStdlib(ctx, &tg)) {
+        lspRespond(id, "null");
+        return;
+    }
+    AoStr *result = aoStrNew();
+    aoStrCatPrintf(result,
+        "{\"range\":{\"start\":{\"line\":%d,\"character\":%d},"
+        "\"end\":{\"line\":%d,\"character\":%d}},\"placeholder\":\"",
+        line, col0, line, col0 + (int)ilen);
+    jsonEscapeInto(result, ident, (size_t)ilen);
+    aoStrCatLen(result, "\"}", 2);
+    lspRespond(id, result->data);
+    aoStrRelease(result);
+}
+
+/* ---------------- references & highlight ----------------
+ *
+ * The read-only siblings of rename: same target resolution, same
+ * occurrence scan, same semantic filter - the last step emits
+ * Locations instead of TextEdits. One policy flips: a STDLIB symbol
+ * is fair game ("where do I call MAlloc" is the whole point); the
+ * stdlib's own files stay out of the scan, but the declaration is
+ * synthesized from provenance when includeDeclaration asks for it. */
+
+/* Scan one file for references; append `{"uri","range"}` Locations
+ * to `body`. Returns the number appended. */
+static int lspReferencesScanFile(LspCtx *ctx, LspRenameTarget *tg,
+                                 const char *uri, const char *path,
+                                 AoStr *text, const char *name, s64 nlen,
+                                 int include_decl,
+                                 AoStr *body, int *emitted)
+{
+    Vec *occs = lspFindOccurrences(text, name, (size_t)nlen);
+    if (occs->size == 0) {
+        free(occs);
+        return 0;
+    }
+    AoStr path_s = { .data = (char *)path, .len = strlen(path),
+                     .capacity = 0 };
+    u32 doc_id = cctrlRegisterFile(ctx->cc, &path_s);
+
+    int found = 0;
+    for (u64 k = 0; k < occs->size; ++k) {
+        LspOccurrence *o = occs->entries[k];
+        if (!lspOccurrenceMatches(ctx, tg, doc_id, text, o, name, nlen))
+            continue;
+        if (!include_decl && lspOccurrenceIsDecl(tg, doc_id, o)) continue;
+        if ((*emitted)++) aoStrPutChar(body, ',');
+        aoStrCatPrintf(body, "{\"uri\":\"");
+        jsonEscapeInto(body, uri, strlen(uri));
+        aoStrCatPrintf(body,
+            "\",\"range\":{\"start\":{\"line\":%d,\"character\":%d},"
+            "\"end\":{\"line\":%d,\"character\":%d}}}",
+            o->line, o->col, o->line, o->col + (int)nlen);
+        found++;
+    }
+    free(occs);
+    return found;
+}
+
+static void lspReferences(LspCtx *ctx, Json *id, Json *params) {
+    const char *uri;
+    int line, character;
+    char ident[256];
+    AoStr *text;
+    if (ctx->cc_dirty ||
+        !lspTextDocPosition(params, &uri, &line, &character) ||
+        (text = lspDocGetOrLoad(ctx, uri)) == NULL ||
+        !lspIdentAt(text, line, character, 0, ident, sizeof(ident), NULL))
+    {
+        lspRespond(id, "null");
+        return;
+    }
+    int include_decl = jsonBoolOr(jsonObjGet(params, "context"),
+                                  "includeDeclaration", 0);
+    s64 ilen = (s64)strlen(ident);
+    char *doc_path = lspUriToPath(uri);
+    AoStr path_s = { .data = doc_path, .len = strlen(doc_path),
+                     .capacity = 0 };
+    u32 doc_id = cctrlRegisterFile(ctx->cc, &path_s);
+
+    LspRenameTarget tg = lspRenameTargetAt(ctx, text, doc_id, line, character,
+                                           ident, ilen);
+    if (tg.kind == HCC_LSP_RENAME_NONE) {
+        free(doc_path);
+        lspRespond(id, "null");
+        return;
+    }
+
+    AoStr *body = aoStrNew();
+    aoStrPutChar(body, '[');
+    int emitted = 0;
+    lspReferencesScanFile(ctx, &tg, uri, doc_path, text, ident, ilen,
+                          include_decl, body, &emitted);
+
+    if (!(tg.kind == HCC_LSP_RENAME_VALUE && tg.value_local)) {
+        MapIter mi;
+        mapIterInit(ctx->cc->file_map, &mi);
+        while (mapIterNext(&mi)) {
+            AoStr *p = (AoStr *)mi.node->value;
+            if (p == NULL || strcmp(p->data, doc_path) == 0) continue;
+            if (lspPathInStdlib(ctx, p->data)) continue;
+            const char *furi = NULL;
+            AoStr *ftext = lspTextForPath(ctx, p->data, &furi);
+            if (ftext == NULL) continue;
+            lspReferencesScanFile(ctx, &tg, furi, p->data, ftext, ident,
+                                  ilen, include_decl, body, &emitted);
+        }
+        /* A stdlib symbol's declaration lives in a file the loop just
+         * skipped - synthesize its Location from provenance. */
+        if (include_decl && lspRenameTargetInStdlib(ctx, &tg)) {
+            u32 fid = 0;
+            int line1 = 0, col1 = 0;
+            if (tg.kind == HCC_LSP_RENAME_VALUE) {
+                fid = tg.value->file_id;
+                line1 = tg.value->line;
+                col1 = tg.value->col;
+            } else if (tg.kind == HCC_LSP_RENAME_FIELD) {
+                fid = tg.field->file_id;
+                line1 = tg.field->line;
+                col1 = tg.field->col;
+            } else if (tg.kind == HCC_LSP_RENAME_TYPE) {
+                fid = tg.type->file_id;
+                line1 = tg.type->line;
+                col1 = tg.type->col;
+            }
+            AoStr *def_file = cctrlLookUpFile(ctx->cc, fid);
+            if (def_file && line1 > 0) {
+                int c0 = col1 > 0 ? col1 - 1 : 0;
+                int c1 = col1 > 0 ? c0 + (int)ilen : 0;
+                if (emitted++) aoStrPutChar(body, ',');
+                aoStrCatPrintf(body, "{\"uri\":\"file://");
+                jsonEscapeInto(body, def_file->data, def_file->len);
+                aoStrCatPrintf(body,
+                    "\",\"range\":{\"start\":{\"line\":%d,\"character\":%d},"
+                    "\"end\":{\"line\":%d,\"character\":%d}}}",
+                    line1 - 1, c0, line1 - 1, c1);
+            }
+        }
+    }
+    free(doc_path);
+    aoStrPutChar(body, ']');
+    lspRespond(id, body->data);
+    lspLog(ctx, "lsp: references %s -> %d location(s)", ident, emitted);
+    aoStrRelease(body);
+}
+
+/* documentHighlight: every occurrence in THIS document, declaration
+ * included - the same query as references, scoped to one buffer. */
+static void lspDocumentHighlight(LspCtx *ctx, Json *id, Json *params) {
+    const char *uri;
+    int line, character;
+    char ident[256];
+    AoStr *text;
+    if (ctx->cc_dirty ||
+        !lspTextDocPosition(params, &uri, &line, &character) ||
+        (text = lspDocGetOrLoad(ctx, uri)) == NULL ||
+        !lspIdentAt(text, line, character, 0, ident, sizeof(ident), NULL))
+    {
+        lspRespond(id, "null");
+        return;
+    }
+    s64 ilen = (s64)strlen(ident);
+    char *doc_path = lspUriToPath(uri);
+    AoStr path_s = { .data = doc_path, .len = strlen(doc_path),
+                     .capacity = 0 };
+    u32 doc_id = cctrlRegisterFile(ctx->cc, &path_s);
+    free(doc_path);
+
+    LspRenameTarget tg = lspRenameTargetAt(ctx, text, doc_id, line, character,
+                                           ident, ilen);
+    if (tg.kind == HCC_LSP_RENAME_NONE) {
+        lspRespond(id, "null");
+        return;
+    }
+    Vec *occs = lspFindOccurrences(text, ident, (size_t)ilen);
+    AoStr *body = aoStrNew();
+    aoStrPutChar(body, '[');
+    int emitted = 0;
+    for (u64 k = 0; k < occs->size; ++k) {
+        LspOccurrence *o = occs->entries[k];
+        if (!lspOccurrenceMatches(ctx, &tg, doc_id, text, o, ident, ilen))
+            continue;
+        if (emitted++) aoStrPutChar(body, ',');
+        aoStrCatPrintf(body,
+            "{\"range\":{\"start\":{\"line\":%d,\"character\":%d},"
+            "\"end\":{\"line\":%d,\"character\":%d}}}",
+            o->line, o->col, o->line, o->col + (int)ilen);
+    }
+    vecRelease(occs);
+    aoStrPutChar(body, ']');
+    lspRespond(id, body->data);
+    aoStrRelease(body);
+}
+
 /* ---------------- lifecycle ---------------- */
 
 static void lspInitialize(Json *id) {
@@ -1197,7 +2032,10 @@ static void lspInitialize(Json *id) {
         "\"textDocumentSync\":{\"openClose\":true,\"change\":1},"
         "\"hoverProvider\":true,"
         "\"definitionProvider\":true,"
-        "\"completionProvider\":{}"
+        "\"completionProvider\":{\"triggerCharacters\":[\".\",\">\"]},"
+        "\"renameProvider\":{\"prepareProvider\":true},"
+        "\"referencesProvider\":true,"
+        "\"documentHighlightProvider\":true"
         "},\"serverInfo\":{\"name\":\"hcc\",\"version\":\"%s\"}}",
         cctrlGetVersion());
     lspRespond(id, result->data);
@@ -1272,6 +2110,18 @@ int lspRun(CliArgs *args) {
         } else if (strcmp(method, "textDocument/definition") == 0) {
             lspFlushPending(ctx);
             lspDefinition(ctx, id, params);
+        } else if (strcmp(method, "textDocument/rename") == 0) {
+            lspFlushPending(ctx);
+            lspRename(ctx, id, params);
+        } else if (strcmp(method, "textDocument/prepareRename") == 0) {
+            lspFlushPending(ctx);
+            lspPrepareRename(ctx, id, params);
+        } else if (strcmp(method, "textDocument/references") == 0) {
+            lspFlushPending(ctx);
+            lspReferences(ctx, id, params);
+        } else if (strcmp(method, "textDocument/documentHighlight") == 0) {
+            lspFlushPending(ctx);
+            lspDocumentHighlight(ctx, id, params);
         } else if (id != NULL) {
             /* Requests we don't implement yet; notifications
              * (initialized, didSave, $/...) are silently fine. */
