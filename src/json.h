@@ -71,6 +71,7 @@ Json *jsonArrayAt(Json *arr, u32 idx);
  * beyond the message. */
 const char *jsonStrOr(Json *obj, const char *key, const char *dflt);
 s64 jsonIntOr(Json *obj, const char *key, s64 dflt);
+int jsonBoolOr(Json *obj, const char *key, int dflt);
 
 /* Append `len` bytes of `s` onto `buf`, JSON-escaped (quotes NOT
  * added by this helper). */

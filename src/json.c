@@ -354,6 +354,11 @@ s64 jsonIntOr(Json *obj, const char *key, s64 dflt) {
     return (v && v->kind == JSON_INT) ? v->as.i : dflt;
 }
 
+int jsonBoolOr(Json *obj, const char *key, int dflt) {
+    Json *v = jsonObjGet(obj, key);
+    return (v && v->kind == JSON_BOOL) ? v->as.boolean : dflt;
+}
+
 void jsonEscapeInto(AoStr *buf, const char *s, size_t len) {
     for (size_t i = 0; i < len; ++i) {
         unsigned char c = (unsigned char)s[i];
