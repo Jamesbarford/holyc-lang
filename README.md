@@ -26,8 +26,8 @@ https://holyc-lang.com/
 # What's here?
 - AOT compiler (uses clang internally to create and link object files)
 - JIT compiler - `hcc -jit <files...>`
-- [REPL][#repl]
-- [LSP][#lsp] and [see here for setup with neovim][#neovim-lsp-example]
+- [REPL](#repl)
+- [LSP][#lsp] and [see here for setup with neovim](#neovim-lsp-example)
 - Assembler, used in `asm {}` blocks
 - Disassembler
 - A myriad of pernicious bugs
