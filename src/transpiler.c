@@ -1364,7 +1364,6 @@ static void transpileFields(TranspileCtx *ctx,
 void transpileClassDefinitions(Cctrl *cc, TranspileCtx *ctx, Map *built_in_types) {
     AoStr *buf = ctx->buf;
     s64 indent = 4;
-    Map *seen = astTypeMapNew();
     MapIter it;
     mapIterInit(cc->clsdefs, &it);
 
@@ -1386,17 +1385,21 @@ void transpileClassDefinitions(Cctrl *cc, TranspileCtx *ctx, Map *built_in_types
             loggerPanic("Should not be here\n"); 
         }
 
+        /* `seen` dedupes a class's flattened base/anonymous field copies
+         * against the nested struct that renders them - it must be scoped
+         * to ONE class, or a field name reused by a later class (or
+         * inherited from an already-rendered base) is silently dropped. */
+        Map *seen = astTypeMapNew();
         aoStrCatFmt(buf, "typedef struct %s {\n", n->key);
         transpileFields(ctx,cls->fields,seen,n->key,buf,&indent);
         aoStrCatFmt(buf, "} %s;\n\n", n->key);
+        mapRelease(seen);
     }
-    mapRelease(seen);
 }
 
 void transpileUnionDefinitions(Cctrl *cc, TranspileCtx *ctx) {
     s64 indent = 4;
     AoStr *buf = ctx->buf;
-    Map *seen = astTypeMapNew();
     MapIter it;
     mapIterInit(cc->uniondefs, &it);
 
@@ -1413,11 +1416,12 @@ void transpileUnionDefinitions(Cctrl *cc, TranspileCtx *ctx) {
             loggerPanic("Should not be here: %s\n", astTypeToColorString(cls)); 
         }
 
+        Map *seen = astTypeMapNew();
         aoStrCatFmt(buf, "typedef union %s {\n", n->key);
         transpileFields(ctx,cls->fields,seen,n->key,buf,&indent);
         aoStrCatFmt(buf, "} %s;\n\n", n->key);
+        mapRelease(seen);
     }
-    mapRelease(seen);
 }
 
 void transpileDefines(Cctrl *cc, TranspileCtx *ctx) {

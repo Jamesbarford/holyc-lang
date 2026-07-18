@@ -450,12 +450,6 @@ Map *parseClassOffsets(Cctrl *cc,
     Map *fields_dict = astTypeMapNew();
     int max_align = 1;
 
-    /* XXX: Assumes the class definition will be made later */
-    if (listEmpty(fields)) {
-        *out_align = max_align;
-        return fields_dict;
-    }
-
     if (base_class) {
         offset = base_class->size;
         int ba = astTypeAlign(base_class);
@@ -466,6 +460,15 @@ Map *parseClassOffsets(Cctrl *cc,
         parseFlattenAnnonymous(base_class,fields_dict,0,1);
     } else {
         offset = 0;
+    }
+
+    /* A derived class with no fields of its own is just the base class,
+     * flattened above. Without a base this assumes the class definition
+     * will be made later. */
+    if (listEmpty(fields)) {
+        *out_align = max_align;
+        *aligned_size = offset + CalcPadding(offset, max_align);
+        return fields_dict;
     }
 
     if (is_intrinsic) {
