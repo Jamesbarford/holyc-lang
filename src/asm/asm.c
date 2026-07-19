@@ -28,6 +28,14 @@ typedef struct AsmLex {
     int len;
     int pos;
     int line; /* 1-based */
+
+    char *start;
+    /* Pointer to the start of the current source line. */
+    char *line_start_ptr;
+    /* Column of the first byte of the token currently
+     * being lexed. */
+    int tok_start_col;
+
     const char *src_file;
     Target target; /* selects register dialect */
     /* Look-ahead. */
@@ -68,11 +76,16 @@ asm_parse_err_at(AsmLex *l, int line, const char *fmt, ...)
     vsnprintf(body, sizeof body, fmt, ap);
     va_end(ap);
 
+    /* This is simply an error diagnostic */
+    AsmLine *ln = calloc(1,sizeof(AsmLine));
+    ln->kind = AINS_NONE;
+    ln->line = line;
+
     char full[640];
     snprintf(full, sizeof full, "%s:%d: error: %s",
              l->src_file ? l->src_file : "<input>", line, body);
 
-    l->err_handler.handler(l->err_handler.data, NULL, full);
+    l->err_handler.handler(l->err_handler.data, ln, full);
     l->errors++;
 
     /* Skip to (but not past) the next '\n' so the next peek/consume sees a
@@ -93,13 +106,36 @@ asm_lex_init(AsmLex *l, const char *body, int len, const char *file, int start_l
     l->err_handler.data = l;
     l->src_file = file;
     l->target = target;
+    /* Pointer to the start of the current source line. */
+    l->line_start_ptr = (char *)body;
+    l->start = (char *)body;
+    l->tok_start_col = 1;
+}
+
+char *
+asm_lex_cur_ptr(AsmLex *l)
+{
+    if (l->pos < l->len) {
+        return &((char *)l->src)[l->pos];
+    }
+    return NULL;
+}
+
+void
+asm_lex_set_start(AsmLex *l)
+{
+    l->start = asm_lex_cur_ptr(l);
 }
 
 static int
 asm_lex_peek(AsmLex *l, int o)
 {
     int i = l->pos + o;
-    return i >= l->len ? 0 : (unsigned char)l->src[i];
+    if (i >= l->len) {
+        return 0;
+    } else {
+        return (unsigned char)l->src[i];
+    }
 }
 
 static void
@@ -138,14 +174,17 @@ asm_lex_next(AsmLex *l)
 {
     free(l->text);
     l->text = NULL;
-
     asm_skip_inline_ws(l);
-    if (l->pos >= l->len) return ATK_EOF;
+    asm_lex_set_start(l);
+
+    if (l->pos >= l->len)
+        return ATK_EOF;
 
     int c = asm_lex_peek(l, 0);
     if (c == '\n') {
         l->pos++;
         l->line++;
+        l->line_start_ptr = asm_lex_cur_ptr(l);
         return ATK_NEWLINE;
     }
 
@@ -372,6 +411,7 @@ static AsmTok
 asm_lex_peek_tok(AsmLex *l)
 {
     if (!l->have) {
+
         l->have_kind = asm_lex_next(l);
         l->have = 1;
     }
@@ -385,7 +425,8 @@ asm_lex_consume(AsmLex *l)
         l->have = 0;
         return l->have_kind;
     }
-    return asm_lex_next(l);
+    AsmTok t = asm_lex_next(l);
+    return t;
 }
 
 /* ================================================================ registers */
@@ -680,14 +721,16 @@ block_push(AsmBlock *b, AsmLine ln)
 static void
 asm_skip_newlines(AsmLex *l)
 {
-    while (asm_lex_peek_tok(l) == ATK_NEWLINE)
+    while (asm_lex_peek_tok(l) == ATK_NEWLINE) {
         asm_lex_consume(l);
+    }
 }
 
 /* Parse a single operand. Stops on `,` or newline or EOF. */
 static AsmOperand
 asm_parse_operand(AsmLex *l)
 {
+
     AsmOperand op = { 0 };
     int width = 0;
     int has_seg = 0;
@@ -749,9 +792,9 @@ asm_parse_operand(AsmLex *l)
          * suffix on ARM64 shifted-register instructions. */
         if (l->target == TASM_ARCH_ARM64 &&
                 (strcasecmp(l->text, "lsl") == 0 ||
-                        strcasecmp(l->text, "lsr") == 0 ||
-                        strcasecmp(l->text, "asr") == 0 ||
-                        strcasecmp(l->text, "ror") == 0)) {
+                 strcasecmp(l->text, "lsr") == 0 ||
+                 strcasecmp(l->text, "asr") == 0 ||
+                 strcasecmp(l->text, "ror") == 0)) {
             int st = (strcasecmp(l->text, "lsl") == 0) ? ASHIFT_LSL :
                     (strcasecmp(l->text, "lsr") == 0)  ? ASHIFT_LSR :
                     (strcasecmp(l->text, "asr") == 0)  ? ASHIFT_ASR :
@@ -1116,15 +1159,22 @@ normalise_mnemonic(const char *m)
 int
 is_directive(const char *m)
 {
-    return strcasecmp(m, "DB") == 0 || strcasecmp(m, "DW") == 0 ||
-            strcasecmp(m, "DD") == 0 || strcasecmp(m, "DQ") == 0 ||
-            strcasecmp(m, "DU32") == 0 || strcasecmp(m, "DU16") == 0 ||
-            strcasecmp(m, "DU8") == 0 || strcasecmp(m, "DU64") == 0;
+    return strcasecmp(m, "DB")   == 0 || strcasecmp(m, "DW") == 0 ||
+           strcasecmp(m, "DD")   == 0 || strcasecmp(m, "DQ") == 0 ||
+           strcasecmp(m, "DU32") == 0 || strcasecmp(m, "DU16") == 0 ||
+           strcasecmp(m, "DU8")  == 0 || strcasecmp(m, "DU64") == 0;
 }
 #else
 char *normalise_mnemonic(const char *m);
 int is_directive(const char *m);
 #endif
+
+void
+asm_line_set_col(AsmLex *l, AsmLine *ln)
+{
+    l->tok_start_col = (l->start - l->line_start_ptr)+1;
+    ln->col = l->tok_start_col;
+}
 
 AsmBlock *
 asm_parse_with_handler(const char *body,
@@ -1148,12 +1198,15 @@ asm_parse_with_handler(const char *body,
     }
 
     for (;;) {
+        AsmLine ln = { 0 };
         asm_skip_newlines(&l);
         AsmTok t = asm_lex_peek_tok(&l);
-        if (t == ATK_EOF) break;
+        if (t == ATK_EOF)
+            break;
 
-        AsmLine ln = { 0 };
+
         ln.line = l.line;
+        asm_line_set_col(&l,&ln);
 
         /* Local label `@@NN:`, but actually the lexer emits ATK_LOCAL_LABEL
          * for `@@NN`. The colon follows. */
@@ -1178,8 +1231,10 @@ asm_parse_with_handler(const char *body,
             /* ARM64 conditional branches use a `.` between mnemonic and
              * condition (e.g. `B.GE`). If we see `IDENT . IDENT` at the
              * start of a line, glue them into a single mnemonic. */
-            if (l.target == TASM_ARCH_ARM64 && asm_lex_peek_tok(&l) == ATK_PUNCT &&
-                    l.punc == '.') {
+            if (l.target == TASM_ARCH_ARM64 &&
+                asm_lex_peek_tok(&l) == ATK_PUNCT &&
+                l.punc == '.')
+            {
                 int save = l.pos;
                 AsmTok save_kind = l.have_kind;
                 int save_have = l.have;

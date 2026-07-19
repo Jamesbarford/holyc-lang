@@ -588,24 +588,12 @@ public extern "c" U0 *malloc(U64 size);
  * so its binding is declared unconditionally. The remaining core memory
  * ops are asm on x86 but ordinary HolyC on ARM, so those stay split. */
 public _extern _MALLOC U0 *MAlloc(U64 size);
-
-#ifdef IS_X86_64
 public _extern _FREE U0 Free(U0 *ptr);
-public _extern _REALLOC U0 *ReAlloc(U0 *ptr, U64 new_size);
-public _extern _CALLOC U0 *CAlloc(U64 new_size);
 public _extern _MSIZE U64 MSize(U0 *ptr);
-public _extern _MEMCPY U0 *MemCpy(U0 *dst, U0 *src, U64 len);
 public _extern _MEMSET U0 *MemSet(U0 *dst, I32 ch, U64 len);
-#endif
-
-#ifdef IS_ARM_64
-public U0 Free(U0 *ptr);
-public U0 *ReAlloc(U0 *ptr, U64 new_size);
-public U0 *CAlloc(U64 new_size);
-public U64 MSize(U0 *ptr);
-public U0 *MemCpy(U0 *dst, U0 *src, U64 len);
-public U0 *MemSet(U0 *dst, I32 ch, U64 len);
-#endif
+public _extern _MEMCPY U0 *MemCpy(U0 *dst, U0 *src, U64 len);
+public _extern _CALLOC U0 *CAlloc(U64 new_size);
+public _extern _REALLOC U0 *ReAlloc(U0 *ptr, U64 new_size);
 
 #define STR_LEN 256
 
@@ -655,12 +643,13 @@ extern "c" U8 *strstr(U8 *__big, U8 *__little);
 extern "c" U8 *strtok(U8 *__str, U8 *__sep);
 extern "c" U64 strxfrm(U8 *__s1, U8 *__s2, U64 __n);
 
-#ifdef IS_X86_64
 public _extern _STRLEN_FAST U64 StrLen(U8 *buf);
 public _extern _STRNCMP I64 StrNCmp(U8 *s1, U8 *s2, I64 len);
 public _extern _STRNICMP I64 StrNICmp(U8 *s1, U8 *s2, I64 len);
-public _extern _STRCMP I64 StrCmp(U8 *s1, U8 *s2);
 public _extern _STRCPY U0 StrCpy(U8 *dst, U8 *src);
+public _extern _STRCMP I64 StrCmp(U8 *s1, U8 *s2);
+
+#ifdef IS_X86_64
 public _extern _TOLOWER U8 ToLower(U8 ch);
 public _extern _TOUPPER U8 ToUpper(U8 ch);
 public _extern _ISSPACE Bool IsSpace(U8 ch);
@@ -669,11 +658,6 @@ public _extern _ATOI I64 Atoi(U8 *str);
 #endif
 
 #ifdef IS_ARM_64
-public U64 StrLen(U8 *buf);
-public I64 StrNCmp(U8 *s1, U8 *s2, I64 len);
-public I64 StrNICmp(U8 *s1, U8 *s2, I64 len);
-public I64 StrCmp(U8 *s1, U8 *s2);
-public U0 StrCpy(U8 *dst, U8 *src);
 public U8 ToLower(U8 ch);
 public U8 ToUpper(U8 ch);
 public Bool IsSpace(U8 ch);

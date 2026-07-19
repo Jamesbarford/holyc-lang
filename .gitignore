@@ -25,3 +25,4 @@ test-runner-jit
 build
 compile.sh
 lsp-test-runner
+build-x86

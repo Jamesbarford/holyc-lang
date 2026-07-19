@@ -9,47 +9,9 @@
 public extern "c" I32 open(U8 *path, I32 flags, I32 mode);
 public extern "c" I64 read(I32 fd, U0 *buf, U64 nbyte);
 
-#ifdef IS_X86_64
-asm {
-/* Read a file storing the length into the RDX */
-_READ_FILE::
-    PUSHQ   RBP
-    MOVQ    RBP, RSP
-    SUBQ    RSP, 48
-    MOVQ    -8[RBP], RDI
-    MOVQ    -16[RBP], RSI
-    MOVQ    -24[RBP], RDX
-    MOVQ    RDI, -16[RBP]
-    CALL    _MALLOC
-    MOVQ    -32[RBP], RAX
-    MOVQ    RDI, -8[RBP]
-    MOVQ    RSI, 0
-    MOVQ    RDX, 420
-    CALL    open
-    MOVQ    -40[RBP], RAX
-    MOVQ    RDI, -40[RBP]
-    MOVQ    RSI, -32[RBP]
-    MOVQ    RDX, -16[RBP]
-    CALL    read
-    MOVQ    -48[RBP], RAX
-
-    MOVQ    RDX, RAX
-    MOVQ    RAX, -24[RBP]
-    MOVQ    [RAX], RDX
-    MOVQ    RAX, -32[RBP]
-    MOVQ    RCX, -48[RBP]
-    ADDQ    RAX, RCX
-    MOVQ    [RAX], 0
-    MOVQ    RAX, -32[RBP]
-
-    ADDQ    RSP, 48
-    LEAVE
-    RET
-}
-public _extern _READ_FILE U8 *FileRead(U8 *name, I64 max_size, I64 *_len);
-#endif
-
-#ifdef IS_ARM_64
+/* This used to be an assembly routine. Codegen is good enough that
+ * this is so similar to what used to be here. There is no point in having
+ * this implemented in assembly */
 public U8 *FileRead(U8 *name, I64 max_size, I64 *_len)
 {
   U8 *buf = MAlloc(max_size);
@@ -59,7 +21,6 @@ public U8 *FileRead(U8 *name, I64 max_size, I64 *_len)
   buf[n] = 0;
   return buf;
 }
-#endif
 
 public U64 MemAddr(U0 *ptr)
 {

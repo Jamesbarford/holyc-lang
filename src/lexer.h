@@ -251,6 +251,8 @@ void lexerRelease(Lexer *l);
 Lexeme *lexemeTokNew(char *start, int len, int line, s64 ch);
 Lexeme *lexemeNew(char *start, int len);
 Lexeme *lexemeSentinal(void);
+void lexSetAsmFlags(Lexer *l);
+void lexUnSetAsmFlags(Lexer *l);
 void lexSetBuiltinRoot(Lexer *l, char *root);
 void lexInit(Lexer *l, char *source, int flag);
 void lexPushFile(Lexer *l, AoStr *filename);

@@ -283,11 +283,6 @@ _ATOI::
     RET
 }
 
-public _extern _STRLEN_FAST U64 StrLen(U8 *buf);
-public _extern _STRNCMP I64 StrNCmp(U8 *s1, U8 *s2, I64 len);
-public _extern _STRNICMP I64 StrNICmp(U8 *s1, U8 *s2, I64 len);
-public _extern _STRCMP I64 StrCmp(U8 *s1, U8 *s2);
-public _extern _STRCPY U0 StrCpy(U8 *dst, U8 *src);
 public _extern _TOLOWER U8 ToLower(U8 ch);
 public _extern _TOUPPER U8 ToUpper(U8 ch);
 public _extern _ISSPACE Bool IsSpace(U8 ch);
@@ -295,27 +290,108 @@ public _extern _STRHASH U64 StrHash(U8 *str);
 public _extern _ATOI I64 Atoi(U8 *str);
 #endif
 
-#ifdef IS_ARM_64
-public U64 StrLen(U8 *buf) { return strlen(buf); }
-public I64 StrNCmp(U8 *s1, U8 *s2, I64 len) { return strncmp(s1, s2, len); }
-public I64 StrNICmp(U8 *s1, U8 *s2, I64 len) { return strncasecmp(s1, s2, len); }
-public I64 StrCmp(U8 *s1, U8 *s2) { return strcmp(s1, s2); }
-public U0 StrCpy(U8 *dst, U8 *src) { strcpy(dst, src); }
+#ifdef __aarch64__
+asm {
+_STRLEN_FAST::
+    MOV   X1, X0
+    EOR   X0, X0, X0
+@@1:
+    LDRB   W2, [X1], 1
+    CBZ    W2, @@2
+    ADD    X0, x0, 1
+    B      @@1
+@@2:
+    RET
+
+// strncmp(x0=str1, x1=str2, x2=len)
+_STRNCMP::
+    CBZ     X2, @@2
+@@1:
+    LDRB    W4, [X0], #1
+    LDRB    W5, [X1], #1
+    SUBS    W6, W4, W5
+    B.NE    @@3
+    CBZ     W4, @@2
+    SUBS    X2, X2, #1
+    B.NE    @@1
+@@2:
+    MOV     X0, #0
+    RET
+@@3:
+    SXTW    X0, W6
+    RET
+
+// strnicmp(str1, str2, len) - case-insensitive (ASCII)
+// X0 = str1, X1 = str2, X2 = len
+_STRNICMP::
+    CBZ     X2, @@2
+@@1:
+    LDRB    W4, [X0], #1
+    LDRB    W5, [X1], #1
+    // Lowercase W4 if it's in 'A'..'Z'
+    SUB     W7, W4, #0x41
+    CMP     W7, #25
+    ADD     W8, W4, #0x20
+    CSEL    W4, W8, W4, LS
+    // Lowercase W5 the same way
+    SUB     W7, W5, #0x41
+    CMP     W7, #25
+    ADD     W8, W5, #0x20
+    CSEL    W5, W8, W5, LS
+
+    SUBS    W6, W4, W5
+    B.NE    @@3
+    CBZ     W4, @@2
+    SUBS    X2, X2, #1
+    B.NE    @@1
+@@2:
+    MOV     X0, #0
+    RET
+@@3:
+    SXTW    X0, W6
+    RET
+
+_STRCMP::
+@@1:
+    LDRB    W4, [X0], #1
+    LDRB    W5, [X1], #1
+    SUBS    W6, W4, W5
+    B.NE    @@2
+    CBNZ    W4, @@1
+    MOV     X0, #0
+    RET
+@@2:
+    SXTW    X0, W6
+    RET
+
+_STRCPY::
+    MOV     X2, X0
+@@1:
+    LDRB    W3, [X1], #1
+    STRB    W3, [X0], #1
+    CBNZ    W3, @@1
+    MOV     X0, X2
+    RET
+}
+
 public U8 ToLower(U8 ch)
 {
   if (ch >= 'A' && ch <= 'Z') return ch + 32;
   return ch;
 }
+
 public U8 ToUpper(U8 ch)
 {
   if (ch >= 'a' && ch <= 'z') return ch - 32;
   return ch;
 }
+
 public Bool IsSpace(U8 ch)
 {
   return ch == ' ' || ch == '\t' || ch == '\n' ||
          ch == '\v' || ch == '\f' || ch == '\r';
 }
+
 public U64 StrHash(U8 *str)
 {
   U64 h = str[0];
@@ -326,8 +402,18 @@ public U64 StrHash(U8 *str)
   }
   return h;
 }
-public I64 Atoi(U8 *str) { return atol(str); }
+
+public I64 Atoi(U8 *str)
+{
+  return atol(str);
+}
 #endif
+
+public _extern _STRLEN_FAST U64 StrLen(U8 *buf);
+public _extern _STRNCMP I64 StrNCmp(U8 *s1, U8 *s2, I64 len);
+public _extern _STRNICMP I64 StrNICmp(U8 *s1, U8 *s2, I64 len);
+public _extern _STRCMP I64 StrCmp(U8 *s1, U8 *s2);
+public _extern _STRCPY U0 StrCpy(U8 *dst, U8 *src);
 
 public U8 *StrNCpy(U8 *buf, I64 len)
 {
