@@ -533,8 +533,16 @@ int main(int argc, char **argv) {
             memoryRelease();
             return 1;
         }
-        int rc = hccJitRunMain(jit, args.argv->size,
-                                    (char **)args.argv->entries);
+
+        listPrepend(args.argv, args.infile);
+        args.argc++;
+
+        char **jit_argv = malloc(sizeof(char *) * args.argc);
+        int i = 0;
+        listForEach(args.argv) {
+            jit_argv[i++] = it->value;
+        }
+        int rc = hccJitRunMain(jit, args.argc, jit_argv);
         if (args.memsafe) memsafeReportLeaks(stderr);
         hccJitFree(jit);
         memoryRelease();

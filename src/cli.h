@@ -111,7 +111,8 @@ typedef struct CliArgs {
     List *defines_list;
     List *object_files;
     List *shared_object_files;
-    Vec *argv;
+    int argc;
+    List *argv;
 } CliArgs;
 
 void cliArgsInit(CliArgs *args);
