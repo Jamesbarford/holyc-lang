@@ -5,6 +5,7 @@
 #include <stdarg.h>
 
 #include "config.h"
+#include "containers.h"
 #include "list.h"
 #include "types.h"
 
@@ -110,8 +111,7 @@ typedef struct CliArgs {
     List *defines_list;
     List *object_files;
     List *shared_object_files;
-    char *argv[64];
-    int argc;
+    Vec *argv;
 } CliArgs;
 
 void cliArgsInit(CliArgs *args);

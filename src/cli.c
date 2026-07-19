@@ -11,6 +11,7 @@
 
 #include "aostr.h"
 #include "config.h"
+#include "containers.h"
 #include "cli.h"
 #include "util.h"
 #include "version.h"
@@ -279,11 +280,11 @@ __noreturn void cliPrintUsage(void) {
 
 AoStr *cliConcatArgv(CliArgs *args) {
     AoStr *s = aoStrNew();
-    for (int i = 0; i < args->argc; ++i) {
-        if (i + 1 == args->argc) {
-            aoStrCatFmt(s, "%s", args->argv[i]);
+    for (u64 i = 0; i < args->argv->size; ++i) {
+        if (i + 1 == args->argv->size) {
+            aoStrCatFmt(s, "%s", args->argv->entries[i]);
         } else {
-            aoStrCatFmt(s, "%s, ", args->argv[i]);
+            aoStrCatFmt(s, "%s, ", args->argv->entries[i]);
         }
     }
     return s;
@@ -422,7 +423,7 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
             } else {
                 /* Collect arbitrary command line arguments as they could be 
                  * for the jit */
-                args->argv[args->argc++] = strdup(arg);
+                vecPush(args->argv, strdup(arg));
                 continue;
             }
         }
@@ -524,7 +525,7 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
                  "printing assembly to stdout\n");
     }
 
-    if (args->argc && !args->jit && !args->run) {
+    if (args->argv->size > 0 && !args->jit && !args->run) {
         AoStr *s = cliConcatArgv(args);
         cliPanic("Unknown commandline options: %s\n", s->data);
     }
@@ -543,6 +544,7 @@ void cliArgsInit(CliArgs *args) {
     args->defines_list = NULL;
     args->object_files = NULL;
     args->shared_object_files = NULL;
+    args->argv = vecNew(&vec_cstring_owned_type);
 
     /* We make a stab at trying to guess the target from what we have
      * discovered in the config file */

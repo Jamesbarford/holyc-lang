@@ -533,7 +533,8 @@ int main(int argc, char **argv) {
             memoryRelease();
             return 1;
         }
-        int rc = hccJitRunMain(jit, args.argc, args.argv);
+        int rc = hccJitRunMain(jit, args.argv->size,
+                                    (char **)args.argv->entries);
         if (args.memsafe) memsafeReportLeaks(stderr);
         hccJitFree(jit);
         memoryRelease();
