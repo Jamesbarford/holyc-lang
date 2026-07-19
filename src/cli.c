@@ -11,6 +11,7 @@
 
 #include "aostr.h"
 #include "config.h"
+#include "containers.h"
 #include "cli.h"
 #include "util.h"
 #include "version.h"
@@ -277,6 +278,18 @@ __noreturn void cliPrintUsage(void) {
     exit(EXIT_SUCCESS);
 }
 
+AoStr *cliConcatArgv(CliArgs *args) {
+    AoStr *s = aoStrNew();
+    for (u64 i = 0; i < args->argv->size; ++i) {
+        if (i + 1 == args->argv->size) {
+            aoStrCatFmt(s, "%s", args->argv->entries[i]);
+        } else {
+            aoStrCatFmt(s, "%s, ", args->argv->entries[i]);
+        }
+    }
+    return s;
+}
+
 CliParser *cliParserFind(char *arg, u64 arg_len) {
     int len = (int)(sizeof(parsers)/sizeof(parsers[0]));
 
@@ -408,7 +421,10 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
                 getASMFileName(args, file_type, arg, arg_len);
                 continue;
             } else {
-                cliPanic("Unknown cli option `%s`\n", arg);
+                /* Collect arbitrary command line arguments as they could be 
+                 * for the jit */
+                vecPush(args->argv, strdup(arg));
+                continue;
             }
         }
 
@@ -509,6 +525,11 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
                  "printing assembly to stdout\n");
     }
 
+    if (args->argv->size > 0 && !args->jit && !args->run) {
+        AoStr *s = cliConcatArgv(args);
+        cliPanic("Unknown commandline options: %s\n", s->data);
+    }
+
     /* The REPL and the LSP read from stdin - the two modes with no
      * input file. */
     if (args->infile == NULL && !args->repl && !args->lsp) {
@@ -523,6 +544,7 @@ void cliArgsInit(CliArgs *args) {
     args->defines_list = NULL;
     args->object_files = NULL;
     args->shared_object_files = NULL;
+    args->argv = vecNew(&vec_cstring_owned_type);
 
     /* We make a stab at trying to guess the target from what we have
      * discovered in the config file */

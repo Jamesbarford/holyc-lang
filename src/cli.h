@@ -5,6 +5,7 @@
 #include <stdarg.h>
 
 #include "config.h"
+#include "containers.h"
 #include "list.h"
 #include "types.h"
 
@@ -110,12 +111,14 @@ typedef struct CliArgs {
     List *defines_list;
     List *object_files;
     List *shared_object_files;
+    Vec *argv;
 } CliArgs;
 
 void cliArgsInit(CliArgs *args);
 int cliParseArgs(struct CliArgs *cli_args, int argc, char **argv);
 __noreturn void cliPanicGeneric(const char *const_msg, const char *fmt, va_list ap);
 
+AoStr *cliConcatArgv(CliArgs *args);
 const char *cliTargetToString(enum CliTarget target);
 
 #endif

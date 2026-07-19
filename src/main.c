@@ -303,13 +303,17 @@ void emitFile(Cctrl *cc, AoStr *asmbuf, CliArgs *args) {
         if (args->run) {
             AoStr *run_cmd = aoStrNew();
             writeAsmToTmp(asmbuf);
-            aoStrCatPrintf(run_cmd,"%s -L%s/lib %s %s %s %s "CLIBS" -ltos && ./a.out && rm ./a.out",
+            AoStr *argv = cliConcatArgv(args);
+            aoStrCatPrintf(run_cmd,"%s -L%s/lib %s %s %s %s "CLIBS" -ltos && ./a.out && rm ./a.out %s",
                     cc->CC,
                     args->install_dir,
                     ASM_TMP_FILE,
                     ofiles->data,
                     link_flags->data,
-                    args->clibs ? args->clibs : "");
+                    args->clibs ? args->clibs : "",
+                    argv->data);
+            aoStrRelease(argv);
+            aoStrRelease(run_cmd);
             /* Don't use 'safeSystem' else anything other than a '0' exit
              * code will cause a panic which is incorrect... This is a bit of a
              * hack as run, in an ideal world, would not be calling out to `_CC` */
@@ -529,7 +533,8 @@ int main(int argc, char **argv) {
             memoryRelease();
             return 1;
         }
-        int rc = hccJitRunMain(jit, argc, argv);
+        int rc = hccJitRunMain(jit, args.argv->size,
+                                    (char **)args.argv->entries);
         if (args.memsafe) memsafeReportLeaks(stderr);
         hccJitFree(jit);
         memoryRelease();
