@@ -277,6 +277,18 @@ __noreturn void cliPrintUsage(void) {
     exit(EXIT_SUCCESS);
 }
 
+AoStr *cliConcatArgv(CliArgs *args) {
+    AoStr *s = aoStrNew();
+    for (int i = 0; i < args->argc; ++i) {
+        if (i + 1 == args->argc) {
+            aoStrCatFmt(s, "%s", args->argv[i]);
+        } else {
+            aoStrCatFmt(s, "%s, ", args->argv[i]);
+        }
+    }
+    return s;
+}
+
 CliParser *cliParserFind(char *arg, u64 arg_len) {
     int len = (int)(sizeof(parsers)/sizeof(parsers[0]));
 
@@ -408,7 +420,10 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
                 getASMFileName(args, file_type, arg, arg_len);
                 continue;
             } else {
-                cliPanic("Unknown cli option `%s`\n", arg);
+                /* Collect arbitrary command line arguments as they could be 
+                 * for the jit */
+                args->argv[args->argc++] = strdup(arg);
+                continue;
             }
         }
 
@@ -507,6 +522,11 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
     if (args->to_stdout && !args->assemble_only) {
         cliPanic("`-o-` can only be used in conjunction with `-S` for "
                  "printing assembly to stdout\n");
+    }
+
+    if (args->argc && !args->jit && !args->run) {
+        AoStr *s = cliConcatArgv(args);
+        cliPanic("Unknown commandline options: %s\n", s->data);
     }
 
     /* The REPL and the LSP read from stdin - the two modes with no
