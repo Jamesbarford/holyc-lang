@@ -125,6 +125,7 @@ _MEMCPY::
 
 #ifdef __aarch64__
 asm {
+
 _MALLOC::
     STP    X29, X30, [SP, -16]! // save FP/LR - we make a call
     STR    X0, [SP, -16]!       // save size across the call (X1 is caller-saved)
@@ -142,7 +143,7 @@ _FREE::
     SUB    X0, X0, 8
     BL     free
 @@1:
-    LDP    X29, X30, [SP], #16
+    LDP    X29, X30, [SP], 16
     RET
 
 _MSIZE::

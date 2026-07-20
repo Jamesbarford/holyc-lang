@@ -307,15 +307,15 @@ _STRLEN_FAST::
 _STRNCMP::
     CBZ     X2, @@2
 @@1:
-    LDRB    W4, [X0], #1
-    LDRB    W5, [X1], #1
+    LDRB    W4, [X0], 1
+    LDRB    W5, [X1], 1
     SUBS    W6, W4, W5
     B.NE    @@3
     CBZ     W4, @@2
-    SUBS    X2, X2, #1
+    SUBS    X2, X2, 1
     B.NE    @@1
 @@2:
-    MOV     X0, #0
+    MOV     X0, 0
     RET
 @@3:
     SXTW    X0, W6
@@ -326,26 +326,26 @@ _STRNCMP::
 _STRNICMP::
     CBZ     X2, @@2
 @@1:
-    LDRB    W4, [X0], #1
-    LDRB    W5, [X1], #1
+    LDRB    W4, [X0], 1
+    LDRB    W5, [X1], 1
     // Lowercase W4 if it's in 'A'..'Z'
-    SUB     W7, W4, #0x41
-    CMP     W7, #25
-    ADD     W8, W4, #0x20
+    SUB     W7, W4, 0x41
+    CMP     W7, 25
+    ADD     W8, W4, 0x20
     CSEL    W4, W8, W4, LS
     // Lowercase W5 the same way
-    SUB     W7, W5, #0x41
-    CMP     W7, #25
-    ADD     W8, W5, #0x20
+    SUB     W7, W5, 0x41
+    CMP     W7, 25
+    ADD     W8, W5, 0x20
     CSEL    W5, W8, W5, LS
 
     SUBS    W6, W4, W5
     B.NE    @@3
     CBZ     W4, @@2
-    SUBS    X2, X2, #1
+    SUBS    X2, X2, 1
     B.NE    @@1
 @@2:
-    MOV     X0, #0
+    MOV     X0, 0
     RET
 @@3:
     SXTW    X0, W6
@@ -353,12 +353,12 @@ _STRNICMP::
 
 _STRCMP::
 @@1:
-    LDRB    W4, [X0], #1
-    LDRB    W5, [X1], #1
+    LDRB    W4, [X0], 1
+    LDRB    W5, [X1], 1
     SUBS    W6, W4, W5
     B.NE    @@2
     CBNZ    W4, @@1
-    MOV     X0, #0
+    MOV     X0, 0
     RET
 @@2:
     SXTW    X0, W6
@@ -367,8 +367,8 @@ _STRCMP::
 _STRCPY::
     MOV     X2, X0
 @@1:
-    LDRB    W3, [X1], #1
-    STRB    W3, [X0], #1
+    LDRB    W3, [X1], 1
+    STRB    W3, [X0], 1
     CBNZ    W3, @@1
     MOV     X0, X2
     RET
