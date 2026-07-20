@@ -214,7 +214,6 @@ Ast *prsAsm(Cctrl *cc, int parse_one) {
             Lexeme *next = cctrlTokenPeek(cc);
             if (tokenPunctIs(next, TK_DBL_COLON) || tokenPunctIs(next, ':')) {
                 cctrlAsmTokenGet(cc);
-                cctrlTokenExpect(cc, '\n');
                 prsAsmFlushFunc(cc, funcs, curfunc, cur, func_line);
                 curfunc = aoStrDupRaw(tok->start, tok->len);
                 cc->tmp_asm_fname = curfunc;
