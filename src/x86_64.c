@@ -52,6 +52,48 @@ static Vec *x86_64MakeAoStrVec(const char *const *src, int n) {
     return v;
 }
 
+/* Which of rax/rcx/rdx/xmm0/xmm1 does emitting `I` actually write, by
+ * the point `at`? r1 is materialised into rax/xmm0, r2 into rcx, and
+ * the result spills out of rax/xmm0.
+ *
+ * Conservative by default - only the audited cases answer "not
+ * clobbered", so an unconsidered opcode keeps the old behaviour. */
+static int x86_64OpClobbers(IrInstr *I, AoStr *reg, IrClobberPoint at) {
+    const char *r = reg->data;
+    int is_scratch0 = !strcmp(r, "rax") || !strcmp(r, "xmm0");
+    /* Division sign-extends into rdx (cqto) *before* the divisor is
+     * loaded, so rdx is unsafe for r2 - and rdx is SysV arg #3. */
+    int is_divrem = I->op == IR_IDIV || I->op == IR_UDIV ||
+                    I->op == IR_IREM || I->op == IR_UREM;
+
+    switch (at) {
+        case IR_CLOBBER_BEFORE_R1:
+            if (I->op == IR_STORE_DEREF || I->op == IR_RMW_DEREF) return 1;
+            return 0;
+
+        case IR_CLOBBER_BEFORE_R2:
+            if (I->op == IR_STORE_DEREF || I->op == IR_RMW_DEREF) return 1;
+            if (is_divrem) return 1;
+            /* r1 has landed in rax/xmm0; rcx and rdx are untouched. */
+            return is_scratch0;
+
+        case IR_CLOBBER_AFTER:
+        default:
+            /* The IR_STORE path stores a reg-resident r1 straight out
+             * of its own register instead of bouncing through
+             * rax/xmm0, so nothing is clobbered - which is what lets
+             * consecutive param spills all forward. A pinned
+             * destination names its own register and does clobber. */
+            if (I->op == IR_STORE) {
+                if (I->dst && I->dst->pinned_reg) return 1;
+                int src_in_reg = I->r1 && I->r1->loc.kind == IR_LOC_REG &&
+                                 I->r1->loc.as.reg;
+                return src_in_reg ? 0 : is_scratch0;
+            }
+            return 1;
+    }
+}
+
 static void x86_64InitRegPool(void) {
     static int initialised = 0;
     static IrRegPool pool;
@@ -67,6 +109,7 @@ static void x86_64InitRegPool(void) {
     pool.float_return_reg = aoStrDupRaw((char *)"xmm0", 4);
     pool.sret_reg         = NULL; /* SysV: sret ptr is the first int arg */
     pool.scratch_regs     = x86_64MakeAoStrVec(kScratchRegs, n_scratch);
+    pool.op_clobbers      = x86_64OpClobbers;
 
     irRegPoolSet(&pool);
     initialised = 1;

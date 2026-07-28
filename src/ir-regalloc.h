@@ -16,6 +16,16 @@
  * so this flag is informational. */
 #define IRCG_CALL_AGG_RETURN (1u << 1)
 
+/* Where in an instruction's emission a clobber question is asked.
+ * Both backends materialise r1 into their first scratch register and
+ * r2 into the second, so a forwarded value's survival depends on how
+ * far through the instruction it has to stay alive. */
+typedef enum IrClobberPoint {
+    IR_CLOBBER_AFTER = 0,   /* after the whole instruction is emitted */
+    IR_CLOBBER_BEFORE_R1,   /* before r1 is read */
+    IR_CLOBBER_BEFORE_R2,   /* before r2 is read */
+} IrClobberPoint;
+
 /* Per-backend ABI descriptor. The peephole reads this to know which
  * register a fused producer's value will live in (the result reg);
  * the codegen reads it when laying out call arguments and parameter
@@ -39,6 +49,18 @@ typedef struct IrRegPool {
      * passes drop any forwarded source whose loc names one of these
      * after a non-trivial op. Vec<AoStr *>. */
     Vec *scratch_regs;
+    /* Does emitting `I` write `reg` by the point `at`? Lets the
+     * forwarding passes ask about the instruction actually crossed
+     * rather than assuming every op burns every scratch register -
+     * without that distinction a param arriving in a register that is
+     * also scratch (x0-x2 on AAPCS64, rdx/rcx on SysV) can never be
+     * forwarded, so its home slot stays live and forces a frame.
+     *
+     * `reg` is always one of `scratch_regs`; non-scratch registers are
+     * never at risk and are filtered out before the call. NULL here
+     * means "assume every op clobbers every scratch reg", which is the
+     * conservative behaviour a backend gets for free. */
+    int (*op_clobbers)(IrInstr *I, AoStr *reg, IrClobberPoint at);
     /* Apple AArch64 ABI: variadic args (incl. HolyC's implicit argc)
      * are passed on the stack, not in arg regs. The IR builder and
      * layout pass consult this to skip the argc spill and place argc

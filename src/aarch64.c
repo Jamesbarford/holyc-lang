@@ -54,6 +54,50 @@ static Vec *aarch64MakeAoStrVec(const char *const *src, int n) {
     return v;
 }
 
+/* Which of x0/x1/x2/d0/d1 does emitting `I` actually write, by the
+ * point `at`? Mirrors a64EmitArith's fixed shape: r1 is materialised
+ * into x0/d0, then r2 into x1/d1, then the result spills out of x0/d0.
+ *
+ * Conservative by default - only the cases audited against the
+ * emitters answer "not clobbered", so an opcode nobody has thought
+ * about keeps the old blanket behaviour. */
+static int aarch64OpClobbers(IrInstr *I, AoStr *reg, IrClobberPoint at) {
+    const char *r = reg->data;
+    int is_scratch0 = !strcmp(r, "x0") || !strcmp(r, "d0");
+
+    switch (at) {
+        case IR_CLOBBER_BEFORE_R1:
+            /* r1 is the first thing materialised, so nothing has been
+             * written yet - except for the two deref stores, which
+             * put the address through x1/x2 before reading the value. */
+            if (I->op == IR_STORE_DEREF || I->op == IR_RMW_DEREF) return 1;
+            return 0;
+
+        case IR_CLOBBER_BEFORE_R2:
+            if (I->op == IR_STORE_DEREF || I->op == IR_RMW_DEREF) return 1;
+            /* r1 has landed in scratch 0 by now; x1/x2 are still
+             * untouched, so a source living there survives. */
+            return is_scratch0;
+
+        case IR_CLOBBER_AFTER:
+        default:
+            /* a64TxtSrcReg stores a reg-resident value straight out of
+             * its own register - no load, no scratch touched. Only a
+             * source needing materialisation burns scratch 0. This is
+             * what lets consecutive param spills all forward.
+             *
+             * A pinned destination is written via `mov <pinned>, src`,
+             * so it clobbers whatever register it names. */
+            if (I->op == IR_STORE) {
+                if (I->dst && I->dst->pinned_reg) return 1;
+                int src_in_reg = I->r1 && I->r1->loc.kind == IR_LOC_REG &&
+                                 I->r1->loc.as.reg;
+                return src_in_reg ? 0 : is_scratch0;
+            }
+            return 1;
+    }
+}
+
 static void aarch64InitRegPool(void) {
     static int initialised = 0;
     static IrRegPool pool;
@@ -69,6 +113,7 @@ static void aarch64InitRegPool(void) {
     pool.float_return_reg = aoStrDupRaw((char *)"d0", 2);
     pool.sret_reg         = aoStrDupRaw((char *)"x8", 2);
     pool.scratch_regs     = aarch64MakeAoStrVec(kScratchRegs, n_scratch);
+    pool.op_clobbers      = aarch64OpClobbers;
     pool.variadic_on_stack = 1;
 
     irRegPoolSet(&pool);

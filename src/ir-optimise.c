@@ -326,6 +326,7 @@ static int irValMatchesSlot(IrValue *v, IrValue *slot) {
 }
 
 static int irLocIsScratchClobbered(IrValue *v);
+static int irLocClobberedBy(IrInstr *I, IrValue *v, IrClobberPoint at);
 
 static int irRewriteOperands(IrInstr *I, IrValue *slot, IrValue *source) {
     int changed = 0;
@@ -338,22 +339,24 @@ static int irRewriteOperands(IrInstr *I, IrValue *slot, IrValue *source) {
     /* A source living in a backend scratch register (a param's arrive
      * reg overlapping x0/x1/x2 on AArch64) only survives until the
      * consumer's OWN operand materialisation starts writing scratch
-     * regs. r1 of a simple op is loaded first, so it may read the
-     * home reg; r2 is loaded after r1 already landed in scratch 0 -
-     * `D(I64 x){ 10/x }` emitted `mov x0,#10` over the param then
-     * computed 10/10. STORE_DEREF / RMW_DEREF load their value operand
-     * LAST (after address/idx hit x1/x2), so even r1 is unsafe there.
-     * Refuse the hazardous positions; the read then stays on the slot
-     * and the spilling store stays live. */
-    int scratch_src = irLocIsScratchClobbered(source);
-    int r1_loads_first = I->op != IR_STORE_DEREF && I->op != IR_RMW_DEREF;
-    if ((!scratch_src || r1_loads_first) &&
+     * regs. Ask the backend per operand position rather than refusing
+     * every scratch-resident source outright: r1 is materialised
+     * first, so nothing has been written when it is read; r2 is read
+     * after r1 landed in scratch 0, which is what broke
+     * `D(I64 x){ 10/x }` (`mov x0,#10` over the param, then 10/10).
+     * Only the source actually sitting in the register r1's load
+     * targets is at risk - a param in x1 is untouched by a load into
+     * x0. STORE_DEREF / RMW_DEREF read their value operand LAST, so
+     * the backend reports both positions unsafe there. */
+    if (!irLocClobberedBy(I, source, IR_CLOBBER_BEFORE_R1) &&
         irValMatchesSlot(I->r1, slot) && I->r1 != source)
     {
         I->r1 = source;
         changed = 1;
     }
-    if (!scratch_src && irValMatchesSlot(I->r2, slot) && I->r2 != source) {
+    if (!irLocClobberedBy(I, source, IR_CLOBBER_BEFORE_R2) &&
+        irValMatchesSlot(I->r2, slot) && I->r2 != source)
+    {
         I->r2 = source;
         changed = 1;
     }
@@ -385,8 +388,12 @@ static int irRewriteOperands(IrInstr *I, IrValue *slot, IrValue *source) {
     }
     /* Phi values materialise at the predecessor's terminator - AFTER a
      * CMP_BR terminator's compare has already run r1/r2 through the
-     * scratch regs - so a scratch-homed source is stale by then. */
-    if (I->op == IR_PHI && I->extra.phi_pairs && !scratch_src) {
+     * scratch regs - so a scratch-homed source is stale by then. The
+     * clobbering instruction is that terminator rather than `I`, so
+     * this stays on the blanket "is it scratch at all" test. */
+    if (I->op == IR_PHI && I->extra.phi_pairs &&
+        !irLocIsScratchClobbered(source))
+    {
         for (u64 i = 0; i < I->extra.phi_pairs->size; ++i) {
             IrPair *p = vecGet(IrPair *, I->extra.phi_pairs, i);
             if (p && irValMatchesSlot(p->ir_value, slot) &&
@@ -400,9 +407,25 @@ static int irRewriteOperands(IrInstr *I, IrValue *slot, IrValue *source) {
     return changed;
 }
 
+/* True if emitting `I` destroys the value `v` is holding in its
+ * register, at the point `at` of I's emission.
+ *
+ * Two questions, deliberately kept apart: is `v` even in a register
+ * the backend treats as scratch (if not, nothing can disturb it), and
+ * if so does THIS instruction actually write that register by that
+ * point. The backend answers the second via `pool->op_clobbers`; with
+ * no such hook we fall back to "any op clobbers any scratch reg". */
+static int irLocClobberedBy(IrInstr *I, IrValue *v, IrClobberPoint at) {
+    if (!irLocIsScratchClobbered(v)) return 0;
+    IrRegPool *pool = irRegPoolGet();
+    if (!pool || !pool->op_clobbers) return 1;
+    return pool->op_clobbers(I, v->loc.as.reg, at);
+}
+
 /* True if `v` is pinned to a register the backend declared as
- * per-instruction scratch. After a non trivial op the forwarded
- * value sitting there is gone, so the forwarding map drops it. */
+ * per-instruction scratch - i.e. a register that SOME op may clobber.
+ * Callers with an instruction in hand should prefer
+ * `irLocClobberedBy`, which narrows this to the op actually crossed. */
 static int irLocIsScratchClobbered(IrValue *v) {
     if (!v || v->loc.kind != IR_LOC_REG || !v->loc.as.reg) return 0;
     IrRegPool *pool = irRegPoolGet();
@@ -444,17 +467,20 @@ static int irForwardStoreToReads(IrFunction *fn) {
                 continue;
             }
 
-            /* Scratch-clobber: drop any source whose loc names a
-             * backend-declared scratch reg, since this op overwrote it.
-             * IR_STORE counts: a const r1 is materialised via the
-             * scratch reg on AArch64 (mov x0, #N; stur x0, ...), so a
-             * param pinned to x0 is gone after the store. */
+            /* Scratch-clobber: drop any source whose register THIS op
+             * actually overwrites. The backend decides - e.g. an
+             * IR_STORE of a value that is already in a register stores
+             * straight out of it and burns no scratch at all, while a
+             * store of a constant materialises it through scratch 0
+             * (mov x0, #N; stur x0, ...) and does destroy a param
+             * sitting in x0. Asking per instruction is what lets two
+             * consecutive param spills both forward. */
             if (I->op != IR_NOP && I->op != IR_JMP && I->op != IR_PHI &&
                 I->op != IR_LABEL && I->op != IR_ALLOCA)
             {
                 u64 j = 0;
                 while (j < n) {
-                    if (irLocIsScratchClobbered(sources[j])) {
+                    if (irLocClobberedBy(I, sources[j], IR_CLOBBER_AFTER)) {
                         slots[j] = slots[n - 1];
                         sources[j] = sources[n - 1];
                         n--;
@@ -760,11 +786,17 @@ static int irFuseIaddIntoMemAddressing(IrFunction *fn) {
                     ptr = I->r1; k = -I->r2->as._i64;
                 }
                 if (ptr && k >= INT32_MIN && k <= INT32_MAX) {
-                    /* Refuse the fold if ptr is reg-pinned and any
-                     * intervening op clobbers scratch, the codegen
+                    /* Refuse the fold if ptr is reg-pinned and either
+                     * an intervening op clobbers scratch, or the
+                     * CONSUMER's own expansion does: an IR_RMW_DEREF
+                     * loads through the base into scratch 0 and then
+                     * needs the base again for the store-back, so a
+                     * base living in scratch 0 is gone by then
+                     * (`str x0, [x0, #40]`). Either way the codegen
                      * would read a stale register at the consumer. */
-                    if (irLocIsScratchClobbered(ptr) && use_node &&
-                        irRangeClobbersScratch(cur, use_node))
+                    if (irLocIsScratchClobbered(ptr) &&
+                        ((use_node && irRangeClobbersScratch(cur, use_node)) ||
+                         irLocClobberedBy(use, ptr, IR_CLOBBER_BEFORE_R1)))
                     {
                         /* fall through to scale-fold attempt */
                     } else {
@@ -789,8 +821,9 @@ static int irFuseIaddIntoMemAddressing(IrFunction *fn) {
                 else if ((scaler = irFindScalingProducer(defs, I->r1, &scale)) &&
                          irTmpUseCount(uses, I->r1) == 1) base = I->r2;
                 else scaler = NULL;
-                if (scaler && irLocIsScratchClobbered(base) && use_node &&
-                    irRangeClobbersScratch(cur, use_node))
+                if (scaler && irLocIsScratchClobbered(base) &&
+                    ((use_node && irRangeClobbersScratch(cur, use_node)) ||
+                     irLocClobberedBy(use, base, IR_CLOBBER_BEFORE_R1)))
                 {
                     scaler = NULL;
                 }
