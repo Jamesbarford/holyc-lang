@@ -110,34 +110,49 @@ int hccLibInit(Cctrl *cc, hccLib *lib, CliArgs *args, char *name) {
      * invocations behave unchanged - this is purely an opt-in
      * redirection for cross-builds and sandboxed installs. */
 #if IS_BSD
-    snprintf(lib->stylib_name,LIB_BUFSIZ,"%s.a",name);
-    snprintf(lib->dylib_name,LIB_BUFSIZ,"%s.dylib",name);
-    snprintf(lib->dylib_version_name,LIB_BUFSIZ,"%s.0.0.1.dylib",name);
+    /* `lib`-prefixed throughout, matching the Linux naming below and
+     * what jitLoadLibtos probes for. */
+    snprintf(lib->stylib_name,LIB_BUFSIZ,"lib%s.a",name);
+    snprintf(lib->dylib_name,LIB_BUFSIZ,"lib%s.dylib",name);
+    snprintf(lib->dylib_version_name,LIB_BUFSIZ,"lib%s.0.0.1.dylib",name);
 
+    char *lib_install_dir = tprintf("%s/lib", args->install_dir);
+
+    /* `-install_name` is the path a client records to load this from
+     * at runtime, so it has to name the file that actually gets
+     * installed - the VERSIONED dylib, not the unversioned build
+     * artefact (which is never installed) and not an extensionless
+     * path. Nothing links against libtos today (AOT takes the
+     * archive), but a wrong install_name would only surface later as
+     * an image-not-found at load time. */
     aoStrCatPrintf(dylib_cmd,
-            "cp -pPR ./%s %s/lib/lib%s && "
-            "%s -dynamiclib -Wl,-install_name,%s/lib/%s -o %s "CLIBS" -o %s %s %s",
-            lib->stylib_name,
-            args->install_dir,
-            lib->stylib_name,
+            "%s -dynamiclib -Wl,-install_name,%s/%s %s -o %s "CLIBS" %s",
             cc->CC,
-            args->install_dir,
-            name,
+            lib_install_dir,
             lib->dylib_version_name,
-            lib->dylib_name,
             args->obj_outfile,
+            lib->dylib_name,
             link_flags->data);
 
+    /* Install the same two artefacts as Linux, for the same reasons
+     * (see the long comment on the Linux branch): the static archive
+     * that `-ltos` resolves to, and the VERSIONED dylib that the JIT
+     * dlopen's - jitLoadLibtos probes `lib/libtos.0.0.1.dylib`.
+     *
+     * Deliberately NO unversioned `libtos.dylib`: `ld` prefers a dylib
+     * over an archive for `-ltos`, so installing one would silently
+     * flip AOT builds to dynamic linking. */
     aoStrCatPrintf(installcmd,
-            "cp -pPR ./%s %s/lib/lib%s && "
-            "ln -sf %s/lib/%s %s/lib/%s",
+            "cp -pPR ./%s %s/%s && ",
+            lib->stylib_name,
+            lib_install_dir,
+            lib->stylib_name);
+
+    /* Copy the versioned dylib to somewhere like /usr/local/lib */
+    aoStrCatPrintf(installcmd, "cp -pPR ./%s %s/%s",
             lib->dylib_name,
-            args->install_dir,
-            lib->dylib_version_name,
-            args->install_dir,
-            lib->dylib_version_name,
-            args->install_dir,
-            lib->dylib_name);
+            lib_install_dir,
+            lib->dylib_version_name);
 
 #elif IS_LINUX
     snprintf(lib->stylib_name,LIB_BUFSIZ,"lib%s.a",name);
@@ -273,8 +288,8 @@ void emitFile(Cctrl *cc, AoStr *asmbuf, CliArgs *args) {
                 cc->CC,
                 ASM_TMP_FILE,args->obj_outfile);
         safeSystem(cmd->data,1);
-        /* The archive first: dylib_cmd's leading `cp` ships it, so
-         * running it second means shipping a stale (or absent) one. */
+        /* The archive first: install_cmd copies it, so building it
+         * afterwards would ship a stale (or absent) one. */
         safeSystem(lib.stylib_cmd, 1);
         safeSystem(lib.dylib_cmd, 1);
         safeSystem(lib.install_cmd, 1);

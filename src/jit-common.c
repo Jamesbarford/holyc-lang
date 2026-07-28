@@ -377,8 +377,10 @@ static int jitAllocateGlobals(HccJit *jit, List *from) {
  * the JIT has to make them visible at runtime. The configured install
  * prefix (cc->install_dir, `--install-dir`, defaults to /usr/local) is
  * probed first with both platforms' install conventions: macOS installs
- * lib<name>.0.0.1.dylib + a lib<name>.dylib symlink, Linux produces
- * <name>.so / <name>.so.0.0.1. */
+ * lib<name>.0.0.1.dylib, Linux lib<name>.so.0.0.1. Neither installs an
+ * unversioned shared library - that would make `-ltos` prefer it over
+ * the static archive (see hccLibInit in main.c) - so the unversioned
+ * entries here only ever match a hand-placed one. */
 static void jitLoadLibtos(Cctrl *cc) {
     static int tos_loaded = 0;
     if (tos_loaded) return;
@@ -403,8 +405,8 @@ static void jitLoadLibtos(Cctrl *cc) {
         "libtos.dylib",
         "libtos.so",
         "libtos.so.0.0.1",
-        "./tos.so",
-        "./tos.dylib",
+        "./libtos.so",
+        "./libtos.dylib",
     };
     for (size_t i = 0; i < sizeof(candidates)/sizeof(candidates[0]); ++i) {
         if (dlopen(candidates[i], RTLD_LAZY | RTLD_GLOBAL)) return;

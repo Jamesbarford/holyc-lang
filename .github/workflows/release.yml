@@ -1,0 +1,193 @@
+name: release
+
+# Runs when you publish a release in the GitHub UI (or via `gh release
+# create`). Each matrix leg builds hcc + libtos for one target and
+# attaches hcc-<version>-<os>-<arch>.zip to that release.
+#
+# workflow_dispatch is kept for dry runs: it builds and tests every
+# target and uploads the zips as workflow artifacts instead, so the
+# pipeline can be exercised without cutting a release.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.os_name }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ubuntu-22.04 rather than 24.04 to keep the glibc floor at
+          # 2.35, so the binaries run on older distros too.
+          - runner: ubuntu-22.04
+            os_name: linux
+            arch: x86_64
+            triple: x86_64-unknown-linux-gnu
+            cross: false
+          - runner: ubuntu-22.04-arm
+            os_name: linux
+            arch: aarch64
+            triple: aarch64-unknown-linux-gnu
+            cross: false
+          - runner: macos-15
+            os_name: macos
+            arch: aarch64
+            triple: aarch64-apple-darwin
+            cross: false
+          # No Intel macOS runners remain, so this leg cross-builds on
+          # Apple Silicon. The macOS SDK is universal, so `-arch x86_64`
+          # covers both the C sources and the libtos assembly; hcc picks
+          # its backend at runtime from --target, so one native binary
+          # can emit x86_64 Mach-O asm. Nothing here is executable on
+          # the runner, so the smoke test is skipped.
+          - runner: macos-15
+            os_name: macos
+            arch: x86_64
+            triple: x86_64-apple-darwin
+            cross: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          if [ "${{ matrix.os_name }}" = "linux" ]; then
+            sudo apt-get update
+            sudo apt-get install -y cmake build-essential
+          else
+            command -v cmake >/dev/null || brew install cmake
+          fi
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ -n "${{ github.event.release.tag_name }}" ]; then
+            version="${{ github.event.release.tag_name }}"
+          else
+            version="$(git rev-parse --short HEAD)"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "pkg=hcc-$version-${{ matrix.os_name }}-${{ matrix.arch }}" >> "$GITHUB_OUTPUT"
+
+      # A native hcc is always needed: it is the compiler that has to
+      # RUN to turn holyc-lib/*.HC into target assembly.
+      - name: Build native hcc
+        run: |
+          make C_COMPILER=cc BUILD_TYPE=Release INSTALL_PREFIX=/usr/local
+          cp ./hcc ./hcc-native
+
+      # For the cross leg the shipped binary is a second, x86_64 build.
+      # CMAKE_RUNTIME_OUTPUT_DIRECTORY writes to the repo root, so this
+      # overwrites ./hcc - hence the ./hcc-native copy above.
+      - name: Build hcc for target
+        if: matrix.cross
+        run: |
+          cmake -S ./src -B ./build-x86_64 -G 'Unix Makefiles' \
+            -DCMAKE_C_COMPILER=cc \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DHCC_ENABLE_JIT=on
+          make -C ./build-x86_64 -j3
+
+      # Deliberately NOT `hcc -lib tos`: hccLibInit picks the library
+      # naming and link commands from a build-time `#if IS_BSD` /
+      # `#elif IS_LINUX`, i.e. from the host rather than from
+      # cc->target, so it cannot produce a cross-target library. These
+      # explicit steps are what hccLibInit runs, with the target chosen
+      # from the triple, and they are identical for native and cross.
+      - name: Build libtos
+        env:
+          PKG: ${{ steps.version.outputs.pkg }}
+        run: |
+          set -eux
+          stage="$PWD/$PKG"
+          mkdir -p "$stage/include" "$stage/lib"
+
+          # tos.HH must be in the prefix before all.HC is compiled -
+          # the lexer resolves builtins from <install-dir>/include.
+          cp ./src/holyc-lib/tos.HH "$stage/include/tos.HH"
+
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            archflag="-arch x86_64"
+          else
+            archflag=""
+          fi
+
+          (cd ./src/holyc-lib && \
+            "$GITHUB_WORKSPACE/hcc-native" \
+              --target=${{ matrix.triple }} \
+              --install-dir="$stage" \
+              -fPIC -S -o "$GITHUB_WORKSPACE/tos.s" ./all.HC)
+
+          cc $archflag -fPIC -c ./tos.s -o ./tos.o
+
+          # One -fPIC object feeds both the archive and the shared
+          # library, exactly as the source build does.
+          ar rcs "$stage/lib/libtos.a" ./tos.o
+
+          if [ "${{ matrix.os_name }}" = "linux" ]; then
+            # -Bsymbolic binds libtos's internal global references
+            # (e.g. the `Fs` exception object) to its own definitions,
+            # which is what lets codegen use direct RIP-relative /
+            # adrp+add addressing instead of the GOT.
+            cc -fPIC -shared -Wl,-Bsymbolic -Wl,-soname,libtos.so.0.0.1 \
+              ./tos.o -o "$stage/lib/libtos.so.0.0.1" -lpthread -lc -lm
+          else
+            cc $archflag -dynamiclib \
+              -install_name @rpath/libtos.0.0.1.dylib \
+              ./tos.o -o "$stage/lib/libtos.0.0.1.dylib" -lpthread -lc -lm
+          fi
+
+      - name: Stage package
+        env:
+          PKG: ${{ steps.version.outputs.pkg }}
+        run: |
+          set -eux
+          cp ./hcc "./$PKG/hcc"
+          cp ./packaging/install.sh "./$PKG/install.sh"
+          chmod +x "./$PKG/hcc" "./$PKG/install.sh"
+          ls -la "./$PKG" "./$PKG/lib" "./$PKG/include"
+          file "./$PKG/hcc" "./$PKG/lib/"*
+
+      # Installs into a scratch prefix and compiles + runs a program
+      # through both the AOT and JIT paths. Catches the failure that
+      # matters most here: a libtos laid out under a name the linker
+      # or jitLoadLibtos does not probe for.
+      - name: Smoke test
+        if: '!matrix.cross'
+        env:
+          PKG: ${{ steps.version.outputs.pkg }}
+        run: |
+          set -eux
+          prefix="$PWD/smoke-prefix"
+          "./$PKG/install.sh" --prefix="$prefix"
+          printf 'U0 Main(){\n  "hello %%d\\n", 40+2;\n}\n' > ./hello.HC
+          "$prefix/bin/hcc" --install-dir="$prefix" ./hello.HC -o ./hello
+          test "$(./hello)" = "hello 42"
+          test "$("$prefix/bin/hcc" --install-dir="$prefix" -jit ./hello.HC)" = "hello 42"
+
+      - name: Create zip
+        env:
+          PKG: ${{ steps.version.outputs.pkg }}
+        run: zip -r "$PKG.zip" "$PKG"
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PKG: ${{ steps.version.outputs.pkg }}
+        run: gh release upload "${{ github.event.release.tag_name }}" "$PKG.zip" --clobber
+
+      - name: Upload artifact (dry run)
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.version.outputs.pkg }}
+          path: ${{ steps.version.outputs.pkg }}.zip
