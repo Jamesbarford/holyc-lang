@@ -338,10 +338,62 @@ static void x86_64DerefStoreWidth(AoStr *buf,
     x86_64GenericStoreWidth(buf, size, reg, fmt);
 }
 
-static void x86_64DerefStoreGlobal(AoStr *buf, u32 size, const char *reg, const char *sym) {
-    char fmt[32];
-    snprintf(fmt, sizeof(fmt), "%s(%%rip)", sym);
+/* RIP-relative operand for a global, with any folded displacement
+ * baked into the symbol reference: `sym(%rip)` / `sym+8(%rip)`.
+ *
+ * The displacement is not decoration. `irEmitInlineCopy` chunks a small
+ * struct copy into load/store pairs at increasing `disp`, and
+ * `irFoldGlobalDeref` then rewrites the ones addressing a global to
+ * point at the symbol directly - so a copy into a global lands entirely
+ * on offset zero if this drops it. RIP-relative addressing has no index
+ * component (no SIB), which is why the callers assert idx is absent
+ * rather than trying to encode it. */
+static void x86_64FmtGlobalMemOperand(char *out, u64 out_sz,
+                                      const char *sym, s32 disp)
+{
+    int n = disp == 0
+          ? snprintf(out, out_sz, "%s(%%rip)", sym)
+          : snprintf(out, out_sz, "%s%+ld(%%rip)", sym, (long)disp);
+    /* A truncated symbol assembles as a *different* global, so refuse
+     * rather than emit it. */
+    if (n < 0 || (u64)n >= out_sz) {
+        loggerPanic("ir-cg-x86_64: global operand for '%s' does not fit "
+                    "in %d bytes\n", sym, (int)out_sz);
+    }
+}
+
+/* A global operand can never carry a scaled index: `irFoldGlobalDeref`
+ * runs before the addressing-mode fusion, and the fusion always
+ * retargets the deref at the IADD's (tmp) base, dropping the global.
+ * Guard rather than silently emit an address missing its index. */
+static void x86_64AssertNoGlobalIdx(IrInstr *instr) {
+    if (instr->idx) {
+        loggerPanic("ir-cg-x86_64: scaled index on a RIP-relative global "
+                    "operand cannot be encoded\n");
+    }
+}
+
+static void x86_64DerefStoreGlobal(AoStr *buf, u32 size, const char *reg,
+                                   const char *sym, s32 disp)
+{
+    char fmt[128];
+    x86_64FmtGlobalMemOperand(fmt, sizeof(fmt), sym, disp);
     x86_64GenericStoreWidth(buf, size, reg, fmt);
+}
+
+/* Width-aware load of a global into <reg64>, same extension policy as
+ * the register-base path (`x86_64DerefLoadWidth`). */
+static void x86_64DerefLoadGlobal(AoStr *buf, u32 size, const char *reg,
+                                  const char *sym, s32 disp)
+{
+    char mem[128];
+    x86_64FmtGlobalMemOperand(mem, sizeof(mem), sym, disp);
+    switch (size) {
+        case 1:  aoStrCatFmt(buf, "movzbq  %s, %%%s\n\t", mem, reg); break;
+        case 2:  aoStrCatFmt(buf, "movzwq  %s, %%%s\n\t", mem, reg); break;
+        case 4:  aoStrCatFmt(buf, "movslq  %s, %%%s\n\t", mem, reg); break;
+        default: aoStrCatFmt(buf, "movq    %s, %%%s\n\t", mem, reg); break;
+    }
 }
 
 /* x86 mnemonic suffix for an N-byte operation. */
@@ -1403,20 +1455,27 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
 
         case IR_LOAD_DEREF: {
             /* Global address folded in by irFoldGlobalDeref: read the
-             * symbol RIP-relative in a single instruction. Disp on a
-             * GLOBAL operand has no current use (the IADD fusion only
-             * runs when r1 is a TMP), so we assert it's zero. */
+             * symbol RIP-relative in a single instruction. `disp` is
+             * live here - a chunked struct copy out of a global reads
+             * its tail through one - and the width comes from the
+             * destination, so a 4-byte chunk does not over-read the
+             * object by four bytes. */
             if (instr->r1 && instr->r1->kind == IR_VAL_GLOBAL) {
                 const char *sym = asmNormaliseGlobalLabel(ctx->cc,
                         instr->r1->as.global.name)->data;
+                x86_64AssertNoGlobalIdx(instr);
                 if (instr->dst && irIsFloat(instr->dst->type)) {
-                    aoStrCatFmt(ctx->buf, "%s   %s(%%rip), %%xmm0\n\t",
+                    char mem[128];
+                    x86_64FmtGlobalMemOperand(mem, sizeof(mem), sym,
+                                              instr->disp);
+                    aoStrCatFmt(ctx->buf, "%s   %s, %%xmm0\n\t",
                                 x86_64FpMov((int)irValueByteSize(instr->dst)),
-                                sym);
+                                mem);
                     x86_64SpillDstFpr(ctx, instr, "xmm0");
                 } else {
-                    aoStrCatFmt(ctx->buf, "movq    %s(%%rip), %%rax\n\t",
-                                sym);
+                    u32 size = instr->dst ? instr->dst->as.var.size : 8;
+                    x86_64DerefLoadGlobal(ctx->buf, size, "rax", sym,
+                                          instr->disp);
                     x86_64SpillDst(ctx, instr, "rax");
                 }
                 break;
@@ -1455,21 +1514,25 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                 const char *sym = asmNormaliseGlobalLabel(ctx->cc,
                         instr->dst->as.global.name)->data;
                 u32 sz = irValueByteSize(instr->r1);
+                char mem[128];
+                x86_64AssertNoGlobalIdx(instr);
+                x86_64FmtGlobalMemOperand(mem, sizeof(mem), sym, instr->disp);
                 if (instr->r1 && irIsFloat(instr->r1->type)) {
                     x86_64LoadFirstSrcFpr(ctx, instr, instr->r1);
-                    aoStrCatFmt(ctx->buf, "%s   %%xmm0, %s(%%rip)\n\t",
-                                x86_64FpMov((int)irValueByteSize(instr->r1)), sym);
+                    aoStrCatFmt(ctx->buf, "%s   %%xmm0, %s\n\t",
+                                x86_64FpMov((int)irValueByteSize(instr->r1)),
+                                mem);
                     break;
                 }
                 s64 imm;
                 if (x86_64IsImm32(instr->r1, &imm)) {
                     const char *mnem = x86_64GetSizedMov(sz);
-                    aoStrCatFmt(ctx->buf, "%s    $%I, %s(%%rip)\n\t",
-                                mnem, (s64)imm, sym);
+                    aoStrCatFmt(ctx->buf, "%s    $%I, %s\n\t",
+                                mnem, (s64)imm, mem);
                     break;
                 }
                 x86_64LoadFirstSrc(ctx, instr, instr->r1);
-                x86_64DerefStoreGlobal(ctx->buf, sz, "rax", sym);
+                x86_64DerefStoreGlobal(ctx->buf, sz, "rax", sym, instr->disp);
                 break;
             }
 
@@ -1536,9 +1599,11 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
             const char *val_reg = "rax";
 
             if (instr->dst && instr->dst->kind == IR_VAL_GLOBAL) {
-                snprintf(mem, sizeof(mem), "%s(%%rip)",
-                         asmNormaliseGlobalLabel(ctx->cc,
-                                 instr->dst->as.global.name)->data);
+                x86_64AssertNoGlobalIdx(instr);
+                x86_64FmtGlobalMemOperand(mem, sizeof(mem),
+                        asmNormaliseGlobalLabel(ctx->cc,
+                                instr->dst->as.global.name)->data,
+                        instr->disp);
             } else {
                 const char *base_reg = "rcx";
                 int addr_in_reg = instr->dst &&

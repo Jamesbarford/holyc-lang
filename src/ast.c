@@ -18,6 +18,43 @@ static Arena ast_type_arena;
 static int ast_arena_init = 0;
 static int ast_type_arena_init = 0;
 
+/* The Vecs and Lists hanging off Ast nodes - argument vectors, statement
+ * bodies - are ordinary malloc'd containers, so resetting the AST arena
+ * reclaims the nodes and leaves their spines behind. Recording them here
+ * lets astMemoryRelease free the whole AST, not just the parts that
+ * happen to live in the arena.
+ *
+ * Only containers that are ONLY ever reached through an Ast belong on
+ * these lists - anything the parser might listMergeAppend (which frees
+ * the merged-from head) or release itself must keep allocating with
+ * plain listNew, or the release below would be a double free. */
+static Vec *ast_owned_vecs = NULL;
+static Vec *ast_owned_lists = NULL;
+
+static void astOwnedStringify(AoStr *buf, void *ptr) {
+    aoStrCatFmt(buf, "%p", ptr);
+}
+
+static int astOwnedMatch(void *a, void *b) {
+    return a == b;
+}
+
+/* Release is driven explicitly by astReleaseOwnedContainers, which has
+ * to pick the right destructor per list. */
+static int astOwnedRelease(void *ptr) {
+    (void)ptr;
+    return 1;
+}
+
+static VecType vec_ast_owned_type = {
+    .stringify = astOwnedStringify,
+    .match     = astOwnedMatch,
+    .release   = astOwnedRelease,
+    .type_str  = "void *",
+};
+
+static void astReleaseOwnedContainers(void);
+
 void astMemoryInit(void) {
     if (!ast_arena_init) {
         arenaInit(&ast_arena, sizeof(Ast) * 512);
@@ -25,15 +62,27 @@ void astMemoryInit(void) {
         ast_arena_init = 1;
         ast_type_arena_init = 1;
     }
+    if (!ast_owned_vecs)  ast_owned_vecs  = vecNew(&vec_ast_owned_type);
+    if (!ast_owned_lists) ast_owned_lists = vecNew(&vec_ast_owned_type);
 }
 
 void astMemoryRelease(void) {
+    astReleaseOwnedContainers();
     if (ast_arena_init) {
         ast_arena_init = 0;
-        ast_type_arena_init = 1;
+        ast_type_arena_init = 0;
         arenaClear(&ast_arena);
         arenaClear(&ast_type_arena);
     }
+}
+
+/* Bytes handed out since the arenas were last (re)initialised. A parse
+ * never gives any of it back, so this is the compiler's accumulated
+ * AST garbage - which is what `hcc -lsp` watches to decide when to
+ * recycle. */
+u64 astArenaBytes(void) {
+    if (!ast_arena_init) return 0;
+    return (u64)ast_arena.used + (u64)ast_type_arena.used;
 }
 
 void astMemoryStats(void) {
@@ -68,7 +117,35 @@ VecType vec_ast_type = {
 };
 
 Vec *astVecNew(void) {
-    return vecNew(&vec_ast_type);
+    Vec *vec = vecNew(&vec_ast_type);
+    if (ast_owned_vecs) vecPush(ast_owned_vecs, vec);
+    return vec;
+}
+
+/* A List that belongs to the AST and dies with it. */
+List *astListNew(void) {
+    List *list = listNew();
+    if (ast_owned_lists) vecPush(ast_owned_lists, list);
+    return list;
+}
+
+static void astReleaseOwnedContainers(void) {
+    if (ast_owned_vecs) {
+        for (u64 i = 0; i < ast_owned_vecs->size; ++i) {
+            /* vec_ast_type has no release hook, so this frees the
+             * vector's own storage and not the Ast pointers in it. */
+            vecRelease((Vec *)ast_owned_vecs->entries[i]);
+        }
+        vecRelease(ast_owned_vecs);
+        ast_owned_vecs = NULL;
+    }
+    if (ast_owned_lists) {
+        for (u64 i = 0; i < ast_owned_lists->size; ++i) {
+            listRelease((List *)ast_owned_lists->entries[i], NULL);
+        }
+        vecRelease(ast_owned_lists);
+        ast_owned_lists = NULL;
+    }
 }
 
 AoStr *mapAstTypeToString(void *ast_type) {
@@ -1359,8 +1436,18 @@ int astIsLabelMatch(Ast *ast, AoStr *goto_label) {
            aoStrCmp(goto_label, astHackedGetLabel(ast));
 }
 
+/* Does a call to `callee` use HolyC's varargs convention (a synthetic
+ * `argc` count followed by every variadic argument spilled to the stack,
+ * read back through `argc`/`argv`) rather than the platform C one?
+ *
+ * `parseArgv()` is the authority: it only inserts the `argc` prefix when
+ * the callee is NOT an `extern "c"` function, so codegen has to draw the
+ * line in exactly the same place. Getting this wrong on an `extern "c"`
+ * variadic (`printf`) silently pushes the arguments past the first onto
+ * the stack while the callee reads them from %rdx/%rcx/%r8/%r9. */
 int astUsesHolyCVarargs(Ast *callee) {
     if (!callee || !callee->params) return 0;
+    if (callee->kind == AST_EXTERN_FUNC) return 0;
     for (u64 i = 0; i < callee->params->size; ++i) {
         Ast *p = (Ast *)callee->params->entries[i];
         if (p && p->kind == AST_VAR_ARGS) return p->argc != NULL;

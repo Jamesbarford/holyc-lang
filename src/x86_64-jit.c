@@ -870,25 +870,16 @@ static void jitEmitInstr(JitFnCtx *ctx, IrInstr *instr) {
         }
 
         case IR_LOAD_DEREF: {
-            /* Global base: materialise the address into rcx, then load. */
-            if (instr->r1 && instr->r1->kind == IR_VAL_GLOBAL) {
-                jitGlobalAddr(jit, R_RCX, instr->r1->as.global.name->data);
-                if (instr->dst && irIsFloat(instr->dst->type)) {
-                    if (jitFpDbl(instr->dst))
-                        x86_64_enc_movsd_load(enc, 0, R_RCX, -1, 0, 0);
-                    else
-                        x86_64_enc_movss_load(enc, 0, R_RCX, -1, 0, 0);
-                    jitSpillDstFpr(ctx, instr, 0);
-                } else {
-                    int size = instr->dst ? (int)instr->dst->as.var.size : 8;
-                    x86_64_enc_load_mem(enc, size, R_RAX, R_RCX, -1, 0, 0);
-                    jitSpillDst(ctx, instr, R_RAX);
-                }
-                break;
-            }
             X86Reg base = R_RCX;
-            if (instr->r1 && instr->r1->loc.kind == IR_LOC_REG &&
-                instr->r1->loc.as.reg)
+            if (instr->r1 && instr->r1->kind == IR_VAL_GLOBAL) {
+                /* Global base: materialise the address into rcx and
+                 * then go through the ordinary disp/idx addressing
+                 * below. It used to load at offset zero unconditionally,
+                 * which silently mis-read every chunk of a struct copy
+                 * out of a global past the first. */
+                jitGlobalAddr(jit, R_RCX, instr->r1->as.global.name->data);
+            } else if (instr->r1 && instr->r1->loc.kind == IR_LOC_REG &&
+                       instr->r1->loc.as.reg)
             {
                 base = jitRegFromName(instr->r1->loc.as.reg->data);
             } else {
@@ -916,27 +907,23 @@ static void jitEmitInstr(JitFnCtx *ctx, IrInstr *instr) {
         }
 
         case IR_STORE_DEREF: {
-            if (instr->dst && instr->dst->kind == IR_VAL_GLOBAL) {
-                jitGlobalAddr(jit, R_RCX, instr->dst->as.global.name->data);
-                if (instr->r1 && irIsFloat(instr->r1->type)) {
-                    jitLoadFirstSrcFpr(ctx, instr->r1);
-                    if (jitFpDbl(instr->r1))
-                        x86_64_enc_movsd_store(enc, 0, R_RCX, -1, 0, 0);
-                    else
-                        x86_64_enc_movss_store(enc, 0, R_RCX, -1, 0, 0);
-                } else {
-                    int sz = (int)irValueByteSize(instr->r1);
-                    jitLoadFirstSrc(ctx, instr->r1);
-                    x86_64_enc_store_mem(enc, sz, R_RAX, R_RCX, -1, 0, 0);
-                }
-                break;
-            }
+            /* A global destination is just "address materialised into
+             * rcx" - it shares the disp/idx addressing below rather
+             * than hardcoding offset zero, which used to collapse
+             * every chunk of a struct copy into a global onto the
+             * object's first bytes. */
+            int is_global = instr->dst && instr->dst->kind == IR_VAL_GLOBAL;
             X86Reg base = R_RCX;
-            int addr_in_reg = instr->dst && instr->dst->loc.kind == IR_LOC_REG &&
+            int addr_in_reg = !is_global && instr->dst &&
+                              instr->dst->loc.kind == IR_LOC_REG &&
                               instr->dst->loc.as.reg;
             if (addr_in_reg) base = jitRegFromName(instr->dst->loc.as.reg->data);
             X86Reg idx; int has_idx = jitIdxReg(ctx, instr, &idx);
-            if (!addr_in_reg) jitLoadToReg(ctx, instr->dst, R_RCX);
+            if (is_global) {
+                jitGlobalAddr(jit, R_RCX, instr->dst->as.global.name->data);
+            } else if (!addr_in_reg) {
+                jitLoadToReg(ctx, instr->dst, R_RCX);
+            }
             if (instr->r1 && irIsFloat(instr->r1->type)) {
                 /* Materialising a float value can clobber RAX (a const is
                  * built with movabs+movq through RAX - the JIT has no

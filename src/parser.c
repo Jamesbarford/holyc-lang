@@ -572,7 +572,7 @@ AstType *parseClassOrUnion(Cctrl *cc, Map *env,
     AstType *prev = NULL, *ref = NULL, *base_class = NULL;
     List *fields = NULL;
     Map *fields_dict;
-    cc->localenv = cctrlCreateAstMap(cc->localenv);
+    cc->localenv = cctrlCreateAstMap(cc);
 
     if (tok == NULL) {
         cctrlRaiseException(cc,
@@ -882,8 +882,8 @@ Ast *parseIfStatement(Cctrl *cc) {
      * followed by the condition. The init declarations and a
      * declaration-condition are scoped to the if (and its bodies), so we
      * open a child environment and, when present, desugar to a block. */
-    cc->localenv = cctrlCreateAstMap(cc->localenv);
-    List *pre = listNew();
+    cc->localenv = cctrlCreateAstMap(cc);
+    List *pre = astListNew();
     Ast *cond_clause = NULL;
     while (1) {
         char term = 0;
@@ -1184,7 +1184,7 @@ Ast *parseForStatement(Cctrl *cc) {
     cc->tmp_loop_begin = for_middle;
     cc->tmp_loop_end = for_end;
 
-    cc->localenv = cctrlCreateAstMap(cc->localenv);
+    cc->localenv = cctrlCreateAstMap(cc);
     forinit = parseForLoopInitialiser(cc);
     //parseOptDeclOrStmt(cc);
 
@@ -1236,7 +1236,7 @@ Ast *parseWhileStatement(Cctrl *cc) {
     cc->tmp_loop_begin = while_begin;
     cc->tmp_loop_end = while_end;
 
-    cc->localenv = cctrlCreateAstMap(cc->localenv);
+    cc->localenv = cctrlCreateAstMap(cc);
     whilecond = parseExpr(cc,16);
     cctrlTokenExpect(cc,')');
 
@@ -1271,7 +1271,7 @@ Ast *parseDoWhileStatement(Cctrl *cc) {
     cc->tmp_loop_begin = while_begin;
     cc->tmp_loop_end = while_end;
 
-    cc->localenv = cctrlCreateAstMap(cc->localenv);
+    cc->localenv = cctrlCreateAstMap(cc);
 
     Lexeme *peek = cctrlTokenPeek(cc);
     if (peek == NULL) {
@@ -1441,7 +1441,7 @@ Ast *parseCaseLabel(Cctrl *cc, Lexeme *tok) {
         end = begining;
     }
 
-    List *stmts = listNew();
+    List *stmts = astListNew();
     peek = cctrlTokenPeek(cc);
 
     if (!ok && cc->flags & CCTRL_PASTE_DEFINES) {
@@ -1480,7 +1480,7 @@ Ast *parseDefaultStatement(Cctrl *cc) {
         cctrlRaiseException(cc,"Duplicate default case");
     }
     Lexeme *peek;
-    List *stmts = listNew();
+    List *stmts = astListNew();
     AoStr *default_label = astMakeLabel();
     /* set here so this is non-null for the next call to parseStatement */
     cc->tmp_default_case = astDefault(default_label,stmts);
@@ -1748,7 +1748,7 @@ void parseCompoundStatementInternal(Cctrl *cc, Ast *body) {
     Ast *var = NULL;
     AstType *base_type, *type, *next_type;
     Lexeme *tok, *varname, *peek;
-    Map *block_scope = cctrlCreateAstMap(cc->localenv);
+    Map *block_scope = cctrlCreateAstMap(cc);
     cc->localenv = block_scope;
     tok = NULL;
 
@@ -1874,7 +1874,7 @@ void parseCompoundStatementInternal(Cctrl *cc, Ast *body) {
 }
 
 Ast *parseCompoundStatement(Cctrl *cc) {
-    List *stmts = listNew();
+    List *stmts = astListNew();
     Ast *ast_compound = astCompountStatement(stmts);
     parseCompoundStatementInternal(cc, ast_compound);
     return ast_compound;
@@ -2155,13 +2155,13 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
         }
     }
 
-    List *locals = listNew();
+    List *locals = astListNew();
     Ast *func = NULL;
-    List *body = listNew();
+    List *body = astListNew();
     Ast *func_body = astCompountStatement(body);
     AstType *fn_type = NULL;
 
-    cc->localenv = cctrlCreateAstMap(cc->localenv);
+    cc->localenv = cctrlCreateAstMap(cc);
     cc->tmp_locals = locals;
 
     /* Upgrade a prototype to an actual function */
@@ -2296,7 +2296,7 @@ Ast *parseExternFunctionProto(Cctrl *cc, AstType *rettype, char *fname, int len)
     Ast *func;
     int has_var_args = 0;
     Lexeme *tok;
-    cc->localenv = cctrlCreateAstMap(cc->localenv);
+    cc->localenv = cctrlCreateAstMap(cc);
     cc->tmp_locals = NULL;
 
     Vec *params = parseParams(cc,')', &has_var_args,1);
@@ -2323,8 +2323,8 @@ Ast *parseFunctionOrDef(Cctrl *cc, AstType *rettype, char *fname, int len, int i
     u32 name_file = ast_file_hint;
     int has_var_args = 0;
     cctrlTokenExpect(cc,'(');
-    cc->localenv = cctrlCreateAstMap(cc->localenv);
-    cc->tmp_locals = listNew();
+    cc->localenv = cctrlCreateAstMap(cc);
+    cc->tmp_locals = astListNew();
 
     /* Reset the unique id counter otherwise we get ridiculous numbers */
     astResetLVarId();
@@ -2409,7 +2409,7 @@ Ast *parseAsmFunctionBinding(Cctrl *cc) {
     }
     c_fname = aoStrDupRaw(tok->start,tok->len);
     int name_line = tok->line, name_col = tok->col;
-    cc->localenv = cctrlCreateAstMap(cc->localenv);
+    cc->localenv = cctrlCreateAstMap(cc);
     cctrlTokenExpect(cc,'(');
 
     Vec *params = parseParams(cc,')',&has_var_args,0);
@@ -2555,22 +2555,22 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
                     break;
 
                 case KW_IF:
-                    cc->tmp_locals = listNew();
+                    cc->tmp_locals = astListNew();
                     *is_global = 1;
                     return parseIfStatement(cc);
 
                 case KW_WHILE:
-                    cc->tmp_locals = listNew();
+                    cc->tmp_locals = astListNew();
                     *is_global = 1;
                     return parseWhileStatement(cc);
 
                 case KW_DO:
-                    cc->tmp_locals = listNew();
+                    cc->tmp_locals = astListNew();
                     *is_global = 1;
                     return parseDoWhileStatement(cc);
 
                 case KW_FOR:
-                    cc->tmp_locals = listNew();
+                    cc->tmp_locals = astListNew();
                     *is_global = 1;
                     return parseForStatement(cc);
 
@@ -2881,7 +2881,13 @@ void parseToAst(Cctrl *cc) {
         if (is_global) {
             listAppend(cc->initalisers,ast);
             if (!listEmpty(cc->tmp_locals)) {
-                listMergeAppend(cc->initaliser_locals,cc->tmp_locals);
+                /* Move the nodes, keep the head: `tmp_locals` comes
+                 * from astListNew, so the AST owns it now and freeing
+                 * it here would be a double free later. It also
+                 * retires the stale-tmp_locals hazard noted at the top
+                 * of this function - the head stays valid and empty
+                 * rather than being handed back to malloc. */
+                listMergeAppendKeep(cc->initaliser_locals,cc->tmp_locals);
             }
         } else if (ast->kind != AST_FUN_PROTO) {
             listAppend(cc->ast_list,ast);
@@ -2894,4 +2900,9 @@ void parseToAst(Cctrl *cc) {
     }
 
     cc->current_recovery = prev_recovery;
+    /* Scopes are a parse-time structure - nothing downstream reads
+     * them - so hand them back now rather than making the next parse
+     * carry them. cctrlInitParse repeats this for the paths that leave
+     * through a longjmp instead of arriving here. */
+    cctrlReleaseScopeMaps(cc);
 }

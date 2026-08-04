@@ -48,6 +48,29 @@ static VecType vec_diagnostic_type = {
     .type_str  = "CctrlDiagnostic *",
 };
 
+/* `Vec<Map *>` of the parse's open-and-closed lexical scopes. Release is
+ * explicit (cctrlReleaseScopeMaps) rather than a hook, so vecClear can
+ * empty the list without touching the maps. */
+static void cctrlScopeMapStringify(AoStr *buf, void *ptr) {
+    aoStrCatFmt(buf, "%p", ptr);
+}
+
+static int cctrlScopeMapMatch(void *a, void *b) {
+    return a == b;
+}
+
+static int cctrlScopeMapRelease(void *ptr) {
+    (void)ptr;
+    return 1;
+}
+
+static VecType vec_scope_map_type = {
+    .stringify = cctrlScopeMapStringify,
+    .match     = cctrlScopeMapMatch,
+    .release   = cctrlScopeMapRelease,
+    .type_str  = "Map *",
+};
+
 /* `Map<char *, Lexeme *>` Map does not own either the key nor the Lexeme */
 MapType map_cstring_lexeme_type = {
     .match           = mapCStringEq,
@@ -65,8 +88,33 @@ Map *cctrlCreateLexemeMap(void) {
     return mapNew(32, &map_cstring_lexeme_type);
 }
 
-Map *cctrlCreateAstMap(Map *parent) {
-    return mapNewWithParent(parent, 32, &map_ast_type);
+/* A lexical scope, parented to whatever scope is currently open.
+ *
+ * The Cctrl keeps a reference so the map can actually be freed: the
+ * parser closes a scope by rewinding `cc->localenv` to `->parent` (or
+ * by NULLing it at the end of a function), which drops the only
+ * pointer to the child. See `Cctrl.scope_maps`. */
+Map *cctrlCreateAstMap(Cctrl *cc) {
+    Map *scope = mapNewWithParent(cc->localenv, 32, &map_ast_type);
+    if (cc->scope_maps) vecPush(cc->scope_maps, scope);
+    return scope;
+}
+
+/* Free every scope map from the parse that just finished.
+ *
+ * Safe because a scope map is only ever read through `cc->localenv`
+ * during parsing, and the parser leaves that NULL once the parse is
+ * over - nothing downstream (codegen, the LSP's symbol queries) can
+ * reach one. `map_ast_type` has no key/value release hooks, so this
+ * frees the map's own storage and never touches the Ast values, which
+ * live in the AST arena. */
+void cctrlReleaseScopeMaps(Cctrl *cc) {
+    if (!cc->scope_maps) return;
+    for (u64 i = 0; i < cc->scope_maps->size; ++i) {
+        mapRelease((Map *)cc->scope_maps->entries[i]);
+    }
+    vecClear(cc->scope_maps);
+    cc->localenv = NULL;
 }
 
 static char *x86_registers = "rax,rbx,rcx,rdx,rsi,rdi,rbp,rsp,r8,r9,r10,r11,r12,"
@@ -234,6 +282,10 @@ Cctrl *ccMacroProcessor(Map *macro_defs) {
     cc->macro_defs = macro_defs;
     cc->strs = mapNew(32, &map_ast_type);
     cc->ast_list = NULL;
+    /* This stub never runs the parser, but the scope-map helpers read
+     * both fields and would otherwise see the malloc's garbage. */
+    cc->localenv = NULL;
+    cc->scope_maps = NULL;
     /* The macro-processor stub Cctrl is passed to helpers that may
      * call cctrlRaiseException; keep diagnostics state consistent
      * so those paths don't read uninitialised fields. */
@@ -268,6 +320,7 @@ Cctrl *cctrlNew(enum CliTarget target) {
     /* These are temoraries that the parser will allocate and 
      * NULL out between parses of classes and functions */
     cc->localenv = NULL;
+    cc->scope_maps = vecNew(&vec_scope_map_type);
     cc->tmp_rettype = NULL;
     cc->func_params = NULL;
     cc->tmp_params = NULL;
@@ -329,6 +382,75 @@ Cctrl *cctrlNew(enum CliTarget target) {
     mapAdd(cc->global_env,"argc",cmd_args->argc->declvar);
     mapAdd(cc->global_env,"argv",cmd_args->argv->declvar);
     return cc;
+}
+
+/* Free a Cctrl built by cctrlNew, along with the containers it owns.
+ *
+ * What this deliberately does NOT free:
+ *
+ *  - The values inside those containers. Every Ast, AstType, Lexeme and
+ *    AoStr in them came from an arena, and handing arena memory to
+ *    free() is a crash, not a leak. The container MapTypes are chosen
+ *    to match: map_ast_type and map_asttype_type carry no release
+ *    hooks, and set_cstring_type does not own its strings (several of
+ *    them are arena buffers). The two exceptions are deliberate:
+ *    map_u32_to_aostr_type returns its AoStr buffers to the string
+ *    pool, and vec_diagnostic_type owns its diagnostics outright.
+ *  - `CC` and `install_dir`, which point at CLI-owned strings.
+ *  - `object_files` / `shared_object_files` / `link_libs`, which main()
+ *    overwrites with the CLI's own lists.
+ *  - `lexer_`, released by whoever created it (see lspParse).
+ *
+ * Ordering note for the arena-recycling caller: this must run BEFORE
+ * memoryRecycleArenas - it touches the arena-backed containers - and
+ * the recycle's lexerForgetMacroProcessor() is what makes releasing
+ * `macro_defs` safe, since the cached macro-processor stub borrows it. */
+void cctrlRelease(Cctrl *cc) {
+    if (!cc) return;
+
+    cctrlReleaseScopeMaps(cc);
+    if (cc->scope_maps) vecRelease(cc->scope_maps);
+
+    /* The built-in types are the only AstTypes this Cctrl malloc'd
+     * itself, and symbol_table is the only place they live. Everything
+     * in clsdefs/uniondefs came from the AST arena, which is why this
+     * is an explicit loop here rather than a release hook on the shared
+     * map_asttype_type. */
+    if (cc->symbol_table) {
+        MapIter it;
+        mapIterInit(cc->symbol_table, &it);
+        while (mapIterNext(&it)) {
+            free(it.node->value);
+        }
+        mapRelease(cc->symbol_table);
+    }
+
+    if (cc->file_map)      mapRelease(cc->file_map);
+    if (cc->global_env)    mapRelease(cc->global_env);
+    if (cc->clsdefs)       mapRelease(cc->clsdefs);
+    if (cc->uniondefs)     mapRelease(cc->uniondefs);
+    if (cc->asm_funcs)     mapRelease(cc->asm_funcs);
+    if (cc->asm_functions) mapRelease(cc->asm_functions);
+    if (cc->strs)          mapRelease(cc->strs);
+    if (cc->macro_defs)    mapRelease(cc->macro_defs);
+
+    if (cc->raw_asm_labels) setRelease(cc->raw_asm_labels);
+    if (cc->x86_registers)  setRelease(cc->x86_registers);
+    if (cc->libc_functions) setRelease(cc->libc_functions);
+    if (cc->extern_globals) setRelease(cc->extern_globals);
+
+    if (cc->asm_blocks)        listRelease(cc->asm_blocks, NULL);
+    if (cc->ast_list)          listRelease(cc->ast_list, NULL);
+    if (cc->initalisers)       listRelease(cc->initalisers, NULL);
+    if (cc->initaliser_locals) listRelease(cc->initaliser_locals, NULL);
+
+    if (cc->diagnostics) vecRelease(cc->diagnostics);
+
+    /* Only the header: `entries` is the file-static ring shared by
+     * every Cctrl (tokenRingBufferStaticNew). */
+    if (cc->token_buffer) free(cc->token_buffer);
+
+    free(cc);
 }
 
 static Lexeme *token_ring_buffer[CCTRL_TOKEN_BUFFER_SIZE];
@@ -440,6 +562,11 @@ void cctrLoadNextTokens(Cctrl *cc, s64 token_count) {
 }
 
 void cctrlInitParse(Cctrl *cc, Lexer *lexer_) {
+    /* Reclaim the previous parse's scopes. Here rather than only at the
+     * end of parseToAst because a parse can leave through a longjmp (a
+     * lex-time raise, the LSP's crash guard) and skip its own cleanup;
+     * starting a new parse is the one point that is always reached. */
+    cctrlReleaseScopeMaps(cc);
     cc->lexer_ = lexer_;
     /* Wire the back-pointer so lex-time errors can route through
      * this Cctrl's diagnostic accumulator and recovery longjmp. */
@@ -945,11 +1072,39 @@ void cctrlDiagClear(Cctrl *cc) {
  * an expression, and when the expression opens the input that step
  * walks into the ring's history - which must therefore always hold
  * valid lexemes. */
+/* Drop the lists a parse appends its results to, for a Cctrl that is
+ * about to be re-parsed rather than handed to a code generator.
+ *
+ * A one-shot compile builds these once and consumes them; `hcc -lsp`
+ * re-parses on every keystroke, so without this each parse's top-level
+ * definitions, initialisers and asm blocks pile up on lists nothing
+ * ever reads again - unbounded, and O(parses) to walk.
+ *
+ * Only the list NODES are freed. The Ast values they point at live in
+ * the AST arena and are not this list's to free (and the symbol tables
+ * still reference them). */
+void cctrlResetParseAccumulators(Cctrl *cc) {
+    if (cc->ast_list)          listClear(cc->ast_list, NULL);
+    if (cc->initalisers)       listClear(cc->initalisers, NULL);
+    if (cc->initaliser_locals) listClear(cc->initaliser_locals, NULL);
+    if (cc->asm_blocks)        listClear(cc->asm_blocks, NULL);
+    cc->tmp_locals = NULL;
+}
+
+/* Padding for the unused slots of the ring buffer. Allocated from the
+ * lexeme arena, hence file scope: `cctrlForgetTokenFiller` has to be
+ * able to drop it before a `memoryRecycleArenas` invalidates it. */
+static Lexeme *cctrl_token_filler = NULL;
+
+void cctrlForgetTokenFiller(void) {
+    cctrl_token_filler = NULL;
+}
+
 void cctrlResetTokenBuffer(Cctrl *cc) {
     TokenRingBuffer *ring = cc->token_buffer;
     if (!ring) return;
-    static Lexeme *filler = NULL;
-    if (filler == NULL) filler = lexemeSentinal();
+    Lexeme *filler = cctrl_token_filler;
+    if (filler == NULL) filler = cctrl_token_filler = lexemeSentinal();
     ring->tail = 0;
     ring->head = 0;
     ring->size = 0;

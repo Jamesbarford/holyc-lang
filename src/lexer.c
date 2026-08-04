@@ -86,6 +86,11 @@ void lexemeMemoryStats(void) {
     arenaPrintStats(&lexeme_arena);
 }
 
+u64 lexemeArenaBytes(void) {
+    if (!lexeme_arena_init) return 0;
+    return (u64)lexeme_arena.used;
+}
+
 Lexeme *lexerAllocLexeme(void) {
     return (Lexeme *)arenaAlloc(&lexeme_arena, sizeof(Lexeme));
 }
@@ -245,6 +250,16 @@ Lexeme *lexemeNewOp(char *start, int len, s64 op, int line) {
 }
 
 static Cctrl *macro_proccessor = NULL;
+
+/* Forget the cached stub so the next lexInit builds a new one.
+ *
+ * It caches interned strings (`cc->strs`) that point into the AST
+ * arena, so it cannot outlive a `memoryRecycleArenas`. Its own maps
+ * are small and malloc'd; abandoning them costs a few hundred bytes
+ * per recycle, against the megabytes a recycle reclaims. */
+void lexerForgetMacroProcessor(void) {
+    macro_proccessor = NULL;
+}
 
 /* User-visible lex error. Routes through the diagnostic
  * accumulator when the lexer has a Cctrl back-pointer; otherwise

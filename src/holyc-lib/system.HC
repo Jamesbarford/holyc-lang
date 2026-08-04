@@ -1,6 +1,14 @@
 #include "./defs.HH"
 
-#define SYS_CALL_WRITE 0x2000004 /* Non portable */
+/* `write`'s syscall number, which is per-kernel: Linux numbers its
+ * syscalls from zero, XNU tags a BSD-class call with (2 << 24). This
+ * was unconditionally the macOS number, so on Linux `Write()` issued
+ * a syscall that does not exist. */
+#ifdef IS_LINUX
+#define SYS_CALL_WRITE 1
+#else
+#define SYS_CALL_WRITE 0x2000004
+#endif
 
 public extern "c" U0 exit(I32 status);
 public extern "c" I32 system(U8 *command);
@@ -18,10 +26,14 @@ _SYSTEM::
     LEAVE
     RET
 
+/* No frame is set up here, so there is no LEAVE either: the syscall
+ * arguments already arrive in RDI/RSI/RDX. A LEAVE without a matching
+ * PUSHQ RBP loads RSP from the CALLER's frame pointer and pops, so the
+ * RET returned into garbage - `Write()` crashed the process rather
+ * than returning. */
 _WRITE::
     MOVQ    RAX, SYS_CALL_WRITE
     SYSCALL
-    LEAVE
     RET
 }
 

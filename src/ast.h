@@ -458,6 +458,9 @@ extern Ast *ast_forever_sentinal;
 
 extern VecType vec_ast_type;
 Vec *astVecNew(void);
+/* A List owned by the AST: freed wholesale by astMemoryRelease.
+ * Only for lists reached solely through an Ast - see ast.c. */
+List *astListNew(void);
 
 extern MapType map_asttype_type;
 extern MapType map_ast_type;
@@ -467,6 +470,8 @@ Map *astMapNew(void);
 void astMemoryInit(void);
 void astMemoryRelease(void);
 void astMemoryStats(void);
+/* Bytes the AST arenas have handed out since (re)init. */
+u64 astArenaBytes(void);
 
 AstType *astTypeCopy(AstType *type);
 

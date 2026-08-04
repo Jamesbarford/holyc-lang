@@ -187,6 +187,29 @@ void listMergeAppend(List *l1, List *l2) {
     free(l2);
 }
 
+/* listMergeAppend without the free: l2's nodes move to l1 and l2 is
+ * left a valid empty list.
+ *
+ * For a list whose head belongs to someone else - an Ast's `locals`,
+ * say, which the AST also reaches - where freeing it here would leave
+ * that owner holding a dangling pointer, or double-free it later. */
+void listMergeAppendKeep(List *l1, List *l2) {
+    if (listEmpty(l2)) return;
+    List *h1 = l1->next;
+    List *t1 = l1->prev;
+
+    List *h2 = l2->next;
+    List *t2 = l2->prev;
+
+    h2->prev = t1;
+    h2->prev->next = h1;
+    t1->next = h2;
+    t2->next = l1;
+    l1->prev = t2;
+    assert(l1->value == NULL);
+    l2->next = l2->prev = l2;
+}
+
 List *listCopy(List *l) {
     List *cpy = listNew();
     listForEach(l) {

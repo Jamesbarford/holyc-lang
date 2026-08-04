@@ -97,6 +97,15 @@ typedef struct Cctrl {
     /* Local environment for a function */
     Map *localenv;
 
+    /* Every scope map `cctrlCreateAstMap` has handed out for the parse
+     * in flight. Closing a scope only rewinds `localenv` to its parent,
+     * so without an owner the map itself is unreachable and unfreed -
+     * one ~1KB Map per lexical scope. A batch compile never noticed
+     * (the process exits); `hcc -lsp` re-parses on every keystroke and
+     * it was the single largest source of its growth. Released by
+     * `cctrlReleaseScopeMaps`. */
+    Vec *scope_maps;
+
     /* assembly functions that have been bound to HC, this is the HC 
      * name, not the assembly name */
     Map *asm_funcs;
@@ -233,6 +242,11 @@ typedef struct Cctrl {
 
 /* Instantiate a new compiler control struct */
 Cctrl *cctrlNew(enum CliTarget target);
+/* Free a Cctrl and the containers it owns. For a caller that discards
+ * a whole compiler rather than exiting - see the definition for what
+ * it deliberately leaves alone, and for the ordering it needs against
+ * memoryRecycleArenas. */
+void cctrlRelease(Cctrl *cc);
 /* Slimmed down Cctrl, for expanding macros */
 Cctrl *ccMacroProcessor(Map *macro_defs);
 /* File-id registry over cc->file_map; ids are what Ast->file_id holds. */
@@ -289,6 +303,13 @@ void cctrlDiagClear(Cctrl *cc);
 /* Empty the token ring buffer so a fresh parse doesn't consume tokens
  * left over from a previous (possibly errored) one. */
 void cctrlResetTokenBuffer(Cctrl *cc);
+/* Drop the ring buffer's cached filler Lexeme; it lives in the lexeme
+ * arena and must not survive a memoryRecycleArenas. */
+void cctrlForgetTokenFiller(void);
+/* Empty the lists a parse appends its output to (ast_list, initialisers,
+ * asm blocks). For a Cctrl that gets re-parsed instead of code
+ * generated - see the definition. */
+void cctrlResetParseAccumulators(Cctrl *cc);
 
 /* Build a CctrlDiagnostic from a pre-rendered message and the current source
  * position. Takes ownership of `rendered` and `suggestion`. */
@@ -318,7 +339,8 @@ AoStr *cctrlInfoAtPreviousLine(Cctrl *cc, Lexeme *tok, const char *fmt, ...);
 void cctrlSyncToplevel(Cctrl *cc);
 void cctrlSyncStatement(Cctrl *cc);
 
-Map *cctrlCreateAstMap(Map *parent);
+Map *cctrlCreateAstMap(Cctrl *cc);
+void cctrlReleaseScopeMaps(Cctrl *cc);
 Map *cctrlCreateLexemeMap(void);
 void cctrlAddDefine(Cctrl *cc, char *name);
 

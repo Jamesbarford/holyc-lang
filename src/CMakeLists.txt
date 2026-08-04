@@ -150,9 +150,23 @@ install(TARGETS hcc DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
 # Install the header file
 install(FILES ${CMAKE_SOURCE_DIR}/holyc-lib/tos.HH DESTINATION ${CMAKE_INSTALL_PREFIX}/include)
 
-# Custom installation step to run `hcc` during install
+# Custom installation step to run `hcc` during install.
+#
+# The working directory is a scratch dir inside the build tree, NOT
+# holyc-lib/. `hcc -lib` drops all.o / libtos.a / libtos.so wherever it
+# is run from, and `make install` is normally run under sudo - pointed
+# at the source tree it left root-owned artifacts there, and every
+# later non-root `hcc -lib tos` then died on
+# `ar: unable to copy file 'libtos.a'; reason: Permission denied`
+# (which is exactly what broke `make lsp-test`). Includes resolve
+# relative to all.HC, so the cwd is free to be anywhere.
+#
+# `libtos-install`, not the `libtos-build` the dev targets use: sudo
+# would own whichever directory it touched, so sharing one just moved
+# the permission clash from the source tree into the build tree.
+install(CODE "file(MAKE_DIRECTORY \"${CMAKE_BINARY_DIR}/libtos-install\")")
 if (DEFINED HCC_LINK_SQLITE3)
-    install(CODE "execute_process(COMMAND \"${HCC_PATH}\" -DHCC_LINK_SQLITE3 -lib tos ${CMAKE_SOURCE_DIR}/holyc-lib/all.HC WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/holyc-lib)")
+    install(CODE "execute_process(COMMAND \"${HCC_PATH}\" -DHCC_LINK_SQLITE3 -lib tos ${CMAKE_SOURCE_DIR}/holyc-lib/all.HC WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/libtos-install)")
 else()
-  install(CODE "execute_process(COMMAND \"${HCC_PATH}\" -fPIC -lib tos ${CMAKE_SOURCE_DIR}/holyc-lib/all.HC WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/holyc-lib)")
+  install(CODE "execute_process(COMMAND \"${HCC_PATH}\" -fPIC -lib tos ${CMAKE_SOURCE_DIR}/holyc-lib/all.HC WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/libtos-install)")
 endif()

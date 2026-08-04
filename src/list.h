@@ -30,6 +30,9 @@ void listRelease(List *ll, void (*freeValue)(void *));
 void listClear(List *ll, void (*freeValue)(void *));
 int listCount(List *ll);
 void listMergeAppend(List *l1, List *l2);
+/* Same splice, but leaves `l2` an empty list instead of freeing it -
+ * for heads that something else owns. */
+void listMergeAppendKeep(List *l1, List *l2);
 void listMergePrepend(List *l1, List *l2);
 List *listCopy(List *l);
 
