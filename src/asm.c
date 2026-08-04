@@ -1,16 +1,18 @@
 #include <strings.h>
-#include <math.h>
 #include <string.h>
 
 #include "aarch64.h"
 #include "asm.h"
 #include "asm/asm.h"
 #include "asm/asm_enc.h"
+#include "asm/dis_arm64.h"
 #include "cctrl.h"
 #include "cli.h"
+#include "ir-inliner.h"
+#include "ir.h"
+#include "ir-optimise.h"
 #include "config.h"
 #include "prsasm.h"
-#include "x86.h"
 #include "x86_64.h"
 #include "types.h"
 #include "util.h"
@@ -35,34 +37,65 @@ uint32_t ieee754_32(f32 _f32) {
     return c.bits;
 }
 
-/* Mach-O treats any symbol beginning with an uppercase `L` as a local
- * (assembler-temporary) label, so `.globl LIGHTGRAY` is rejected with
- * "non-local symbol required". Data globals are otherwise emitted with their
- * raw name (the JIT keys its arena on that name and never goes through the
- * assembler, so it is unaffected). On macOS, escape the colliding names with
- * a leading `_` - matching the function-name convention; the SAME transform
- * must be applied at the symbol's definition and at every reference so they
- * agree. Returns the original AoStr when no change is needed. */
+/* Mach-O prefixes every C symbol with an underscore, data included. A
+ * global `foo` is the symbol `_foo`, and `__stdoutp` in <stdio.h> is
+ * `___stdoutp`. Getting this wrong only became visible once we started
+ * linking against real libc rather than a library this compiler built
+ * itself, where both sides happened to agree on the unmangled name.
+ *
+ * This also subsumes the older uppercase-`L` special case: Mach-O
+ * treats a symbol starting with `L` as an assembler-temporary, so
+ * `.globl LIGHTGRAY` was rejected - prefixing everything fixes that
+ * for free.
+ *
+ * Raw assembly labels are exempt, exactly as for function names: they
+ * are already final symbols. The SAME transform must be applied at the
+ * definition and at every reference so they agree. */
 AoStr *asmNormaliseGlobalLabel(Cctrl *cc, AoStr *name) {
     int is_macos = cc->target == TARGET_AARCH64_APPLE_DARWIN ||
                    cc->target == TARGET_X86_64_APPLE_DARWIN;
-    if (is_macos && name && name->len > 0 && name->data[0] == 'L') {
-        AoStr *out = aoStrNew();
-        aoStrPutChar(out, '_');
-        aoStrCatAoStr(out, name);
-        return out;
+    if (!is_macos || !name || name->len == 0) return name;
+    if (cc->raw_asm_labels && setHas(cc->raw_asm_labels, name->data)) {
+        return name;
     }
-    return name;
+    AoStr *out = aoStrNew();
+    aoStrPutChar(out, '_');
+    aoStrCatAoStr(out, name);
+    return out;
 }
 
 /* This is a hacky, but seemingly functional way of me being able
  * to run this on Macos and Linux */
+/* A function with no body in this translation unit lives in another
+ * image, so its ADDRESS has to come through the GOT: a direct
+ * adrp+add (or a rip-relative leaq) leaves the static linker with
+ * nothing to fold in, and it reports "does not have address". Calls
+ * are unaffected - `bl`/`call` go via a stub. */
+int asmFunctionIsExtern(Cctrl *cc, AoStr *fname) {
+    Ast *fn = (Ast *)mapGetLen(cc->global_env, fname->data, fname->len);
+    if (fn == NULL) return 1;
+    switch (fn->kind) {
+        case AST_FUNC:
+        case AST_ASM_FUNCDEF:
+        case AST_ASM_FUNC_BIND:
+            return 0;
+        default:
+            return 1;
+    }
+}
+
 char *asmNormaliseFunctionName(Cctrl *cc, AoStr *fname) {
     AoStr *newfn = aoStrNew();
+    /* Raw assembly labels are already final symbols; C identifiers get
+     * the platform prefix. Deciding this from the spelling ("starts
+     * with _") was wrong: system headers are full of C functions named
+     * `__swbuf`, `__sputc` and friends, which do need the prefix. */
+    int is_raw_label = cc->raw_asm_labels &&
+                       setHas(cc->raw_asm_labels, fname->data);
     switch(cc->target) {
         case TARGET_AARCH64_APPLE_DARWIN:
         case TARGET_X86_64_APPLE_DARWIN: {
-            if (fname->data[0] != '_') {
+            if (!is_raw_label) {
                 aoStrPutChar(newfn, '_');
             }
             break;
@@ -75,42 +108,55 @@ char *asmNormaliseFunctionName(Cctrl *cc, AoStr *fname) {
     aoStrCatAoStr(newfn, fname);
 
     /* User-defined `Main` (capital M) is the conventional HolyC entry.
-     *  - With initialisers: rename to `MainFn`. The synthetic init-driver
-     *    function (named `main` lowercase below) is the real `_main`.
+     *  - With initialisers: rename to `MainFn`. The synthetic
+     *    `__hcc_entry` driver below becomes the real entry symbol.
      *  - Without initialisers: lowercase to `main` so it links as the
      *    process entry point.
-     * Compare case-sensitively so the synthetic `main` (which we feed in
-     * lowercase) flows straight through as `_main`. */
+     * Compare case-sensitively - a user function genuinely called
+     * `main` is left alone. */
     if (fname->len == 4 && !strncmp(fname->data, str_lit("Main"))) {
-         if (cc->flags & CCTRL_ASM_HAS_INITIALISERS) {
+        if (cc->flags & CCTRL_ASM_HAS_INITIALISERS) {
             aoStrCatPrintf(newfn, "Fn");
         } else {
             aoStrToLowerCase(newfn);
         }
     }
+
+    /* The synthetic initialiser driver is the real entry symbol. */
+    if (fname->len == 11 && !strncmp(fname->data, str_lit("__hcc_entry"))) {
+        aoStrRelease(newfn);
+        newfn = aoStrNew();
+        switch (cc->target) {
+            case TARGET_AARCH64_APPLE_DARWIN:
+            case TARGET_X86_64_APPLE_DARWIN:
+                aoStrCatLen(newfn, str_lit("_main"));
+                break;
+            case TARGET_AARCH64_UNKNOWN_LINUX_GNU:
+            case TARGET_X86_64_UNKNOWN_LINUX_GNU:
+                aoStrCatLen(newfn, str_lit("main"));
+                break;
+        }
+    }
     return aoStrMove(newfn);
 }
 
-/* Build the synthetic `main` that runs file-scope initialiser
- * statements (cc->initalisers) as the process entry point, shared by
- * every backend (aarch64 / x86_64 AOT and the JIT). Returns NULL when
- * there are no initialisers - in that case the user's `Main` becomes
- * the entry directly (asmNormaliseFunctionName lowercases it).
+/* Build the synthetic entry point that runs file-scope initialiser
+ * statements (cc->initalisers), shared by every backend (aarch64 /
+ * x86_64 AOT and the JIT). Returns NULL when there are no
+ * initialisers - then the user's `Main` is the entry point directly.
  *
  * When initialisers DO exist the user's `Main` is renamed to `MainFn`
  * and this driver becomes `_main`, so the driver must call `Main`
- * itself - otherwise the program runs the initialisers and exits
- * without ever entering Main (the auto-entry convenience would be
- * silently lost the moment a file-scope initialiser appears). */
+ * itself - otherwise the program would run the top-level statements
+ * and exit without ever entering Main. */
 Ast *asmBuildInitialiserMain(Cctrl *cc) {
     if (listEmpty(cc->initalisers)) return NULL;
     cc->flags |= CCTRL_ASM_HAS_INITIALISERS;
 
-    /* HolyC "scripting" files drive execution themselves with a
-     * trailing `Main;` at file scope. If the initialisers already call
-     * Main, don't auto-call it again (that would run Main twice). The
-     * auto-call only restores the convenience for the "globals +
-     * Main, no explicit call" case. */
+    /* A scripting-style file can drive execution itself with a trailing
+     * `Main;` at file scope. If the initialisers already call Main,
+     * don't auto-call it again. The auto-call only restores the
+     * convenience for the "globals + Main, no explicit call" case. */
     int calls_main = 0;
     listForEach(cc->initalisers) {
         Ast *a = (Ast *)it->value;
@@ -123,6 +169,7 @@ Ast *asmBuildInitialiserMain(Cctrl *cc) {
     }
 
     Ast *user_main = (Ast *)mapGetLen(cc->global_env, str_lit("Main"));
+
     if (!calls_main && user_main && user_main->kind == AST_FUNC) {
         AstType *rt = user_main->type ? user_main->type->rettype : NULL;
         Ast *call = astFunctionCall(rt ? rt : ast_void_type,
@@ -144,25 +191,108 @@ Ast *asmBuildInitialiserMain(Cctrl *cc) {
     Ast *body = astCompountStatement(cc->initalisers);
     Vec *empty_params = astVecNew();
     AstType *fn_type = astMakeFunctionType(ast_i32_type, empty_params);
-    return astFunction(fn_type, str_lit("main"), empty_params, body,
+    /* Named `__hcc_entry` rather than `main` so it doesn't collide with
+     * the user's function in global_env; asmNormaliseFunctionName maps
+     * it to the real entry symbol. */
+    return astFunction(fn_type, str_lit("__hcc_entry"), empty_params, body,
                        cc->initaliser_locals, 0);
 }
 
+typedef struct AsmGenerator {
+    IrCgCtx ctx;
+    Set *seen_globals;
+    void (*init_reg_pool)(void);
+    void (*paste_data_section)(Cctrl *cc, AoStr *buf);
+    void (*paste_asm_blocks)(Cctrl *cc, AoStr *buf);
+    void (*emit_function)(IrCgCtx *ctx, Ast *fn);
+    void (*emit_global)(Cctrl *cc, Set *seen_globals, AoStr *buf, Ast *ast);
+} AsmGenerator;
+
+static AsmGenerator *AArch64CodeGenerator(Cctrl *cc) {
+    AsmGenerator *gen = malloc(sizeof(AsmGenerator));
+    memset(&gen->ctx, 0, sizeof(gen->ctx));
+    gen->ctx.buf = aoStrAlloc(2048);
+    gen->ctx.cc = cc;
+    gen->seen_globals = setNew(32, &set_cstring_type);
+    gen->init_reg_pool = &aarch64InitRegPool;
+    gen->paste_data_section = &aarch64PasteDataSection;
+    gen->paste_asm_blocks = &aarch64PasteAsmBlocks;
+    gen->emit_function = &aarch64GenerateFunction;
+    gen->emit_global = &aarch64GlobalVar;
+    return gen;
+}
+
+static AsmGenerator *x86_64CodeGenerator(Cctrl *cc) {
+    AsmGenerator *gen = malloc(sizeof(AsmGenerator));
+    memset(&gen->ctx, 0, sizeof(gen->ctx));
+    gen->ctx.buf = aoStrAlloc(2048);
+    gen->ctx.cc = cc;
+    gen->seen_globals = setNew(32, &set_cstring_type);
+    gen->init_reg_pool = &x86_64InitRegPool;
+    gen->paste_data_section = &x86_64PasteDataSection;
+    gen->paste_asm_blocks = &x86_64PasteAsmBlocks;
+    gen->emit_function = &x86_64GenerateFunction;
+    gen->emit_global = &x86_64GlobalVar;
+    return gen;
+}
+
 AoStr *asmGenerate(Cctrl *cc) {
+    AsmGenerator *gen = NULL;
     switch (cc->target) {
         case TARGET_AARCH64_APPLE_DARWIN:
         case TARGET_AARCH64_UNKNOWN_LINUX_GNU:
-            return aarch64AsmGenerate(cc);
+            gen = AArch64CodeGenerator(cc);
+            break;
         case TARGET_X86_64_APPLE_DARWIN:
         case TARGET_X86_64_UNKNOWN_LINUX_GNU:
-            /* Default: IR-based src/x86_64.c. --use-legacy-x86 opts
-             * back into the AST-based src/x86.c for comparison. */
-            if (cc->flags & CCTRL_USE_LEGACY_X86) {
-                return x86AsmGenerate(cc);
-            }
-            return x86_64AsmGenerate(cc);
+            gen = x86_64CodeGenerator(cc);
+            break;
     }
-    loggerPanic("asm: unknown target %d\n", (int)cc->target);
+    if (gen == NULL) {
+        loggerPanic("asm: unknown target %d\n", (int)cc->target);
+    }
+
+    IrCtx *ir_ctx = irCtxNew(cc);
+    AoStr *buf = gen->ctx.buf;
+
+    gen->init_reg_pool();
+    gen->paste_data_section(cc, buf);
+    gen->paste_asm_blocks(cc, buf);
+
+    /* Top-level statements parsed into cc->initalisers become the
+     * body of a synthetic `main`. CCTRL_ASM_HAS_INITIALISERS makes
+     * asmNormaliseFunctionName rename the user's `Main` to `MainFn`
+     * so the symbols don't collide. */
+    Ast *synth_main = asmBuildInitialiserMain(cc);
+
+    listForEach(cc->ast_list) {
+        Ast *ast = it->value;
+        if (ast->kind == AST_FUNC) {
+            IrFunction *fn = irLowerFunction(ir_ctx, ast);
+            irBasicFunctionOptimisations(fn);
+            if (ast->flags & AST_FLAG_INLINE_HINT) {
+                if (irInlineFunction(ir_ctx, fn))
+                    irBasicFunctionOptimisations(fn);
+            }
+            irFunctionPrepForCodeGen(&gen->ctx, fn, ast);
+            gen->emit_function(&gen->ctx, ast);
+        } else if (ast->kind == AST_DECL || ast->kind == AST_GVAR) {
+            gen->emit_global(cc, gen->seen_globals, buf, ast);
+        }
+    }
+    if (synth_main) {
+        IrFunction *fn = irLowerFunction(ir_ctx, synth_main);
+        irBasicFunctionOptimisations(fn);
+        if (irInlineFunction(ir_ctx, fn))
+            irBasicFunctionOptimisations(fn);
+        irFunctionPrepForCodeGen(&gen->ctx, fn, synth_main);
+        gen->emit_function(&gen->ctx, synth_main);
+    }
+
+    asmEmitAsmInfo(cc, buf);
+    setRelease(gen->seen_globals);
+    free(gen);
+    return buf;
 }
 
 /* ---- AOT byte emission for `asm {}` chunks ---- */
@@ -174,6 +304,31 @@ static int asmFixupOffsetCmp(const void *a, const void *b) {
     if (fa->patch_offset < fb->patch_offset) return -1;
     if (fa->patch_offset > fb->patch_offset) return 1;
     return 0;
+}
+
+/* An `asm { }` block is written in holyc's own dialect, which the
+ * system assembler does not accept - so it goes out as its encoded
+ * bytes. That leaves `-S` showing `.byte 224, 0, 128, 210` where the
+ * reader wanted an instruction.
+ *
+ * We have a disassembler, so say what the bytes ARE. Not what was
+ * written: the point of reading `-S` is to check what the encoder
+ * produced, and a comment echoing the source would agree with it even
+ * when the encoding is wrong. */
+static void asmEmitByteRunDisasm(Cctrl *cc, AoStr *buf,
+                                 const uint8_t *bytes,
+                                 size_t from, size_t to)
+{
+    if (prsAsmTasmArch(cc) != TASM_ARCH_ARM64) return;
+    char text[128];
+    for (size_t i = from; i + 4 <= to; i += 4) {
+        uint32_t insn = (uint32_t)bytes[i] | ((uint32_t)bytes[i+1] << 8) |
+                        ((uint32_t)bytes[i+2] << 16) |
+                        ((uint32_t)bytes[i+3] << 24);
+        if (aarch64_disasm(insn, text, sizeof(text))) {
+            aoStrCatFmt(buf, "\t// %s\n", text);
+        }
+    }
 }
 
 static void asmEmitByteRun(AoStr *buf, const uint8_t *bytes,
@@ -295,7 +450,10 @@ int asmEmitBlockBytes(Cctrl *cc, AoStr *buf, AoStr *text, int src_line) {
                 break;
         }
     }
-    if (rc == 0) asmEmitByteRun(buf, enc.bytes, pos, enc.len);
+    if (rc == 0) {
+        asmEmitByteRun(buf, enc.bytes, pos, enc.len);
+        asmEmitByteRunDisasm(cc, buf, enc.bytes, pos, enc.len);
+    }
     asm_enc_free(&enc);
     return rc;
 }
@@ -311,3 +469,4 @@ void asmEmitAsmInfo(Cctrl *cc, AoStr *buf) {
                 cctrlGetVersion(),
                 HCC_GIT_HASH);
 }
+

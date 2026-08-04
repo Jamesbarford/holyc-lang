@@ -6,6 +6,7 @@
 #include "types.h"
 
 char *asmNormaliseFunctionName(Cctrl *cc, AoStr *fname);
+int asmFunctionIsExtern(Cctrl *cc, AoStr *fname);
 AoStr *asmNormaliseGlobalLabel(Cctrl *cc, AoStr *name);
 AoStr *asmGenerate(Cctrl *cc);
 /* Synthetic file-scope-initialiser `main` (calls the user's Main).

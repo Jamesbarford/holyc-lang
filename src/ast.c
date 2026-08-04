@@ -1359,6 +1359,15 @@ int astIsLabelMatch(Ast *ast, AoStr *goto_label) {
            aoStrCmp(goto_label, astHackedGetLabel(ast));
 }
 
+int astUsesHolyCVarargs(Ast *callee) {
+    if (!callee || !callee->params) return 0;
+    for (u64 i = 0; i < callee->params->size; ++i) {
+        Ast *p = (Ast *)callee->params->entries[i];
+        if (p && p->kind == AST_VAR_ARGS) return p->argc != NULL;
+    }
+    return 0;
+}
+
 static AoStr *astTypeToAoStrInternal(AstType *type) {
     AoStr *str = aoStrNew();
 
@@ -1835,7 +1844,7 @@ void _astToString(AoStr *str, Ast *ast, int depth) {
 
         case AST_FUNC: {
             tmp = astFunctionToString(ast);
-            if (ast->flags & AST_FLAG_INLINE) {
+            if (ast->flags & AST_FLAG_INLINE_HINT) {
                 aoStrCatPrintf(str, "<function_def_inline> %s\n", tmp);
             } else {
                 aoStrCatPrintf(str, "<function_def> %s\n", tmp);

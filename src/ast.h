@@ -189,7 +189,8 @@ typedef struct AstType {
 } AstType;
 
 
-#define AST_FLAG_INLINE  (1<<0)
+/* Just a hint */
+#define AST_FLAG_INLINE_HINT (1<<0)
 #define AST_FLAG_BUILTIN (1<<1)
 /* Set on an AST_GVAR / AST_DECL that came from `extern Type name;` -
  * a TempleOS-style forward declaration. The parser registers the
@@ -197,6 +198,7 @@ typedef struct AstType {
  * codegen skips emitting storage: the canonical definition lives in
  * another translation unit (typically libtos). */
 #define AST_FLAG_EXTERN  (1<<2)
+
 
 /* AST_LVAR.pinned_kind values. */
 #define LVAR_AUTO  0  /* compiler chooses storage (default) */
@@ -385,7 +387,6 @@ typedef struct Ast {
         /* @Typeo
          * Compound statement */
         struct {
-            Ast *inline_ret;
             List *stms;
         };
 
@@ -608,6 +609,7 @@ int astIsBinOpKind(Ast *ast, AstBinOp op);
 int astIsBinOpCmp(Ast *ast);
 
 int astIsFnLike(Ast *maybe_fn);
+int astUsesHolyCVarargs(Ast *callee);
 
 AoStr *astMakeLabel(void);
 AoStr *astMakeTmpName(void);

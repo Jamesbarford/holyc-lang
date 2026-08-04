@@ -255,6 +255,7 @@ Cctrl *cctrlNew(enum CliTarget target) {
     cc->symbol_table = mapNew(32, &map_asttype_type);
     cc->asm_funcs = mapNew(32, &map_ast_type);
     cc->macro_defs = cctrlCreateLexemeMap();
+    cc->raw_asm_labels = setNew(32, &set_cstring_type);
     cc->x86_registers = setNew(32, &set_cstring_type);
     cc->libc_functions = setNew(32, &set_cstring_type);
     cc->strs = mapNew(32, &map_ast_type);
@@ -263,6 +264,7 @@ Cctrl *cctrlNew(enum CliTarget target) {
     cc->ast_list = listNew();
     cc->initalisers = listNew();
     cc->initaliser_locals = listNew();
+    cc->extern_globals = setNew(32, &set_cstring_type);
     /* These are temoraries that the parser will allocate and 
      * NULL out between parses of classes and functions */
     cc->localenv = NULL;

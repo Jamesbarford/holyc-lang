@@ -266,6 +266,20 @@ struct IrBlockPair {
 /* IR_CMP_BR carries both the comparison and the branch destinations
  * in a single op, so codegen emits `cmp; j<cc>` without peeking at
  * the prior instruction. */
+/* Does this operand live in a stack slot? A load has to happen for it
+ * anyway, so anything the load can do for free - widening, in
+ * particular - need not be a second instruction. */
+static inline int irValueInMemory(IrValue *v) {
+    if (!v) return 0;
+    if (v->kind != IR_VAL_TMP && v->kind != IR_VAL_LOCAL &&
+        v->kind != IR_VAL_PARAM)
+    {
+        return 0;
+    }
+    if (v->pinned_reg) return 0;
+    return v->loc.kind != IR_LOC_REG;
+}
+
 typedef struct IrCmpBr {
     IrCmpKind cmp_kind;
     IrBlock *target_block;
@@ -397,6 +411,33 @@ typedef struct IrCgCtx {
     /* Leaf function with empty frame: prologue skips the rbp dance
      * and epilogue emits a bare `retq`. Set once before emission. */
     int omit_frame;
+
+    /* The function being emitted, as an AST. The IR alone cannot say
+     * where a variadic list begins: that follows from how the ABI
+     * placed the NAMED parameters, which is a property of the
+     * signature. Set at function emit start. */
+    struct Ast *ast_fn;
+
+    /* The spill that was emitted LAST, so a reload of the same slot
+     * into the same register can be dropped. `end` is the buffer
+     * length straight after the store: if it still matches, nothing
+     * whatever has been emitted since, so the register is untouched
+     * and control cannot have arrived from anywhere else. That single
+     * check stands in for aliasing and control-flow analysis both. */
+    u64 spill_end;
+    int spill_loff;
+    u32 spill_size;
+    char spill_reg[8];
+    /* The same idea for a REGISTER home: `mov <home>, <src>` leaves the
+     * value in BOTH, so an immediately following `mov <src>, <home>` is
+     * a no-op. Valid only while `home_end` still equals the buffer
+     * length - anything emitted in between may have reused src. */
+    /* Which register holds a struct-return destination buffer. x9 by
+     * default; the value's own home when that survives the call. */
+    const char *struct_dest;
+    u64 home_end;
+    char home_reg[8];
+    char home_src[8];
 
 } IrCgCtx;
 

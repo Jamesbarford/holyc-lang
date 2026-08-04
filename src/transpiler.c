@@ -1473,7 +1473,7 @@ AoStr *transpileFunction(Ast *fn, TranspileCtx *ctx) {
     AoStr *body = transpileAst(fn->body, ctx);
 
     /* Add inline modifier if the function is inline */
-    if (fn->flags & AST_FLAG_INLINE) {
+    if (fn->flags & AST_FLAG_INLINE_HINT) {
         aoStrCatFmt(function, "%s ",
                        transpileKeyWordHighlight(ctx,KW_INLINE));
     }

@@ -176,6 +176,10 @@ static void prsAsmFlushFunc(Cctrl *cc, List *funcs, AoStr *curfunc,
     if (!curfunc) return;
     prsAsmValidate(cc, cur, src_line);
     Ast *fn = astAsmFunctionDef(curfunc, cur);
+    /* A label defined inside `asm { }` is the final symbol as written;
+     * keep the platform mangling off it. */
+    setAdd(cc->raw_asm_labels, curfunc->data);
+
     listAppend(funcs, fn);
     if (!mapAddOrErr(cc->asm_functions, curfunc->data, fn)) {
         /* REPL/LSP reparse the same buffer against a persistent Cctrl,

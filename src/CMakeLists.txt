@@ -54,6 +54,7 @@ set(SOURCES
     ir.c
     ir-debug.c
     ir-eval.c
+    ir-inliner.c
     ir-optimise.c
     ir-regalloc.c
     ir-types.c
@@ -90,6 +91,7 @@ set(HEADERS
     ir.h
     ir-debug.h
     ir-eval.h
+    ir-inliner.h
     ir-regalloc.h
     ir-types.h
     lexer.h

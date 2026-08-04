@@ -42,6 +42,7 @@ const HccJitBackend *aarch64JitBackend(void) { return NULL; }
 #include "aarch64-emit.h"
 #include "cli.h"
 #include "containers.h"
+#include "ir-inliner.h"
 #include "ir.h"
 #include "ir-optimise.h"
 #include "ir-regalloc.h"
@@ -58,6 +59,11 @@ typedef struct {
     IrBlock *next_block;
     int omit_frame;
     uint32_t aligned_frame; /* what the prologue subtracted from sp */
+    /* Which register holds a struct-return destination buffer. A_X9
+     * unless the value's own home survives the call; mirrors
+     * IrCgCtx.struct_dest in the text backend. */
+    A64Reg struct_dest;
+    int struct_dest_set;
 } JitFnCtx;
 
 /* ---------------- forward decls ---------------- */
@@ -287,16 +293,37 @@ static void jitFpFrameStore(AsmEnc *enc, A64Reg dreg, int size, int loff) {
     aarch64_enc_fp_ldst_imm(enc, 0, size, dreg, A_FP, (uint32_t)loff);
 }
 
+/* See aarch64IdxScaled in aarch64.c. The register-offset encoding has
+ * a single S bit meaning "scale by the ACCESS width", so it can only
+ * express scale == size. `Point pts[3]` indexed by a variable needs
+ * base + i*8 for a 4-byte field; asking for S=1 on a 4-byte access
+ * scaled by 4 instead, which silently read and wrote the wrong
+ * element. Where they disagree, shift the index by hand into x10 and
+ * use the unscaled form.
+ *
+ * Returns the index register to use and clears `*scaled`. */
+static A64Reg jitIdxScaled(AsmEnc *enc, A64Reg idx, int scale, int size,
+                           int *scaled)
+{
+    int sh = (scale == 8) ? 3 : (scale == 4) ? 2 : (scale == 2) ? 1 : 0;
+    if (sh != 0 && scale != size) {
+        aarch64_enc_lsl_imm(enc, 1, A_X10, idx, (uint32_t)sh);
+        *scaled = 0;
+        return A_X10;
+    }
+    *scaled = (sh != 0);
+    return idx;
+}
+
 /* Width-aware load through an address held in `base_reg`. Mirrors
  * aarch64DerefLoad: handles disp + idx + scale fusion. */
 static void jitDerefLoad(AsmEnc *enc, int size, A64Reg dst, A64Reg base,
                          int has_idx, A64Reg idx, int scale, s32 disp)
 {
     if (has_idx) {
-        int sh = (scale == 8) ? 3 : (scale == 4) ? 2 : (scale == 2) ? 1 : 0;
         if (disp) jitAddSubImm(enc, base, (s64)disp);
-        /* Register-offset form with optional LSL scale. */
-        int scaled = (sh != 0); /* encoder S=1 picks "scale by access width" */
+        int scaled;
+        idx = jitIdxScaled(enc, idx, scale, size, &scaled);
         if (size == 4) {
             /* ldrsw via regoff: encoder doesn't expose the sign-extending
              * variant; load plain word then sxtw. */
@@ -356,9 +383,9 @@ static void jitDerefStore(AsmEnc *enc, int size, A64Reg val, A64Reg base,
                           int has_idx, A64Reg idx, int scale, s32 disp)
 {
     if (has_idx) {
-        int sh = (scale == 8) ? 3 : (scale == 4) ? 2 : (scale == 2) ? 1 : 0;
         if (disp) jitAddSubImm(enc, base, (s64)disp);
-        int scaled = (sh != 0);
+        int scaled;
+        idx = jitIdxScaled(enc, idx, scale, size, &scaled);
         aarch64_enc_ldst_regoff(enc, 0, 0, size, scaled, val, base, idx);
         return;
     }
@@ -603,11 +630,22 @@ static void jitStoreFpr(JitFnCtx *ctx, IrValue *dst, A64Reg dreg) {
     jitStoreFprSized(ctx, dst, dreg, 0);
 }
 
+/* Mirrors aarch64.c's aarch64DstStoreIsDead: skip a home store for a
+ * result nothing reads. Register homes only - see IRCG_DST_DEAD. */
+static int jitDstStoreIsDead(IrInstr *instr, IrValue *dst) {
+    if (!instr || !(instr->flags & IRCG_DST_DEAD)) return 0;
+    if (instr->dst != dst) return 0;
+    return dst->pinned_reg ||
+           (dst->loc.kind == IR_LOC_REG && dst->loc.as.reg);
+}
+
 static void jitSpillDst(JitFnCtx *ctx, IrInstr *instr, A64Reg reg) {
+    if (jitDstStoreIsDead(instr, instr->dst)) return;
     jitStoreReg(ctx, instr->dst, reg);
 }
 
 static void jitSpillDstFpr(JitFnCtx *ctx, IrInstr *instr, A64Reg dreg) {
+    if (jitDstStoreIsDead(instr, instr->dst)) return;
     jitStoreFpr(ctx, instr->dst, dreg);
 }
 
@@ -619,18 +657,58 @@ static void jitLoadFirstSrcFpr(JitFnCtx *ctx, IrValue *src) {
     jitLoadToFpr(ctx, src, A_X0); /* d0 — same numeric index */
 }
 
+/* The register a value lives in, or NULL when it lives in memory.
+ * Mirrors aarch64.c's a64HomeReg - the two backends must agree on what
+ * counts as "already in a register" or they emit different programs. */
+static AoStr *a64JitHome(IrValue *v) {
+    if (!v) return NULL;
+    if (v->pinned_reg) return v->pinned_reg;
+    if (v->loc.kind == IR_LOC_REG && v->loc.as.reg) return v->loc.as.reg;
+    return NULL;
+}
+
+/* Mirrors aarch64.c's a64ScratchTake / a64BaseHome / aarch64IdxHome.
+ * The IR-side fusion guard was relaxed for BOTH backends, so the JIT
+ * has to make the same guarantee: a base scratch that avoids the
+ * index, and no addressing off a home the emitter would mutate. */
+static A64Reg a64JitScratchTake(int avoid_valid, A64Reg avoid) {
+    if (!avoid_valid || avoid != A_X1) return A_X1;
+    return A_X2;
+}
+
+/* Where the index already lives, or 0 if it must be materialised.
+ * Emits nothing - the base scratch is chosen from this. */
+static int a64JitIdxHome(IrInstr *instr, A64Reg *out) {
+    if (!instr->idx || !instr->scale) return 0;
+    AoStr *h = a64JitHome(instr->idx);
+    if (!h) return 0;
+    *out = jitRegFromName(h->data);
+    return 1;
+}
+
+/* May we address straight off this value's home? Only when nothing
+ * writes to it: the displacement fold adds into the base register in
+ * place, which destroys a promoted local. Indexed AND displaced is the
+ * mutating shape. */
+static int a64JitBaseHome(IrValue *v, IrInstr *instr, A64Reg *out) {
+    AoStr *h = a64JitHome(v);
+    if (!h) return 0;
+    if (instr->idx && instr->scale && instr->disp != 0) return 0;
+    *out = jitRegFromName(h->data);
+    return 1;
+}
+
 /* idx register for addressing-mode fusion. Returns 1 if there is an
  * idx component, 0 otherwise. `*out` is always written so callers can
  * forward it unconditionally. */
-static int jitIdxReg(JitFnCtx *ctx, IrInstr *instr, A64Reg *out) {
+static int jitIdxReg(JitFnCtx *ctx, IrInstr *instr, A64Reg base,
+                     A64Reg *out) {
     *out = A_X2;
     if (!instr->idx || !instr->scale) return 0;
-    if (instr->idx->loc.kind == IR_LOC_REG && instr->idx->loc.as.reg) {
-        *out = jitRegFromName(instr->idx->loc.as.reg->data);
-        return 1;
-    }
-    jitLoadToReg(ctx, instr->idx, A_X2);
-    *out = A_X2;
+    if (a64JitIdxHome(instr, out)) return 1;
+    A64Reg scratch = (base == A_X2) ? A_X1 : A_X2;
+    jitLoadToReg(ctx, instr->idx, scratch);
+    *out = scratch;
     return 1;
 }
 
@@ -856,6 +934,7 @@ static void a64JitStoreIntPinned(void *be, IrInstr *i) {
 }
 
 static void a64JitEmitInit(A64Emitter *e, JitFnCtx *ctx) {
+    memset(e, 0, sizeof(*e));
     e->be = ctx;
     e->store_fpr        = a64JitStoreFpr;
     e->store_int        = a64JitStoreInt;
@@ -943,24 +1022,55 @@ static void a64JitSpillRet(void *be, IrInstr *instr, int is_float) {
 }
 /* Store a result-register chunk of a register-returned struct into the
  * destination buffer parked in x9 (mirror of a64JitAggLoad). */
+static A64Reg a64JitDestReg(JitFnCtx *ctx) {
+    return ctx->struct_dest_set ? ctx->struct_dest : A_X9;
+}
+
 static void a64JitRetChunkStore(void *be, int is_fp, int reg, int off, int size) {
-    AsmEnc *enc = &((JitFnCtx *)be)->jit->enc;
+    JitFnCtx *ctx = (JitFnCtx *)be;
+    AsmEnc *enc = &ctx->jit->enc;
+    A64Reg d = a64JitDestReg(ctx);
     if (is_fp)
-        aarch64_enc_fp_ldst_imm(enc, 0 /*store*/, size, (A64Reg)reg, A_X9,
+        aarch64_enc_fp_ldst_imm(enc, 0 /*store*/, size, (A64Reg)reg, d,
                                 (uint32_t)off);
     else if (size >= 8)
-        aarch64_enc_str_imm(enc, (A64Reg)reg, A_X9, (uint32_t)off);
+        aarch64_enc_str_imm(enc, (A64Reg)reg, d, (uint32_t)off);
     else if (size == 4)
-        aarch64_enc_str32_imm_gpr(enc, (A64Reg)reg, A_X9, (uint32_t)off);
+        aarch64_enc_str32_imm_gpr(enc, (A64Reg)reg, d, (uint32_t)off);
     else if (size == 2)
-        aarch64_enc_strh_imm(enc, (A64Reg)reg, A_X9, (uint32_t)off);
+        aarch64_enc_strh_imm(enc, (A64Reg)reg, d, (uint32_t)off);
     else if (size == 1)
-        aarch64_enc_strb_imm(enc, (A64Reg)reg, A_X9, (uint32_t)off);
+        aarch64_enc_strb_imm(enc, (A64Reg)reg, d, (uint32_t)off);
     else loggerPanic("jit-aarch64: %d-byte ret chunk not supported\n", size);
 }
 
 static void a64JitSpillStructDst(void *be, IrInstr *instr) {
-    jitSpillDst((JitFnCtx *)be, instr, A_X9);
+    JitFnCtx *ctx = (JitFnCtx *)be;
+    jitSpillDst(ctx, instr, a64JitDestReg(ctx));
+}
+
+/* Mirrors a64TxtDestSurvivesCall. */
+static int a64JitDestSurvivesCall(void *be, IrValue *v) {
+    (void)be;
+    AoStr *home = a64JitHome(v);
+    if (!home) return 1;
+    IrRegPool *pool = irRegPoolGet();
+    if (!pool || !pool->callee_saved_regs) return 0;
+    for (u64 i = 0; i < pool->callee_saved_regs->size; ++i) {
+        AoStr *cs = (AoStr *)pool->callee_saved_regs->entries[i];
+        if (!strcmp(cs->data, home->data)) return 1;
+    }
+    return 0;
+}
+
+static int a64JitUseDestHome(void *be, IrValue *v) {
+    JitFnCtx *ctx = (JitFnCtx *)be;
+    ctx->struct_dest_set = 0;
+    AoStr *home = a64JitHome(v);
+    if (!home || !a64JitDestSurvivesCall(be, v)) return 0;
+    ctx->struct_dest = jitRegFromName(home->data);
+    ctx->struct_dest_set = 1;
+    return 1;
 }
 
 static void a64JitStashDest(void *be, int sp_off) {
@@ -972,6 +1082,7 @@ static void a64JitUnstashDest(void *be, int sp_off) {
 }
 
 static void a64JitCallInit(A64CallEmitter *e, JitFnCtx *ctx) {
+    memset(e, 0, sizeof(*e));
     e->be = ctx;
     e->sub_sp           = a64JitSubSp;
     e->add_sp           = a64JitAddSp;
@@ -986,6 +1097,8 @@ static void a64JitCallInit(A64CallEmitter *e, JitFnCtx *ctx) {
     e->spill_ret        = a64JitSpillRet;
     e->ret_chunk_store  = a64JitRetChunkStore;
     e->spill_struct_dst = a64JitSpillStructDst;
+    e->dest_survives_call = a64JitDestSurvivesCall;
+    e->use_dest_home    = a64JitUseDestHome;
     e->stash_dest       = a64JitStashDest;
     e->unstash_dest     = a64JitUnstashDest;
 }
@@ -1022,6 +1135,7 @@ static void a64JitIndirectToSlot(void *be, int from_stack, int reg,
 }
 
 static void a64JitParamInit(A64ParamEmitter *e, JitFnCtx *ctx) {
+    memset(e, 0, sizeof(*e));
     e->be = ctx;
     e->agg_store          = a64JitAggStore;
     e->copy_stack_to_slot = a64JitCopyStackToSlot;
@@ -1060,13 +1174,36 @@ static void a64JitConvert(void *be, A64CvtKind k, int width) {
     case A64_CVT_FMOV_FP2GP: aarch64_enc_fmov_gpr(enc, width == 8, 1, A_X0, A_X0); break;
     }
 }
+/* `uxth w19, w20` rather than a move in, a convert in x0, a move out. */
+static int a64JitConv3(void *be, A64CvtKind k, IrInstr *i) {
+    AsmEnc *enc = &((JitFnCtx *)be)->jit->enc;
+    AoStr *d = a64JitHome(i->dst);
+    AoStr *a = a64JitHome(i->r1);
+    if (!d || !a) return 0;
+    A64Reg rd = jitRegFromName(d->data), rs = jitRegFromName(a->data);
+    switch (k) {
+    case A64_CVT_UXTB: aarch64_enc_uxtb(enc, 0, rd, rs); return 1;
+    case A64_CVT_UXTH: aarch64_enc_uxth(enc, rd, rs); return 1;
+    case A64_CVT_MOVW: aarch64_enc_mov_reg_w(enc, rd, rs); return 1;
+    case A64_CVT_SXTB: aarch64_enc_sxtb(enc, rd, rs); return 1;
+    case A64_CVT_SXTH: aarch64_enc_sxth(enc, rd, rs); return 1;
+    case A64_CVT_SXTW: aarch64_enc_sxtw(enc, rd, rs); return 1;
+    default: return 0;
+    }
+}
+
 static void a64JitConvInit(A64ConvEmitter *e, JitFnCtx *ctx) {
+    memset(e, 0, sizeof(*e));
     e->be = ctx;
     e->load_gp   = a64JitCvtLoadGp;
     e->load_fpr  = a64JitCvtLoadFpr;
     e->spill_gp  = a64JitCvtSpillGp;
     e->spill_fpr = a64JitCvtSpillFpr;
     e->convert   = a64JitConvert;
+    e->conv3     = a64JitConv3;
+    /* No fused sign-extending load yet: NULL falls back to load +
+     * convert, which is correct, just a instruction longer. */
+    e->load_gp_sx = NULL;
 }
 
 /* JIT (machine-code) leaf ops for the shared a64EmitArith lowering. */
@@ -1132,6 +1269,88 @@ static void a64JitShiftReg(void *be, IrOp op, IrInstr *i) {
     else if (op == IR_SHR) aarch64_enc_lsrv(enc, 1, A_X0, A_X0, A_X1);
     else                   aarch64_enc_asrv(enc, 1, A_X0, A_X0, A_X1);
 }
+/* `add x19, x20, x21` rather than three moves and an add through x0. */
+static int a64JitAlu3(void *be, IrOp op, IrInstr *i) {
+    AsmEnc *enc = &((JitFnCtx *)be)->jit->enc;
+    AoStr *d = a64JitHome(i->dst);
+    AoStr *a = a64JitHome(i->r1);
+    if (!d || !a) return 0;
+    A64Reg rd = jitRegFromName(d->data), ra = jitRegFromName(a->data);
+
+    if (i->r2 && i->r2->kind == IR_VAL_CONST_INT) {
+        /* Only add/sub have an encodable immediate here, matching
+         * a64JitAluImm; the logical forms fall back. */
+        if (op != IR_IADD && op != IR_ISUB) return 0;
+        s64 imm = i->r2->as._i64;
+        int as_add = (op == IR_IADD);
+        if (jitIsAddImm(imm)) { /* keep */ }
+        else if (imm < 0 && jitIsAddImm(-imm)) { as_add = !as_add; imm = -imm; }
+        else return 0;
+        if (as_add) aarch64_enc_add_imm(enc, 1, rd, ra, (uint32_t)imm);
+        else        aarch64_enc_sub_imm(enc, 1, rd, ra, (uint32_t)imm);
+        return 1;
+    }
+
+    AoStr *b = a64JitHome(i->r2);
+    if (!b) return 0;
+    A64Reg rb = jitRegFromName(b->data);
+    switch (op) {
+    case IR_IADD: aarch64_enc_add_reg(enc, 1, rd, ra, rb); return 1;
+    case IR_ISUB: aarch64_enc_sub_reg(enc, 1, rd, ra, rb); return 1;
+    case IR_AND:  aarch64_enc_and_reg(enc, 1, rd, ra, rb); return 1;
+    case IR_OR:   aarch64_enc_orr_reg(enc, 1, rd, ra, rb); return 1;
+    case IR_XOR:  aarch64_enc_eor_reg(enc, 1, rd, ra, rb); return 1;
+    default: return 0;
+    }
+}
+
+static int a64JitShift3(void *be, IrOp op, IrInstr *i) {
+    AsmEnc *enc = &((JitFnCtx *)be)->jit->enc;
+    AoStr *d = a64JitHome(i->dst);
+    AoStr *a = a64JitHome(i->r1);
+    if (!d || !a) return 0;
+    A64Reg rd = jitRegFromName(d->data), ra = jitRegFromName(a->data);
+    IrValue *r2 = i->r2;
+    if (r2 && r2->kind == IR_VAL_CONST_INT &&
+        r2->as._i64 >= 0 && r2->as._i64 < 64)
+    {
+        uint32_t sh = (uint32_t)r2->as._i64;
+        if (op == IR_SHL)      aarch64_enc_lsl_imm(enc, 1, rd, ra, sh);
+        else if (op == IR_SHR) aarch64_enc_lsr_imm(enc, 1, rd, ra, sh);
+        else                   aarch64_enc_asr_imm(enc, 1, rd, ra, sh);
+        return 1;
+    }
+    AoStr *b = a64JitHome(r2);
+    if (!b) return 0;
+    A64Reg rb = jitRegFromName(b->data);
+    if (op == IR_SHL)      aarch64_enc_lslv(enc, 1, rd, ra, rb);
+    else if (op == IR_SHR) aarch64_enc_lsrv(enc, 1, rd, ra, rb);
+    else                   aarch64_enc_asrv(enc, 1, rd, ra, rb);
+    return 1;
+}
+
+static int a64JitMul3(void *be, IrInstr *i) {
+    AsmEnc *enc = &((JitFnCtx *)be)->jit->enc;
+    AoStr *d = a64JitHome(i->dst);
+    AoStr *a = a64JitHome(i->r1);
+    AoStr *b = a64JitHome(i->r2);
+    if (!d || !a || !b) return 0;
+    aarch64_enc_mul(enc, 1, jitRegFromName(d->data),
+                    jitRegFromName(a->data), jitRegFromName(b->data));
+    return 1;
+}
+
+static int a64JitUnary3(void *be, IrOp op, IrInstr *i) {
+    AsmEnc *enc = &((JitFnCtx *)be)->jit->enc;
+    AoStr *d = a64JitHome(i->dst);
+    AoStr *a = a64JitHome(i->r1);
+    if (!d || !a) return 0;
+    A64Reg rd = jitRegFromName(d->data), ra = jitRegFromName(a->data);
+    if (op == IR_INEG) aarch64_enc_neg_reg(enc, 1, rd, ra);
+    else               aarch64_enc_mvn_reg(enc, 1, rd, ra);
+    return 1;
+}
+
 static void a64JitLoadX1(void *be, IrInstr *i) {
     jitLoadToReg((JitFnCtx *)be, i->r2, A_X1);
 }
@@ -1148,10 +1367,17 @@ static void a64JitFneg(void *be, int width) {
     aarch64_enc_fneg_scalar(&((JitFnCtx *)be)->jit->enc, width == 8, A_X0, A_X0);
 }
 static void a64JitArithInit(A64ArithEmitter *e, JitFnCtx *ctx) {
+    memset(e, 0, sizeof(*e));
+    /* Zeroed first: every field is assigned below, but an OPTIONAL one
+     * added later would otherwise be a garbage function pointer in a
+     * stack struct that nobody initialised. */
+    memset(e, 0, sizeof(*e));
     e->be        = ctx;
     e->load_gp   = a64JitCvtLoadGp;   e->load_fpr  = a64JitCvtLoadFpr;
     e->spill_gp  = a64JitCvtSpillGp;  e->spill_fpr = a64JitCvtSpillFpr;
     e->alu_imm   = a64JitAluImm;      e->alu_reg   = a64JitAluReg;
+    e->alu3      = a64JitAlu3;        e->shift3    = a64JitShift3;
+    e->mul3      = a64JitMul3;        e->unary3    = a64JitUnary3;
     e->mul       = a64JitMul;         e->divrem    = a64JitDivRem;
     e->unary     = a64JitUnary;       e->shift_imm = a64JitShiftImm;
     e->shift_reg = a64JitShiftReg;    e->load_x1   = a64JitLoadX1;
@@ -1171,10 +1397,25 @@ static void jitEmitInstr(JitFnCtx *ctx, IrInstr *instr) {
             break;
 
         case IR_LOAD: {
+            /* Mirrors aarch64.c: IR_LOAD names a home, so a register
+             * home makes the load a read of that register. */
             if (instr->r1 && instr->r1->pinned_reg) {
                 A64Reg src = jitRegFromName(instr->r1->pinned_reg->data);
                 aarch64_enc_mov_reg(enc, A_X0, src);
                 jitSpillDst(ctx, instr, A_X0);
+                break;
+            }
+            if (instr->r1 && instr->r1->loc.kind == IR_LOC_REG &&
+                instr->r1->loc.as.reg)
+            {
+                A64Reg src = jitRegFromName(instr->r1->loc.as.reg->data);
+                if (instr->dst && irIsFloat(instr->dst->type)) {
+                    aarch64_enc_fmov_reg(enc, 1, A_X0 /*d0*/, src);
+                    jitSpillDstFpr(ctx, instr, A_X0 /*d0*/);
+                } else {
+                    aarch64_enc_mov_reg(enc, A_X0, src);
+                    jitSpillDst(ctx, instr, A_X0);
+                }
                 break;
             }
             if (instr->dst && irIsFloat(instr->dst->type)) {
@@ -1206,26 +1447,39 @@ static void jitEmitInstr(JitFnCtx *ctx, IrInstr *instr) {
                 int size = instr->dst ? (int)instr->dst->as.var.size : 8;
                 if (instr->dst && irIsFloat(instr->dst->type)) {
                     aarch64_enc_fp_ldst_imm(enc, 1, (int)irValueByteSize(instr->dst),
-                                            A_X0 /*d0*/, A_X1, 0);
+                                            A_X0 /*d0*/, A_X1,
+                                            (uint32_t)instr->disp);
                     jitSpillDstFpr(ctx, instr, A_X0);
                 } else {
-                    jitDerefLoad(enc, size, A_X0, A_X1, 0, A_X0, 0, 0);
+                    /* instr->disp, not 0 - the global fast path
+                     * dropped it, so a displaced access to a global
+                     * read offset zero. Mirrors the aarch64.c fix. */
+                    jitDerefLoad(enc, size, A_X0, A_X1, 0, A_X0, 0,
+                                 instr->disp);
                     jitSpillDst(ctx, instr, A_X0);
                 }
                 break;
             }
-            A64Reg base = A_X1;
-            if (instr->r1 && instr->r1->loc.kind == IR_LOC_REG &&
-                instr->r1->loc.as.reg)
-            {
-                base = jitRegFromName(instr->r1->loc.as.reg->data);
-            } else {
-                jitLoadToReg(ctx, instr->r1, A_X1);
+            /* Index home first, then a base scratch that avoids it -
+             * this site loaded the base BEFORE consulting the index, so
+             * it lacked even the ordering the text backend had. */
+            A64Reg idx_home; int idx_homed = a64JitIdxHome(instr, &idx_home);
+            A64Reg base;
+            if (!a64JitBaseHome(instr->r1, instr, &base)) {
+                base = a64JitScratchTake(idx_homed, idx_home);
+                jitLoadToReg(ctx, instr->r1, base);
             }
-            A64Reg idx; int has_idx = jitIdxReg(ctx, instr, &idx);
+            A64Reg idx; int has_idx = jitIdxReg(ctx, instr, base, &idx);
             if (instr->dst && irIsFloat(instr->dst->type)) {
                 int fsz = (int)irValueByteSize(instr->dst);
                 if (has_idx) {
+                    /* No `[base, idx, lsl #n, #disp]` form exists, so
+                     * the displacement folds into the base - what
+                     * jitDerefLoad does for integers. Dropping it read
+                     * from the start of the struct instead of the
+                     * field: `s->d[i]` where `d` is not at offset 0.
+                     * The text backend had the identical hole. */
+                    if (instr->disp) jitAddSubImm(enc, base, (s64)instr->disp);
                     int sh = (instr->scale == 8) ? 3 :
                              (instr->scale == 4) ? 2 :
                              (instr->scale == 2) ? 1 : 0;
@@ -1261,23 +1515,28 @@ static void jitEmitInstr(JitFnCtx *ctx, IrInstr *instr) {
                 if (instr->r1 && irIsFloat(instr->r1->type)) {
                     jitLoadFirstSrcFpr(ctx, instr->r1);
                     aarch64_enc_fp_ldst_imm(enc, 0, (int)irValueByteSize(instr->r1),
-                                            A_X0 /*d0*/, A_X1, 0);
+                                            A_X0 /*d0*/, A_X1,
+                                            (uint32_t)instr->disp);
                 } else {
                     jitLoadFirstSrc(ctx, instr->r1);
-                    jitDerefStore(enc, sz, A_X0, A_X1, 0, A_X0, 0, 0);
+                    jitDerefStore(enc, sz, A_X0, A_X1, 0, A_X0, 0,
+                                  instr->disp);
                 }
                 break;
             }
-            A64Reg base = A_X1;
-            int addr_in_reg = instr->dst && instr->dst->loc.kind == IR_LOC_REG &&
-                              instr->dst->loc.as.reg;
-            if (addr_in_reg) base = jitRegFromName(instr->dst->loc.as.reg->data);
-            A64Reg idx; int has_idx = jitIdxReg(ctx, instr, &idx);
-            if (!addr_in_reg) jitLoadToReg(ctx, instr->dst, A_X1);
+            A64Reg idx_home; int idx_homed = a64JitIdxHome(instr, &idx_home);
+            A64Reg base;
+            if (!a64JitBaseHome(instr->dst, instr, &base)) {
+                base = a64JitScratchTake(idx_homed, idx_home);
+                jitLoadToReg(ctx, instr->dst, base);
+            }
+            A64Reg idx; int has_idx = jitIdxReg(ctx, instr, base, &idx);
             if (instr->r1 && irIsFloat(instr->r1->type)) {
                 int fsz = (int)irValueByteSize(instr->r1);
                 jitLoadFirstSrcFpr(ctx, instr->r1);
                 if (has_idx) {
+                    /* As the load above. */
+                    if (instr->disp) jitAddSubImm(enc, base, (s64)instr->disp);
                     int sh = (instr->scale == 8) ? 3 :
                              (instr->scale == 4) ? 2 :
                              (instr->scale == 2) ? 1 : 0;
@@ -1308,15 +1567,17 @@ static void jitEmitInstr(JitFnCtx *ctx, IrInstr *instr) {
         }
 
         case IR_RMW_DEREF: {
-            A64Reg base = A_X1;
-            int addr_in_reg = instr->dst && instr->dst->loc.kind == IR_LOC_REG &&
-                              instr->dst->loc.as.reg;
-            if (addr_in_reg) base = jitRegFromName(instr->dst->loc.as.reg->data);
-            else if (instr->dst && instr->dst->kind == IR_VAL_GLOBAL)
-                jitGlobalAddr(jit, A_X1, instr->dst->as.global.name->data);
-            else jitLoadToReg(ctx, instr->dst, A_X1);
-
-            A64Reg idx; int has_idx = jitIdxReg(ctx, instr, &idx);
+            A64Reg idx_home; int idx_homed = a64JitIdxHome(instr, &idx_home);
+            A64Reg base;
+            if (!a64JitBaseHome(instr->dst, instr, &base)) {
+                base = a64JitScratchTake(idx_homed, idx_home);
+                if (instr->dst && instr->dst->kind == IR_VAL_GLOBAL) {
+                    jitGlobalAddr(jit, base, instr->dst->as.global.name->data);
+                } else {
+                    jitLoadToReg(ctx, instr->dst, base);
+                }
+            }
+            A64Reg idx; int has_idx = jitIdxReg(ctx, instr, base, &idx);
             int sz = (int)irValueByteSize(instr->r1);
             jitDerefLoad(enc, sz, A_X0, base, has_idx, idx, instr->scale, instr->disp);
             IrOp rop = instr->extra.rmw_op;
@@ -1379,14 +1640,23 @@ static void jitEmitInstr(JitFnCtx *ctx, IrInstr *instr) {
         }
 
         case IR_ICMP: {
-            jitLoadFirstSrc(ctx, instr->r1);
+            /* Mirrors aarch64.c: `cmp` reads its operands and writes
+             * only the flags, so operands already in registers can be
+             * named directly rather than moved into the scratch pair. */
+            AoStr *lhs_home = a64JitHome(instr->r1);
+            A64Reg lhs = A_X0;
+            if (lhs_home) lhs = jitRegFromName(lhs_home->data);
+            else          jitLoadFirstSrc(ctx, instr->r1);
             if (instr->r2 && instr->r2->kind == IR_VAL_CONST_INT &&
                 jitIsAddImm(instr->r2->as._i64))
             {
-                aarch64_enc_cmp_imm(enc, 1, A_X0, (uint32_t)instr->r2->as._i64);
+                aarch64_enc_cmp_imm(enc, 1, lhs, (uint32_t)instr->r2->as._i64);
             } else {
-                jitLoadToReg(ctx, instr->r2, A_X1);
-                aarch64_enc_cmp_reg(enc, 1, A_X0, A_X1);
+                AoStr *rhs_home = a64JitHome(instr->r2);
+                A64Reg rhs = A_X1;
+                if (rhs_home) rhs = jitRegFromName(rhs_home->data);
+                else          jitLoadToReg(ctx, instr->r2, A_X1);
+                aarch64_enc_cmp_reg(enc, 1, lhs, rhs);
             }
             jitEmitCSet(enc, instr->extra.cmp_kind, 0);
             jitSpillDst(ctx, instr, A_X0);
@@ -1594,8 +1864,8 @@ static void jitEmitInstr(JitFnCtx *ctx, IrInstr *instr) {
                 }
             }
             int apple_target = jit->cc->target == TARGET_AARCH64_APPLE_DARWIN;
-            int holyc_variadic = callee_va && callee && callee->kind != AST_EXTERN_FUNC;
-            int extern_variadic = callee_va && callee && callee->kind == AST_EXTERN_FUNC;
+            int holyc_variadic = callee_va && astUsesHolyCVarargs(callee);
+            int extern_variadic = callee_va && !holyc_variadic;
             int force_va_stack = holyc_variadic || (extern_variadic && apple_target);
 
             u64 n = args ? args->size : 0;
@@ -1659,10 +1929,24 @@ static void jitEmitInstr(JitFnCtx *ctx, IrInstr *instr) {
             }
             break;
 
+        case IR_VA_START: {
+            /* Mirrors aarch64.c: the variadic arguments live in the
+             * incoming argument area, past any named parameter that
+             * overflowed the registers. */
+            if (ctx->jit->cc->target != TARGET_AARCH64_APPLE_DARWIN) {
+                loggerPanic("jit-aarch64: <stdarg.h> is implemented for "
+                            "aarch64-apple-darwin only\n");
+            }
+            int va_off = a64VaRegionOffset(ctx->ast);
+            aarch64_enc_mov_reg(enc, A_X0, A_FP);
+            jitAddSubImm(enc, A_X0, (s64)va_off);
+            jitSpillDst(ctx, instr, A_X0);
+            break;
+        }
+
         case IR_SELECT:
         case IR_SWITCH:
         case IR_VA_ARG:
-        case IR_VA_START:
         case IR_VA_END:
             loggerPanic("jit-aarch64: op %d not yet implemented\n", instr->op);
         default:
@@ -1671,6 +1955,34 @@ static void jitEmitInstr(JitFnCtx *ctx, IrInstr *instr) {
 }
 
 /* ---------------- prologue / epilogue ---------------- */
+
+/* Mirrors aarch64.c's aarch64SaveAreaBytes / aarch64EmitSaveRestore -
+ * same placement (bottom of the frame, sp-relative) so the two backends
+ * lay out an identical frame. */
+static int jitSaveAreaBytes(IrFunction *fn) {
+    Vec *saved = irCgPinnedCalleeSaved(fn);
+    int bytes = (int)saved->size * 8;
+    vecRelease(saved);
+    return (bytes + 15) & ~15;
+}
+
+static void jitEmitSaveRestore(JitFnCtx *ctx, int store) {
+    AsmEnc *enc = &ctx->jit->enc;
+    Vec *saved = irCgPinnedCalleeSaved(ctx->fn);
+    for (u64 i = 0; i < saved->size; ++i) {
+        AoStr *r = (AoStr *)saved->entries[i];
+        A64Reg reg = jitRegFromName(r->data);
+        uint32_t off = (uint32_t)(i * 8);
+        if (jitIsFpRegName(r->data)) {
+            aarch64_enc_fp_ldst_imm(enc, store ? 0 : 1, 8, reg, A_SP, off);
+        } else if (store) {
+            aarch64_enc_str_imm(enc, reg, A_SP, off);
+        } else {
+            aarch64_enc_ldr_imm(enc, reg, A_SP, off);
+        }
+    }
+    vecRelease(saved);
+}
 
 static void jitEmitPrologue(JitFnCtx *ctx) {
     AsmEnc *enc = &ctx->jit->enc;
@@ -1683,6 +1995,7 @@ static void jitEmitPrologue(JitFnCtx *ctx) {
     uint32_t aligned = ((uint32_t)ctx->fn->stack_space + 15u) & ~15u;
     ctx->aligned_frame = aligned;
     jitSpAdjust(enc, 1, aligned);
+    jitEmitSaveRestore(ctx, 1);
 }
 
 static void jitEmitEpilogue(JitFnCtx *ctx) {
@@ -1691,6 +2004,7 @@ static void jitEmitEpilogue(JitFnCtx *ctx) {
         aarch64_jit_emit_ret(enc);
         return;
     }
+    jitEmitSaveRestore(ctx, 0);   /* before sp moves */
     jitSpAdjust(enc, 0, ctx->aligned_frame);
     aarch64_jit_emit_ldp_post(enc, A_FP, A_LR, A_SP, 16);
     aarch64_jit_emit_ret(enc);
@@ -1701,6 +2015,7 @@ static void jitEmitEpilogue(JitFnCtx *ctx) {
 static int jitCompileFunction(HccJit *jit, Ast *ast, IrCtx *ir_ctx) {
     IrFunction *fn = irLowerFunction(ir_ctx, ast);
     irBasicFunctionOptimisations(fn);
+    if (irInlineFunction(ir_ctx, fn)) irBasicFunctionOptimisations(fn);
 
     /* Layout passes (slot offsets, IR-CG ctx). The text path goes
      * through irFunctionPrepForCodeGen; same here so the regalloc loff
@@ -1721,6 +2036,7 @@ static int jitCompileFunction(HccJit *jit, Ast *ast, IrCtx *ir_ctx) {
             if (jitIsByvalStruct(p->type)) { has_struct_param = 1; break; }
         }
     }
+    fn->stack_space = (u16)(fn->stack_space + jitSaveAreaBytes(fn));
     int omit_frame = (fn->stack_space == 0) && !irFnHasCalls(fn) &&
                      (ast->loff == 0) && !is_variadic && !has_struct_param;
 
@@ -1782,6 +2098,28 @@ static void jitInitRegPool(void) {
     static const char *const kInt[]   = { "x0","x1","x2","x3","x4","x5","x6","x7" };
     static const char *const kFloat[] = { "d0","d1","d2","d3","d4","d5","d6","d7" };
     static const char *const kScratch[] = { "x0","x1","x2","d0","d1" };
+    /* AAPCS64 callee-saved. Must match aarch64.c's list exactly: the
+     * two backends compile the same source and a register preserved in
+     * one but not the other is a difference the tests cannot see, since
+     * they only compare program output. */
+    static const char *const kCalleeSaved[] = {
+        "x19","x20","x21","x22","x23","x24","x25","x26","x27","x28",
+        "d8","d9","d10","d11","d12","d13","d14","d15",
+    };
+
+    static const char *const kLeafFree[] = { "x13","x14","x15" };
+    Vec *lf = vecNew(&vec_aostr_type);
+    for (int i = 0; i < 3; i++) {
+        vecPush(lf, aoStrDupRaw((char *)kLeafFree[i], 3));
+    }
+    pool.leaf_free_regs = lf;
+
+    Vec *cs = vecNew(&vec_aostr_type);
+    for (int i = 0; i < (int)(sizeof(kCalleeSaved)/sizeof(kCalleeSaved[0])); i++) {
+        vecPush(cs, aoStrDupRaw((char *)kCalleeSaved[i],
+                                (int)strlen(kCalleeSaved[i])));
+    }
+    pool.callee_saved_regs = cs;
 
     Vec *iv = vecNew(&vec_aostr_type);
     Vec *fv = vecNew(&vec_aostr_type);

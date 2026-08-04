@@ -254,6 +254,39 @@ static size_t jitWriteInit(HccJit *jit, uint8_t *addr, Ast *init) {
         }
         return w;
     }
+    /* `&Fn` or a lambda in a global's initialiser. Unlike a string, the
+     * address does not exist yet - the function has not been compiled -
+     * so leave a hole and record a fixup. Returning 8 keeps the layout
+     * right; falling through to `return 0` below wrote nothing AND
+     * shifted every following field. */
+    {
+        Ast *fn = init;
+        if (astIsUnOpKind(fn, AST_UN_OP_ADDR_OF) && fn->operand) {
+            fn = fn->operand;
+        }
+        if (fn->kind == AST_FUNC || fn->kind == AST_FUN_PROTO ||
+            fn->kind == AST_EXTERN_FUNC || fn->kind == AST_ASM_FUNCDEF ||
+            fn->kind == AST_ASM_FUNC_BIND)
+        {
+            AoStr *nm = (fn->kind == AST_ASM_FUNCDEF ||
+                         fn->kind == AST_ASM_FUNC_BIND)
+                      ? fn->asmfname : fn->fname;
+            if (nm) {
+                if (jit->n_ptr_fixups == jit->cap_ptr_fixups) {
+                    jit->cap_ptr_fixups = jit->cap_ptr_fixups
+                                        ? jit->cap_ptr_fixups * 2 : 16;
+                    jit->ptr_fixups = realloc(jit->ptr_fixups,
+                            jit->cap_ptr_fixups * sizeof(*jit->ptr_fixups));
+                }
+                jit->ptr_fixups[jit->n_ptr_fixups].addr = addr;
+                jit->ptr_fixups[jit->n_ptr_fixups].symbol = strdup(nm->data);
+                jit->n_ptr_fixups++;
+            }
+            uint64_t zero = 0;
+            memcpy(addr, &zero, 8);
+            return 8;
+        }
+    }
     if (init->kind == AST_STRING) {
         void *p = init->slabel ? mapGet(jit->host_symbols,
                                         (void *)init->slabel->data) : NULL;
@@ -268,6 +301,13 @@ static size_t jitWriteInit(HccJit *jit, uint8_t *addr, Ast *init) {
         for (List *n = head->next; n && n != head; n = n->next) {
             Ast *el = (Ast *)n->value;
             total += jitWriteInit(jit, addr + total, el);
+        }
+        /* Members the list did not mention are zero, and a NESTED
+         * aggregate has to keep its full width or every field after it
+         * lands at the wrong offset. Mirrors the AOT emitters. */
+        if (init->type && (size_t)init->type->size > total) {
+            memset(addr + total, 0, (size_t)init->type->size - total);
+            total = (size_t)init->type->size;
         }
         return total;
     }
@@ -292,6 +332,7 @@ static int jitAllocateGlobals(HccJit *jit, List *from) {
         MapIter mi; mapIterInit(jit->cc->strs, &mi);
         while (mapIterNext(&mi)) {
             Ast *ast = (Ast *)mi.node->value;
+            
             if (ast->kind != AST_STRING) continue;
             if (mapGet(jit->host_symbols, (void *)ast->slabel->data)) continue;
             char *addr = (char *)(globals + off);
@@ -365,33 +406,37 @@ static int jitAllocateGlobals(HccJit *jit, List *from) {
         if (!label) continue;
         if (mapGet(jit->host_symbols, (void *)label->data)) continue;
         uint8_t *addr = globals + off;
+        size_t slot = (size_t)ast->declvar->type->size;
         mapAdd(jit->host_symbols, strdup(label->data), addr);
+        /* Zero first: an initialiser need not cover the whole object,
+         * and what it leaves behind is defined to be zero rather than
+         * whatever the arena happened to hold. */
+        memset(addr, 0, slot);
         jitWriteInit(jit, addr, ast->declinit);
-        off += (ast->declvar->type->size + 7) & ~7;
+        off += (slot + 7) & ~7;
     }
     return 0;
 }
 
-/* Load libtos so HolyC stdlib symbols (MAlloc, Free, printf, ...) are
- * discoverable by dlsym. The AOT path links them in at the linker step;
- * the JIT has to make them visible at runtime. The configured install
- * prefix (cc->install_dir, `--install-dir`, defaults to /usr/local) is
- * probed first with both platforms' install conventions: macOS installs
- * lib<name>.0.0.1.dylib, Linux lib<name>.so.0.0.1. Neither installs an
- * unversioned shared library - that would make `-ltos` prefer it over
- * the static archive (see hccLibInit in main.c) - so the unversioned
- * entries here only ever match a hand-placed one. */
-static void jitLoadLibtos(Cctrl *cc) {
-    static int tos_loaded = 0;
-    if (tos_loaded) return;
-    tos_loaded = 1;
+/* Make the exception runtime's symbols (HCC_PushFrame, HCC_TryLeave,
+ * HCC_Throw, Fs) discoverable by dlsym. The AOT path links them at the
+ * linker step; the JIT has to load them at runtime. Everything else a
+ * program calls comes from libc, which is already in the process.
+ *
+ * The configured install prefix (cc->install_dir, `--install-dir`,
+ * defaults to /usr/local) is probed first, then the dynamic linker's
+ * own search paths and the in-tree build directory. */
+static void jitLoadRuntime(Cctrl *cc) {
+    static int rt_loaded = 0;
+    if (rt_loaded) return;
+    rt_loaded = 1;
 
     if (cc->install_dir && *cc->install_dir) {
         static const char *const suffixes[] = {
-            "lib/libtos.dylib",
             "lib/libtos.0.0.1.dylib",
-            "lib/libtos.so",
             "lib/libtos.so.0.0.1",
+            "lib/libtos.dylib",
+            "lib/libtos.so",
         };
         char path[1024];
         for (size_t i = 0; i < sizeof(suffixes)/sizeof(suffixes[0]); ++i) {
@@ -399,21 +444,18 @@ static void jitLoadLibtos(Cctrl *cc) {
             if (dlopen(path, RTLD_LAZY | RTLD_GLOBAL)) return;
         }
     }
-    /* Fall back to the dynamic-linker search paths and the in-tree
-     * `hcc -lib tos` build artifact. */
+
     static const char *const candidates[] = {
         "libtos.dylib",
         "libtos.so",
-        "libtos.so.0.0.1",
-        "./libtos.so",
-        "./libtos.dylib",
+        "./build/libtos.dylib",
+        "./build/libtos.so",
     };
     for (size_t i = 0; i < sizeof(candidates)/sizeof(candidates[0]); ++i) {
         if (dlopen(candidates[i], RTLD_LAZY | RTLD_GLOBAL)) return;
     }
-    /* Non-fatal if none load: programs that don't touch the HolyC
-     * stdlib will still work. The unresolved-symbol error fires later
-     * with a precise name if they do. */
+    /* Non-fatal if none load: only programs using try/catch need it,
+     * and those fail later with a precise unresolved-symbol error. */
 }
 
 /* dlopen one library, making its exports visible to
@@ -496,7 +538,7 @@ static void jitLoadSharedObjects(Cctrl *cc) {
             if (setHas(loaded, so->data)) continue;
             setAdd(loaded, so->data);
             if (!jitDlopenLib(cc, so->data, 0)) {
-                fprintf(stderr, "hcc: #link: failed to load '%s': %s\n",
+                fprintf(stderr, "jag: #link: failed to load '%s': %s\n",
                         so->data, dlerror());
             }
         }
@@ -507,7 +549,7 @@ static void jitLoadSharedObjects(Cctrl *cc) {
             if (setHas(loaded, name->data)) continue;
             setAdd(loaded, name->data);
             if (!jitDlopenLib(cc, name->data, 1)) {
-                fprintf(stderr, "hcc: #link: failed to load library '%s' "
+                fprintf(stderr, "jag: #link: failed to load library '%s' "
                         "(probed lib%s.{dylib,so} in the dynamic linker's "
                         "default paths, %s/lib, /opt/homebrew/lib, "
                         "/usr/local/lib and the system lib dirs)\n",
@@ -522,7 +564,7 @@ static void jitLoadSharedObjects(Cctrl *cc) {
 
 HccJit *hccJitNew(Cctrl *cc, const HccJitBackend *backend) {
     if (!backend->target_ok(cc->target)) {
-        fprintf(stderr, "hcc: JIT only supports %s targets\n", backend->name);
+        fprintf(stderr, "jag: JIT only supports %s targets\n", backend->name);
         return NULL;
     }
 
@@ -544,7 +586,7 @@ HccJit *hccJitNew(Cctrl *cc, const HccJitBackend *backend) {
 
     asm_enc_init(&jit->enc);
     backend->init_reg_pool();
-    jitLoadLibtos(cc);
+    jitLoadRuntime(cc);
     jitLoadSharedObjects(cc);
     return jit;
 }
@@ -615,6 +657,8 @@ int hccJitCompileChunk(HccJit *jit, Ast *extra_fn) {
     for (List *it = ast_from; it != cc->ast_list; it = it->next) {
         Ast *ast = it->value;
         if (ast->kind != AST_FUNC) continue;
+        /* `#test` code is absent from a build that is not running
+         * tests, exactly as in the AOT path. */
         if (jit->backend->compile_function(jit, ast, ir_ctx) != 0) return -1;
     }
     if (extra_fn) {
@@ -704,6 +748,32 @@ int hccJitCompileChunk(HccJit *jit, Ast *extra_fn) {
         mapAdd(jit->symbols, strdup(L->name), addr);
         mapAdd(jit->host_symbols, strdup(L->name), addr);
     }
+
+    /* Patch the holes left where a global's initialiser named a
+     * function. Its address exists only now that the chunk defining it
+     * has been finalized and registered above. */
+    for (u32 i = 0; i < jit->n_ptr_fixups; ) {
+        void *target = jitResolveSymbol(jit, jit->ptr_fixups[i].symbol);
+        if (!target && jit->ptr_fixups[i].symbol[0] != '_') {
+            /* Labels are registered under the platform-mangled name -
+             * `_G` on Mach-O - while the AST carries the source
+             * spelling. Same retry hccJitLookup does. */
+            char *u = malloc(strlen(jit->ptr_fixups[i].symbol) + 2);
+            u[0] = '_';
+            strcpy(u + 1, jit->ptr_fixups[i].symbol);
+            target = jitResolveSymbol(jit, u);
+            free(u);
+        }
+        if (!target) {
+            /* Defined by a later chunk - leave it for the next pass. */
+            ++i;
+            continue;
+        }
+        uintptr_t v = (uintptr_t)target;
+        memcpy(jit->ptr_fixups[i].addr, &v, 8);
+        free(jit->ptr_fixups[i].symbol);
+        jit->ptr_fixups[i] = jit->ptr_fixups[--jit->n_ptr_fixups];
+    }
     return 0;
 }
 
@@ -737,13 +807,14 @@ void *hccJitLookup(HccJit *jit, const char *name) {
     if (!jit || !name) return NULL;
     void *p = mapGet(jit->symbols, (void *)name);
     if (p) return p;
-    /* Try the underscore-prefixed mangled form too (macOS convention). */
-    if (name[0] != '_') {
-        char buf[256];
-        snprintf(buf, sizeof buf, "_%s", name);
-        return mapGet(jit->symbols, (void *)buf);
-    }
-    return NULL;
+    /* Try the underscore-prefixed mangled form too (macOS convention).
+     * This must be attempted even when the name already starts with an
+     * underscore: Mach-O prefixes every C symbol, so a function called
+     * `__repl_1` is emitted as `___repl_1`. Skipping the retry for
+     * `_`-leading names lost the REPL's own entry points. */
+    char buf[256];
+    snprintf(buf, sizeof buf, "_%s", name);
+    return mapGet(jit->symbols, (void *)buf);
 }
 
 AsmJitCode *hccJitFindChunk(HccJit *jit, void *pc) {

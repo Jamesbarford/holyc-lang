@@ -218,6 +218,17 @@ typedef struct Cctrl {
      * each as `-l<name>` to the linker; the JIT probes
      * lib<name>.{dylib,so} with dlopen. */
     List *link_libs;
+
+    /* Symbols that are RAW assembly labels rather than C identifiers:
+     * `_extern _MALLOC ...` bindings and labels defined by an `asm { }`
+     * block. The platform's leading-underscore mangling must not be
+     * applied to these - they are already the final symbol - whereas
+     * every C identifier needs it, including the `_`-prefixed ones that
+     * fill the system headers (`__swbuf`, `__sputc`). Provenance is the
+     * only reliable way to tell the two apart; the spelling is not. */
+    Set *raw_asm_labels;
+
+    Set *extern_globals;
 } Cctrl;
 
 /* Instantiate a new compiler control struct */

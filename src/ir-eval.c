@@ -107,6 +107,15 @@ int irEvalBlock(IrBlock *bb, Map *resolver) {
 
         I->r1 = irResolveTmp(resolver, I->r1);
         I->r2 = irResolveTmp(resolver, I->r2);
+        /* The scaled-index operand of a fused addressing mode is a use
+         * like any other. It was safe to skip only while this pass ran
+         * strictly BEFORE addressing-mode fusion, so no `idx` existed
+         * yet. Inlining broke that assumption: it splices an already
+         * fused body into a caller and the optimiser is then re-run
+         * over it, so a folded index left the load pointing at a
+         * definition this pass had just turned into a nop - and the
+         * register it named was never written. */
+        I->idx = irResolveTmp(resolver, I->idx);
 
         /* IR_BR/IR_RET pass a value via dst; IR_STORE_DEREF's dst is
          * the pointer being written through (an input, not a write

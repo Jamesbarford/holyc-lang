@@ -37,7 +37,6 @@
 #include "ir-regalloc.h"
 #include "list.h"
 #include "util.h"
-#include "version.h"
 
 static const char *const kIntRegs64[] = {
     "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"
@@ -61,16 +60,63 @@ static Vec *aarch64MakeAoStrVec(const char *const *src, int n) {
  * Conservative by default - only the cases audited against the
  * emitters answer "not clobbered", so an opcode nobody has thought
  * about keeps the old blanket behaviour. */
+static const char *a64HomeReg(IrValue *v);
+
+/* Will a deref store have to put its address or index INTO a scratch
+ * register before it can read its value?
+ *
+ * Mirrors what the emitter does: `a64BaseHome` uses the address's own
+ * register when it has one, `aarch64IdxHome` likewise for the index,
+ * and only a value with neither goes through `a64ScratchTake`. Kept
+ * beside them deliberately - the two must agree, and the failure mode
+ * if they drift is a source read out of a register something else has
+ * since written.
+ *
+ * Deliberately coarse in one respect: it answers for ANY scratch
+ * register rather than working out which one would be taken. The
+ * refinement worth having is "nothing is materialised at all", and
+ * that is exactly what this tests. */
+static int aarch64DerefTakesScratch(IrInstr *I) {
+    /* An address computed rather than held - a global's symbol has to
+     * be materialised, and anything without a home is loaded. */
+    if (!I->dst) return 1;
+    if (I->dst->kind == IR_VAL_GLOBAL) return 1;
+    if (!a64HomeReg(I->dst)) return 1;
+    /* `a64BaseHome` refuses a home for the one shape that would mutate
+     * it, and the emitter then takes scratch after all. */
+    if (I->idx && I->scale && I->disp != 0) return 1;
+    /* An index is only free when it too is already in a register. */
+    if (I->idx && I->scale && !a64HomeReg(I->idx)) return 1;
+    return 0;
+}
+
 static int aarch64OpClobbers(IrInstr *I, AoStr *reg, IrClobberPoint at) {
     const char *r = reg->data;
     int is_scratch0 = !strcmp(r, "x0") || !strcmp(r, "d0");
 
     switch (at) {
+        case IR_CLOBBER_BEFORE_DST:
+            /* Only the deref stores ask: their dst is the ADDRESS, and
+             * it is the first thing the emitter touches. Nothing has
+             * run, so nothing is clobbered. */
+            return 0;
+
         case IR_CLOBBER_BEFORE_R1:
             /* r1 is the first thing materialised, so nothing has been
-             * written yet - except for the two deref stores, which
-             * put the address through x1/x2 before reading the value. */
-            if (I->op == IR_STORE_DEREF || I->op == IR_RMW_DEREF) return 1;
+             * written yet - except for the two deref stores, where r1
+             * is the VALUE and comes last, after the address and the
+             * index have been put where they need to be.
+             *
+             * Those two only burn scratch when they have to compute
+             * something: an address already sitting in a register is
+             * used where it is, and so is an index. When neither needs
+             * materialising, nothing is written before the value is
+             * read and a source in a scratch register survives after
+             * all. Answering a flat "clobbered" here is what kept
+             * `f->e[i] = v` copying every operand into place first. */
+            if (I->op == IR_STORE_DEREF || I->op == IR_RMW_DEREF) {
+                return aarch64DerefTakesScratch(I);
+            }
             return 0;
 
         case IR_CLOBBER_BEFORE_R2:
@@ -98,12 +144,19 @@ static int aarch64OpClobbers(IrInstr *I, AoStr *reg, IrClobberPoint at) {
     }
 }
 
-static void aarch64InitRegPool(void) {
+void aarch64InitRegPool(void) {
     static int initialised = 0;
     static IrRegPool pool;
     if (initialised) return;
 
     static const char *kScratchRegs[] = { "x0", "x1", "x2", "d0", "d1" };
+    /* AAPCS64: x19-x28 and the low 64 bits of d8-d15 belong to the
+     * caller. A `reg X19 x` binding writes one, so the function has to
+     * put it back. */
+    static const char *kCalleeSaved[] = {
+        "x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26", "x27",
+        "x28", "d8", "d9", "d10", "d11", "d12", "d13", "d14", "d15",
+    };
     int n_int     = (int)(sizeof(kIntRegs64)   / sizeof(kIntRegs64[0]));
     int n_float   = (int)(sizeof(kFloatRegs)   / sizeof(kFloatRegs[0]));
     int n_scratch = (int)(sizeof(kScratchRegs) / sizeof(kScratchRegs[0]));
@@ -113,6 +166,20 @@ static void aarch64InitRegPool(void) {
     pool.float_return_reg = aoStrDupRaw((char *)"d0", 2);
     pool.sret_reg         = aoStrDupRaw((char *)"x8", 2);
     pool.scratch_regs     = aarch64MakeAoStrVec(kScratchRegs, n_scratch);
+    /* x0-x2 scratch, x8 sret, x9 large-offset pivot, x10 addressing
+     * scratch, x16 indirect-call veneer, x18 platform, x29/x30 frame.
+     * x3-x7 can still hold incoming arguments. That leaves x11-x15. */
+    /* x0-x2 scratch, x8 sret, x9 large-offset pivot, x10 addressing
+     * scratch, x11/x12 parameter-copy scratch, x16 indirect-call
+     * veneer, x18 platform, x29/x30 frame; x3-x7 may hold incoming
+     * arguments. Verified by grepping every register name this backend
+     * emits - x11 and x12 were in this list until the arg-overflow and
+     * varargs tests found them. */
+    static const char *kLeafFree[] = { "x13","x14","x15" };
+    pool.leaf_free_regs = aarch64MakeAoStrVec(kLeafFree,
+            (int)(sizeof(kLeafFree) / sizeof(kLeafFree[0])));
+    pool.callee_saved_regs = aarch64MakeAoStrVec(kCalleeSaved,
+            (int)(sizeof(kCalleeSaved) / sizeof(kCalleeSaved[0])));
     pool.op_clobbers      = aarch64OpClobbers;
     pool.variadic_on_stack = 1;
 
@@ -149,6 +216,39 @@ static void aarch64FpRegForWidth(const char *dreg, int size,
     } else {
         snprintf(out, out_sz, "%s", dreg);
     }
+}
+
+/* Byte width of an FP register from its name: sN -> 4, dN -> 8.
+ * Registers the compiler picks are always lower case, but a `reg`-pinned
+ * one is spelled by the user and idiomatically upper (`float reg S8 f`),
+ * so accept either. */
+static int aarch64FpRegWidth(const char *reg) {
+    return (reg[0] == 's' || reg[0] == 'S') ? 4 : 8;
+}
+
+/* Is this register name an FP/SIMD scalar (sN/dN)? Same lower/upper
+ * tolerance as aarch64FpRegWidth - `reg`-pinned names come from the
+ * user. */
+static int aarch64IsFpRegName(const char *reg) {
+    if (!reg) return 0;
+    char c = reg[0];
+    return (c == 's' || c == 'S' || c == 'd' || c == 'D') &&
+           reg[1] >= '0' && reg[1] <= '9';
+}
+
+/* Move between two FP registers. `fmov` requires both to be the same
+ * precision; crossing widths is a conversion, and the instruction for
+ * that is `fcvt`. This matters for `reg`-pinned floats: the user names
+ * the register, so the pin's width is whatever they wrote and need not
+ * match the width of the value passing through it. Emitting `fmov s8,
+ * d0` there is not merely wrong - the assembler rejects it. */
+static void aarch64FpMoveReg(AoStr *buf, const char *dst, const char *src) {
+    if (!strcasecmp(dst, src)) {
+        return;
+    }
+    const char *mnem = aarch64FpRegWidth(dst) == aarch64FpRegWidth(src)
+                     ? "fmov" : "fcvt";
+    aoStrCatFmt(buf, "%s    %s, %s\n\t", mnem, dst, src);
 }
 
 /* FP scalar register name for index `n` at the given byte width:
@@ -205,16 +305,40 @@ static void aarch64EmitMovImm(AoStr *buf, const char *reg, s64 imm) {
 /* PC-relative address of a global symbol into `reg`. Apple Darwin
  * uses `adrp X, sym@PAGE; add X, X, sym@PAGEOFF`. Linux is the
  * same form (`:lo12:sym` instead of `@PAGEOFF`). */
+static void aarch64GlobalAddrEx(Cctrl *cc, AoStr *buf, const char *sym,
+                                const char *reg, int force_got)
+{
+    /* A global defined in another image cannot be reached by a direct
+     * adrp+add - the static linker has no address to fold in, and
+     * emits "does not have address". Load its address from the GOT
+     * instead. */
+    int is_extern = force_got ||
+                    (cc->extern_globals &&
+                     setHas(cc->extern_globals, (char *)sym));
+
+    if (cc->target == TARGET_AARCH64_APPLE_DARWIN) {
+        if (is_extern) {
+            aoStrCatFmt(buf, "adrp    %s, %s@GOTPAGE\n\t", reg, sym);
+            aoStrCatFmt(buf, "ldr %s, [%s, %s@GOTPAGEOFF]\n\t", reg, reg, sym);
+        } else {
+            aoStrCatFmt(buf, "adrp    %s, %s@PAGE\n\t", reg, sym);
+            aoStrCatFmt(buf, "add %s, %s, %s@PAGEOFF\n\t", reg, reg, sym);
+        }
+    } else {
+        if (is_extern) {
+            aoStrCatFmt(buf, "adrp    %s, :got:%s\n\t", reg, sym);
+            aoStrCatFmt(buf, "ldr %s, [%s, :got_lo12:%s]\n\t", reg, reg, sym);
+        } else {
+            aoStrCatFmt(buf, "adrp    %s, %s\n\t", reg, sym);
+            aoStrCatFmt(buf, "add %s, %s, :lo12:%s\n\t", reg, reg, sym);
+        }
+    }
+}
+
 static void aarch64GlobalAddr(Cctrl *cc, AoStr *buf, const char *sym,
                               const char *reg)
 {
-    if (cc->target == TARGET_AARCH64_APPLE_DARWIN) {
-        aoStrCatFmt(buf, "adrp    %s, %s@PAGE\n\t", reg, sym);
-        aoStrCatFmt(buf, "add %s, %s, %s@PAGEOFF\n\t", reg, reg, sym);
-    } else {
-        aoStrCatFmt(buf, "adrp    %s, %s\n\t", reg, sym);
-        aoStrCatFmt(buf, "add %s, %s, :lo12:%s\n\t", reg, reg, sym);
-    }
+    aarch64GlobalAddrEx(cc, buf, sym, reg, 0);
 }
 
 /* Pick the addressing form for a frame access. AArch64 ldr/str
@@ -274,6 +398,24 @@ static void aarch64FrameLoad(AoStr *buf, const char *reg, u32 size,
         default: op = (form == 0) ? "ldur" : "ldr";  break;
     }
     aoStrCatFmt(buf, "%s %s, %s\n\t", op, dst, mem);
+}
+
+/* Sign-extending sub-word load: `ldursb x0, [x29,#-8]` does the widen
+ * the plain load + `sxtb` pair was doing in two. */
+static void aarch64FrameLoadSx(AoStr *buf, const char *reg, u32 size,
+                               int loff)
+{
+    char dst[8];
+    aarch64RegForWidth(reg, 8, dst, sizeof(dst));
+    char mem[32];
+    int form = aarch64FrameOperand(buf, loff, size, mem, sizeof(mem));
+    const char *op;
+    switch (size) {
+        case 1: op = (form == 0) ? "ldursb" : "ldrsb"; break;
+        case 2: op = (form == 0) ? "ldursh" : "ldrsh"; break;
+        default: op = (form == 0) ? "ldursw" : "ldrsw"; break;
+    }
+    aoStrCatFmt(buf, "%s    %s, %s\n\t", op, dst, mem);
 }
 
 static void aarch64FrameStore(AoStr *buf, const char *reg, u32 size,
@@ -369,6 +511,40 @@ static int aarch64IsMemDisp(s32 disp, u32 size) {
     return 0;
 }
 
+/* Build the `[base, idx{, lsl #n}]` operand for a scaled index.
+ *
+ * On AArch64 the register-offset shift is tied to the ACCESS size, not
+ * to the element size: a 4-byte `ldrsw`/`str w` may only scale by 4,
+ * an 8-byte `ldr`/`str x` only by 8. `Point pts[3]` indexed by a
+ * variable wants base + i*8 for a 4-byte field, which is `lsl #3` on a
+ * 4-byte access - and that is not encodable. The assembler says so and
+ * rejects the AOT build outright ("expected 'lsl' or 'sxtx' with
+ * optional shift of #0 or #2"), while the JIT's own encoder took it
+ * and scaled by 4, quietly reading and writing the wrong element.
+ *
+ * When the scale does not match, shift the index by hand into x10 and
+ * use the unscaled form. x10 is free here: values live in x0/x9 and
+ * bases in x1-x7, and the out-of-range-displacement path below already
+ * borrows it the same way. */
+static void aarch64IdxScaled(AoStr *buf, const char *idx_reg, u8 scale,
+                             u32 size, char *mem, size_t mem_len,
+                             const char *base_reg)
+{
+    int sh = 0;
+    if      (scale == 2) sh = 1;
+    else if (scale == 4) sh = 2;
+    else if (scale == 8) sh = 3;
+
+    if (sh != 0 && (u32)scale != size) {
+        aoStrCatFmt(buf, "lsl x10, %s, #%i\n\t", idx_reg, (s64)sh);
+        idx_reg = "x10";
+        sh = 0;
+    }
+
+    if (sh == 0) snprintf(mem, mem_len, "[%s, %s]", base_reg, idx_reg);
+    else snprintf(mem, mem_len, "[%s, %s, lsl #%d]", base_reg, idx_reg, sh);
+}
+
 /* Width-aware load through a register-held address. */
 static void aarch64DerefLoad(AoStr *buf, u32 size, const char *dst_reg,
                              const char *base_reg, const char *idx_reg,
@@ -378,17 +554,8 @@ static void aarch64DerefLoad(AoStr *buf, u32 size, const char *dst_reg,
     aarch64RegForWidth(dst_reg, (int)(size <= 4 ? 4 : 8), wdst, sizeof(wdst));
     char mem[64];
     if (idx_reg) {
-        /* AArch64 indexed: [base, idx, lsl #log2(scale)]. Scale must
-         * match the access size (1/2/4/8). Otherwise we need an
-         * explicit shift before the load. */
-        int sh = 0;
-        if      (scale == 2) sh = 1;
-        else if (scale == 4) sh = 2;
-        else if (scale == 8) sh = 3;
-
-        if (sh == 0) snprintf(mem, sizeof(mem), "[%s, %s]", base_reg, idx_reg);
-        else snprintf(mem, sizeof(mem), "[%s, %s, lsl #%d]",
-                      base_reg, idx_reg, sh);
+        aarch64IdxScaled(buf, idx_reg, scale, size, mem, sizeof(mem),
+                         base_reg);
         aarch64AddSubImm(buf, base_reg, (s64)disp);
     } else if (disp != 0 && aarch64IsMemDisp(disp, size)) {
         snprintf(mem, sizeof(mem), "[%s, #%d]", base_reg, (int)disp);
@@ -421,13 +588,8 @@ static void aarch64DerefStore(AoStr *buf, u32 size, const char *val_reg,
     aarch64RegForWidth(val_reg, (int)(size <= 4 ? 4 : 8), wval, sizeof(wval));
     char mem[64];
     if (idx_reg) {
-        int sh = 0;
-        switch (scale) { case 1: sh=0; break; case 2: sh=1; break;
-                         case 4: sh=2; break; case 8: sh=3; break;
-                         default: sh = 0; }
-        if (sh == 0) snprintf(mem, sizeof(mem), "[%s, %s]", base_reg, idx_reg);
-        else snprintf(mem, sizeof(mem), "[%s, %s, lsl #%d]",
-                      base_reg, idx_reg, sh);
+        aarch64IdxScaled(buf, idx_reg, scale, size, mem, sizeof(mem),
+                         base_reg);
         aarch64AddSubImm(buf, base_reg, (s64)disp);
     } else if (disp != 0 && aarch64IsMemDisp(disp, size)) {
         snprintf(mem, sizeof(mem), "[%s, #%d]", base_reg, (int)disp);
@@ -505,6 +667,57 @@ static void aarch64EmitFloatLiteral(IrCgCtx *ctx, const char *dreg, f64 f,
 }
 
 /* Load any IrValue into the given x-register. */
+/* Remember a spill so the next instruction, if it is the matching
+ * reload, can be skipped. Only for full 8-byte values: a narrower
+ * store leaves the register's upper bits alone, while the reload
+ * sign- or zero-extends, so the two are not the same value. */
+static void aarch64NoteSpill(IrCgCtx *ctx, const char *reg, u32 size,
+                             int loff)
+{
+    if (size != 8 || strlen(reg) >= sizeof(ctx->spill_reg)) {
+        ctx->spill_end = 0;
+        return;
+    }
+    ctx->spill_end = ctx->buf->len;
+    ctx->spill_loff = loff;
+    ctx->spill_size = size;
+    snprintf(ctx->spill_reg, sizeof(ctx->spill_reg), "%s", reg);
+}
+
+/* `stur x0, [x29,#-32]` then `ldur x0, [x29,#-32]` - the value is
+ * already there. Emitting nothing at all is only safe while the store
+ * is literally the previous thing in the buffer. */
+static int aarch64SpillStillLive(IrCgCtx *ctx, const char *reg, u32 size,
+                                 int loff)
+{
+    return ctx->spill_end != 0 && ctx->spill_end == ctx->buf->len &&
+           size == 8 && ctx->spill_size == 8 && ctx->spill_loff == loff &&
+           !strcmp(ctx->spill_reg, reg);
+}
+
+/* Record that `home` and `src` both hold the same value right now. */
+static void aarch64NoteHomeMove(IrCgCtx *ctx, const char *home,
+                                const char *src)
+{
+    if (strlen(home) >= sizeof(ctx->home_reg) ||
+        strlen(src)  >= sizeof(ctx->home_src))
+    {
+        ctx->home_end = 0;
+        return;
+    }
+    ctx->home_end = ctx->buf->len;
+    snprintf(ctx->home_reg, sizeof(ctx->home_reg), "%s", home);
+    snprintf(ctx->home_src, sizeof(ctx->home_src), "%s", src);
+}
+
+/* Did the immediately preceding emit put this value in `reg` already? */
+static int aarch64HomeStillIn(IrCgCtx *ctx, const char *home,
+                              const char *reg)
+{
+    return ctx->home_end != 0 && ctx->home_end == ctx->buf->len &&
+           !strcmp(ctx->home_reg, home) && !strcmp(ctx->home_src, reg);
+}
+
 static void aarch64LoadToReg(IrCgCtx *ctx, IrValue *val, const char *reg) {
     switch (val->kind) {
         case IR_VAL_CONST_INT:
@@ -527,19 +740,30 @@ static void aarch64LoadToReg(IrCgCtx *ctx, IrValue *val, const char *reg) {
         case IR_VAL_LOCAL:
         case IR_VAL_PARAM: {
             if (val->pinned_reg) {
-                aoStrCatFmt(ctx->buf, "mov %s, %s\n\t",
-                            reg, val->pinned_reg->data);
+                const char *src = val->pinned_reg->data;
+                /* We just moved this value OUT of `reg` into its home,
+                 * so `reg` still holds it - moving it back is a no-op. */
+                if (strcmp(src, reg) != 0 &&
+                    !aarch64HomeStillIn(ctx, src, reg))
+                {
+                    aoStrCatFmt(ctx->buf, "mov %s, %s\n\t", reg, src);
+                }
                 break;
             }
             if (val->loc.kind == IR_LOC_REG && val->loc.as.reg) {
                 const char *src = val->loc.as.reg->data;
-                if (strcmp(src, reg) != 0) {
+                if (strcmp(src, reg) != 0 &&
+                    !aarch64HomeStillIn(ctx, src, reg))
+                {
                     aoStrCatFmt(ctx->buf, "mov %s, %s\n\t", reg, src);
                 }
                 break;
             }
             u32 size = irValueByteSize(val);
             int loff = irCgGetLoff(&ctx->fn->ra, val);
+            /* The spill we just emitted put this exact value in this
+             * exact register - reloading it would be a no-op. */
+            if (aarch64SpillStillLive(ctx, reg, size, loff)) break;
             aarch64FrameLoad(ctx->buf, reg, size, loff);
             break;
         }
@@ -549,9 +773,22 @@ static void aarch64LoadToReg(IrCgCtx *ctx, IrValue *val, const char *reg) {
     }
 }
 
+/* Skip a home store the flagged instruction's result nobody reads.
+ * Register homes only - see IRCG_DST_DEAD. */
+static int aarch64DstStoreIsDead(IrInstr *instr, IrValue *dst) {
+    if (!instr || !(instr->flags & IRCG_DST_DEAD)) return 0;
+    if (instr->dst != dst) return 0;
+    return dst->pinned_reg ||
+           (dst->loc.kind == IR_LOC_REG && dst->loc.as.reg);
+}
+
 static void aarch64StoreReg(IrCgCtx *ctx, IrValue *dst, const char *reg) {
     if (dst->pinned_reg) {
-        aoStrCatFmt(ctx->buf, "mov %s, %s\n\t", dst->pinned_reg->data, reg);
+        const char *home = dst->pinned_reg->data;
+        if (strcmp(home, reg) != 0) {
+            aoStrCatFmt(ctx->buf, "mov %s, %s\n\t", home, reg);
+        }
+        aarch64NoteHomeMove(ctx, home, reg);
         return;
     }
     if (dst->loc.kind == IR_LOC_REG && dst->loc.as.reg) {
@@ -559,14 +796,17 @@ static void aarch64StoreReg(IrCgCtx *ctx, IrValue *dst, const char *reg) {
         if (strcmp(home, reg) != 0) {
             aoStrCatFmt(ctx->buf, "mov %s, %s\n\t", home, reg);
         }
+        aarch64NoteHomeMove(ctx, home, reg);
         return;
     }
     u32 size = irValueByteSize(dst);
     int loff = irCgGetLoff(&ctx->fn->ra, dst);
     aarch64FrameStore(ctx->buf, reg, size, loff);
+    aarch64NoteSpill(ctx, reg, size, loff);
 }
 
 static void aarch64SpillDst(IrCgCtx *ctx, IrInstr *instr, const char *reg) {
+    if (aarch64DstStoreIsDead(instr, instr->dst)) return;
     aarch64StoreReg(ctx, instr->dst, reg);
 }
 
@@ -593,12 +833,15 @@ static void aarch64LoadToFpr(IrCgCtx *ctx, IrValue *val, const char *dreg) {
         case IR_VAL_TMP:
         case IR_VAL_LOCAL:
         case IR_VAL_PARAM: {
-            /* Pinned FP local: `fmov dreg, <pinned>` - the assembler
-             * picks the FP-FP or GPR-FP form from the register names. */
+            /* Pinned FP local. `dreg` is always handed round in its dN
+             * spelling; narrow it to the value's width first, exactly
+             * as the frame path below does, or a 4-byte value reads
+             * back through a 64-bit register. */
             if (val->pinned_reg) {
-                const char *src = val->pinned_reg->data;
-                if (strcmp(src, dreg) != 0)
-                    aoStrCatFmt(ctx->buf, "fmov    %s, %s\n\t", dreg, src);
+                char vr[8];
+                aarch64FpRegForWidth(dreg, (int)irValueByteSize(val),
+                                     vr, sizeof(vr));
+                aarch64FpMoveReg(ctx->buf, vr, val->pinned_reg->data);
                 break;
             }
             if (val->loc.kind == IR_LOC_REG && val->loc.as.reg) {
@@ -627,12 +870,13 @@ static void aarch64LoadToFpr(IrCgCtx *ctx, IrValue *val, const char *dreg) {
  * storing 8 bytes there would clobber the adjacent field. */
 static void aarch64StoreFprSized(IrCgCtx *ctx, IrValue *dst,
                                  const char *dreg, int val_size) {
-    /* Pinned FP local: `fmov <pinned>, dreg` (FP-FP or FP-GPR per the
-     * register names). */
+    /* Pinned FP local. Same narrowing as the frame store below - the
+     * value's width, not `dreg`'s nominal dN. */
     if (dst->pinned_reg) {
-        const char *home = dst->pinned_reg->data;
-        if (strcmp(home, dreg) != 0)
-            aoStrCatFmt(ctx->buf, "fmov    %s, %s\n\t", home, dreg);
+        u32 psize = val_size > 0 ? (u32)val_size : irValueByteSize(dst);
+        char vr[8];
+        aarch64FpRegForWidth(dreg, (int)psize, vr, sizeof(vr));
+        aarch64FpMoveReg(ctx->buf, dst->pinned_reg->data, vr);
         return;
     }
     if (dst->loc.kind == IR_LOC_REG && dst->loc.as.reg) {
@@ -652,6 +896,7 @@ static void aarch64StoreFpr(IrCgCtx *ctx, IrValue *dst, const char *dreg) {
 }
 
 static void aarch64SpillDstFpr(IrCgCtx *ctx, IrInstr *instr, const char *dreg) {
+    if (aarch64DstStoreIsDead(instr, instr->dst)) return;
     aarch64StoreFpr(ctx, instr->dst, dreg);
 }
 
@@ -707,13 +952,92 @@ static int aarch64IsLogicalImm(s64 imm, int is_64) {
     return 0;
 }
 
-static const char *aarch64IdxReg(IrCgCtx *ctx, IrInstr *instr) {
-    if (!instr->idx || !instr->scale) return NULL;
-    if (instr->idx->loc.kind == IR_LOC_REG && instr->idx->loc.as.reg)
-        return instr->idx->loc.as.reg->data;
-    aarch64LoadToReg(ctx, instr->idx, "x2");
-    return "x2";
+/* The index register for a `[base, idx, lsl #n]` addressing mode.
+ *
+ * `base_scratch` is the register the caller is about to load the base
+ * into, or NULL when the base already lives in one. An index whose home
+ * IS that register has to be moved out of the way first: x1 is the
+ * second integer parameter's home, so `p->data[i]` loaded the base over
+ * the top of `i` and then used one register for both -
+ * `ldrsw x0, [x1, x1, lsl #2]`. Callers must resolve the index BEFORE
+ * loading the base, which is what makes the copy land in time. */
+/* The register a value lives in, or NULL when it lives in memory. */
+static const char *a64HomeReg(IrValue *v) {
+    if (!v) return NULL;
+    if (v->pinned_reg) return v->pinned_reg->data;
+    if (v->loc.kind == IR_LOC_REG && v->loc.as.reg) return v->loc.as.reg->data;
+    return NULL;
 }
+
+/* May the deref emitters address straight off `v`'s home register?
+ *
+ * Only when nothing will WRITE to it. aarch64DerefLoad/Store fold a
+ * displacement by adding it into the base register in place, which is
+ * free when the base is a scratch copy we own and destroys the value
+ * when it is a promoted local's home. The mutating shape is exactly
+ * "indexed AND displaced"; everything else either encodes the
+ * displacement in the addressing mode or has no displacement. */
+static const char *a64BaseHome(IrValue *v, IrInstr *instr) {
+    const char *home = a64HomeReg(v);
+    if (!home) return NULL;
+    if (instr->idx && instr->scale && instr->disp != 0) return NULL;
+    return home;
+}
+
+/* A scratch register that is none of `avoid`.
+ *
+ * Emitters used to name x0/x1/x2 outright, which is fine while one
+ * value is in flight and wrong the moment two must be live at once: a
+ * base and an index, where materialising the second lands on the
+ * first. Asking for a register that avoids what is already spoken for
+ * is the whole difference, and it is what lets the addressing-mode
+ * fusion fold `a[i]` instead of declining it.
+ *
+ * The pool excludes everything with a role: x0 result, x9 large-offset
+ * pivot, x10 addressing scratch, x16 veneer, x29/x30 frame, and
+ * x13-x15 / x19-x28 which the register allocator hands out. x3-x7 are
+ * excluded too - they can still hold incoming arguments, which is
+ * exactly the bug in the x3 fallback this replaces.
+ *
+ * Two entries is deliberate: a base and an index are the only pair
+ * that ever contend, and x0 holds the result. x11/x12 look free but
+ * aarch64CopyToSlot uses them, and 54_struct_copy proved it. If a
+ * third role ever appears the panic below says so rather than
+ * silently sharing. */
+static const char *a64ScratchTake(const char *avoid1, const char *avoid2) {
+    static const char *const pool[] = { "x1", "x2" };
+    for (u64 i = 0; i < sizeof(pool)/sizeof(pool[0]); ++i) {
+        if (avoid1 && !strcmp(pool[i], avoid1)) continue;
+        if (avoid2 && !strcmp(pool[i], avoid2)) continue;
+        return pool[i];
+    }
+    loggerPanic("ir-cg-aarch64: no free scratch avoiding %s/%s\n",
+                avoid1 ? avoid1 : "-", avoid2 ? avoid2 : "-");
+}
+
+/* Where the index already lives, or NULL. Emits nothing - the caller
+ * needs this BEFORE choosing a base scratch, so the base can avoid it. */
+static const char *aarch64IdxHome(IrInstr *instr) {
+    if (!instr->idx || !instr->scale) return NULL;
+    if (instr->idx->loc.kind == IR_LOC_REG && instr->idx->loc.as.reg) {
+        return instr->idx->loc.as.reg->data;
+    }
+    if (instr->idx->pinned_reg) return instr->idx->pinned_reg->data;
+    return NULL;
+}
+
+/* The index in a register, materialising it if it has no home. */
+static const char *aarch64IdxReg(IrCgCtx *ctx, IrInstr *instr,
+                                 const char *base_reg)
+{
+    if (!instr->idx || !instr->scale) return NULL;
+    const char *home = aarch64IdxHome(instr);
+    if (home) return home;
+    const char *scratch = a64ScratchTake(base_reg, NULL);
+    aarch64LoadToReg(ctx, instr->idx, scratch);
+    return scratch;
+}
+
 
 /* Condition codes for branches. AArch64 uses the same suffixes as
  * x86's jCC; mapping is straightforward. */
@@ -987,10 +1311,23 @@ static void a64TxtStoreInt(void *be, IrInstr *i, int size) {
 }
 static void a64TxtStoreIntPinned(void *be, IrInstr *i) {
     IrCgCtx *ctx = (IrCgCtx *)be;
-    aoStrCatFmt(ctx->buf, "mov %s, %s\n\t", i->dst->pinned_reg->data,
-                a64TxtSrcReg(ctx, i, 0));
+    const char *home = i->dst->pinned_reg->data;
+    const char *src = a64TxtSrcReg(ctx, i, 0);
+    if (strcmp(home, src) != 0) {
+        aoStrCatFmt(ctx->buf, "mov %s, %s\n\t", home, src);
+    }
+    /* The source register still holds the value, and the next thing to
+     * want it is often an argument setup that would move it straight
+     * back: `void *M(u64 cap) { return malloc(cap); }` homed the
+     * parameter with `mov x13, x0` and then read it out again with
+     * `mov x0, x13`. aarch64StoreReg has always recorded this; the
+     * IR_STORE path reached the register home by a different route and
+     * did not, so the elision never fired for a promoted parameter -
+     * which is every parameter that gets used. */
+    aarch64NoteHomeMove(ctx, home, src);
 }
 static void a64TxtEmitInit(A64Emitter *e, IrCgCtx *ctx) {
+    memset(e, 0, sizeof(*e));
     e->be = ctx;
     e->store_fpr        = a64TxtStoreFpr;
     e->store_int        = a64TxtStoreInt;
@@ -1059,19 +1396,57 @@ static void a64TxtSpillRet(void *be, IrInstr *instr, int is_float) {
 }
 /* Store a result-register chunk of a register-returned struct into the
  * destination buffer parked in x9 (mirror of a64TxtAggLoad). */
+/* A value survives a call when it does not live in a caller-saved
+ * register: a stack slot is untouched, and the allocator's own pool is
+ * callee-saved (or leaf-only, where there is no call to survive). */
+static int a64TxtDestSurvivesCall(void *be, IrValue *v) {
+    (void)be;
+    const char *home = a64HomeReg(v);
+    if (!home) return 1;                     /* in memory - untouched */
+    IrRegPool *pool = irRegPoolGet();
+    if (!pool || !pool->callee_saved_regs) return 0;
+    for (u64 i = 0; i < pool->callee_saved_regs->size; ++i) {
+        AoStr *cs = (AoStr *)pool->callee_saved_regs->entries[i];
+        if (!strcmp(cs->data, home)) return 1;
+    }
+    return 0;
+}
+
+/* The destination-buffer register: the value's own home when it has
+ * one that survives the call, else x9. */
+static const char *a64TxtDestReg(IrCgCtx *ctx) {
+    return ctx->struct_dest ? ctx->struct_dest : "x9";
+}
+
+static int a64TxtUseDestHome(void *be, IrValue *v) {
+    IrCgCtx *ctx = (IrCgCtx *)be;
+    ctx->struct_dest = NULL;
+    const char *home = a64HomeReg(v);
+    if (!home || !a64TxtDestSurvivesCall(be, v)) return 0;
+    ctx->struct_dest = home;
+    return 1;
+}
+
 static void a64TxtRetChunkStore(void *be, int is_fp, int reg, int off, int size) {
     AoStr *buf = ((IrCgCtx *)be)->buf;
-    if (is_fp)
-        aoStrCatFmt(buf, "str %s%i, [x9, #%i]\n\t", size == 4 ? "s" : "d",
-                    reg, off);
-    else if (size >= 8) aoStrCatFmt(buf, "str x%i, [x9, #%i]\n\t", reg, off);
-    else if (size == 4) aoStrCatFmt(buf, "str w%i, [x9, #%i]\n\t", reg, off);
-    else if (size == 2) aoStrCatFmt(buf, "strh w%i, [x9, #%i]\n\t", reg, off);
-    else if (size == 1) aoStrCatFmt(buf, "strb w%i, [x9, #%i]\n\t", reg, off);
-    else loggerPanic("ir-cg-aarch64: %d-byte ret chunk not supported\n", size);
+    const char *d = a64TxtDestReg((IrCgCtx *)be);
+    if (is_fp) {
+        aoStrCatFmt(buf, "str %s%i, [%s, #%i]\n\t",
+                    size == 4 ? "s" : "d", reg, d, off);
+    } else if (size >= 8) {
+        aoStrCatFmt(buf, "str x%i, [%s, #%i]\n\t", reg, d, off);
+    } else if (size == 4) {
+        aoStrCatFmt(buf, "str w%i, [%s, #%i]\n\t", reg, d, off);
+    } else if (size == 2) {
+        aoStrCatFmt(buf, "strh w%i, [%s, #%i]\n\t", reg, d, off);
+    } else if (size == 1) {
+        aoStrCatFmt(buf, "strb w%i, [%s, #%i]\n\t", reg, d, off);
+    } else {
+        loggerPanic("ir-cg-aarch64: %d-byte ret chunk not supported\n", size);
+    }
 }
 static void a64TxtSpillStructDst(void *be, IrInstr *instr) {
-    aarch64SpillDst((IrCgCtx *)be, instr, "x9");
+    aarch64SpillDst((IrCgCtx *)be, instr, a64TxtDestReg((IrCgCtx *)be));
 }
 static void a64TxtStashDest(void *be, int sp_off) {
     aoStrCatFmt(((IrCgCtx *)be)->buf, "str x9, [sp, #%i]\n\t", sp_off);
@@ -1080,6 +1455,7 @@ static void a64TxtUnstashDest(void *be, int sp_off) {
     aoStrCatFmt(((IrCgCtx *)be)->buf, "ldr x9, [sp, #%i]\n\t", sp_off);
 }
 static void a64TxtCallInit(A64CallEmitter *e, IrCgCtx *ctx) {
+    memset(e, 0, sizeof(*e));
     e->be = ctx;
     e->sub_sp           = a64TxtSubSp;
     e->add_sp           = a64TxtAddSp;
@@ -1094,6 +1470,8 @@ static void a64TxtCallInit(A64CallEmitter *e, IrCgCtx *ctx) {
     e->spill_ret        = a64TxtSpillRet;
     e->ret_chunk_store  = a64TxtRetChunkStore;
     e->spill_struct_dst = a64TxtSpillStructDst;
+    e->dest_survives_call = a64TxtDestSurvivesCall;
+    e->use_dest_home    = a64TxtUseDestHome;
     e->stash_dest       = a64TxtStashDest;
     e->unstash_dest     = a64TxtUnstashDest;
 }
@@ -1138,6 +1516,7 @@ static void a64TxtIndirectToSlot(void *be, int from_stack, int reg,
     aarch64CopyToSlot(buf, base, size, 0, loff);
 }
 static void a64TxtParamInit(A64ParamEmitter *e, IrCgCtx *ctx) {
+    memset(e, 0, sizeof(*e));
     e->be = ctx;
     e->agg_store          = a64TxtAggStore;
     e->copy_stack_to_slot = a64TxtCopyStackToSlot;
@@ -1157,6 +1536,39 @@ static void a64TxtCvtSpillGp(void *be, IrInstr *i) {
 static void a64TxtCvtSpillFpr(void *be, IrInstr *i) {
     aarch64SpillDstFpr((IrCgCtx *)be, i, "d0");
 }
+static void a64TxtCvtLoadGpSx(void *be, IrInstr *i, int src_size) {
+    IrCgCtx *ctx = (IrCgCtx *)be;
+    int loff = irCgGetLoff(&ctx->fn->ra, i->r1);
+    aarch64FrameLoadSx(ctx->buf, "x0", (u32)src_size, loff);
+}
+
+/* x19 -> w19. AArch64 names the 32-bit view of xN as wN. */
+static const char *a64WReg(const char *x, char *out, size_t n) {
+    if (!x || (x[0] != 'x' && x[0] != 'X')) return x;   /* sp/zr/d: as-is */
+    snprintf(out, n, "w%s", x + 1);
+    return out;
+}
+
+/* `uxth w19, w20` instead of a move in, a convert in x0 and a move out. */
+static int a64TxtConv3(void *be, A64CvtKind k, IrInstr *i) {
+    IrCgCtx *ctx = (IrCgCtx *)be;
+    const char *d = a64HomeReg(i->dst);
+    const char *sx = a64HomeReg(i->r1);
+    if (!d || !sx) return 0;
+    char dw[16], sw[16];
+    const char *dwr = a64WReg(d, dw, sizeof(dw));
+    const char *swr = a64WReg(sx, sw, sizeof(sw));
+    switch (k) {
+    case A64_CVT_UXTB: aoStrCatFmt(ctx->buf, "uxtb    %s, %s\n\t", dwr, swr); return 1;
+    case A64_CVT_UXTH: aoStrCatFmt(ctx->buf, "uxth    %s, %s\n\t", dwr, swr); return 1;
+    case A64_CVT_MOVW: aoStrCatFmt(ctx->buf, "mov %s, %s\n\t", dwr, swr); return 1;
+    case A64_CVT_SXTB: aoStrCatFmt(ctx->buf, "sxtb    %s, %s\n\t", d, swr); return 1;
+    case A64_CVT_SXTH: aoStrCatFmt(ctx->buf, "sxth    %s, %s\n\t", d, swr); return 1;
+    case A64_CVT_SXTW: aoStrCatFmt(ctx->buf, "sxtw    %s, %s\n\t", d, swr); return 1;
+    default: return 0;
+    }
+}
+
 static void a64TxtConvert(void *be, A64CvtKind k, int width) {
     AoStr *buf = ((IrCgCtx *)be)->buf;
     switch (k) {
@@ -1179,12 +1591,15 @@ static void a64TxtConvert(void *be, A64CvtKind k, int width) {
     }
 }
 static void a64TxtConvInit(A64ConvEmitter *e, IrCgCtx *ctx) {
+    memset(e, 0, sizeof(*e));
     e->be = ctx;
     e->load_gp   = a64TxtCvtLoadGp;
     e->load_fpr  = a64TxtCvtLoadFpr;
     e->spill_gp  = a64TxtCvtSpillGp;
     e->spill_fpr = a64TxtCvtSpillFpr;
     e->convert   = a64TxtConvert;
+    e->conv3     = a64TxtConv3;
+    e->load_gp_sx = a64TxtCvtLoadGpSx;
 }
 
 /* AOT (assembly-text) leaf ops for the shared a64EmitArith lowering. */
@@ -1213,6 +1628,40 @@ static const char *a64TxtIntMnem(IrOp op) {
     default:      return "eor";
     }
 }
+/* `add x19, x20, x21` rather than three movs and an add through x0. */
+static int a64TxtAlu3(void *be, IrOp op, IrInstr *i) {
+    IrCgCtx *ctx = (IrCgCtx *)be;
+    const char *d = a64HomeReg(i->dst);
+    const char *a = a64HomeReg(i->r1);
+    if (!d || !a) return 0;
+
+    if (i->r2 && i->r2->kind == IR_VAL_CONST_INT) {
+        s64 imm = i->r2->as._i64;
+        if (op == IR_IADD || op == IR_ISUB) {
+            const char *m = (op == IR_IADD) ? "add" : "sub";
+            if (!aarch64IsAddImm(imm)) {
+                if (imm < 0 && aarch64IsAddImm(-imm)) {
+                    m = (op == IR_IADD) ? "sub" : "add";
+                    imm = -imm;
+                } else {
+                    return 0;
+                }
+            }
+            aoStrCatFmt(ctx->buf, "%s %s, %s, #%I\n\t", m, d, a, imm);
+            return 1;
+        }
+        if (!aarch64IsLogicalImm(imm, 1)) return 0;
+        aoStrCatFmt(ctx->buf, "%s %s, %s, #%I\n\t",
+                    a64TxtIntMnem(op), d, a, imm);
+        return 1;
+    }
+
+    const char *b = a64HomeReg(i->r2);
+    if (!b) return 0;
+    aoStrCatFmt(ctx->buf, "%s %s, %s, %s\n\t", a64TxtIntMnem(op), d, a, b);
+    return 1;
+}
+
 static void a64TxtAluReg(void *be, IrOp op, IrInstr *i) {
     IrCgCtx *ctx = (IrCgCtx *)be;
     const char *rhs;
@@ -1250,6 +1699,47 @@ static void a64TxtShiftReg(void *be, IrOp op, IrInstr *i) {
     aarch64LoadToReg(ctx, i->r2, "x1");
     aoStrCatFmt(ctx->buf, "%s x0, x0, x1\n\t", a64TxtShiftMnem(op));
 }
+/* `lsr x13, x19, #8` rather than a move in, a shift in x0, a move out. */
+static int a64TxtShift3(void *be, IrOp op, IrInstr *i) {
+    IrCgCtx *ctx = (IrCgCtx *)be;
+    const char *d = a64HomeReg(i->dst);
+    const char *a = a64HomeReg(i->r1);
+    if (!d || !a) return 0;
+    IrValue *r2 = i->r2;
+    if (r2 && r2->kind == IR_VAL_CONST_INT &&
+        r2->as._i64 >= 0 && r2->as._i64 < 64)
+    {
+        aoStrCatFmt(ctx->buf, "%s %s, %s, #%I\n\t",
+                    a64TxtShiftMnem(op), d, a, r2->as._i64);
+        return 1;
+    }
+    const char *b = a64HomeReg(r2);
+    if (!b) return 0;
+    aoStrCatFmt(ctx->buf, "%s %s, %s, %s\n\t",
+                a64TxtShiftMnem(op), d, a, b);
+    return 1;
+}
+
+static int a64TxtMul3(void *be, IrInstr *i) {
+    IrCgCtx *ctx = (IrCgCtx *)be;
+    const char *d = a64HomeReg(i->dst);
+    const char *a = a64HomeReg(i->r1);
+    const char *b = a64HomeReg(i->r2);
+    if (!d || !a || !b) return 0;
+    aoStrCatFmt(ctx->buf, "mul %s, %s, %s\n\t", d, a, b);
+    return 1;
+}
+
+static int a64TxtUnary3(void *be, IrOp op, IrInstr *i) {
+    IrCgCtx *ctx = (IrCgCtx *)be;
+    const char *d = a64HomeReg(i->dst);
+    const char *a = a64HomeReg(i->r1);
+    if (!d || !a) return 0;
+    aoStrCatFmt(ctx->buf, "%s %s, %s\n\t",
+                op == IR_INEG ? "neg" : "mvn", d, a);
+    return 1;
+}
+
 static void a64TxtLoadX1(void *be, IrInstr *i) {
     aarch64LoadToReg((IrCgCtx *)be, i->r2, "x1");
 }
@@ -1268,10 +1758,14 @@ static void a64TxtFneg(void *be, int width) {
                 aarch64Fpr(width, 0), aarch64Fpr(width, 0));
 }
 static void a64TxtArithInit(A64ArithEmitter *e, IrCgCtx *ctx) {
+    memset(e, 0, sizeof(*e));
     e->be        = ctx;
     e->load_gp   = a64TxtCvtLoadGp;   e->load_fpr  = a64TxtCvtLoadFpr;
     e->spill_gp  = a64TxtCvtSpillGp;  e->spill_fpr = a64TxtCvtSpillFpr;
     e->alu_imm   = a64TxtAluImm;      e->alu_reg   = a64TxtAluReg;
+    e->alu3      = a64TxtAlu3;
+    e->shift3    = a64TxtShift3;      e->mul3      = a64TxtMul3;
+    e->unary3    = a64TxtUnary3;
     e->mul       = a64TxtMul;         e->divrem    = a64TxtDivRem;
     e->unary     = a64TxtUnary;       e->shift_imm = a64TxtShiftImm;
     e->shift_reg = a64TxtShiftReg;    e->load_x1   = a64TxtLoadX1;
@@ -1291,10 +1785,36 @@ static void aarch64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
             break;
 
         case IR_LOAD: {
+            /* IR_LOAD names a HOME, not a pointer (that is
+             * IR_LOAD_DEREF) - so when the home is a register the load
+             * is just a read of it. Same shape as the pinned case
+             * below, which has always worked this way. */
             if (instr->r1 && instr->r1->pinned_reg) {
-                aoStrCatFmt(ctx->buf, "mov x0, %s\n\t",
-                            instr->r1->pinned_reg->data);
-                aarch64SpillDst(ctx, instr, "x0");
+                const char *src = instr->r1->pinned_reg->data;
+                if (aarch64IsFpRegName(src) ||
+                    (instr->dst && irIsFloat(instr->dst->type)))
+                {
+                    aarch64FpMoveReg(ctx->buf, "d0", src);
+                    aarch64SpillDstFpr(ctx, instr, "d0");
+                } else {
+                    aoStrCatFmt(ctx->buf, "mov x0, %s\n\t", src);
+                    aarch64SpillDst(ctx, instr, "x0");
+                }
+                break;
+            }
+            if (instr->r1 && instr->r1->loc.kind == IR_LOC_REG &&
+                instr->r1->loc.as.reg)
+            {
+                const char *src = instr->r1->loc.as.reg->data;
+                if (aarch64IsFpRegName(src) ||
+                    (instr->dst && irIsFloat(instr->dst->type)))
+                {
+                    aarch64FpMoveReg(ctx->buf, "d0", src);
+                    aarch64SpillDstFpr(ctx, instr, "d0");
+                } else {
+                    aoStrCatFmt(ctx->buf, "mov x0, %s\n\t", src);
+                    aarch64SpillDst(ctx, instr, "x0");
+                }
                 break;
             }
             if (instr->dst && irIsFloat(instr->dst->type)) {
@@ -1326,28 +1846,45 @@ static void aarch64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                 aarch64GlobalAddr(ctx->cc, ctx->buf, sym, "x1");
                 u32 size = instr->dst ? instr->dst->as.var.size : 8;
                 if (instr->dst && irIsFloat(instr->dst->type)) {
-                    aoStrCatFmt(ctx->buf, "ldr %s, [x1]\n\t",
-                                aarch64Fpr((int)irValueByteSize(instr->dst), 0));
+                    aoStrCatFmt(ctx->buf, "ldr %s, [x1, #%i]\n\t",
+                                aarch64Fpr((int)irValueByteSize(instr->dst), 0),
+                                (s64)instr->disp);
                     aarch64SpillDstFpr(ctx, instr, "d0");
                 } else {
-                    aarch64DerefLoad(ctx->buf, size, "x0", "x1", NULL, 0, 0);
+                    aarch64DerefLoad(ctx->buf, size, "x0", "x1", NULL, 0, instr->disp);
                     aarch64SpillDst(ctx, instr, "x0");
                 }
                 break;
             }
-            const char *base_reg = "x1";
-            if (instr->r1 && instr->r1->loc.kind == IR_LOC_REG &&
-                instr->r1->loc.as.reg)
-            {
-                base_reg = instr->r1->loc.as.reg->data;
-            } else {
-                aarch64LoadToReg(ctx, instr->r1, "x1");
-            }
-            const char *idx_reg = aarch64IdxReg(ctx, instr);
+            /* a64HomeReg, not loc.kind alone: promotion records a home
+             * in `pinned_reg`, so a loc-only test missed every promoted
+             * value and copied it into scratch for nothing. */
+            const char *base_home = a64BaseHome(instr->r1, instr);
+            int base_in_reg = base_home != NULL;
+            /* Ask where the index lives BEFORE picking a base scratch,
+             * so the base cannot be loaded on top of it. The base was
+             * hardcoded to x1, which is where the second integer
+             * argument arrives - so `a[i]` destroyed its own index and
+             * the fusion pass had to decline the fold. */
+            const char *idx_home = aarch64IdxHome(instr);
+            const char *base_reg = base_in_reg
+                                 ? base_home
+                                 : a64ScratchTake(idx_home, NULL);
+            if (!base_in_reg) aarch64LoadToReg(ctx, instr->r1, base_reg);
+            const char *idx_reg = aarch64IdxReg(ctx, instr, base_reg);
             if (instr->dst && irIsFloat(instr->dst->type)) {
                 /* AArch64 LDR for FP supports the same indexed form. */
                 const char *fr = aarch64Fpr((int)irValueByteSize(instr->dst), 0);
                 if (idx_reg) {
+                    /* There is no `[base, idx, lsl #n, #disp]` form, so
+                     * the displacement has to go into the base first -
+                     * exactly what aarch64DerefLoad does for integers.
+                     * Omitting it silently addressed the wrong element:
+                     * `s->d[i]` on a struct whose double array is not
+                     * at offset zero read from the START of the struct.
+                     * a64BaseHome hands out no home for this shape, so
+                     * base_reg is always scratch and safe to mutate. */
+                    aarch64AddSubImm(ctx->buf, base_reg, (s64)instr->disp);
                     int sh = (instr->scale == 8) ? 3 :
                              (instr->scale == 4) ? 2 :
                              (instr->scale == 2) ? 1 : 0;
@@ -1388,27 +1925,39 @@ static void aarch64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                 aarch64GlobalAddr(ctx->cc, ctx->buf, sym, "x1");
                 if (instr->r1 && irIsFloat(instr->r1->type)) {
                     aarch64LoadFirstSrcFpr(ctx, instr, instr->r1);
-                    aoStrCatFmt(ctx->buf, "str %s, [x1]\n\t",
-                                aarch64Fpr((int)irValueByteSize(instr->r1), 0));
+                    aoStrCatFmt(ctx->buf, "str %s, [x1, #%i]\n\t",
+                                aarch64Fpr((int)irValueByteSize(instr->r1), 0),
+                                (s64)instr->disp);
                 } else {
                     aarch64LoadFirstSrc(ctx, instr, instr->r1);
-                    aarch64DerefStore(ctx->buf, sz, "x0", "x1", NULL, 0, 0);
+                    /* instr->disp, not 0: the global fast path used to
+                     * drop it, so any displaced access to a global hit
+                     * offset zero. Nothing generated one until small
+                     * struct copies started chunking. */
+                    aarch64DerefStore(ctx->buf, sz, "x0", "x1", NULL, 0,
+                                      instr->disp);
                 }
                 break;
             }
-            const char *base_reg = "x1";
-            int addr_in_reg = instr->dst &&
-                              instr->dst->loc.kind == IR_LOC_REG &&
-                              instr->dst->loc.as.reg;
-            if (addr_in_reg) base_reg = instr->dst->loc.as.reg->data;
-            const char *idx_reg = aarch64IdxReg(ctx, instr);
+            const char *addr_home = a64BaseHome(instr->dst, instr);
+            int addr_in_reg = addr_home != NULL;
+            /* Same ordering as LOAD_DEREF: the index's home decides
+             * which scratch the address may use. */
+            const char *idx_home = aarch64IdxHome(instr);
+            const char *base_reg = addr_in_reg
+                                 ? addr_home
+                                 : a64ScratchTake(idx_home, NULL);
             if (!addr_in_reg) {
-                aarch64LoadToReg(ctx, instr->dst, "x1");
+                aarch64LoadToReg(ctx, instr->dst, base_reg);
             }
+            const char *idx_reg = aarch64IdxReg(ctx, instr, base_reg);
             if (instr->r1 && irIsFloat(instr->r1->type)) {
                 const char *fr = aarch64Fpr((int)irValueByteSize(instr->r1), 0);
                 aarch64LoadFirstSrcFpr(ctx, instr, instr->r1);
                 if (idx_reg) {
+                    /* As the load above: no indexed-and-displaced form,
+                     * so fold the displacement into the base. */
+                    aarch64AddSubImm(ctx->buf, base_reg, (s64)instr->disp);
                     int sh = (instr->scale == 8) ? 3 :
                              (instr->scale == 4) ? 2 :
                              (instr->scale == 2) ? 1 : 0;
@@ -1434,10 +1983,23 @@ static void aarch64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                 break;
             }
             u32 sz = irValueByteSize(instr->r1);
-            const char *val_reg = "x0";
-            if (idx_reg && !strcmp(val_reg, idx_reg)) val_reg = "x9";
-            if (!strcmp(val_reg, base_reg)) val_reg = "x9";
-            aarch64LoadToReg(ctx, instr->r1, val_reg);
+            /* The value is materialised LAST - base and index are both
+             * settled by here - so one that already lives in a register
+             * can be stored straight out of it. Copying it into scratch
+             * first is what made `void Set(Foo *f, long i, long v)
+             * { f->e[i] = v; }` open with `mov x0, x14` before the
+             * store. Only reads are involved, so it does not matter if
+             * the home happens to be the base or the index. */
+            const char *val_home = a64HomeReg(instr->r1);
+            const char *val_reg;
+            if (val_home) {
+                val_reg = val_home;
+            } else {
+                val_reg = "x0";
+                if (idx_reg && !strcmp(val_reg, idx_reg)) val_reg = "x9";
+                if (!strcmp(val_reg, base_reg)) val_reg = "x9";
+                aarch64LoadToReg(ctx, instr->r1, val_reg);
+            }
             aarch64DerefStore(ctx->buf, sz, val_reg, base_reg, idx_reg,
                               instr->scale, instr->disp);
             break;
@@ -1446,19 +2008,24 @@ static void aarch64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
         case IR_RMW_DEREF: {
             /* AArch64 has no memory-destination ops. Lower to
              * load-modify-store on the same address. */
-            const char *base_reg = "x1";
-            int addr_in_reg = instr->dst &&
-                              instr->dst->loc.kind == IR_LOC_REG &&
-                              instr->dst->loc.as.reg;
-            if (addr_in_reg) base_reg = instr->dst->loc.as.reg->data;
-            else if (instr->dst && instr->dst->kind == IR_VAL_GLOBAL) {
-                const char *sym = asmNormaliseGlobalLabel(ctx->cc,
-                        instr->dst->as.global.name)->data;
-                aarch64GlobalAddr(ctx->cc, ctx->buf, sym, "x1");
-            } else {
-                aarch64LoadToReg(ctx, instr->dst, "x1");
+            const char *addr_home = a64BaseHome(instr->dst, instr);
+            int addr_in_reg = addr_home != NULL;
+            /* As LOAD_DEREF / STORE_DEREF: index home first, then an
+             * address scratch that avoids it. */
+            const char *idx_home = aarch64IdxHome(instr);
+            const char *base_reg = addr_in_reg
+                                 ? addr_home
+                                 : a64ScratchTake(idx_home, NULL);
+            if (!addr_in_reg) {
+                if (instr->dst && instr->dst->kind == IR_VAL_GLOBAL) {
+                    const char *sym = asmNormaliseGlobalLabel(ctx->cc,
+                            instr->dst->as.global.name)->data;
+                    aarch64GlobalAddr(ctx->cc, ctx->buf, sym, base_reg);
+                } else {
+                    aarch64LoadToReg(ctx, instr->dst, base_reg);
+                }
             }
-            const char *idx_reg = aarch64IdxReg(ctx, instr);
+            const char *idx_reg = aarch64IdxReg(ctx, instr, base_reg);
             u32 sz = irValueByteSize(instr->r1);
             aarch64DerefLoad(ctx->buf, sz, "x0", base_reg, idx_reg,
                              instr->scale, instr->disp);
@@ -1495,19 +2062,31 @@ static void aarch64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
         }
 
         case IR_LEA: {
+            /* Compute the address straight into the destination's home
+             * when it has one. Going via x0 and moving cost an extra
+             * instruction per address taken - `sub x0, x29, #64` then
+             * `mov x19, x0` - and addresses are taken constantly.
+             * Both forms below write a single register, so there is no
+             * half-computed state for the home to be caught in. */
+            const char *out = a64HomeReg(instr->dst);
+            if (!out) out = "x0";
             if (instr->r1 && instr->r1->kind == IR_VAL_GLOBAL) {
                 const char *name = asmNormaliseGlobalLabel(ctx->cc,
                         instr->r1->as.global.name)->data;
+                int got = 0;
                 if (instr->r1->flags & IR_VAL_FLAG_FUNC) {
                     name = asmNormaliseFunctionName(ctx->cc,
                             instr->r1->as.global.name);
+                    got = asmFunctionIsExtern(ctx->cc,
+                            instr->r1->as.global.name);
                 }
-                aarch64GlobalAddr(ctx->cc, ctx->buf, name, "x0");
+                aarch64GlobalAddrEx(ctx->cc, ctx->buf, name, out, got);
             } else if (instr->r1) {
                 int loff = irCgGetLoff(&ctx->fn->ra, instr->r1);
-                aarch64EmitFrameAddr(ctx->buf, "x0", loff);
+                aarch64EmitFrameAddr(ctx->buf, out, loff);
             }
-            aarch64SpillDst(ctx, instr, "x0");
+            /* A no-op when `out` is already the home. */
+            aarch64SpillDst(ctx, instr, out);
             break;
         }
 
@@ -1530,15 +2109,27 @@ static void aarch64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
         }
 
         case IR_ICMP: {
-            aarch64LoadFirstSrc(ctx, instr, instr->r1);
+            /* `cmp` reads its operands and writes only the flags, so
+             * when both already live in registers it can name them
+             * directly. Loading them into x0/x1 first turned a value in
+             * a register into two moves and a compare. */
+            const char *lhs = a64HomeReg(instr->r1);
+            if (!lhs) {
+                aarch64LoadFirstSrc(ctx, instr, instr->r1);
+                lhs = "x0";
+            }
             if (instr->r2 && instr->r2->kind == IR_VAL_CONST_INT &&
                 aarch64IsAddImm(instr->r2->as._i64))
             {
-                aoStrCatFmt(ctx->buf, "cmp x0, #%I\n\t",
+                aoStrCatFmt(ctx->buf, "cmp %s, #%I\n\t", lhs,
                             instr->r2->as._i64);
             } else {
-                aarch64LoadToReg(ctx, instr->r2, "x1");
-                aoStrCatFmt(ctx->buf, "cmp x0, x1\n\t");
+                const char *rhs = a64HomeReg(instr->r2);
+                if (!rhs) {
+                    aarch64LoadToReg(ctx, instr->r2, "x1");
+                    rhs = "x1";
+                }
+                aoStrCatFmt(ctx->buf, "cmp %s, %s\n\t", lhs, rhs);
             }
             aarch64EmitCSet(ctx, instr->extra.cmp_kind, 0);
             aarch64SpillDst(ctx, instr, "x0");
@@ -1824,9 +2415,8 @@ static void aarch64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
             int apple_target =
                 ctx->cc->target == TARGET_AARCH64_APPLE_DARWIN;
             int holyc_variadic =
-                callee_va && callee && callee->kind != AST_EXTERN_FUNC;
-            int extern_variadic =
-                callee_va && callee && callee->kind == AST_EXTERN_FUNC;
+                callee_va && astUsesHolyCVarargs(callee);
+            int extern_variadic = callee_va && !holyc_variadic;
             int force_va_stack =
                 holyc_variadic || (extern_variadic && apple_target);
             u64 n = args ? args->size : 0;
@@ -1908,9 +2498,24 @@ static void aarch64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
             aoStrPutChar(ctx->buf, '\t');
             break;
 
+        case IR_VA_START: {
+            /* The variadic arguments start in the incoming argument
+             * area; a64VaRegionOffset says where, having stepped over
+             * any named parameter that overflowed the registers. */
+            if (ctx->cc->target != TARGET_AARCH64_APPLE_DARWIN) {
+                loggerPanic("ir-cg-aarch64: <stdarg.h> is implemented for "
+                            "aarch64-apple-darwin only - AAPCS Linux "
+                            "passes variadic arguments in registers with "
+                            "a save area, which is not built yet\n");
+            }
+            int va_off = a64VaRegionOffset(ctx->ast_fn);
+            aarch64EmitAddSubImm(ctx->buf, "add", "x0", "x29", va_off);
+            aarch64SpillDst(ctx, instr, "x0");
+            break;
+        }
+
         case IR_SWITCH:
         case IR_VA_ARG:
-        case IR_VA_START:
         case IR_VA_END:
             loggerPanic("ir-cg-aarch64: op %d not yet implemented\n",
                         instr->op);
@@ -1954,6 +2559,38 @@ void aarch64PasteDataSection(Cctrl *cc, AoStr *buf) {
     }
 }
 
+/* Callee-saved registers live at the BOTTOM of the frame - `[sp, #0]`
+ * upwards - because locals are addressed downwards from x29 and the
+ * save area has to miss them. Reserving it inside `stack_space` means
+ * the prologue and the epilogue derive the same frame size from the
+ * same field, so they cannot disagree.
+ *
+ * Not pushed before `mov x29, sp` instead: that would put them between
+ * x29 and the saved {x29,x30} pair and break the frame chain a
+ * debugger walks. */
+static int aarch64SaveAreaBytes(IrFunction *fn) {
+    Vec *saved = irCgPinnedCalleeSaved(fn);
+    int bytes = (int)saved->size * 8;
+    vecRelease(saved);
+    return (bytes + 15) & ~15;
+}
+
+static int aarch64RegIsFp(AoStr *r) {
+    return r->len > 0 && (r->data[0] == 'd' || r->data[0] == 'D');
+}
+
+static void aarch64EmitSaveRestore(AoStr *buf, IrFunction *fn, int store) {
+    Vec *saved = irCgPinnedCalleeSaved(fn);
+    for (u64 i = 0; i < saved->size; ++i) {
+        AoStr *r = (AoStr *)saved->entries[i];
+        aoStrCatFmt(buf, "%s %s, [sp, #%I]\n\t",
+                    store ? (aarch64RegIsFp(r) ? "str" : "str")
+                          : (aarch64RegIsFp(r) ? "ldr" : "ldr"),
+                    r->data, (s64)(i * 8));
+    }
+    vecRelease(saved);
+}
+
 static void aarch64EmitFunctionPrologue(Cctrl *cc, AoStr *buf, Ast *func,
                                         u16 total_stack, int omit_frame)
 {
@@ -1980,6 +2617,8 @@ static void aarch64Epilogue(IrCgCtx *ctx, int frame_size, int omit_frame) {
         aoStrCatFmt(ctx->buf, "ret\n");
         return;
     }
+    /* Before sp moves - the save area is addressed from it. */
+    aarch64EmitSaveRestore(ctx->buf, ctx->fn, 0);
     if (frame_size > 0) {
         aarch64EmitAddSubImm(ctx->buf, "add", "sp", "sp", frame_size);
     }
@@ -2004,6 +2643,7 @@ static int aarch64HasRet(IrCgCtx *ctx) {
 }
 
 void aarch64GenerateFunction(IrCgCtx *ctx, Ast *ast) {
+    ctx->ast_fn = ast;
     AoStr *buf = ctx->buf;
     IrFunction *fn = ctx->fn;
 
@@ -2013,12 +2653,18 @@ void aarch64GenerateFunction(IrCgCtx *ctx, Ast *ast) {
      * holds the caller's value and the varargs reads return garbage. */
     int is_variadic = (ast->type && ast->type->has_var_args) ||
                       ast->has_var_args;
+    /* Reserve the callee-saved area before anything reads stack_space:
+     * the prologue, the epilogue and the frame-elision test all derive
+     * their size from this one field. A function that saves a register
+     * needs somewhere to put it, so it also stops being frameless. */
+    fn->stack_space = (u16)(fn->stack_space + aarch64SaveAreaBytes(fn));
     ctx->omit_frame =
         (fn->stack_space == 0) && !irFnHasCalls(fn) && (ast->loff == 0) &&
         !is_variadic;
 
     aarch64EmitFunctionPrologue(ctx->cc, buf, ast, fn->stack_space,
                                 ctx->omit_frame);
+    if (!ctx->omit_frame) aarch64EmitSaveRestore(buf, fn, 1);
     A64ParamEmitter pe;
     a64TxtParamInit(&pe, ctx);
     a64EmitParamPrologue(&pe, ast, fn);
@@ -2071,16 +2717,54 @@ void aarch64InitialiseEmptyGlobal(Cctrl *cc, AoStr *buf, Ast *global,
     }
 }
 
-static void aarch64DataInternal(AoStr *buf, Ast *data) {
+/* Returns the number of bytes emitted, so a partially-written
+ * aggregate can be padded out to its declared size. C zero-initialises
+ * every member an initialiser does not mention; emitting only what was
+ * written leaves the rest of the object as whatever follows it in the
+ * section - for `MapType` that meant reading function pointers out of
+ * the text segment and calling them. */
+static int aarch64DataInternal(Cctrl *cc, AoStr *buf, Ast *data) {
+    /* `&Fn` / a lambda in a static or global aggregate initialiser: a
+     * relocation to the symbol, not a number. Falling through to the
+     * integer path below emitted whatever happened to be in `i64` -
+     * `.quad 8` for a function pointer, which segfaults on the first
+     * call through it. */
+    if (astIsUnOpKind(data, AST_UN_OP_ADDR_OF) && data->operand) {
+        data = data->operand;
+    }
+    if (data->kind == AST_FUNC || data->kind == AST_FUN_PROTO ||
+        data->kind == AST_EXTERN_FUNC)
+    {
+        char *fn = asmNormaliseFunctionName(cc, data->fname);
+        aoStrCatPrintf(buf, ".quad   %s\n\t", fn);
+        return 8;
+    }
+    if (data->kind == AST_ASM_FUNCDEF || data->kind == AST_ASM_FUNC_BIND) {
+        aoStrCatFmt(buf, ".quad   %S\n\t", data->asmfname);
+        return 8;
+    }
+    if (data->kind == AST_GVAR) {
+        AoStr *g = asmNormaliseGlobalLabel(cc,
+                data->is_static ? data->glabel : data->gname);
+        aoStrCatFmt(buf, ".quad   %S\n\t", g);
+        return 8;
+    }
     if (data->kind == AST_STRING) {
         aoStrCatFmt(buf, ".quad   %S\n\t", data->slabel);
-        return;
+        return 8;
     }
     if (data->kind == AST_ARRAY_INIT) {
+        int wrote = 0;
         listForEach(data->arrayinit) {
-            aarch64DataInternal(buf, (Ast *)it->value);
+            wrote += aarch64DataInternal(cc, buf, (Ast *)it->value);
         }
-        return;
+        /* Nested aggregates pad too - `{ {1}, 2 }` has to leave the
+         * inner struct its full width or every later field shifts. */
+        if (data->type && data->type->size > wrote) {
+            aoStrCatPrintf(buf, ".space  %d\n\t", data->type->size - wrote);
+            wrote = data->type->size;
+        }
+        return wrote;
     }
     if (data->type->kind == AST_TYPE_FLOAT) {
         /* aoStrCatFmt has no hex specifier; use aoStrCatPrintf so the IEEE
@@ -2089,17 +2773,18 @@ static void aarch64DataInternal(AoStr *buf, Ast *data) {
         if (data->type->size == 4) {
             aoStrCatPrintf(buf, ".long   0x%X\n\t",
                            (unsigned)ieee754_32((f32)data->f64));
+            return 4;
         } else {
             aoStrCatPrintf(buf, ".quad   0x%llX\n\t",
                            (unsigned long long)ieee754_64(data->f64));
         }
-        return;
+        return 8;
     }
     switch (data->type->size) {
-        case 1:  aoStrCatFmt(buf, ".byte   %i\n\t", data->i64); break;
-        case 2:  aoStrCatFmt(buf, ".short  %i\n\t", data->i64); break;
-        case 4:  aoStrCatFmt(buf, ".long   %i\n\t", data->i64); break;
-        default: aoStrCatFmt(buf, ".quad   %I\n\t", data->i64); break;
+        case 1:  aoStrCatFmt(buf, ".byte   %i\n\t", data->i64); return 1;
+        case 2:  aoStrCatFmt(buf, ".short  %i\n\t", data->i64); return 2;
+        case 4:  aoStrCatFmt(buf, ".long   %i\n\t", data->i64); return 4;
+        default: aoStrCatFmt(buf, ".quad   %I\n\t", data->i64); return 8;
     }
 }
 
@@ -2148,16 +2833,29 @@ void aarch64GlobalVar(Cctrl *cc, Set *seen_globals, AoStr *buf, Ast *ast) {
                 aoStrCatFmt(buf, ".align 4\n");
             }
         }
+        /* An aggregate can hold a pointer, so the whole object needs
+         * pointer alignment - the linker warns about an under-aligned
+         * atom otherwise, and an unaligned load is a fault on some
+         * targets. */
+        aoStrCatFmt(buf, ".p2align 3\n");
         aoStrCatFmt(buf, "%S:\n\t", label);
-        aarch64DataInternal(buf, declinit);
+        int wrote = aarch64DataInternal(cc, buf, declinit);
+        if (declvar->type && declvar->type->size > wrote) {
+            aoStrCatPrintf(buf, ".space  %d\n\t",
+                           declvar->type->size - wrote);
+        }
     } else {
         if (declvar->is_static) {
             aoStrCatFmt(buf, ".lcomm %S, %i\n\t", label,
                         declvar->type->size);
-        } else if (label->len == 4 &&
-                   (!strncmp(label->data, str_lit("argc")) ||
-                    !strncmp(label->data, str_lit("argv"))))
+        } else if (varname->len == 4 &&
+                   (!strncmp(varname->data, str_lit("argc")) ||
+                    !strncmp(varname->data, str_lit("argv"))))
         {
+            /* Test the source name, not `label` - Mach-O has already
+             * prefixed that with `_`, so matching on it never fired
+             * and every TU emitted its own definition of argc/argv,
+             * colliding with libtos's at link time. */
             aarch64InitialiseEmptyGlobal(cc, buf, declvar, 0);
         } else {
             aarch64InitialiseEmptyGlobal(cc, buf, declvar, 1);
@@ -2169,7 +2867,7 @@ void aarch64GlobalVar(Cctrl *cc, Set *seen_globals, AoStr *buf, Ast *ast) {
  * symbol references can't be expressed as `.byte` runs on arm64 (the
  * relocation lands inside an instruction word), so self-contained
  * functions work and ones that call out report an error. */
-static void aarch64PasteAsmBlocks(AoStr *buf, Cctrl *cc) {
+void aarch64PasteAsmBlocks(Cctrl *cc, AoStr *buf) {
     if (!cc->asm_blocks) return;
     for (List *bl = cc->asm_blocks->next; bl != cc->asm_blocks;
          bl = bl->next)
@@ -2185,42 +2883,4 @@ static void aarch64PasteAsmBlocks(AoStr *buf, Cctrl *cc) {
             asmEmitBlockBytes(cc, buf, asm_func->body->asm_stmt, 0);
         }
     }
-}
-
-AoStr *aarch64AsmGenerate(Cctrl *cc) {
-    AoStr *buf = aoStrAlloc(2048);
-    aarch64InitRegPool();
-    aarch64PasteDataSection(cc, buf);
-    aarch64PasteAsmBlocks(buf, cc);
-
-    Ast *synth_main = asmBuildInitialiserMain(cc);
-
-    IrCtx *ir_ctx = irCtxNew(cc);
-    IrCgCtx ctx;
-    ctx.buf = buf;
-    ctx.cc = cc;
-
-    Set *seen_globals = setNew(32, &set_cstring_type);
-
-    listForEach(cc->ast_list) {
-        Ast *ast = it->value;
-        if (ast->kind == AST_FUNC) {
-            IrFunction *fn = irLowerFunction(ir_ctx, ast);
-            irBasicFunctionOptimisations(fn);
-            irFunctionPrepForCodeGen(&ctx, fn, ast);
-            aarch64GenerateFunction(&ctx, ast);
-        } else if (ast->kind == AST_DECL || ast->kind == AST_GVAR) {
-            aarch64GlobalVar(cc, seen_globals, buf, ast);
-        }
-    }
-    if (synth_main) {
-        IrFunction *fn = irLowerFunction(ir_ctx, synth_main);
-        irBasicFunctionOptimisations(fn);
-        irFunctionPrepForCodeGen(&ctx, fn, synth_main);
-        aarch64GenerateFunction(&ctx, synth_main);
-    }
-
-    asmEmitAsmInfo(cc, buf);
-    setRelease(seen_globals);
-    return buf;
 }

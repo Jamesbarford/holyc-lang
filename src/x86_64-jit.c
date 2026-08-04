@@ -42,6 +42,7 @@ const HccJitBackend *x86_64JitBackend(void) { return NULL; }
 #include "asm/enc_x86_64.h"
 #include "cli.h"
 #include "containers.h"
+#include "ir-inliner.h"
 #include "ir.h"
 #include "ir-optimise.h"
 #include "ir-regalloc.h"
@@ -555,8 +556,14 @@ static void jitEmitSysvCall(JitFnCtx *ctx, IrInstr *instr, Vec *args,
      * buffer (args[0]) is not an ABI argument. */
     AstType *ret_st = (instr->flags & IRCG_CALL_AGG_RETURN) && instr->dst
                       ? instr->dst->byval_struct_type : NULL;
-    int reg_ret = ret_st && ret_st->size <= 16;
-    u64 a0 = reg_ret ? 1 : 0;
+    /* The result IS this function's return value and the `ret` is next,
+     * so the callee has already left the bytes in rax/rdx (or xmm0/1).
+     * The buffer is gone from the IR along with the address that
+     * reached it - which is why nothing below may go looking for it.
+     * args[0] is still skipped as an argument: it was never one. */
+    int fwd_ret = (instr->flags & IRCG_AGG_RET_FORWARD) != 0;
+    int reg_ret = ret_st && ret_st->size <= 16 && !fwd_ret;
+    u64 a0 = (ret_st && ret_st->size <= 16) ? 1 : 0;
 
     /* Pre-pass: size the stack-argument area (MEMORY / register-overflow
      * aggregates + overflow scalars). */
@@ -706,7 +713,7 @@ static void jitEmitSysvCall(JitFnCtx *ctx, IrInstr *instr, Vec *args,
 
     if (reg_ret) {
         if (instr->dst) jitSpillDst(ctx, instr, R_R10);  /* dst = buffer addr */
-    } else if (instr->dst && instr->dst->type != IR_TYPE_VOID) {
+    } else if (!fwd_ret && instr->dst && instr->dst->type != IR_TYPE_VOID) {
         if (irIsFloat(instr->dst->type)) jitSpillDstFpr(ctx, instr, 0);
         else                             jitSpillDst(ctx, instr, R_RAX);
     }
@@ -1428,8 +1435,8 @@ static void jitEmitInstr(JitFnCtx *ctx, IrInstr *instr) {
                     if (last && last->kind == AST_VAR_ARGS) callee_va = 1;
                 }
             }
-            int holyc_variadic = callee_va && callee && callee->kind != AST_EXTERN_FUNC;
-            int extern_variadic = callee_va && callee && callee->kind == AST_EXTERN_FUNC;
+            int holyc_variadic = callee_va && astUsesHolyCVarargs(callee);
+            int extern_variadic = callee_va && !holyc_variadic;
 
             int var_arg_start = -1;
             if (holyc_variadic && callee->params) {
@@ -1579,6 +1586,7 @@ static void jitEmitEpilogue(JitFnCtx *ctx) {
 static int jitCompileFunction(HccJit *jit, Ast *ast, IrCtx *ir_ctx) {
     IrFunction *fn = irLowerFunction(ir_ctx, ast);
     irBasicFunctionOptimisations(fn);
+    if (irInlineFunction(ir_ctx, fn)) irBasicFunctionOptimisations(fn);
 
     /* Layout passes (slot offsets, IR-CG ctx). The text path goes
      * through irFunctionPrepForCodeGen; same here so the regalloc loff

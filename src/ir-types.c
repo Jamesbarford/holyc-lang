@@ -319,10 +319,13 @@ IrValueType irConvertType(AstType *type) {
         }
         case AST_TYPE_CHAR:    return IR_TYPE_I8;
         case AST_TYPE_FLOAT: {
-            if (type->size == 8)
-                return IR_TYPE_F64;
-            else
-                return IR_TYPE_F32;
+            if (type->size == 8) return IR_TYPE_F64;
+            if (type->size == 4) return IR_TYPE_F32;
+            /* Half precision exists as a type so the platform headers
+             * parse, but no backend can operate on it. Say so rather
+             * than quietly widening to F32. */
+            loggerPanic("Half-precision floats (`_Float16`) can be "
+                        "declared but not used\n");
         }
         case AST_TYPE_ARRAY:   return IR_TYPE_ARRAY;
         case AST_TYPE_POINTER: return IR_TYPE_PTR;

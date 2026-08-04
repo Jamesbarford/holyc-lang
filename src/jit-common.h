@@ -7,7 +7,7 @@
  * and the compile-pipeline driver. The per-arch files own only the
  * instruction selection and emission.
  *
- * Build-gated: only compiled when HCC_ENABLE_JIT is defined. */
+ * Build-gated: only compiled when JAG_ENABLE_JIT is defined. */
 
 #include <stdint.h>
 
@@ -70,6 +70,17 @@ typedef struct HccJit {
     u32 n_lines, cap_lines;
     struct HccJitLine *pending_lines;
     u32 n_pending, cap_pending;
+
+    /* Function addresses referenced from a global's initialiser. The
+     * globals are laid out before any function is compiled, so the
+     * address is not known when the bytes are written - record where it
+     * goes and patch once the chunk has finalized and its labels are
+     * registered. */
+    struct HccJitPtrFixup {
+        unsigned char *addr;
+        char *symbol;
+    } *ptr_fixups;
+    u32 n_ptr_fixups, cap_ptr_fixups;
 } HccJit;
 
 typedef struct HccJitLine {

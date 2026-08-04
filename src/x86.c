@@ -1913,11 +1913,6 @@ void asmExpression(Cctrl *cc, AoStr *buf, Ast *ast) {
         break;
 
     case AST_ASM_FUNCALL:
-   //     if (ast->flags & AST_FLAG_INLINE) {
-   //         asmFunCall(cc,buf,ast);
-   //         break;
-   //     }
-   // }
     case AST_FUNPTR_CALL:
     case AST_FUNCALL: {
         asmFunCall(cc,buf,ast);
@@ -2556,10 +2551,6 @@ AoStr *x86AsmGenerate(Cctrl *cc) {
     listForEach(cc->ast_list) {
         ast = (Ast *)it->value;
         if (ast->kind == AST_FUNC) {
-            /* We do not emit inline functions */
-            if (ast->flags & AST_FLAG_INLINE) {
-                continue;
-            }
             asmFunction(cc,asmbuf,ast);
         } else if (ast->kind == AST_DECL || ast->kind == AST_GVAR) {
             asmGlobalVar(seen_globals,asmbuf,ast);

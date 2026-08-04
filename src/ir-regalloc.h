@@ -16,6 +16,45 @@
  * so this flag is informational. */
 #define IRCG_CALL_AGG_RETURN (1u << 1)
 
+/* Set on an IR_TRUNC whose destination type is SIGNED. Truncating to a
+ * narrower width still leaves the value in a 64-bit register, so the
+ * high bits have to be filled correctly or any later 64-bit compare
+ * reads a different number: `(int)(3L - 5L)` zero-extended reads as
+ * +4294967294 and tests greater-than-zero. Unsigned destinations keep
+ * the zero-extending forms. */
+#define IRCG_TRUNC_SIGNED    (1u << 2)
+
+/* Set on an IR_SEXT whose operand a 4-byte load already sign-extended.
+ * Every 4-byte load on this target widens to 64 bits (`ldrsw`/`ldursw`,
+ * matching x86's `movslq`), so the widen that follows it re-does work
+ * already done. The emitter cannot see the producer, so an IR pass
+ * marks it - the same arrangement IRCG_TRUNC_SIGNED uses to carry
+ * signedness the value type does not hold. */
+#define IRCG_SEXT_NOOP       (1u << 3)
+
+/* Set on an instruction whose destination is dead immediately after it.
+ * The instruction still runs - it may be a call - but writing the
+ * result to the destination's home is pointless. Only honoured for a
+ * REGISTER home: a dead store to a stack SLOT is skipped too readily,
+ * because parts of the emitter read a slot the IR never mentions (the
+ * struct-return out-pointer being the case that bit). */
+#define IRCG_DST_DEAD        (1u << 4)
+
+/* One omission described from both ends: a call whose register-returned
+ * aggregate IS this function's return value, followed immediately by
+ * the `ret` that returns it. The callee has already left the bytes in
+ * the very registers the epilogue wants, so the buffer store and the
+ * reload that follows it are a round trip to nowhere.
+ *
+ * IRCG_AGG_RET_FORWARD sits on the IR_CALL and says "leave the result
+ * registers alone"; IRCG_RET_IN_REGS sits on the IR_RET and says "they
+ * already hold the value, emit only the epilogue". They are set and
+ * cleared together by irForwardAggReturn - one without the other
+ * either returns garbage or drops the value on the floor, so neither
+ * backend may honour one alone. */
+#define IRCG_AGG_RET_FORWARD (1u << 5)
+#define IRCG_RET_IN_REGS     (1u << 6)
+
 /* Where in an instruction's emission a clobber question is asked.
  * Both backends materialise r1 into their first scratch register and
  * r2 into the second, so a forwarded value's survival depends on how
@@ -24,6 +63,11 @@ typedef enum IrClobberPoint {
     IR_CLOBBER_AFTER = 0,   /* after the whole instruction is emitted */
     IR_CLOBBER_BEFORE_R1,   /* before r1 is read */
     IR_CLOBBER_BEFORE_R2,   /* before r2 is read */
+    /* Before `dst` is read AS AN ADDRESS - the deref stores only.
+     * Their dst is an input, and it is the FIRST thing materialised,
+     * so nothing in the instruction has run yet. Distinct from
+     * BEFORE_R1, which for those ops is the last thing. */
+    IR_CLOBBER_BEFORE_DST,
 } IrClobberPoint;
 
 /* Per-backend ABI descriptor. The peephole reads this to know which
@@ -61,6 +105,17 @@ typedef struct IrRegPool {
      * means "assume every op clobbers every scratch reg", which is the
      * conservative behaviour a backend gets for free. */
     int (*op_clobbers)(IrInstr *I, AoStr *reg, IrClobberPoint at);
+    /* Registers the ABI requires a function to preserve across a call.
+     * A `<Type> reg <REG> name` binding to one of these has to be saved
+     * and restored, or the function silently destroys a value its
+     * caller was relying on. Vec<AoStr *>, lowercase. */
+    Vec *callee_saved_regs;
+    /* Caller-saved registers that no part of codegen reserves for
+     * itself. Usable without save/restore in a function that makes no
+     * calls, where nothing can clobber them - which is most leaf
+     * functions. Empty is always safe: the allocator just falls back to
+     * the callee-saved pool and pays the save. Vec<AoStr *>. */
+    Vec *leaf_free_regs;
     /* Apple AArch64 ABI: variadic args (incl. HolyC's implicit argc)
      * are passed on the stack, not in arg regs. The IR builder and
      * layout pass consult this to skip the argc spill and place argc
@@ -109,5 +164,17 @@ u32 irValueByteSize(IrValue *v);
  * prologue (calls require rsp to be 16-byte aligned at the call
  * point). Linear in function size; codegen-driver only. */
 int irFnHasCalls(IrFunction *fn);
+
+/* The callee-saved registers this function pins, in pool order and
+ * without duplicates. Vec<AoStr *> borrowed from the pool; caller frees
+ * the vector, not the strings. Empty when nothing is pinned. */
+Vec *irCgPinnedCalleeSaved(IrFunction *fn);
+
+/* Bind hot address-free locals and params to callee-saved registers by
+ * setting `pinned_reg`, the same field a source-level `reg <REG>` uses.
+ * No-op when the target has no callee-saved pool, when the function
+ * contains an `asm { }` block, or under -fno-reg-promote. */
+void irOptPromoteToRegs(IrFunction *fn);
+void irRegPromoteSetEnabled(int enabled);
 
 #endif

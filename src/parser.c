@@ -739,7 +739,7 @@ Ast *parseVariableAssignment(Cctrl *cc, Ast *var, s64 terminator_flags) {
         if (cc->tmp_func) {
             listAppend(cc->tmp_func->body->stms,init);
         }
-        return astDecl(var,init->inline_ret);
+        return astDecl(var,NULL);
     }
 
     return astDecl(var,init);
@@ -1335,9 +1335,6 @@ Ast *parseReturnStatement(Cctrl *cc) {
     else        check = ast_void_type;
 
     if (check->kind == AST_TYPE_VOID && maybe_fn->type->rettype->kind == AST_TYPE_VOID) {
-        if (maybe_fn->flags & AST_FLAG_INLINE && !(cc->flags & CCTRL_TRANSPILING)) {
-            return astDecl(maybe_fn->inline_ret,NULL);
-        }
         return astReturn(retval,cc->tmp_rettype);
     }
 
@@ -1345,9 +1342,6 @@ Ast *parseReturnStatement(Cctrl *cc) {
     if (!ok) {
         Ast *func = mapGet(cc->global_env, cc->tmp_fname->data);
         typeCheckReturnTypeWarn(cc,func,check,retval);
-    }
-    if (maybe_fn->flags & AST_FLAG_INLINE && !(cc->flags & CCTRL_TRANSPILING)) {
-        return astDecl(maybe_fn->inline_ret,retval);
     }
     return astReturn(retval,cc->tmp_rettype);
 }
@@ -2144,10 +2138,6 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
                 }
             }
 
-            if (is_inline) {
-                asm_func->flags = AST_FLAG_INLINE;
-            }
-
             if (!asmTextHasReturn(asm_block->asm_stmt)) {
                 cctrlWarningAt(cc, fn_line, fn_col, fn_len,
                     "asm function '%.*s' has no RET; execution runs off the "
@@ -2233,9 +2223,9 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
     func->body = func_body;
 
     if (is_inline) {
-        func->flags |= AST_FLAG_INLINE;
-        func->inline_ret = astLVar(func->type->rettype, str_lit("retval"));
+        func->flags |= AST_FLAG_INLINE_HINT;
     }
+
     parseCompoundStatementInternal(cc, func_body);
     fn_type->rettype = cc->tmp_rettype;
     /* `astFunction` shallow-copies the type into the AST node, so
@@ -2246,9 +2236,6 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
      * resolution onto `func->type` too. */
     if (func->type) {
         func->type->rettype = cc->tmp_rettype;
-    }
-    if (is_inline) {
-        listAppend(func->locals,func->inline_ret);
     }
 
     /* TempleOS rule: a function containing an `asm { }` block may
@@ -2288,8 +2275,7 @@ Ast *parseFunctionDef(Cctrl *cc, AstType *rettype,
      * the return register. `inline` functions return through `retval`
      * and `asm { }` bodies are opaque, so neither is checked. */
     AstType *rt = func->type ? func->type->rettype : NULL;
-    if (rt && rt->kind != AST_TYPE_VOID && !(func->flags & AST_FLAG_INLINE) &&
-        !has_asm && astStmtFallsThrough(func_body))
+    if (rt && (rt->kind != AST_TYPE_VOID) && !has_asm && astStmtFallsThrough(func_body))
     {
         cctrlWarningAt(cc, fn_line, fn_col, fn_len,
             "control may reach the end of non-void function '%.*s' "
@@ -2388,7 +2374,7 @@ Ast *parseAsmFunctionBinding(Cctrl *cc) {
     AoStr *asm_fname, *c_fname;
     AstType *rettype;
     Ast *asm_func;
-    int has_var_args = 0, is_inline = 0;
+    int has_var_args = 0;
 
     tok = cctrlTokenGet(cc);
     if (tok->tk_type != TK_IDENT && tok->start[0] != '_') {
@@ -2397,6 +2383,10 @@ Ast *parseAsmFunctionBinding(Cctrl *cc) {
     }
 
     asm_fname = aoStrDupRaw(tok->start, tok->len);
+
+    /* Don't let the name get mangled */
+    setAdd(cc->raw_asm_labels, asm_fname->data);
+
     /* No existence check here, deliberately: a binding's label is
      * usually EXTERNAL - stdlib headers bind `_extern _MALLOC`-style
      * labels whose bodies live in libtos, and the lib itself binds
@@ -2441,9 +2431,6 @@ Ast *parseAsmFunctionBinding(Cctrl *cc) {
     /* Map a c function to an ASM function */
     mapAdd(cc->asm_funcs,c_fname->data,asm_func);
     cctrlTokenExpect(cc,';');
-    if (is_inline) {
-        asm_func->flags |= AST_FLAG_INLINE;
-    }
     return asm_func;
 }
 
@@ -2520,7 +2507,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
                     name = cctrlTokenGet(cc);
                     
                     ast = parseFunctionOrDef(cc,type,name->start,name->len,1);
-                    ast->flags |= AST_FLAG_INLINE;
+                    ast->flags |= AST_FLAG_INLINE_HINT;
                     ast->line = name->line;
                     ast->col = name->col;
                     return ast;

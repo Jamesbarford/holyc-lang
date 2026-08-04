@@ -86,6 +86,17 @@ typedef struct {
     void (*spill_struct_dst)(void *be, IrInstr *instr);
     void (*stash_dest)(void *be, int sp_off);    /* str x9, [sp,#off] */
     void (*unstash_dest)(void *be, int sp_off);  /* ldr x9, [sp,#off] */
+    /* Does `v` still hold the destination address AFTER a call, so the
+     * address can be recomputed instead of spilled? True for a stack
+     * slot and for a callee-saved register; false for a caller-saved
+     * one, which the callee may destroy. NULL means "assume not". */
+    int (*dest_survives_call)(void *be, IrValue *v);
+    /* Point the backend's destination-buffer register at `v`'s own
+     * home, if it has one that survives the call. Returns 1 when it
+     * did, meaning the address needs no materialising into x9 at all.
+     * The register itself stays inside the backend - the two of them
+     * name registers differently, so it cannot cross this interface. */
+    int (*use_dest_home)(void *be, IrValue *v);
 } A64CallEmitter;
 
 static inline void a64EmitCall(A64CallEmitter *e, IrInstr *instr,
@@ -101,7 +112,13 @@ static inline void a64EmitCall(A64CallEmitter *e, IrInstr *instr,
      * arg passing either way. */
     AstType *ret_st = (instr->flags & IRCG_CALL_AGG_RETURN) && instr->dst
                       ? instr->dst->byval_struct_type : NULL;
-    int reg_ret = ret_st && ret_st->size <= 16;
+    /* The result IS this function's return value and the `ret` is next:
+     * the bytes are already in the registers the epilogue wants, so the
+     * buffer, the address kept alive to reach it, and the store through
+     * it all go. args[0] stays in the vector as the placeholder the arg
+     * loop skips - there is simply nothing left to do with it. */
+    int fwd_ret = (instr->flags & IRCG_AGG_RET_FORWARD) != 0;
+    int reg_ret = ret_st && ret_st->size <= 16 && !fwd_ret;
     int ind_ret = ret_st && ret_st->size > 16;
     u64 a0 = ret_st ? 1 : 0;
 
@@ -134,14 +151,27 @@ static inline void a64EmitCall(A64CallEmitter *e, IrInstr *instr,
             }
         }
     }
-    /* Reserve 8 bytes above the arg/copy regions to save the return
-     * destination pointer across the call (x9 is caller-saved). */
+    /* The destination pointer is computed into x9, which is
+     * caller-saved, so it normally has to be spilled across the call.
+     * When the VALUE it came from survives the call by itself - a slot,
+     * or a callee-saved register the allocator handed out - the spill
+     * is pure waste: recompute the address afterwards instead. That
+     * also drops the 8 bytes reserved to hold it, which was the whole
+     * reason for a `sub sp` around some calls. */
+    int need_dest = ret_st && !fwd_ret;
+    int dest_resident = need_dest && e->dest_survives_call &&
+                        e->dest_survives_call(e->be, vecGet(IrValue *, args, 0));
+    /* Stronger still: the address is ALREADY in a surviving register,
+     * so it need not be moved into x9 either side of the call. */
+    int dest_homed = need_dest && e->use_dest_home &&
+                     e->use_dest_home(e->be, vecGet(IrValue *, args, 0));
     int dest_save_off = nsaa_total + indirect_bytes;
-    int total = (nsaa_total + indirect_bytes + (ret_st ? 16 : 0) + 15) & ~15;
+    int total = (nsaa_total + indirect_bytes +
+                 ((need_dest && !dest_resident) ? 16 : 0) + 15) & ~15;
     if (total > 0) e->sub_sp(e->be, total);
     int nsaa = 0, copy_off = 0, copy_base = nsaa_total;
 
-    if (ret_st) {
+    if (need_dest && !dest_resident && !dest_homed) {
         /* Compute the destination buffer address into x9 (before the arg
          * loop clobbers x9) and stash it across the call. */
         e->load_struct_addr(e->be, vecGet(IrValue *, args, 0));
@@ -221,7 +251,9 @@ static inline void a64EmitCall(A64CallEmitter *e, IrInstr *instr,
          * result registers into it; do this while sp is still lowered. */
         int re = 0, rc = 0;
         AapcsClass rcls = astAapcsClassify(ret_st, &re, &rc);
-        e->unstash_dest(e->be, dest_save_off);   /* x9 = dest buffer */
+        if (dest_homed)         { /* already there */ }
+        else if (dest_resident) e->load_struct_addr(e->be, vecGet(IrValue *, args, 0));
+        else                    e->unstash_dest(e->be, dest_save_off);
         if (rcls == AAPCS_HFA) {
             for (int k = 0; k < rc; ++k)
                 e->ret_chunk_store(e->be, 1, k, k * re, re);
@@ -234,16 +266,19 @@ static inline void a64EmitCall(A64CallEmitter *e, IrInstr *instr,
         }
     } else if (ind_ret) {
         /* The call's dst is the buffer address, but unlike SysV the
-         * callee does NOT return it in x0: reload the stashed copy
-         * while sp is still lowered. */
-        e->unstash_dest(e->be, dest_save_off);   /* x9 = dest buffer */
+         * callee does NOT return it in x0: get it back while sp is
+         * still lowered - reloaded, or recomputed when the source
+         * outlived the call on its own. */
+        if (dest_homed)         { /* already there */ }
+        else if (dest_resident) e->load_struct_addr(e->be, vecGet(IrValue *, args, 0));
+        else                    e->unstash_dest(e->be, dest_save_off);
     }
 
     if (total > 0) e->add_sp(e->be, total);
 
-    if (ret_st) {
+    if (need_dest) {
         e->spill_struct_dst(e->be, instr);  /* dst = buffer address (x9) */
-    } else if (instr->dst && instr->dst->type != IR_TYPE_VOID) {
+    } else if (!ret_st && instr->dst && instr->dst->type != IR_TYPE_VOID) {
         /* Scalar return in x0 / d0. */
         e->spill_ret(e->be, instr, irIsFloat(instr->dst->type));
     }
@@ -279,6 +314,54 @@ typedef struct {
     void (*indirect_to_slot)(void *be, int from_stack, int reg,
                              int incoming_off, int size, int loff);
 } A64ParamEmitter;
+
+/* Where this function's VARIADIC arguments begin, as an offset from
+ * x29.
+ *
+ * Apple AArch64 passes every variadic argument on the stack, so they sit
+ * in the incoming argument area that starts at [x29, #16] - just past
+ * the saved x29/x30 pair. Named parameters normally arrive in registers
+ * and take no room there, but ones that overflowed the registers were
+ * placed first and have to be stepped over.
+ *
+ * The accounting below deliberately mirrors a64EmitParamPrologue's,
+ * because it is answering the same question from the other side: where
+ * that loop stops reading is where the variadic list starts. Any
+ * disagreement between the two reads arguments that are not there. */
+static inline int a64VaRegionOffset(Ast *ast) {
+    int ngrn = 0, nsrn = 0, nsaa = 0;
+    if (!ast || !ast->params) return 16;
+
+    for (u64 i = 0; i < ast->params->size; ++i) {
+        Ast *p = vecGet(Ast *, ast->params, i);
+        if (p->kind == AST_VAR_ARGS) break;
+        AstType *t = p->type;
+
+        if (!a64IsByvalStruct(t)) {
+            int is_float = (t->kind == AST_TYPE_FLOAT);
+            if (is_float ? (nsrn < 8) : (ngrn < 8)) {
+                if (is_float) nsrn++; else ngrn++;
+            } else {
+                nsaa += 8;
+            }
+            continue;
+        }
+
+        int elem = 0, count = 0;
+        AapcsClass cls = astAapcsClassify(t, &elem, &count);
+        if (cls == AAPCS_HFA) {
+            if (nsrn + count <= 8) nsrn += count;
+            else { nsaa += (t->size + 7) & ~7; nsrn = 8; }
+        } else if (cls == AAPCS_INTEGER) {
+            int ngp = (t->size + 7) / 8;
+            if (ngrn + ngp <= 8) ngrn += ngp;
+            else { nsaa += (t->size + 7) & ~7; ngrn = 8; }
+        } else { /* AAPCS_INDIRECT: a pointer, in a register or not */
+            if (ngrn >= 8) nsaa += 8; else ngrn += 1;
+        }
+    }
+    return 16 + nsaa;
+}
 
 static inline void a64EmitParamPrologue(A64ParamEmitter *e, Ast *ast,
                                         IrFunction *fn) {
@@ -385,35 +468,94 @@ typedef struct {
     void (*spill_gp)(void *be, IrInstr *instr);  /* x0 -> dst */
     void (*spill_fpr)(void *be, IrInstr *instr); /* d0 -> dst */
     void (*convert)(void *be, A64CvtKind kind, int width);
+    /* Sign-extending load of a MEMORY-resident r1, folding the widen
+     * into the load: `ldursb x0, [x29,#-8]` rather than `ldurb` plus a
+     * separate `sxtb`. Optional - NULL falls back to load + convert. */
+    void (*load_gp_sx)(void *be, IrInstr *instr, int src_size);
+    /* Optional: emit the conversion straight between home registers,
+     * `uxth w19, w20` rather than a move in, a convert in x0, and a
+     * move out. Returns 0 when either end lives in memory. */
+    int (*conv3)(void *be, A64CvtKind k, IrInstr *i);
 } A64ConvEmitter;
 
 static inline void a64EmitConvert(A64ConvEmitter *e, IrInstr *instr) {
     void *be = e->be;
     switch (instr->op) {
     case IR_TRUNC: {
+        {
+            int sz3 = instr->dst ? (int)instr->dst->as.var.size : 8;
+            int sgn3 = (instr->flags & IRCG_TRUNC_SIGNED) != 0;
+            A64CvtKind k3 = sz3 == 1 ? (sgn3 ? A64_CVT_SXTB : A64_CVT_UXTB)
+                          : sz3 == 2 ? (sgn3 ? A64_CVT_SXTH : A64_CVT_UXTH)
+                          : sz3 == 4 ? (sgn3 ? A64_CVT_SXTW : A64_CVT_MOVW)
+                          : (A64CvtKind)-1;
+            if ((int)k3 != -1 && e->conv3 && e->conv3(be, k3, instr)) break;
+        }
         e->load_gp(be, instr);
         int sz = instr->dst ? (int)instr->dst->as.var.size : 8;
-        if      (sz == 1) e->convert(be, A64_CVT_UXTB, 0);
-        else if (sz == 2) e->convert(be, A64_CVT_UXTH, 0);
-        else if (sz == 4) e->convert(be, A64_CVT_MOVW, 0);
+        /* The result still lives in a 64-bit register, so the high bits
+         * have to reflect the destination's signedness - otherwise a
+         * later compare reads a different number entirely. */
+        int sgn = (instr->flags & IRCG_TRUNC_SIGNED) != 0;
+        if      (sz == 1) e->convert(be, sgn ? A64_CVT_SXTB : A64_CVT_UXTB, 0);
+        else if (sz == 2) e->convert(be, sgn ? A64_CVT_SXTH : A64_CVT_UXTH, 0);
+        else if (sz == 4) e->convert(be, sgn ? A64_CVT_SXTW : A64_CVT_MOVW, 0);
         e->spill_gp(be, instr);
         break;
     }
     case IR_ZEXT: {
-        e->load_gp(be, instr);
         int sz = (int)irValueByteSize(instr->r1);
-        if      (sz == 1) e->convert(be, A64_CVT_UXTB, 0);
-        else if (sz == 2) e->convert(be, A64_CVT_UXTH, 0);
-        else if (sz == 4) e->convert(be, A64_CVT_MOVW, 0);  /* see header note */
+        {
+            A64CvtKind k3 = sz == 1 ? A64_CVT_UXTB
+                          : sz == 2 ? A64_CVT_UXTH
+                          : sz == 4 ? A64_CVT_MOVW : (A64CvtKind)-1;
+            if ((int)k3 != -1 && e->conv3 && e->conv3(be, k3, instr)) break;
+        }
+        e->load_gp(be, instr);
+        /* A 1- or 2-byte frame load already zero-extends (`ldurb`/
+         * `ldurh`, `movzbq`/`movzwq`), so widening it again is a no-op.
+         * A 4-byte load does NOT - it sign-extends, matching `movslq` -
+         * so that one still needs the explicit widen. */
+        int fused_zx = irValueInMemory(instr->r1) && (sz == 1 || sz == 2);
+        if (!fused_zx) {
+            if      (sz == 1) e->convert(be, A64_CVT_UXTB, 0);
+            else if (sz == 2) e->convert(be, A64_CVT_UXTH, 0);
+            else if (sz == 4) e->convert(be, A64_CVT_MOVW, 0);
+        }
         e->spill_gp(be, instr);
         break;
     }
     case IR_SEXT: {
-        e->load_gp(be, instr);
         int sz = (int)irValueByteSize(instr->r1);
-        if      (sz == 1) e->convert(be, A64_CVT_SXTB, 0);
-        else if (sz == 2) e->convert(be, A64_CVT_SXTH, 0);
-        else if (sz == 4) e->convert(be, A64_CVT_SXTW, 0);
+        /* A 4-byte load already sign-extended to 64 bits, so this widen
+         * is a copy. When source and destination share a register it is
+         * not even that. */
+        if (instr->flags & IRCG_SEXT_NOOP) {
+            e->load_gp(be, instr);
+            e->spill_gp(be, instr);
+            break;
+        }
+        {
+            A64CvtKind k3 = sz == 1 ? A64_CVT_SXTB
+                          : sz == 2 ? A64_CVT_SXTH
+                          : sz == 4 ? A64_CVT_SXTW : (A64CvtKind)-1;
+            if ((int)k3 != -1 && e->conv3 && e->conv3(be, k3, instr)) break;
+        }
+        /* Fold the widen into the load where the operand is in memory:
+         * one `ldursb` instead of `ldurb` + `sxtb`. A 4-byte load
+         * already sign-extends, so that case needs nothing extra. */
+        if (irValueInMemory(instr->r1) && sz == 4) {
+            e->load_gp(be, instr);
+        } else if (irValueInMemory(instr->r1) && e->load_gp_sx &&
+                   (sz == 1 || sz == 2))
+        {
+            e->load_gp_sx(be, instr, sz);
+        } else {
+            e->load_gp(be, instr);
+            if      (sz == 1) e->convert(be, A64_CVT_SXTB, 0);
+            else if (sz == 2) e->convert(be, A64_CVT_SXTH, 0);
+            else if (sz == 4) e->convert(be, A64_CVT_SXTW, 0);
+        }
         e->spill_gp(be, instr);
         break;
     }
@@ -490,6 +632,19 @@ typedef struct {
     void (*fbinop)(void *be, IrOp op, int width);/* fadd/.. d0,d0,d1 */
     void (*load_d1)(void *be, IrInstr *instr);   /* r2 -> d1 */
     void (*fneg)(void *be, int width);
+    /* Optional: emit `dst = r1 <op> r2` straight into the operands'
+     * home registers, with no trip through the scratch pair. Returns 0
+     * when it cannot - a missing home, an immediate that will not
+     * encode - and the scratch path below runs instead.
+     *
+     * Without this, giving values register homes only turns
+     * "load slot into x0" into "mov home into x0": the same three
+     * instructions, now moving between registers. */
+    int (*alu3)(void *be, IrOp op, IrInstr *i);
+    /* Same idea for shifts, multiplies and the unary ops. */
+    int (*shift3)(void *be, IrOp op, IrInstr *i);
+    int (*mul3)(void *be, IrInstr *i);
+    int (*unary3)(void *be, IrOp op, IrInstr *i);
 } A64ArithEmitter;
 
 static inline void a64EmitArith(A64ArithEmitter *e, IrInstr *instr) {
@@ -497,6 +652,7 @@ static inline void a64EmitArith(A64ArithEmitter *e, IrInstr *instr) {
     IrOp op = instr->op;
     switch (op) {
     case IR_IADD: case IR_ISUB: case IR_AND: case IR_OR: case IR_XOR: {
+        if (e->alu3 && e->alu3(be, op, instr)) break;
         e->load_gp(be, instr);
         int has_imm = instr->r2 && instr->r2->kind == IR_VAL_CONST_INT;
         if (!(has_imm && e->alu_imm(be, op, instr->r2->as._i64)))
@@ -505,6 +661,7 @@ static inline void a64EmitArith(A64ArithEmitter *e, IrInstr *instr) {
         break;
     }
     case IR_IMUL:
+        if (e->mul3 && e->mul3(be, instr)) break;
         e->load_gp(be, instr); e->load_x1(be, instr);
         e->mul(be); e->spill_gp(be, instr);
         break;
@@ -513,9 +670,11 @@ static inline void a64EmitArith(A64ArithEmitter *e, IrInstr *instr) {
         e->divrem(be, op); e->spill_gp(be, instr);
         break;
     case IR_INEG: case IR_NOT:
+        if (e->unary3 && e->unary3(be, op, instr)) break;
         e->load_gp(be, instr); e->unary(be, op); e->spill_gp(be, instr);
         break;
     case IR_SHL: case IR_SHR: case IR_SAR: {
+        if (e->shift3 && e->shift3(be, op, instr)) break;
         e->load_gp(be, instr);
         IrValue *r2 = instr->r2;
         if (r2 && r2->kind == IR_VAL_CONST_INT &&

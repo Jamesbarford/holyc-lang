@@ -28,7 +28,6 @@
 #include "ir-regalloc.h"
 #include "list.h"
 #include "util.h"
-#include "version.h"
 #include "x86_64.h"
 
 /* SysV first-six integer arg registers, ordered as arg 0..5. */
@@ -67,7 +66,20 @@ static int x86_64OpClobbers(IrInstr *I, AoStr *reg, IrClobberPoint at) {
                     I->op == IR_IREM || I->op == IR_UREM;
 
     switch (at) {
+        case IR_CLOBBER_BEFORE_DST:
+            /* The deref stores read their dst as an ADDRESS, and it is
+             * the first thing put in place - `x86_64LoadToReg(dst,
+             * "rcx")` runs before the value is touched - so nothing has
+             * been written yet. */
+            return 0;
+
         case IR_CLOBBER_BEFORE_R1:
+            /* For the deref stores r1 is the VALUE and comes last,
+             * after the address and index. Left conservative here: the
+             * AArch64 backend narrows this to "only when something
+             * actually has to be materialised", and doing the same for
+             * SysV means working through rcx/rdx and the immediate
+             * fast paths, which is its own piece of work. */
             if (I->op == IR_STORE_DEREF || I->op == IR_RMW_DEREF) return 1;
             return 0;
 
@@ -94,7 +106,7 @@ static int x86_64OpClobbers(IrInstr *I, AoStr *reg, IrClobberPoint at) {
     }
 }
 
-static void x86_64InitRegPool(void) {
+void x86_64InitRegPool(void) {
     static int initialised = 0;
     static IrRegPool pool;
     if (initialised) return;
@@ -109,6 +121,8 @@ static void x86_64InitRegPool(void) {
     pool.float_return_reg = aoStrDupRaw((char *)"xmm0", 4);
     pool.sret_reg         = NULL; /* SysV: sret ptr is the first int arg */
     pool.scratch_regs     = x86_64MakeAoStrVec(kScratchRegs, n_scratch);
+    pool.callee_saved_regs = NULL;  /* x86 saves every pinned reg already */
+    pool.leaf_free_regs    = NULL;  /* not yet surveyed for this ABI */
     pool.op_clobbers      = x86_64OpClobbers;
 
     irRegPoolSet(&pool);
@@ -157,8 +171,24 @@ static void x86_64RegForWidth(const char *reg64,
 
 /* leaq <sym>(%rip), %<reg64>. Caller has already normalised the
  * symbol name */
+static void x86_64GlobalAddrEx(IrCgCtx *ctx, const char *sym,
+                               const char *reg, int force_got)
+{
+    /* Same rule as aarch64: a symbol defined in another image has no
+     * link-time address, so its own address comes from the GOT. */
+    int is_extern = force_got ||
+                    (ctx->cc->extern_globals &&
+                     setHas(ctx->cc->extern_globals, (char *)sym));
+    if (is_extern) {
+        aoStrCatFmt(ctx->buf, "movq    %s@GOTPCREL(%%rip), %%%s\n\t",
+                    sym, reg);
+    } else {
+        aoStrCatFmt(ctx->buf, "leaq    %s(%%rip), %%%s\n\t", sym, reg);
+    }
+}
+
 static void x86_64GlobalAddr(IrCgCtx *ctx, const char *sym, const char *reg) {
-    aoStrCatFmt(ctx->buf, "leaq    %s(%%rip), %%%s\n\t", sym, reg);
+    x86_64GlobalAddrEx(ctx, sym, reg, 0);
 }
 
 /* leaq <loff>(%rbp), %<reg64>. AT&T allows signed displacements
@@ -171,11 +201,13 @@ static void x86_64Lea(IrCgCtx *ctx, IrInstr *lea, const char *reg) {
     if (lea->r1 && lea->r1->kind == IR_VAL_GLOBAL) {
         const char *name = asmNormaliseGlobalLabel(ctx->cc,
                 lea->r1->as.global.name)->data;
+        int got = 0;
         if (lea->r1->flags & IR_VAL_FLAG_FUNC) {
             name = asmNormaliseFunctionName(ctx->cc,
                     lea->r1->as.global.name);
+            got = asmFunctionIsExtern(ctx->cc, lea->r1->as.global.name);
         }
-        x86_64GlobalAddr(ctx, name, reg);
+        x86_64GlobalAddrEx(ctx, name, reg, got);
     } else {
         int loff = irCgGetLoff(&ctx->fn->ra, lea->r1);
         x86_64FrameAddr(ctx->buf, loff, reg);
@@ -193,6 +225,16 @@ static void x86_64Load(AoStr *buf, const char *reg, u32 size, int loff) {
         case 2:  aoStrCatFmt(buf, "movzwq  %i(%%rbp), %%%s\n\t", loff, reg); break;
         case 4:  aoStrCatFmt(buf, "movslq  %i(%%rbp), %%%s\n\t", loff, reg); break;
         default: aoStrCatFmt(buf, "movq    %i(%%rbp), %%%s\n\t", loff, reg); break;
+    }
+}
+
+/* Sign-extending sub-word load - `movsbq -8(%rbp), %rax` folds the
+ * widen into the load that had to happen anyway. */
+static void x86_64LoadSx(AoStr *buf, const char *reg, u32 size, int loff) {
+    switch (size) {
+        case 1:  aoStrCatFmt(buf, "movsbq  %i(%%rbp), %%%s\n\t", loff, reg); break;
+        case 2:  aoStrCatFmt(buf, "movswq  %i(%%rbp), %%%s\n\t", loff, reg); break;
+        default: aoStrCatFmt(buf, "movslq  %i(%%rbp), %%%s\n\t", loff, reg); break;
     }
 }
 
@@ -348,6 +390,31 @@ static void x86_64DerefStoreImm(AoStr *buf,
  * - Tmp/local/param values either come from their pinned register
  *   (when one is set) or are loaded from their frame slot via
  *   x86_64Load. */
+/* See aarch64NoteSpill: a spill is worth remembering only while it is
+ * the very last thing emitted, and only at full width - a narrower
+ * store leaves the register's upper bits alone while the reload
+ * extends them. */
+static void x86_64NoteSpill(IrCgCtx *ctx, const char *reg, u32 size,
+                            int loff)
+{
+    if (size != 8 || strlen(reg) >= sizeof(ctx->spill_reg)) {
+        ctx->spill_end = 0;
+        return;
+    }
+    ctx->spill_end = ctx->buf->len;
+    ctx->spill_loff = loff;
+    ctx->spill_size = size;
+    snprintf(ctx->spill_reg, sizeof(ctx->spill_reg), "%s", reg);
+}
+
+static int x86_64SpillStillLive(IrCgCtx *ctx, const char *reg, u32 size,
+                                int loff)
+{
+    return ctx->spill_end != 0 && ctx->spill_end == ctx->buf->len &&
+           size == 8 && ctx->spill_size == 8 && ctx->spill_loff == loff &&
+           !strcmp(ctx->spill_reg, reg);
+}
+
 static void x86_64LoadToReg(IrCgCtx *ctx, IrValue *val, const char *reg) {
     switch (val->kind) {
         case IR_VAL_CONST_INT:
@@ -398,6 +465,8 @@ static void x86_64LoadToReg(IrCgCtx *ctx, IrValue *val, const char *reg) {
             }
             u32 size = irValueByteSize(val);
             int loff = irCgGetLoff(&ctx->fn->ra, val);
+            /* Already there, from the spill immediately above. */
+            if (x86_64SpillStillLive(ctx, reg, size, loff)) break;
             x86_64Load(ctx->buf, reg, size, loff);
             break;
         }
@@ -428,6 +497,7 @@ static void x86_64StoreReg(IrCgCtx *ctx, IrValue *dst, const char *reg) {
     u32 size = irValueByteSize(dst);
     int loff = irCgGetLoff(&ctx->fn->ra, dst);
     x86_64FrameStoreWidth(ctx->buf, loff, size, reg);
+    x86_64NoteSpill(ctx, reg, size, loff);
 }
 
 /* Spill instr->dst into its home. When dst.loc is a register (set by
@@ -1007,8 +1077,14 @@ static void x86_64EmitSysvCall(IrCgCtx *ctx, IrInstr *instr, Vec *args,
      * return keeps args[0] as the hidden out-pointer in rdi. */
     AstType *ret_st = (instr->flags & IRCG_CALL_AGG_RETURN) && instr->dst
                       ? instr->dst->byval_struct_type : NULL;
-    int reg_ret = ret_st && ret_st->size <= 16;
-    u64 a0 = reg_ret ? 1 : 0;
+    /* The result IS this function's return value and the `ret` is next,
+     * so the callee has already left the bytes in rax/rdx (or xmm0/1).
+     * The buffer is gone from the IR along with the address that
+     * reached it - which is why nothing below may go looking for it.
+     * args[0] is still skipped as an argument: it was never one. */
+    int fwd_ret = (instr->flags & IRCG_AGG_RET_FORWARD) != 0;
+    int reg_ret = ret_st && ret_st->size <= 16 && !fwd_ret;
+    u64 a0 = (ret_st && ret_st->size <= 16) ? 1 : 0;
 
     /* Pre-pass: size the stack-argument area. An aggregate is stack-passed
      * (MEMORY) when it is >16B or doesn't fit in the remaining registers;
@@ -1150,7 +1226,7 @@ static void x86_64EmitSysvCall(IrCgCtx *ctx, IrInstr *instr, Vec *args,
     if (reg_ret) {
         /* dst = destination buffer address (in r10). */
         if (instr->dst) x86_64SpillDst(ctx, instr, "r10");
-    } else if (instr->dst && instr->dst->type != IR_TYPE_VOID &&
+    } else if (!fwd_ret && instr->dst && instr->dst->type != IR_TYPE_VOID &&
         (instr->dst->kind == IR_VAL_TMP ||
          instr->dst->kind == IR_VAL_LOCAL ||
          instr->dst->kind == IR_VAL_PARAM))
@@ -1712,11 +1788,19 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
         case IR_TRUNC: {
             x86_64LoadFirstSrc(ctx, instr, instr->r1);
             u32 sz = instr->dst ? instr->dst->as.var.size : 8;
+            /* The result still lives in a 64-bit register, so the high
+             * bits have to reflect the destination's signedness. */
+            int sgn = (instr->flags & IRCG_TRUNC_SIGNED) != 0;
             switch (sz) {
-                case 1: aoStrCatFmt(ctx->buf, "movzbq  %%al, %%rax\n\t"); break;
-                case 2: aoStrCatFmt(ctx->buf, "movzwq  %%ax, %%rax\n\t"); break;
-                case 4: /* movl into a 32-bit subreg zero-extends to 64 */
-                        aoStrCatFmt(ctx->buf, "movl    %%eax, %%eax\n\t"); break;
+                case 1: aoStrCatFmt(ctx->buf, sgn ? "movsbq  %%al, %%rax\n\t"
+                                                  : "movzbq  %%al, %%rax\n\t");
+                        break;
+                case 2: aoStrCatFmt(ctx->buf, sgn ? "movswq  %%ax, %%rax\n\t"
+                                                  : "movzwq  %%ax, %%rax\n\t");
+                        break;
+                case 4: aoStrCatFmt(ctx->buf, sgn ? "movslq  %%eax, %%rax\n\t"
+                                                  : "movl    %%eax, %%eax\n\t");
+                        break;
                 default: break;
             }
             x86_64SpillDst(ctx, instr, "rax");
@@ -1795,9 +1879,32 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
         case IR_SEXT: {
             /* Width-extending int-to-int. Source width comes from r1's
              * tmp size; we pick the matching movz/movs encoding. */
-            x86_64LoadFirstSrc(ctx, instr, instr->r1);
             u32 src_sz = instr->r1 ? irValueByteSize(instr->r1) : 8;
             int signed_ext = (instr->op == IR_SEXT);
+
+            /* Fold the widen into the load when the operand is in
+             * memory. `movzbq`/`movzwq` already zero-extend and
+             * `movslq` already sign-extends, so those converts were
+             * pure repetition; a sub-word SIGN extension just needs the
+             * movs form of the load. */
+            /* A 4-byte load sign-extends (`movslq`), so only a SIGN
+             * extension can fuse with it; zero-extending from 4 bytes
+             * still needs the explicit `movl`. */
+            int can_fuse = irValueInMemory(instr->r1) &&
+                           (src_sz == 1 || src_sz == 2 ||
+                            (src_sz == 4 && signed_ext));
+            if (can_fuse) {
+                int loff = irCgGetLoff(&ctx->fn->ra, instr->r1);
+                if (signed_ext) {
+                    x86_64LoadSx(ctx->buf, "rax", src_sz, loff);
+                } else {
+                    x86_64Load(ctx->buf, "rax", src_sz, loff);
+                }
+                x86_64SpillDst(ctx, instr, "rax");
+                break;
+            }
+
+            x86_64LoadFirstSrc(ctx, instr, instr->r1);
             switch (src_sz) {
                 case 1:
                     aoStrCatFmt(ctx->buf,
@@ -2055,10 +2162,8 @@ static void x86_64EmitInstr(IrCgCtx *ctx, IrInstr *instr) {
                         callee_va = 1;
                 }
             }
-            int holyc_variadic = callee_va && callee &&
-                                 callee->kind != AST_EXTERN_FUNC;
-            int extern_variadic = callee_va && callee &&
-                                  callee->kind == AST_EXTERN_FUNC;
+            int holyc_variadic = callee_va && astUsesHolyCVarargs(callee);
+            int extern_variadic = callee_va && !holyc_variadic;
 
             int var_arg_start = -1;
             if (holyc_variadic && callee->params) {
@@ -2399,44 +2504,80 @@ void x86_64InitialiseEmptyGlobal(Cctrl *cc,
     }
 }
 
-static void x86_64DataInternal(AoStr *buf, Ast *data) {
+/* Returns the number of bytes emitted, so a partially-written
+ * aggregate can be padded out to its declared size. C zero-initialises
+ * every member an initialiser does not mention; emitting only what was
+ * written leaves the rest of the object as whatever follows it in the
+ * section - for `MapType` that meant reading function pointers out of
+ * the text segment and calling them. */
+static int x86_64DataInternal(Cctrl *cc, AoStr *buf, Ast *data) {
+    /* `&Fn` / a lambda in a static or global aggregate initialiser: a
+     * relocation to the symbol, not a number. Falling through to the
+     * integer path below emitted whatever happened to be in `i64` -
+     * `.quad 8` for a function pointer, which segfaults on the first
+     * call through it. */
+    if (astIsUnOpKind(data, AST_UN_OP_ADDR_OF) && data->operand) {
+        data = data->operand;
+    }
+    if (data->kind == AST_FUNC || data->kind == AST_FUN_PROTO ||
+        data->kind == AST_EXTERN_FUNC)
+    {
+        char *fn = asmNormaliseFunctionName(cc, data->fname);
+        aoStrCatPrintf(buf, ".quad %s\n\t", fn);
+        return 8;
+    }
+    if (data->kind == AST_ASM_FUNCDEF || data->kind == AST_ASM_FUNC_BIND) {
+        aoStrCatFmt(buf, ".quad %S\n\t", data->asmfname);
+        return 8;
+    }
+    if (data->kind == AST_GVAR) {
+        AoStr *g = asmNormaliseGlobalLabel(cc,
+                data->is_static ? data->glabel : data->gname);
+        aoStrCatFmt(buf, ".quad %S\n\t", g);
+        return 8;
+    }
     if (data->kind == AST_STRING) {
         aoStrCatPrintf(buf, ".quad %s\n\t", data->slabel->data);
-        return;
+        return 8;
     }
     if (data->kind == AST_ARRAY_INIT) {
+        int wrote = 0;
         listForEach(data->arrayinit) {
-            x86_64DataInternal(buf, (Ast *)it->value);
+            wrote += x86_64DataInternal(cc, buf, (Ast *)it->value);
         }
-        return;
+        /* Nested aggregates pad too - `{ {1}, 2 }` has to leave the
+         * inner struct its full width or every later field shifts. */
+        if (data->type && data->type->size > wrote) {
+            aoStrCatPrintf(buf, ".space  %d\n\t", data->type->size - wrote);
+            wrote = data->type->size;
+        }
+        return wrote;
     }
     if (data->type->kind == AST_TYPE_FLOAT) {
         if (data->type->size == 4) {
             aoStrCatPrintf(buf, ".long 0x%lX #%.9f\n\t",
                            (unsigned long)(u32)ieee754_32((f32)data->f64),
                            data->f64);
+            return 4;
         } else {
             aoStrCatPrintf(buf, ".quad 0x%lX #%.9f\n\t",
                            ieee754_64(data->f64), data->f64);
         }
-        return;
+        return 8;
     }
     switch (data->type->size) {
-        case 1: aoStrCatPrintf(buf, ".byte %d\n\t", data->i64); break;
-        case 2: aoStrCatPrintf(buf, ".short %d\n\t", data->i64); break;
-        case 4: aoStrCatPrintf(buf, ".long %d\n\t", data->i64); break;
-        case 8: aoStrCatPrintf(buf, ".quad %d\n\t", data->i64); break;
+        case 1: aoStrCatPrintf(buf, ".byte %d\n\t", data->i64); return 1;
+        case 2: aoStrCatPrintf(buf, ".short %d\n\t", data->i64); return 2;
+        case 4: aoStrCatPrintf(buf, ".long %d\n\t", data->i64); return 4;
+        case 8: aoStrCatPrintf(buf, ".quad %d\n\t", data->i64); return 8;
         default:
             loggerPanic("Cannot create size information for: %s\n",
                         astToString(data));
     }
+    return 0;
 }
 
-void x86_64GlobalVar(Cctrl *cc,
-                     Set *seen_globals,
-                     AoStr *buf,
-                     Ast *ast)
-{
+void x86_64GlobalVar(Cctrl *cc, Set *seen_globals, AoStr *buf, Ast *ast) {
     Ast *declvar = ast->declvar;
     Ast *declinit = ast->declinit;
     AoStr *varname = declvar->gname;
@@ -2482,24 +2623,37 @@ void x86_64GlobalVar(Cctrl *cc,
                 aoStrCatPrintf(buf, ".align 4\n");
             }
         }
+        /* An aggregate can hold a pointer, so the object needs pointer
+         * alignment - the linker warns about an under-aligned atom
+         * otherwise. */
+        aoStrCatPrintf(buf, ".p2align 3\n");
         aoStrCatFmt(buf, "%S:\n\t", label);
+        int wrote;
         if (declinit->kind == AST_ARRAY_INIT) {
+            wrote = 0;
             listForEach(declinit->arrayinit) {
-                x86_64DataInternal(buf, (Ast *)it->value);
+                wrote += x86_64DataInternal(cc, buf, (Ast *)it->value);
             }
-            return;
+        } else {
+            wrote = x86_64DataInternal(cc, buf, declinit);
         }
-        x86_64DataInternal(buf, declinit);
+        /* Members the initialiser did not mention are zero, not
+         * whatever the section happens to hold next. */
+        if (declvar->type && declvar->type->size > wrote) {
+            aoStrCatPrintf(buf, ".space %d\n\t", declvar->type->size - wrote);
+        }
     } else {
         if (declvar->is_static) {
             aoStrCatFmt(buf, ".lcomm %S, %i\n\t", label,
                         declvar->type->size);
         } else {
             /* argc/argv are linked from the startup file - use .comm
-             * not .zerofill so the linker doesn't double-allocate. */
-            if (label->len == 4 &&
-                (!strncmp(label->data, str_lit("argc")) ||
-                 !strncmp(label->data, str_lit("argv"))))
+             * not .zerofill so the linker doesn't double-allocate.
+             * Test the source name, not `label`: Mach-O has already
+             * prefixed that with `_`, so matching on it never fired. */
+            if (varname->len == 4 &&
+                (!strncmp(varname->data, str_lit("argc")) ||
+                 !strncmp(varname->data, str_lit("argv"))))
             {
                 x86_64InitialiseEmptyGlobal(cc, buf, declvar, 0);
             } else {
@@ -2512,7 +2666,7 @@ void x86_64GlobalVar(Cctrl *cc,
 /* `asm {}` function blocks: assemble each function chunk with libtasm
  * and emit the encoded bytes under the function's label. Per-function
  * encoding scopes `@@N` local labels the TempleOS way. */
-static void x86_64PasteAsmBlocks(AoStr *buf, Cctrl *cc) {
+void x86_64PasteAsmBlocks(Cctrl *cc, AoStr *buf) {
     if (!cc->asm_blocks) return;
     for (List *bl = cc->asm_blocks->next; bl != cc->asm_blocks;
          bl = bl->next)
@@ -2530,47 +2684,4 @@ static void x86_64PasteAsmBlocks(AoStr *buf, Cctrl *cc) {
             asmEmitBlockBytes(cc, buf, asm_func->body->asm_stmt, 0);
         }
     }
-}
-
-AoStr *x86_64AsmGenerate(Cctrl *cc) {
-    AoStr *buf = aoStrAlloc(2048);
-    x86_64InitRegPool();
-    x86_64PasteDataSection(cc, buf);
-    x86_64PasteAsmBlocks(buf, cc);
-
-    /* Top-level statements parsed into cc->initalisers become the
-     * body of a synthetic `main`. CCTRL_ASM_HAS_INITIALISERS makes
-     * asmNormaliseFunctionName rename the user's `Main` to `MainFn`
-     * so the symbols don't collide. */
-    Ast *synth_main = asmBuildInitialiserMain(cc);
-
-    IrCtx *ir_ctx = irCtxNew(cc);
-    IrCgCtx ctx;
-    ctx.buf = buf;
-    ctx.cc = cc;
-
-    Set *seen_globals = setNew(32, &set_cstring_type);
-
-    listForEach(cc->ast_list) {
-        Ast *ast = it->value;
-        if (ast->kind == AST_FUNC) {
-            IrFunction *fn = irLowerFunction(ir_ctx, ast);
-            irBasicFunctionOptimisations(fn);
-            irFunctionPrepForCodeGen(&ctx, fn, ast);
-            x86_64GenerateFunction(&ctx, ast);
-        } else if (ast->kind == AST_DECL || ast->kind == AST_GVAR) {
-            x86_64GlobalVar(cc, seen_globals, buf, ast);
-        }
-    }
-
-    if (synth_main) {
-        IrFunction *fn = irLowerFunction(ir_ctx, synth_main);
-        irBasicFunctionOptimisations(fn);
-        irFunctionPrepForCodeGen(&ctx, fn, synth_main);
-        x86_64GenerateFunction(&ctx, synth_main);
-    }
-
-    asmEmitAsmInfo(cc, buf);
-    setRelease(seen_globals);
-    return buf;
 }
