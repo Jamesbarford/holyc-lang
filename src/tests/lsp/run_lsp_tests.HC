@@ -18,7 +18,10 @@
  *   definition  functions, locals (decl line), fields via typed
  *               member chains, #include jump-to-file (plain / ./ /
  *               subdir / missing->null / <builtin> when installed)
- *   hover       function prototype; null off the end of a line
+ *   hover       function prototype (parameter names intact, and asm
+ *               bindings render as prototypes too); the type of a
+ *               local, a parameter, a class-typed local and a field
+ *               reached through `.`; null off the end of a line
  *   completion  prefix filter; symbols added by a didChange are
  *               visible to an IMMEDIATE completion (flush-before-
  *               query); member completion after `.`/`->` offers
@@ -772,10 +775,55 @@ U0 TestHoverCompletion()
   PosOf(MAIN_HC, "LibAdd(1, 2)", 2, &line, &chr);
   Json *resp = LspPositionRequest(l, "textDocument/hover", uri, line, chr);
   Check("hover shows the function prototype", HoverContains(resp, "LibAdd"));
+  /* Both parameter NAMES, not just the types. A misplaced space in the
+   * renderer's format string turned the last parameter of every
+   * non-pointer-tailed prototype into the literal `s`. */
+  Check("prototype keeps every parameter name",
+        HoverContains(resp, "I64 a") && HoverContains(resp, "I64 b"));
 
   PosOf(MAIN_HC, "I64 Main", 0, &line, &chr);
   resp = LspPositionRequest(l, "textDocument/hover", uri, line, 999);
   Check("hover past end of line is null", IsNullResult(resp));
+
+  /* Variables, not just functions. Hover used to read the global
+   * tables directly, so a local or a parameter - the thing you
+   * actually point at - answered null. It now resolves the same way
+   * go-to-definition does. */
+  PosOf(MAIN_HC, "total = LibAdd", 0, &line, &chr);
+  resp = LspPositionRequest(l, "textDocument/hover", uri, line, chr);
+  Check("hover on a local shows its type",
+        HoverContains(resp, "I64") && HoverContains(resp, "total"));
+
+  PosOf(MAIN_HC, "LibPoint p;", 9, &line, &chr);
+  resp = LspPositionRequest(l, "textDocument/hover", uri, line, chr);
+  Check("hover on a class-typed local names the class",
+        HoverContains(resp, "LibPoint"));
+
+  PosOf(MAIN_HC, "p.x = total", 2, &line, &chr);
+  resp = LspPositionRequest(l, "textDocument/hover", uri, line, chr);
+  Check("hover on a field through `.` shows the field type",
+        HoverContains(resp, "I64") && HoverContains(resp, "x"));
+
+  /* A parameter, in the included file that declares it. */
+  U8 *lib_uri = UriOf("lib.HC");
+  PosOf(LIB_HC, "return a + b;", 7, &line, &chr);
+  resp = LspPositionRequest(l, "textDocument/hover", lib_uri, line, chr);
+  Check("hover on a parameter shows its type",
+        HoverContains(resp, "I64") && HoverContains(resp, "a"));
+
+  /* Most of the stdlib is declared `public _extern _LABEL ...`, an asm
+   * binding rather than a plain prototype. Those used to fall through
+   * to printing the raw function type (`<fn> U0 * MAlloc`). */
+  if (access("/usr/local/include/tos.HH", 0) == 0) {
+    U8 *std_uri = UriOf("std.HC");
+    LspDidOpen(l, std_uri, STD_HC);
+    PosOf(STD_HC, "MAlloc", 0, &line, &chr);
+    resp = LspPositionRequest(l, "textDocument/hover", std_uri, line, chr);
+    Check("hover on an asm-bound stdlib function shows a prototype",
+          HoverContains(resp, "MAlloc(") && !HoverContains(resp, "<fn>"));
+  } else {
+    "  (skipped stdlib prototype hover: no installed stdlib)\n";
+  }
 
   /* Prefix "Lib" - cursor after the 3rd char of the call site. */
   PosOf(MAIN_HC, "LibAdd(1, 2)", 3, &line, &chr);

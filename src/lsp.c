@@ -796,6 +796,13 @@ static int lspTextDocPosition(Json *params, const char **uri,
     return *line >= 0 && *character >= 0;
 }
 
+/* Both defined below, next to the handlers that grew them; hover
+ * resolves identifiers exactly the way go-to-definition does. */
+static AstType *lspMemberClassAt(LspCtx *ctx, AoStr *text, u32 doc_id,
+                                 int line, int character, int *is_member);
+static Ast *lspResolveValue(LspCtx *ctx, u32 doc_id, int cursor_line,
+                            const char *ident, s64 ilen, int *in_doc);
+
 static void lspHover(LspCtx *ctx, Json *id, Json *params) {
     const char *uri;
     int line, character;
@@ -811,29 +818,65 @@ static void lspHover(LspCtx *ctx, Json *id, Json *params) {
     }
     s64 ilen = (s64)strlen(ident);
 
-    /* Render whatever the name is: a class/union layout, a function
-     * prototype, a global's type, or a macro. */
+    /* Same file-id the AST was stamped with at parse, so the local
+     * lookup below can tell which function encloses the cursor. */
+    AoStr path_s = {
+        .data = (char *)lspUriToPath(uri),
+        .len = 0,
+        .capacity = 0
+    };
+    path_s.len = strlen(path_s.data);
+    u32 doc_id = cctrlRegisterFile(ctx->cc, &path_s);
+    free(path_s.data);
+
+    /* Resolve in the same order as go-to-definition - member field,
+     * then value, then type - so the two never disagree about what
+     * the identifier under the cursor refers to.
+     *
+     * Values go through lspResolveValue, which finds the enclosing
+     * function and searches its params and locals before falling back
+     * to the global tables. Hover used to skip it and read the global
+     * tables directly, so it had nothing to say about a local or a
+     * parameter - by far the most common thing to hover over. */
     AoStr *rendered = aoStrNew();
-    AstType *cls = mapGetLen(ctx->cc->clsdefs, ident, ilen);
-    AstType *uni = cls ? NULL : mapGetLen(ctx->cc->uniondefs, ident, ilen);
-    Ast *entry = NULL;
-    if (cls || uni) {
-        AoStr *body = astClassToAoStr(cls ? cls : uni);
-        aoStrCatLen(rendered, body->data, body->len);
-        aoStrRelease(body);
-    } else if ((entry = mapGetLen(ctx->cc->global_env, ident, ilen)) ||
-               (entry = mapGetLen(ctx->cc->asm_funcs, ident, ilen))) {
-        /* asm_funcs: `public _extern _LABEL ...` prototypes (most of
-         * the stdlib) live there rather than in global_env. */
-        if (astIsFnLike(entry)) {
-            char *proto = astFunctionToString(entry);
-            aoStrCatPrintf(rendered, "%s", proto);
-        } else if (entry->type) {
-            aoStrCatPrintf(rendered, "%s %s", astTypeToString(entry->type),
-                           ident);
+    int is_member = 0;
+    AstType *mcls = lspMemberClassAt(ctx, text, doc_id, line, character,
+                                     &is_member);
+    if (mcls) {
+        AstType *field = (AstType *)mapGetLen(mcls->fields, ident, ilen);
+        if (field) {
+            aoStrCatPrintf(rendered, "%s %s", astTypeToString(field), ident);
         }
-    } else if (mapGetLen(ctx->cc->macro_defs, ident, ilen)) {
-        aoStrCatPrintf(rendered, "#define %s", ident);
+    }
+
+    Ast *entry = NULL;
+    if (!is_member && rendered->len == 0) {
+        int in_doc = 0;
+        entry = lspResolveValue(ctx, doc_id, line + 1, ident, ilen, &in_doc);
+        if (entry) {
+            /* asm_funcs, which lspResolveValue also searches, is where
+             * the `public _extern _LABEL ...` prototypes that make up
+             * most of the stdlib live rather than global_env. */
+            if (astIsFnLike(entry)) {
+                char *proto = astFunctionToString(entry);
+                aoStrCatPrintf(rendered, "%s", proto);
+            } else if (entry->type) {
+                aoStrCatPrintf(rendered, "%s %s", astTypeToString(entry->type),
+                               ident);
+            }
+        }
+    }
+
+    if (!is_member && rendered->len == 0) {
+        AstType *cls = mapGetLen(ctx->cc->clsdefs, ident, ilen);
+        AstType *uni = cls ? NULL : mapGetLen(ctx->cc->uniondefs, ident, ilen);
+        if (cls || uni) {
+            AoStr *body = astClassToAoStr(cls ? cls : uni);
+            aoStrCatLen(rendered, body->data, body->len);
+            aoStrRelease(body);
+        } else if (mapGetLen(ctx->cc->macro_defs, ident, ilen)) {
+            aoStrCatPrintf(rendered, "#define %s", ident);
+        }
     }
 
     if (rendered->len == 0) {
@@ -923,8 +966,6 @@ static char *lspConstantSuggestionResolver(Ast *entry, int *_type) {
 
 /* Defined with the definition machinery below; completion needs it
  * for member completion (`recv.` / `recv->` field suggestions). */
-static AstType *lspMemberClassAt(LspCtx *ctx, AoStr *text, u32 doc_id,
-                                 int line, int character, int *is_member);
 
 /* Find matching prefix in a symbol table */
 void lspScanMapForSuggestion(Map *suggestions,
@@ -1052,7 +1093,12 @@ static Ast *lspResolveValue(LspCtx *ctx, u32 doc_id, int cursor_line,
     mapIterInit(ctx->cc->global_env, &mi);
     while (mapIterNext(&mi)) {
         Ast *fn = (Ast *)mi.node->value;
-        if (!astIsFnLike(fn) || fn->file_id != doc_id) continue;
+        /* `body`, not just fn-like: a prototype or an asm binding
+         * declares a name and some parameters but has no statements,
+         * so it cannot be what encloses the cursor. Picking one would
+         * offer its parameters as the locals in scope. */
+        if (!astIsFnLike(fn) || fn->body == NULL) continue;
+        if (fn->file_id != doc_id) continue;
         if (fn->line > 0 && fn->line <= cursor_line &&
             (encl == NULL || fn->line > encl->line))
         {

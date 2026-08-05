@@ -1012,9 +1012,19 @@ int astIsIntrinsicClass(AstType *ty) {
     return ty && ty->kind == AST_TYPE_CLASS && ty->is_intrinsic;
 }
 
+/* Is this a function-shaped declaration - something with a return type
+ * and a parameter list that astFunctionToString can render?
+ *
+ * AST_ASM_FUNC_BIND counts: `public _extern _MALLOC U0 *MAlloc(U64 size);`
+ * is a prototype like any other, and most of the stdlib is declared that
+ * way. Leaving it out meant hover fell through to printing the raw
+ * function TYPE (`<fn> U0 * MAlloc`), and left
+ * lspAsmFunctionSuggestionResolver - whose whole job is asm bindings -
+ * returning NULL for every one of them. */
 int astIsFnLike(Ast *maybe_fn) {
     return maybe_fn && (maybe_fn->kind == AST_FUNC ||
                         maybe_fn->kind == AST_ASM_FUNCDEF ||
+                        maybe_fn->kind == AST_ASM_FUNC_BIND ||
                         maybe_fn->kind == AST_FUN_PROTO ||
                         maybe_fn->kind == AST_EXTERN_FUNC);
 }
@@ -1656,8 +1666,13 @@ static char *astParamsToString(Vec *params) {
                 } else {
                     if (!is_last && label) aoStrCatFmt(str,"%S %s, ",tmp, label);
                     else if (!is_last && !label) aoStrCatFmt(str,"%S, ",tmp);
-                    else if (label)              aoStrCatFmt(str,"%S% s",tmp, label);     
-                    else                         aoStrCatFmt(str,"%S",tmp); 
+                    /* `%S %s`, not `%S% s`: the misplaced space made
+                     * `% ` an unknown spec and left a literal `s`, so
+                     * the LAST parameter of every prototype whose tail
+                     * argument is not a pointer printed as its type
+                     * plus the letter s - `U0 *MAlloc(U64 s)`. */
+                    else if (label)              aoStrCatFmt(str,"%S %s",tmp, label);
+                    else                         aoStrCatFmt(str,"%S",tmp);
                 }
             }
         }
@@ -1697,6 +1712,7 @@ static char *astFunctionToStringInternal(Ast *func, AstType *type) {
         case AST_FUNC:
         case AST_FUN_PROTO:
         case AST_EXTERN_FUNC:
+        case AST_ASM_FUNC_BIND:
             strparams = astParamsToString(func->params);
             break;
         default:
