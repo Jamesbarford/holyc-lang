@@ -12,6 +12,10 @@
 
 A compiler for [Terry A. Davis](https://en.wikipedia.org/wiki/Terry_A._Davis)'s HolyC programming language, implemented in C.
 
+> "An idiot admires complexity, a genius admires simplicity"
+>
+> — Terry A. Davis (1969 - 2018). Rest in peace!
+
 ```hc
 U0 Main()
 {
