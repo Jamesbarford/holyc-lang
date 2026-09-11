@@ -32,7 +32,7 @@ U0 TestListAdd(TestList *ll, I64 value)
 
 I32 Main()
 {
-  "Test - Linked list recusive definition class: ";
+  "Test - Linked list recursive definition class: ";
   I64 correct = 0, test_cases = 5;
   TestList *ll = TestListNew();
   TestListNode *ln;
