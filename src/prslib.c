@@ -1271,7 +1271,7 @@ Ast *parseGetClassField(Cctrl *cc, Ast *cls) {
                             tok->start);
     }
 
-    // XXX: This is hacky and only for recusive data types 
+    // XXX: This is hacky and only for recursive data types 
     if (type->fields == NULL && astIsDeref(cls)) {
         type = cls->operand->type;
     }
