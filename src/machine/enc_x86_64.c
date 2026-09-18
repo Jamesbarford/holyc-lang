@@ -45,6 +45,18 @@ rex_w(int r, int b)
     return v;
 }
 
+/* Same, but with REX.W under the caller's control - `w` 0 selects the
+ * 32-bit operand size. Returns 0 when no REX byte is needed at all,
+ * which is the common case for the low eight registers. */
+static uint8_t
+rex_rb(int w, int r, int b)
+{
+    uint8_t v = w ? REX_W : 0;
+    if (r >= 8) v |= REX_R;
+    if (b >= 8) v |= REX_B;
+    return v;
+}
+
 /* SIB byte 0x24 = scale=0, index=4 (none), base=4 (rsp). Used for [rsp]. */
 
 /* Emit ModR/M + optional disp for `[base + disp]` addressing. Special-case
@@ -234,6 +246,25 @@ x86_64_enc_lea_rip_rel_reg(AsmEnc *e, X86Reg dst)
     return disp_off;
 }
 
+/* `movq sym@GOTPCREL(%rip), %dst` - LOAD the address from the GOT
+ * rather than compute it.
+ *
+ * The lea above computes an address PC-relatively, which only works
+ * when the target is in this module. The address of a function that
+ * lives in a shared library is not known until load time, so the
+ * linker puts it in a GOT slot and the code reads it from there.
+ * Same encoding as the lea but opcode 8B (load) instead of 8D. */
+size_t
+x86_64_enc_mov_gotpcrel_reg(AsmEnc *e, X86Reg dst)
+{
+    put_byte(e, rex_w(dst, 0));
+    put_byte(e, 0x8B);
+    put_byte(e, modrm(0, dst & 7, 5));
+    size_t disp_off = e->len;
+    put_u32(e, 0);
+    return disp_off;
+}
+
 size_t
 x86_64_enc_mov_reg_rip_rel(AsmEnc *e, X86Reg src)
 {
@@ -270,11 +301,18 @@ alu_opcode(int op)
 }
 
 void
-x86_64_enc_alu_reg_reg(AsmEnc *e, int op, X86Reg dst, X86Reg src)
+x86_64_enc_alu_reg_reg_w(AsmEnc *e, int w, int op, X86Reg dst, X86Reg src)
 {
-    put_byte(e, rex_w(src, dst));
+    uint8_t rex = rex_rb(w, src, dst);
+    if (rex) put_byte(e, rex);
     put_byte(e, alu_opcode(op));
     put_byte(e, modrm(3, src & 7, dst & 7));
+}
+
+void
+x86_64_enc_alu_reg_reg(AsmEnc *e, int op, X86Reg dst, X86Reg src)
+{
+    x86_64_enc_alu_reg_reg_w(e, 1, op, dst, src);
 }
 
 void
@@ -308,28 +346,43 @@ x86_64_enc_subq_imm_reg(AsmEnc *e, X86Reg dst, int32_t imm)
 }
 
 void
-x86_64_enc_neg_reg(AsmEnc *e, X86Reg reg)
+x86_64_enc_neg_reg_w(AsmEnc *e, int w, X86Reg reg)
 {
-    put_byte(e, rex_w(0, reg));
+    uint8_t rex = rex_rb(w, 0, reg);
+    if (rex) put_byte(e, rex);
     put_byte(e, 0xF7);
     put_byte(e, modrm(3, 3, reg & 7)); /* /3 = NEG */
 }
 
 void
-x86_64_enc_not_reg(AsmEnc *e, X86Reg reg)
+x86_64_enc_neg_reg(AsmEnc *e, X86Reg reg) { x86_64_enc_neg_reg_w(e, 1, reg); }
+
+void
+x86_64_enc_not_reg_w(AsmEnc *e, int w, X86Reg reg)
 {
-    put_byte(e, rex_w(0, reg));
+    uint8_t rex = rex_rb(w, 0, reg);
+    if (rex) put_byte(e, rex);
     put_byte(e, 0xF7);
     put_byte(e, modrm(3, 2, reg & 7)); /* /2 = NOT */
 }
 
 void
-x86_64_enc_imul_reg_reg(AsmEnc *e, X86Reg dst, X86Reg src)
+x86_64_enc_not_reg(AsmEnc *e, X86Reg reg) { x86_64_enc_not_reg_w(e, 1, reg); }
+
+void
+x86_64_enc_imul_reg_reg_w(AsmEnc *e, int w, X86Reg dst, X86Reg src)
 {
-    put_byte(e, rex_w(dst, src));
+    uint8_t rex = rex_rb(w, dst, src);
+    if (rex) put_byte(e, rex);
     put_byte(e, 0x0F);
     put_byte(e, 0xAF);
     put_byte(e, modrm(3, dst & 7, src & 7));
+}
+
+void
+x86_64_enc_imul_reg_reg(AsmEnc *e, X86Reg dst, X86Reg src)
+{
+    x86_64_enc_imul_reg_reg_w(e, 1, dst, src);
 }
 
 void
@@ -590,6 +643,61 @@ x86_64_enc_load_mem(AsmEnc *e, int width, X86Reg dst, X86Reg base,
     emit_mem_sib(e, dst & 7, base, idx, scale, disp);
 }
 
+/* `callq *disp(%base[,%idx,scale])` - CALL through a memory operand.
+ *
+ * The register form needs somewhere to put the target, and on SysV the
+ * only registers that are neither arguments nor the backend's scratch
+ * are r10 and r11. Calling straight out of the stack slot the target
+ * was parked in needs none of them, which is what frees r10 for the
+ * register allocator. Same /2 extension as the register form. */
+void
+x86_64_enc_call_mem(AsmEnc *e, X86Reg base, int idx, int scale, int32_t disp)
+{
+    uint8_t rex = rex_for(0, 0, idx, base);
+    if (rex) put_byte(e, rex);
+    put_byte(e, 0xFF);
+    emit_mem_sib(e, 2, base, idx, scale, disp);  /* /2 = CALL r/m64 */
+}
+
+/* Zero-extending sub-word load: 1 -> movzbq, 2 -> movzwq, 4 -> movl.
+ *
+ * Only the 4-byte case differs from x86_64_enc_load_mem, which spells
+ * it `movslq` - right for a signed value, wrong for an unsigned one.
+ * `movl` into the 32-bit destination zero-extends into the full 64,
+ * so it needs no REX.W. */
+void
+x86_64_enc_load_mem_zx(AsmEnc *e, int width, X86Reg dst, X86Reg base,
+                       int idx, int scale, int32_t disp)
+{
+    if (width == 4) {
+        uint8_t rex = rex_for(0, dst, idx, base);
+        if (rex) put_byte(e, rex);
+        put_byte(e, 0x8B);
+        emit_mem_sib(e, dst & 7, base, idx, scale, disp);
+        return;
+    }
+    x86_64_enc_load_mem(e, width, dst, base, idx, scale, disp);
+}
+
+/* Sign-extending sub-word load: 1 -> movsbq, 2 -> movswq, 4 -> movslq.
+ * The counterpart of x86_64LoadSx in the AOT backend, and the reason
+ * it exists: a signed narrow local read out of its slot has to arrive
+ * sign-correct, and the plain load above zero-extends the sub-word
+ * widths. Folding the widen into the load beats loading and then
+ * extending, which is what the text backend emits. */
+void
+x86_64_enc_load_mem_sx(AsmEnc *e, int width, X86Reg dst, X86Reg base,
+                       int idx, int scale, int32_t disp)
+{
+    put_byte(e, rex_for(1, dst, idx, base));
+    switch (width) {
+    case 1: put_byte(e, 0x0F); put_byte(e, 0xBE); break;
+    case 2: put_byte(e, 0x0F); put_byte(e, 0xBF); break;
+    default: put_byte(e, 0x63); break;   /* movslq */
+    }
+    emit_mem_sib(e, dst & 7, base, idx, scale, disp);
+}
+
 void
 x86_64_enc_store_mem(AsmEnc *e, int width, X86Reg src, X86Reg base,
                      int idx, int scale, int32_t disp)
@@ -634,7 +742,7 @@ x86_64_enc_lea_mem(AsmEnc *e, X86Reg dst, X86Reg base,
 
 /* op $imm32, %reg for the five ALU ops; /digit per the 81 group. */
 void
-x86_64_enc_alu_imm_reg(AsmEnc *e, int op, X86Reg dst, int32_t imm)
+x86_64_enc_alu_imm_reg_w(AsmEnc *e, int w, int op, X86Reg dst, int32_t imm)
 {
     int digit;
     switch (op) {
@@ -645,7 +753,8 @@ x86_64_enc_alu_imm_reg(AsmEnc *e, int op, X86Reg dst, int32_t imm)
     case '^': digit = 6; break;
     default:  digit = 0; break;
     }
-    put_byte(e, rex_w(0, dst));
+    uint8_t rex = rex_rb(w, 0, dst);
+    if (rex) put_byte(e, rex);
     if (imm >= -128 && imm <= 127) {
         put_byte(e, 0x83);
         put_byte(e, modrm(3, digit, dst & 7));
@@ -655,6 +764,12 @@ x86_64_enc_alu_imm_reg(AsmEnc *e, int op, X86Reg dst, int32_t imm)
         put_byte(e, modrm(3, digit, dst & 7));
         put_u32(e, (uint32_t)imm);
     }
+}
+
+void
+x86_64_enc_alu_imm_reg(AsmEnc *e, int op, X86Reg dst, int32_t imm)
+{
+    x86_64_enc_alu_imm_reg_w(e, 1, op, dst, imm);
 }
 
 void
@@ -1021,6 +1136,25 @@ x86_64_emit_rex_for(AsmEnc *e, int w, int reg_num, AsmOperand *mem, int extra_b)
     if (rex) put_byte(e, rex);
 }
 
+/* Same, for an instruction whose register operand is a BYTE register:
+ * sil/dil/spl/bpl (4..7 outside the AH family) need a REX byte - a
+ * bare 0x40 if nothing else sets one - or the reg field selects the
+ * legacy high-byte registers. `mov [rbp - 8], sil` without it stores
+ * DH (which is how a jitted Str.PutChar appended garbage). */
+static void
+x86_64_emit_rex_for_r8(AsmEnc *e, AsmReg reg, AsmOperand *mem)
+{
+    uint8_t rex = 0;
+    if (reg.num >= 8) rex |= REX_R;
+    if (mem) {
+        if (mem->has_index && mem->index.num >= 8) rex |= REX_X;
+        if (mem->has_base && mem->base.num >= 8) rex |= REX_B;
+    }
+    if (!rex && reg.cls != AR_AHHIGH && reg.num >= 4 && reg.num < 8)
+        rex = 0x40;
+    if (rex) put_byte(e, rex);
+}
+
 /* Emit a ModR/M and SIB byte (+ optional disp) for a memory operand. The
  * reg field is the OTHER operand's encoding (the register being moved). */
 static void
@@ -1290,16 +1424,23 @@ x86_64_enc_mov(AsmEnc *e, AsmLine *ln)
     }
     if (asm_is_reg(d) && asm_is_mem(s)) {
         int w = x86_64_reg_width(d->reg);
+        if (w == 2) put_byte(e, 0x66);
         if (s->has_seg) x86_64_emit_seg(e, s->seg);
-        x86_64_emit_rex_for(e, w == 8, d->reg.num, s, -1);
+        if (w == 1) x86_64_emit_rex_for_r8(e, d->reg, s);
+        else x86_64_emit_rex_for(e, w == 8, d->reg.num, s, -1);
         put_byte(e, w == 1 ? 0x8A : 0x8B);
         x86_64_emit_memref(e, d->reg.num, s);
         return;
     }
     if (asm_is_mem(d) && asm_is_reg(s)) {
         int w = x86_64_reg_width(s->reg);
+        /* Without the operand-size override a 16-bit store writes FOUR
+         * bytes - `mov [rbp - 3], ax` spilling a short clobbered the
+         * two bytes above it, one of which was the saved-rbp slot. */
+        if (w == 2) put_byte(e, 0x66);
         if (d->has_seg) x86_64_emit_seg(e, d->seg);
-        x86_64_emit_rex_for(e, w == 8, s->reg.num, d, -1);
+        if (w == 1) x86_64_emit_rex_for_r8(e, s->reg, d);
+        else x86_64_emit_rex_for(e, w == 8, s->reg.num, d, -1);
         put_byte(e, w == 1 ? 0x88 : 0x89);
         x86_64_emit_memref(e, s->reg.num, d);
         return;
@@ -1317,6 +1458,33 @@ x86_64_enc_mov(AsmEnc *e, AsmLine *ln)
         else if (w == 2) put_u16(e, (uint16_t)s->imm);
         else             put_u32(e, (uint32_t)s->imm);
         return;
+    }
+    /* `mov r64, sym@GOTPCREL` - RIP-relative load of the address the
+     * linker parks in the symbol's GOT slot (REX.W 8B mod=00 rm=101).
+     * Only the decorated spelling takes this path: a bare symbol source
+     * stays an error rather than silently meaning load-or-address. */
+    if (asm_is_reg(d) && d->reg.cls == AR_GPR64 && asm_is_label(s) &&
+            s->label_name) {
+        size_t name_len = strlen(s->label_name);
+        static const char kGot[] = "@GOTPCREL";
+        if (name_len > sizeof(kGot) - 1 &&
+                strcmp(s->label_name + name_len - (sizeof(kGot) - 1),
+                       kGot) == 0) {
+            put_byte(e, rex_w(d->reg.num, 0));
+            put_byte(e, 0x8B);
+            put_byte(e, modrm(0, d->reg.num & 7, 5));
+            AsmFixup f = { 0 };
+            f.kind = AF_SYMBOL;
+            f.reloc = AFR_X86_64_GOTPCREL;
+            f.sym = xstrdup(s->label_name);
+            f.sym[name_len - (sizeof(kGot) - 1)] = '\0';
+            f.patch_offset = e->len;
+            f.width = 4;
+            f.pcrel = 1;
+            asm_add_fixup(e, f);
+            put_u32(e, 0);
+            return;
+        }
     }
     asm_err_at(e, ln, "mov: unsupported operand combination");
 }
@@ -1383,6 +1551,7 @@ x86_64_enc_alu(AsmEnc *e, AsmLine *ln, const AluVariant *v)
     }
     if (asm_is_reg(d) && asm_is_mem(s)) {
         int w = x86_64_reg_width(d->reg);
+        if (w == 2) put_byte(e, 0x66);
         if (s->has_seg) x86_64_emit_seg(e, s->seg);
         x86_64_emit_rex_for(e, w == 8, d->reg.num, s, -1);
         put_byte(e, v->op_rm);
@@ -1391,6 +1560,7 @@ x86_64_enc_alu(AsmEnc *e, AsmLine *ln, const AluVariant *v)
     }
     if (asm_is_mem(d) && asm_is_reg(s)) {
         int w = x86_64_reg_width(s->reg);
+        if (w == 2) put_byte(e, 0x66);
         if (d->has_seg) x86_64_emit_seg(e, d->seg);
         x86_64_emit_rex_for(e, w == 8, s->reg.num, d, -1);
         put_byte(e, v->op_mr);
@@ -1520,6 +1690,10 @@ x86_64_enc_jmp_local(AsmEnc *e, int local_num)
     put_byte(e, 0xE9);
     AsmFixup f = { 0 };
     f.kind = AF_LOCAL;
+    /* Tagged so the JIT finalize's reloc switch picks the rel32
+     * patcher - an untagged fixup is an error there (same tagging the
+     * arm64 dispatch had to grow). */
+    f.reloc = AFR_X86_64_JMP32;
     f.patch_offset = e->len;
     f.width = 4;
     f.pcrel = 1;
@@ -1536,6 +1710,7 @@ x86_64_enc_jcc_local(AsmEnc *e, int cc, int local_num)
     put_byte(e, (uint8_t)(0x80 | (cc & 0xF)));
     AsmFixup f = { 0 };
     f.kind = AF_LOCAL;
+    f.reloc = AFR_X86_64_JCC32;
     f.patch_offset = e->len;
     f.width = 4;
     f.pcrel = 1;
@@ -1605,6 +1780,15 @@ x86_64_enc_call(AsmEnc *e, AsmLine *ln)
         f.pcrel = 1;
         asm_add_fixup(e, f);
         put_u32(e, 0);
+        return;
+    }
+    /* call [mem] - FF /2 through a memory operand; how an indirect
+     * SysV call reaches the target parked in its stack save slot. */
+    if (asm_is_mem(o)) {
+        if (o->has_seg) x86_64_emit_seg(e, o->seg);
+        x86_64_emit_rex_for(e, 0, 2, o, -1);
+        put_byte(e, 0xFF);
+        x86_64_emit_memref(e, 2, o);
         return;
     }
     asm_err_at(e, ln, "call: unsupported operand");
@@ -2261,6 +2445,30 @@ x86_64_enc_movx(AsmEnc *e, AsmLine *ln, int sign)
     AsmOperand *s = &ln->operands[1];
     int dw = x86_64_reg_width(d->reg);
     int sw = asm_is_reg(s) ? x86_64_reg_width(s->reg) : s->width;
+    /* movsx with a 4-byte source is MOVSXD (0x63): the movslq widen the
+     * selector leans on. Zero-extension from 32 bits has no dedicated
+     * opcode - a plain 32-bit mov does it - so movzx keeps rejecting. */
+    if (sign && sw == 4) {
+        if (dw != 8) {
+            asm_err_at(e, ln, "movsx: 4-byte source needs a 64-bit dst");
+            return;
+        }
+        if (asm_is_reg(s)) {
+            put_byte(e, rex_w(d->reg.num, s->reg.num));
+            put_byte(e, 0x63);
+            put_byte(e, modrm(3, d->reg.num, s->reg.num));
+            return;
+        }
+        if (asm_is_mem(s)) {
+            if (s->has_seg) x86_64_emit_seg(e, s->seg);
+            x86_64_emit_rex_for(e, 1, d->reg.num, s, -1);
+            put_byte(e, 0x63);
+            x86_64_emit_memref(e, d->reg.num, s);
+            return;
+        }
+        asm_err_at(e, ln, "movsx: unsupported source operand");
+        return;
+    }
     if (sw != 1 && sw != 2) {
         asm_err_at(e, ln, "movzx/movsx: source must be 1 or 2 bytes "
                           "(size the operand or use a suffixed mnemonic)");
@@ -2292,6 +2500,70 @@ x86_64_enc_movx(AsmEnc *e, AsmLine *ln, int sign)
         return;
     }
     asm_err_at(e, ln, "movzx/movsx: unsupported source operand");
+}
+
+/* SETcc r8: 0F 9x /0. Byte destination only. */
+static void
+x86_64_enc_setcc(AsmEnc *e, AsmLine *ln, int cc)
+{
+    if (ln->n_operands != 1 || !asm_is_reg(&ln->operands[0]) ||
+            (ln->operands[0].reg.cls != AR_GPR8 &&
+             ln->operands[0].reg.cls != AR_AHHIGH)) {
+        asm_err_at(e, ln, "setcc: needs a byte register");
+        return;
+    }
+    AsmReg r = ln->operands[0].reg;
+    uint8_t rex = 0;
+    if (r.num >= 8) rex |= REX_B;
+    /* SPL/BPL/SIL/DIL need a bare REX; AH-family must have none. */
+    if (r.cls != AR_AHHIGH && r.num >= 4 && r.num < 8) rex |= 0x40;
+    if (rex) put_byte(e, rex);
+    put_byte(e, 0x0F);
+    put_byte(e, (uint8_t)(0x90 | (cc & 0xF)));
+    put_byte(e, modrm(3, 0, r.num));
+}
+
+/* MOVQ/MOVD gpr<->xmm bit moves: 66 [REX.W] 0F 6E (xmm <- gpr) or
+ * 0F 7E (gpr <- xmm), REX.W for the q form. MOVQ with two integer
+ * operands falls back to plain MOV - `movq` is also the AT&T width
+ * suffix and inline asm relies on that spelling. */
+static void
+x86_64_enc_movq_movd(AsmEnc *e, AsmLine *ln, int is_q)
+{
+    if (ln->n_operands != 2) {
+        asm_err_at(e, ln, "movq/movd: needs 2 operands");
+        return;
+    }
+    AsmOperand *d = &ln->operands[0];
+    AsmOperand *s = &ln->operands[1];
+    int d_xmm = asm_is_reg(d) && d->reg.cls == AR_XMM;
+    int s_xmm = asm_is_reg(s) && s->reg.cls == AR_XMM;
+    if (!d_xmm && !s_xmm) {
+        if (is_q) { x86_64_enc_mov(e, ln); return; }
+        asm_err_at(e, ln, "movd: needs an xmm operand");
+        return;
+    }
+    if (d_xmm && asm_is_reg(s) &&
+            s->reg.cls == (is_q ? AR_GPR64 : AR_GPR32)) {
+        put_byte(e, 0x66);
+        uint8_t rex = rex_rb(is_q, d->reg.num, s->reg.num);
+        if (rex) put_byte(e, rex);
+        put_byte(e, 0x0F);
+        put_byte(e, 0x6E);
+        put_byte(e, modrm(3, d->reg.num, s->reg.num));
+        return;
+    }
+    if (s_xmm && asm_is_reg(d) &&
+            d->reg.cls == (is_q ? AR_GPR64 : AR_GPR32)) {
+        put_byte(e, 0x66);
+        uint8_t rex = rex_rb(is_q, s->reg.num, d->reg.num);
+        if (rex) put_byte(e, rex);
+        put_byte(e, 0x0F);
+        put_byte(e, 0x7E);
+        put_byte(e, modrm(3, s->reg.num, d->reg.num));
+        return;
+    }
+    asm_err_at(e, ln, is_q ? "movq: needs xmm<->r64" : "movd: needs xmm<->r32");
 }
 
 /* CMOVcc r, r/m: 0F 4x /r. Byte-width destinations don't exist. */
@@ -2363,7 +2635,7 @@ x86_64_suffixed_mnemonic(const char *m, int *width_out)
     return id;
 }
 
-static void
+void
 x86_64_encode_instr(AsmEnc *e, AsmLine *ln)
 {
     int mn = ln->mnemonic_id;
@@ -2374,6 +2646,12 @@ x86_64_encode_instr(AsmEnc *e, AsmLine *ln)
     /* CMOVcc ids are contiguous and cc-ordered. */
     if (mn >= X86MN_CMOVO && mn <= X86MN_CMOVG) {
         x86_64_enc_cmov(e, ln, mn - X86MN_CMOVO);
+        return;
+    }
+
+    /* SETcc, same contiguous cc-ordered scheme. */
+    if (mn >= X86MN_SETO && mn <= X86MN_SETG) {
+        x86_64_enc_setcc(e, ln, mn - X86MN_SETO);
         return;
     }
 
@@ -2431,6 +2709,8 @@ x86_64_encode_instr(AsmEnc *e, AsmLine *ln)
             return;
         case X86MN_MOVZX:     x86_64_enc_movx(e, ln, 0); return;
         case X86MN_MOVSX:     x86_64_enc_movx(e, ln, 1); return;
+        case X86MN_MOVQ:      x86_64_enc_movq_movd(e, ln, 1); return;
+        case X86MN_MOVD:      x86_64_enc_movq_movd(e, ln, 0); return;
         case X86MN_CLD:       put_byte(e, 0xFC); return;
         case X86MN_MOVSB:     put_byte(e, 0xA4); return;
         case X86MN_CMPSB:     put_byte(e, 0xA6); return;
@@ -2587,7 +2867,8 @@ asm_encode_x86_64(AsmBlock *blk, AsmResolver *r, AsmEnc *out)
      * that remains (AF_SYMBOL / AF_CLASS_MEMBER) is left for the codegen
      * layer to turn into Mach-O relocations. */
     int resolved = 0;
-    AsmFixup *kept = xmalloc(sizeof(AsmFixup) * (size_t)out->n_fixups);
+    AsmFixup *kept = mem_ctx_alloc(&out->mem,
+            sizeof(AsmFixup) * (unsigned int)out->n_fixups, NULL);
     for (int i = 0; i < out->n_fixups; i++) {
         AsmFixup *f = &out->fixups[i];
         if (f->kind != AF_LOCAL) {
@@ -2637,7 +2918,7 @@ asm_encode_x86_64(AsmBlock *blk, AsmResolver *r, AsmEnc *out)
         }
     }
     /* Free the old fixup array and replace with the kept (non-local) ones. */
-    free(out->fixups);
+    mem_ctx_free(&out->mem, out->fixups);
     out->fixups = kept;
     out->n_fixups = resolved;
 
@@ -2807,6 +3088,8 @@ static const TasmMnemonicEntry x86_64_mnemonic_entries[] = {
     { "movabs",     X86MN_MOVABS },
     { "movapd",     X86MN_MOVAPD },
     { "movaps",     X86MN_MOVAPS },
+    { "movd",       X86MN_MOVD },
+    { "movq",       X86MN_MOVQ },
     { "movsb",    X86MN_MOVSB },
     { "movsd",      X86MN_MOVSD },
     { "movss",      X86MN_MOVSS },
@@ -2834,6 +3117,36 @@ static const TasmMnemonicEntry x86_64_mnemonic_entries[] = {
     { "sar",        X86MN_SAR },
     { "sbb",        X86MN_SBB },
     { "scasb",    X86MN_SCASB },
+    { "seta",     X86MN_SETA },
+    { "setae",    X86MN_SETAE },
+    { "setb",     X86MN_SETB },
+    { "setbe",    X86MN_SETBE },
+    { "setc",     X86MN_SETB },
+    { "sete",     X86MN_SETE },
+    { "setg",     X86MN_SETG },
+    { "setge",    X86MN_SETGE },
+    { "setl",     X86MN_SETL },
+    { "setle",    X86MN_SETLE },
+    { "setna",    X86MN_SETBE },
+    { "setnae",   X86MN_SETB },
+    { "setnb",    X86MN_SETAE },
+    { "setnbe",   X86MN_SETA },
+    { "setnc",    X86MN_SETAE },
+    { "setne",    X86MN_SETNE },
+    { "setng",    X86MN_SETLE },
+    { "setnge",   X86MN_SETL },
+    { "setnl",    X86MN_SETGE },
+    { "setnle",   X86MN_SETG },
+    { "setno",    X86MN_SETNO },
+    { "setnp",    X86MN_SETNP },
+    { "setns",    X86MN_SETNS },
+    { "setnz",    X86MN_SETNE },
+    { "seto",     X86MN_SETO },
+    { "setp",     X86MN_SETP },
+    { "setpe",    X86MN_SETP },
+    { "setpo",    X86MN_SETNP },
+    { "sets",     X86MN_SETS },
+    { "setz",     X86MN_SETE },
     { "shl",        X86MN_SHL },
     { "shr",        X86MN_SHR },
     { "sqrtsd",     X86MN_SQRTSD },

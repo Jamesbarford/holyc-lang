@@ -198,6 +198,9 @@ typedef struct AstType {
  * codegen skips emitting storage: the canonical definition lives in
  * another translation unit (typically libtos). */
 #define AST_FLAG_EXTERN  (1<<2)
+/* A `static` function: internal linkage, so the object writers emit a
+ * local symbol for it. The HolyC parser does not set this yet. */
+#define AST_FLAG_STATIC_FN (1<<3)
 
 
 /* AST_LVAR.pinned_kind values. */
@@ -575,6 +578,37 @@ int astTypeAlign(AstType *type);
 typedef int (*AstClassFieldCb)(AoStr *field_name, AstType *field, void *ud);
 int astForEachClassField(AstType *cls, AstClassFieldCb cb, void *ud);
 AstType *astClassFieldAt(AstType *cls, int idx);
+
+/* ---- aggregate initialiser helpers, shared by the data emitters ----
+ *
+ * One entry per initialiser element, in the order the bytes are laid
+ * down. `offset` is the byte offset within the aggregate, or -1 for
+ * "directly after the previous element" - HolyC has no designated
+ * initialisers, so today every slot is -1 and the order is the list
+ * order; the shape exists so a writer that CAN place at an offset
+ * (the object writer's byte image) needs no second walk. */
+typedef struct AstInitSlot {
+    Ast *value;
+    int offset;
+    u64 index;   /* position in the initialiser list */
+} AstInitSlot;
+
+/* malloc'd array of `*n_out` slots for `init_list` (an AST_ARRAY_INIT's
+ * `arrayinit`); the caller frees it. */
+AstInitSlot *astAggregateInitOrder(AstType *type, List *init_list,
+                                   u64 *n_out);
+/* Declared type of element `index` of an aggregate: the field for a
+ * class/union, the element type for an array, NULL otherwise. */
+AstType *astAggregateFieldType(AstType *type, u64 index);
+/* The object whose address an initialiser expression takes: `&Fn`,
+ * `&g`, `Fn`, or any of them behind a cast. NULL when `init` is not
+ * such an expression. */
+Ast *astInitAddressTarget(Ast *init);
+/* The lexer keeps escape sequences in their textual form (`\n` is
+ * the two bytes `\` `n`). Decode `len` bytes of that into `out`
+ * (which must hold at least len+1 bytes) and return the decoded
+ * length; `out` is NUL-terminated. */
+int astDecodeStringLiteral(const char *s, int len, char *out);
 
 /* Platform C-ABI classification of an aggregate passed/returned by value:
  *  - AAPCS_HFA: Homogeneous Floating-point Aggregate (1-4 same FP members)

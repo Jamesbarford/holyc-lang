@@ -169,6 +169,142 @@ x86_64_enc_mov_mem_disp_r64_test(TestCtx *T)
     return EXPECT_BYTES(T, 0x48, 0x89, 0x43, 0x08);
 }
 
+/* The 16-bit forms need the 0x66 operand-size override; without it a
+ * short store writes FOUR bytes. `mov [rbp - 3], ax` spilling a short
+ * clobbered the saved-rbp slot - test 101's infinite ret loop. */
+int
+x86_64_enc_mov_mem_r16_test(TestCtx *T)
+{
+    test_asm_enc(T, "mov [rbx], ax");
+    return EXPECT_BYTES(T, 0x66, 0x89, 0x03);
+}
+
+int
+x86_64_enc_mov_r16_mem_test(TestCtx *T)
+{
+    test_asm_enc(T, "mov ax, [rbx]");
+    return EXPECT_BYTES(T, 0x66, 0x8b, 0x03);
+}
+
+int
+x86_64_enc_mov_mem_disp_r16_test(TestCtx *T)
+{
+    test_asm_enc(T, "mov [rbp - 3], ax");
+    return EXPECT_BYTES(T, 0x66, 0x89, 0x45, 0xfd);
+}
+
+int
+x86_64_enc_mov_mem_r8_test(TestCtx *T)
+{
+    test_asm_enc(T, "mov [rbx], al");
+    return EXPECT_BYTES(T, 0x88, 0x03);
+}
+
+/* sil/dil/spl/bpl need a bare REX or the reg field decodes as the
+ * legacy high-byte registers: without it `mov [rbp - 8], sil` stored
+ * DH (Str.PutChar appending garbage under the JIT). */
+int
+x86_64_enc_mov_mem_sil_test(TestCtx *T)
+{
+    test_asm_enc(T, "mov [rbp - 8], sil");
+    return EXPECT_BYTES(T, 0x40, 0x88, 0x75, 0xf8);
+}
+
+int
+x86_64_enc_mov_sil_mem_test(TestCtx *T)
+{
+    test_asm_enc(T, "mov sil, [rbp - 8]");
+    return EXPECT_BYTES(T, 0x40, 0x8a, 0x75, 0xf8);
+}
+
+int
+x86_64_enc_mov_mem_r11b_test(TestCtx *T)
+{
+    test_asm_enc(T, "mov [rbx], r11b");
+    return EXPECT_BYTES(T, 0x44, 0x88, 0x1b);
+}
+
+int
+x86_64_enc_add_mem_r16_test(TestCtx *T)
+{
+    test_asm_enc(T, "add [rbx], ax");
+    return EXPECT_BYTES(T, 0x66, 0x01, 0x03);
+}
+
+/* ==================================================== dispatch additions
+ * (per-line encoder gaps filled for the MIR selector: movsxd, setcc,
+ * movq/movd gpr<->xmm, call through memory). */
+
+int
+x86_64_enc_movsxd_r_r_test(TestCtx *T)
+{
+    test_asm_enc(T, "movsx rax, eax");
+    return EXPECT_BYTES(T, 0x48, 0x63, 0xc0);
+}
+
+int
+x86_64_enc_movsxd_r11_edx_test(TestCtx *T)
+{
+    test_asm_enc(T, "movsx r11, edx");
+    return EXPECT_BYTES(T, 0x4c, 0x63, 0xda);
+}
+
+int
+x86_64_enc_movsxd_mem_test(TestCtx *T)
+{
+    test_asm_enc(T, "movsx rax, u32 [rbx]");
+    return EXPECT_BYTES(T, 0x48, 0x63, 0x03);
+}
+
+int
+x86_64_enc_sete_al_test(TestCtx *T)
+{
+    test_asm_enc(T, "sete al");
+    return EXPECT_BYTES(T, 0x0f, 0x94, 0xc0);
+}
+
+int
+x86_64_enc_setb_r11b_test(TestCtx *T)
+{
+    test_asm_enc(T, "setb r11b");
+    return EXPECT_BYTES(T, 0x41, 0x0f, 0x92, 0xc3);
+}
+
+int
+x86_64_enc_setge_sil_test(TestCtx *T)
+{
+    test_asm_enc(T, "setge sil");
+    return EXPECT_BYTES(T, 0x40, 0x0f, 0x9d, 0xc6);
+}
+
+int
+x86_64_enc_movq_xmm_gpr_test(TestCtx *T)
+{
+    test_asm_enc(T, "movq xmm0, rax");
+    return EXPECT_BYTES(T, 0x66, 0x48, 0x0f, 0x6e, 0xc0);
+}
+
+int
+x86_64_enc_movq_gpr_xmm_test(TestCtx *T)
+{
+    test_asm_enc(T, "movq rax, xmm0");
+    return EXPECT_BYTES(T, 0x66, 0x48, 0x0f, 0x7e, 0xc0);
+}
+
+int
+x86_64_enc_movd_xmm_gpr_test(TestCtx *T)
+{
+    test_asm_enc(T, "movd xmm1, eax");
+    return EXPECT_BYTES(T, 0x66, 0x0f, 0x6e, 0xc8);
+}
+
+int
+x86_64_enc_call_mem_test(TestCtx *T)
+{
+    test_asm_enc(T, "call [rsp + 8]");
+    return EXPECT_BYTES(T, 0xff, 0x54, 0x24, 0x08);
+}
+
 /* ============================================================ ALU r-imm / r-mem */
 
 int
@@ -1156,6 +1292,24 @@ main(void)
         PrepTest(x86_64_enc_add_imm32_test),
         PrepTest(x86_64_enc_add_r_mem_test),
         PrepTest(x86_64_enc_add_mem_r_test),
+        PrepTest(x86_64_enc_mov_mem_r16_test),
+        PrepTest(x86_64_enc_mov_r16_mem_test),
+        PrepTest(x86_64_enc_mov_mem_disp_r16_test),
+        PrepTest(x86_64_enc_mov_mem_r8_test),
+        PrepTest(x86_64_enc_mov_mem_sil_test),
+        PrepTest(x86_64_enc_mov_sil_mem_test),
+        PrepTest(x86_64_enc_mov_mem_r11b_test),
+        PrepTest(x86_64_enc_add_mem_r16_test),
+        PrepTest(x86_64_enc_movsxd_r_r_test),
+        PrepTest(x86_64_enc_movsxd_r11_edx_test),
+        PrepTest(x86_64_enc_movsxd_mem_test),
+        PrepTest(x86_64_enc_sete_al_test),
+        PrepTest(x86_64_enc_setb_r11b_test),
+        PrepTest(x86_64_enc_setge_sil_test),
+        PrepTest(x86_64_enc_movq_xmm_gpr_test),
+        PrepTest(x86_64_enc_movq_gpr_xmm_test),
+        PrepTest(x86_64_enc_movd_xmm_gpr_test),
+        PrepTest(x86_64_enc_call_mem_test),
         PrepTest(x86_64_enc_add_r8_r9_test),
         PrepTest(x86_64_enc_sub_imm_test),
         PrepTest(x86_64_enc_and_r32_imm_test),

@@ -92,6 +92,10 @@ typedef enum IrOp {
     IR_VA_ARG,      /* Get next variadic argument */
     IR_VA_START,    /* Initialize va_list */
     IR_VA_END,      /* Clean up va_list */
+    /* `__builtin_frame_address(0)` - this function's frame pointer.
+     * Only the backend knows which register that is, and a function
+     * containing one cannot elide its frame. */
+    IR_FRAME_ADDR,
     /* Verbatim assembly text from an inline `asm { ... }` block.
      * The per-arch codegen just dumps the bytes into the output;
      * the user is responsible for asm validity. The raw text lives
@@ -189,6 +193,13 @@ typedef struct IrVar {
 } IrVar;
 
 #define IR_VAL_FLAG_FUNC 0x1
+/* This value's declared type is UNSIGNED. IrValueType carries width but
+ * not sign - I8/I16/I32 say nothing either way - and a narrow value
+ * held in a register has to be canonicalised to its own type on every
+ * write, which means knowing whether that is `sxth` or `uxth`. Set on
+ * IR_VAL_LOCAL / IR_VAL_PARAM at lowering, where the AstType is still
+ * in hand. */
+#define IR_VAL_FLAG_UNSIGNED 0x2
 
 /* Where an IrValue physically lives after register allocation.
  * Filled in by the regalloc pass; consumed by codegen so it never
@@ -412,6 +423,16 @@ typedef struct IrCgCtx {
      * and epilogue emits a bare `retq`. Set once before emission. */
     int omit_frame;
 
+    /* AAPCS64 (Linux aarch64) variadic support. When this function reads
+     * a C `va_list`, the prologue spills the argument registers to a
+     * save area and builds a frame-resident va_list record; these are
+     * its x29-relative offsets, and `__builtin_va_region` (IR_VA_START)
+     * returns the address of the record. Set once at function emit
+     * start; unused on the other targets. */
+    int uses_va_start;
+    int va_save_off;   /* base of the register save area (x0 slot) */
+    int va_list_off;   /* the frame-resident va_list record         */
+
     /* The function being emitted, as an AST. The IR alone cannot say
      * where a variadic list begins: that follows from how the ABI
      * placed the NAMED parameters, which is a property of the
@@ -447,12 +468,53 @@ typedef struct IrProgram {
 } IrProgram;
 
 #define IR_LOOP_STACK_MAX 32
+#define IR_SCOPE_STACK_MAX 64
+/* Bits in the cleanup frame's `active` mask, so one per `defer`. */
+#define IR_UNWIND_MAX_DEFERS 64
 
 /* Keep track of breaks and continues */
 typedef struct IrLoopCtx {
     IrBlock *continue_block;  /* target of `continue` */
     IrBlock *break_block;     /* target of `break` */
+    /* Scope depth when the loop was entered. `break` and `continue`
+     * leave every scope opened since, so they run those scopes'
+     * cleanups and no others. */
+    u16 scope_depth;
 } IrLoopCtx;
+
+/* Something to run when a scope is left.
+ *
+ * Two producers, one mechanism. A `defer` contributes its statement,
+ * re-lowered at each exit. A `try` contributes the HCC_TryLeave that
+ * pops its catch frame - which is why an early `return` out of a try
+ * body no longer leaves a frame pointing at a dead stack frame, the
+ * next throw landing in it and hanging the process. */
+typedef enum IrCleanupKind {
+    IR_CLEANUP_DEFER = 0,
+    IR_CLEANUP_TRY_LEAVE,
+} IrCleanupKind;
+
+typedef struct IrCleanup {
+    IrCleanupKind kind;
+    Ast *stmt;        /* DEFER: the statement to lower */
+    IrValue *frame;   /* TRY_LEAVE: address of the CatchFrame */
+    /* DEFER: which bit of the cleanup frame's `active` mask stands for
+     * this defer. Assigned in lowering order within the function. */
+    int bit;
+} IrCleanup;
+
+/* One lexical block's pending cleanups, innermost last. `cleanups` is
+ * NULL until something registers, so an ordinary block costs nothing. */
+/* One defer as the landing pad needs it: the statement to re-emit and
+ * the bit that says whether it is live. */
+typedef struct IrUnwindDefer {
+    Ast *stmt;
+    int bit;
+} IrUnwindDefer;
+
+typedef struct IrScopeCtx {
+    List *cleanups;   /* List<IrCleanup *>, registration order */
+} IrScopeCtx;
 
 typedef struct IrCtx {
     /* Current function being converted to IR */
@@ -463,9 +525,43 @@ typedef struct IrCtx {
     IrProgram *prog;
     /* The main compiler struct */
     Cctrl *cc;
+    /* Declared return type of the function being lowered. Needed at a
+     * `return` to narrow the value to it with the right SIGNEDNESS -
+     * IrValueType carries width but not sign, and IrFunction has no
+     * link back to the AST. */
+    AstType *cur_rettype;
 
     IrLoopCtx loop_stack[IR_LOOP_STACK_MAX];
     u16 loop_depth;
+    /* Lexical scopes currently open, for `defer` and try-frame pops. */
+    IrScopeCtx scope_stack[IR_SCOPE_STACK_MAX];
+    u16 scope_depth;
+    /* Non-zero while a cleanup's statement is being lowered. The same
+     * statement is emitted at every exit of its block, so a local
+     * declared inside it is registered more than once - which the
+     * duplicate check would reject. The AST-level local has exactly
+     * one stack slot either way (the layout pass assigns one per AST
+     * local), and only one exit path runs, so the copies share it. */
+    u16 cleanup_depth;
+
+    /* ---- unwind landing pad --------------------------------------
+     * Set only for a function that has a `defer` AND calls something
+     * that might throw (see ir-analysis.h). `unwind_frame` is the
+     * address of its CleanupFrame; `unwind_defers` collects every
+     * defer lowered in the function so the pad can re-emit them, each
+     * guarded by its bit in the frame's `active` mask. */
+    IrValue *unwind_frame;
+    /* The pad OWNS these. A scope's cleanup records are freed when the
+     * scope pops, long before the pad is emitted, so it cannot borrow
+     * them. */
+    List *unwind_defers;      /* List<IrUnwindDefer *> */
+    int unwind_next_bit;
+    /* Analysis result for the whole translation unit, or NULL. */
+    void *throw_info;
+    /* Label name -> scope depth + 1, for this function only. A `goto`
+     * compares its own depth with its target's to know which scopes
+     * the jump leaves. See irLabelScopeDepths. */
+    Map *label_depths;
     /*`Map<AoStr *label_name, IrBlock *>` for goto and labels within the current
      * function. */
     Map *labels;

@@ -55,6 +55,55 @@
 #define IRCG_AGG_RET_FORWARD (1u << 5)
 #define IRCG_RET_IN_REGS     (1u << 6)
 
+/* This integer op may be computed in the 32-bit form (`add w0, w0, w1`).
+ *
+ * Only where a canonicalising IR_TRUNC follows - which is exactly what
+ * irNormaliseNarrowInt emits, and where it sets this. That coupling is
+ * the whole safety argument, so the flag is set THERE rather than
+ * inferred from the width here.
+ *
+ * A W-register write ZERO-extends into the full X register, where the
+ * rest of the compiler keeps a narrow SIGNED value sign-extended. So a
+ * w-form op whose truncation was elided produces a positive number for
+ * a negative result. Widths alone cannot tell the two apart: a narrow
+ * IADD reached by a path that does not normalise (`x += y`, RMW, GEP
+ * address arithmetic) must keep the 64-bit form. */
+#define IRCG_OP_NARROW       (1u << 7)
+
+/* Set on an IR_SEXT / IR_ZEXT that widens a PROMOTED narrow local whose
+ * register home is already canonical - the extension would compute the
+ * value the register already holds. The pass also gives the
+ * destination that same home, so the whole instruction is a
+ * register-to-itself copy and the backend emits nothing.
+ *
+ * The instruction is NOT removed, and that is the point: it is the only
+ * record that the local is READ here. Deleting it made liveness
+ * conclude nothing consumed the local, so the store that filled its
+ * home was marked dead and never emitted - `unsigned char a = big;`
+ * printed 0. See irElideCanonicalWiden. */
+#define IRCG_WIDEN_IS_COPY   (1u << 8)
+
+/* Bytes to move when SPILLING a value to its own slot and reading it
+ * back, which is not the same question as how wide the value is.
+ *
+ * A TEMPORARY always gets a full 8-byte slot (irCgAllocTmp), and the
+ * register holds a value already canonical for its type. Storing only
+ * the tagged width and reloading it re-derives the upper bits from the
+ * load - and a sub-word load ZERO-extends on both targets. That turned
+ * a `short` round trip into an unsigned one: `sturh w0` / `ldurh w9`
+ * (and `movw` / `movzwq`) read 60000 back out of -5536.
+ *
+ * A LOCAL keeps its declared width: its slot is that wide, and writing
+ * eight bytes would tread on its neighbours.
+ *
+ * Sign is not consulted, and does not need to be - moving all 64 bits
+ * preserves whatever canonical form the register already held. */
+u32 irValueByteSize(IrValue *v);
+static inline u32 irSpillWidth(IrValue *v) {
+    if (!v) return 8;
+    return v->kind == IR_VAL_TMP ? 8u : irValueByteSize(v);
+}
+
 /* Where in an instruction's emission a clobber question is asked.
  * Both backends materialise r1 into their first scratch register and
  * r2 into the second, so a forwarded value's survival depends on how
@@ -164,11 +213,32 @@ u32 irValueByteSize(IrValue *v);
  * prologue (calls require rsp to be 16-byte aligned at the call
  * point). Linear in function size; codegen-driver only. */
 int irFnHasCalls(IrFunction *fn);
+int irFnHasOp(IrFunction *fn, IrOp op);
 
 /* The callee-saved registers this function pins, in pool order and
  * without duplicates. Vec<AoStr *> borrowed from the pool; caller frees
  * the vector, not the strings. Empty when nothing is pinned. */
 Vec *irCgPinnedCalleeSaved(IrFunction *fn);
+
+/* Is `reg` one of the ABI's argument registers?
+ *
+ * Exported because register assignment does not all happen in one
+ * place: irOptPromoteToRegs and irCgAssignRegisters hand them out, but
+ * irElideCanonicalWiden SHARES one it did not choose, and any of them
+ * can land a value in an argument register. See irCollectCallArgValues
+ * for why that needs asking about. */
+int irRegIsAbiArg(IrRegPool *pool, AoStr *reg);
+int irRegSurvivesCall(IrRegPool *pool, AoStr *reg);
+
+/* Every value handed to a call as an argument (and an indirect call's
+ * target). None of them may live in an ABI argument register: the
+ * argument-loading sequence writes those in ABI order, so a value
+ * waiting in argument register K that is itself a later argument has
+ * been overwritten by the time it is read.
+ *
+ * Such a value is NOT a call "crosser" - it dies AT the call - so
+ * irCollectCallCrossers does not catch it. */
+void irCollectCallArgValues(IrFunction *fn, Set *out);
 
 /* Bind hot address-free locals and params to callee-saved registers by
  * setting `pinned_reg`, the same field a source-level `reg <REG>` uses.

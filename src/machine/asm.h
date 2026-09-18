@@ -180,6 +180,29 @@ void asm_block_free(AsmBlock *b);
  * encoded bytes (e.g. -S output for `asm {}` blocks). */
 int asm_line_format(const AsmLine *ln, char *buf, size_t buflen);
 
+/* Same, in GNU-as dialect for an external assembler: `@@N` labels
+ * become `<local_prefix>N`, memory-resident symbols print
+ * `[base, sym]`, float immediates keep their decimal point. Symbol
+ * text (including any @PAGE/:lo12: decoration) passes through
+ * verbatim. */
+int asm_line_format_gas(const AsmLine *ln, const char *local_prefix,
+                        char *buf, size_t buflen);
+
+/* The x86 flavour, for `.intel_syntax noprefix` output: bare
+ * immediates, `byte/word/dword/qword ptr` size hints, `[rip + sym]`
+ * spellings for the RIP-relative lea/GOT-load forms, and `movsxd`
+ * where a dword source demands it. */
+int asm_line_format_gas_x86(const AsmLine *ln, const char *local_prefix,
+                            char *buf, size_t buflen);
+
+/* The same stream in AT&T: reversed operands, `%`/`$` sigils,
+ * `disp(base, index, scale)` memory, `*` on indirect branches, and a
+ * b/w/l/q suffix where no register operand implies the width. Assembles
+ * to the same bytes as the Intel spelling - the x86 syntax test asserts
+ * exactly that. */
+int asm_line_format_att_x86(const AsmLine *ln, const char *local_prefix,
+                            char *buf, size_t buflen);
+
 
 /* Debug print. */
 void asm_block_print(FILE *f, AsmBlock *b, int indent);

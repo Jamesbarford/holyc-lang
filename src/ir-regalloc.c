@@ -221,6 +221,10 @@ typedef struct IrCgRange {
     u32 var_id;
     int first;
     int last;
+    /* How many times this tmp is MENTIONED - its definition plus every
+     * read. What the allocator wants is the read count, which is this
+     * minus one; see the callee-saved profitability test below. */
+    int refs;
     /* The canonical IrValue for this tmp. All references share the
      * same pointer, so stashing it here lets the allocator write
      * `iv->loc` at the end of the pass without an extra lookup. */
@@ -246,11 +250,13 @@ static void irCgRecordRef(Map *ranges, IrValue *v, int pos) {
         r->var_id = id;
         r->first  = pos;
         r->last   = pos;
+        r->refs   = 1;
         r->val    = v;
         mapAdd(ranges, (void *)(u64)id, (void *)r);
     } else {
         if (pos < r->first) r->first = pos;
         if (pos > r->last)  r->last  = pos;
+        r->refs++;
     }
 }
 
@@ -329,20 +335,23 @@ static int irPromoEligible(IrValue *v) {
     if (v->loc.kind == IR_LOC_REG) return 0;
     if (v->type == IR_TYPE_VOID) return 0;
     if (v->type == IR_TYPE_ASM_FUNCTION) return 0;
-    /* Full register width only.
+    /* Narrow locals ARE eligible.
      *
-     * A local is a memory cell and its SLOT enforces its declared
-     * width: `stur w0` truncates to four bytes and the matching load
-     * re-extends. A register does neither - `mov x13, x0` keeps all 64
-     * bits - so promoting a narrow local silently changes its value.
+     * A local is a memory cell and its SLOT used to enforce its
+     * declared width for free: `sturh w0` kept two bytes and the
+     * matching load re-extended. A register does neither - `mov x13,
+     * x0` keeps all 64 - so this once required a full-width value.
      *
-     * Emitting the truncation on store would lift this, but the right
-     * instruction depends on signedness and IrValueType does not carry
-     * it: I8/I16/I32 say nothing about sign. Temporaries are unaffected
-     * because their widths are managed by explicit IR_TRUNC / IR_SEXT,
-     * which is what IRCG_TRUNC_SIGNED exists to disambiguate. */
+     * The canonical form is now produced explicitly on every write to a
+     * register home instead (aarch64StoreNarrowHome / its JIT twin),
+     * which is what the signedness recorded on the value is for:
+     * IrValueType gives the width, IR_VAL_FLAG_UNSIGNED the sign, and
+     * between them they pick `sxth` from `uxth`.
+     *
+     * Floats are excluded - a narrow float in a register is an F32, not
+     * a truncated F64, and nothing above canonicalises one. */
     u32 sz = irValueByteSize(v);
-    if (sz != 8) return 0;
+    if (sz != 8 && !irIsInt(v->type)) return 0;
     return 1;
 }
 
@@ -515,6 +524,121 @@ static int irRegIsHandPinned(IrFunction *fn, AoStr *reg) {
     return 0;
 }
 
+/* ---- ABI argument registers as allocatable storage -------------------
+ *
+ * An argument register is caller-saved, so a value that never crosses a
+ * call could live in one for free - the same bargain leaf_free_regs
+ * exists to make. Two things stop it, and both are properties of the
+ * ABI rather than of any one backend, which is why the reasoning lives
+ * here rather than in x86_64.c or aarch64.c:
+ *
+ *   INCOMING   a parameter ARRIVES in one of these registers and is
+ *              read out of it. Handing that register to something else
+ *              destroys the parameter.
+ *
+ *   OUTGOING   the argument-loading sequence writes them in ABI order,
+ *              so a value living in argument register K that is itself
+ *              argument J (J placed after K) is gone by the time it is
+ *              read. Note such a value is NOT a "call crosser" - it
+ *              dies AT the call - so irCollectCallCrossers does not
+ *              catch it.
+ *
+ * Both tests below are deliberately whole-function and conservative.
+ * The precise versions want parameter live ranges in the interference
+ * graph, which is a bigger change; these give most of the benefit for
+ * a fraction of the risk, and err only towards refusing a register.
+ *
+ * Every test is gated on the register actually BEING an argument
+ * register, so a pool whose leaf-free list contains none of them - as
+ * aarch64's x13/x14/x15 does - is unaffected. */
+/* Does a value in `reg` survive a call? True only for the callee-saved
+ * pool; the "leaf free" registers are caller-saved and a call may
+ * write them. */
+int irRegSurvivesCall(IrRegPool *pool, AoStr *reg) {
+    if (!pool || !reg || !pool->callee_saved_regs) return 0;
+    for (u64 i = 0; i < pool->callee_saved_regs->size; ++i) {
+        if (irRegNameEq((AoStr *)pool->callee_saved_regs->entries[i], reg))
+            return 1;
+    }
+    return 0;
+}
+
+int irRegIsAbiArg(IrRegPool *pool, AoStr *reg) {
+    if (!pool || !reg) return 0;
+    Vec *lists[2];
+    lists[0] = pool->int_arg_regs;
+    lists[1] = pool->float_arg_regs;
+    for (int L = 0; L < 2; ++L) {
+        if (!lists[L]) continue;
+        for (u64 i = 0; i < lists[L]->size; ++i) {
+            if (irRegNameEq((AoStr *)lists[L]->entries[i], reg)) return 1;
+        }
+    }
+    return 0;
+}
+
+/* INCOMING: does a parameter arrive in `reg` and get read from it?
+ *
+ * "Read anywhere" rather than "read up to position N" on purpose. A
+ * linear last-use position is unsound around a loop: a parameter read
+ * at the top of a loop body is read again after the back edge, so a
+ * range that starts textually later can still overlap it. Reserving
+ * the register for the whole function sidesteps that without needing
+ * parameter ranges in the liveness sets. */
+static int irRegHoldsReadParam(IrFunction *fn, AoStr *reg) {
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            IrValue *ops[3];
+            ops[0] = I->r1; ops[1] = I->r2; ops[2] = I->idx;
+            for (int k = 0; k < 3; ++k) {
+                IrValue *v = ops[k];
+                if (!v || v->kind != IR_VAL_PARAM) continue;
+                if (v->loc.kind != IR_LOC_REG || !v->loc.as.reg) continue;
+                if (irRegNameEq(v->loc.as.reg, reg)) return 1;
+            }
+            /* IR_BR / IR_RET carry their value operand in dst. */
+            if ((I->op == IR_BR || I->op == IR_RET) && I->dst &&
+                I->dst->kind == IR_VAL_PARAM &&
+                I->dst->loc.kind == IR_LOC_REG && I->dst->loc.as.reg &&
+                irRegNameEq(I->dst->loc.as.reg, reg))
+            {
+                return 1;
+            }
+            if (I->op == IR_CALL && I->r1 && I->r1->as.array.values) {
+                Vec *cargs = I->r1->as.array.values;
+                for (u64 i = 0; i < cargs->size; ++i) {
+                    IrValue *v = (IrValue *)cargs->entries[i];
+                    if (!v || v->kind != IR_VAL_PARAM) continue;
+                    if (v->loc.kind != IR_LOC_REG || !v->loc.as.reg) continue;
+                    if (irRegNameEq(v->loc.as.reg, reg)) return 1;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+/* OUTGOING: which values are handed to a call as arguments. */
+void irCollectCallArgValues(IrFunction *fn, Set *out) {
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (I->op != IR_CALL) continue;
+            if (!I->r1 || !I->r1->as.array.values) continue;
+            Vec *cargs = I->r1->as.array.values;
+            for (u64 i = 0; i < cargs->size; ++i) {
+                irLiveAddRef(out, (IrValue *)cargs->entries[i]);
+            }
+            /* An indirect call's target is materialised the same way
+             * and lands in the same hazard. */
+            if (I->r2) irLiveAddRef(out, I->r2);
+        }
+    }
+}
+
 void irOptPromoteToRegs(IrFunction *fn) {
     if (g_no_reg_promote) return;
     IrRegPool *pool = irRegPoolGet();
@@ -665,7 +789,17 @@ void irOptPromoteToRegs(IrFunction *fn) {
      * candidate holding it is skipped above, but the REGISTER has to
      * come out of the pool as well or a promoted value lands on top of
      * it - silently, since both write the same name. */
-    u64 int_next = 0, flt_next = 0, free_next = 0;
+    /* Which values are handed to a call as arguments - they may not
+     * take an ABI argument register. See irCollectCallArgValues. */
+    Set *call_args = setNew(16, &set_uint_type);
+    irCollectCallArgValues(fn, call_args);
+
+    /* Separate free-list cursors per class: the list mixes x and d
+     * registers, and one shared cursor let a float candidate taking
+     * d16 strand the x registers before it for every later int
+     * candidate. The classes are disjoint, so two cursors over the
+     * same list cannot double-allocate. */
+    u64 int_next = 0, flt_next = 0, free_int_next = 0, free_flt_next = 0;
     for (u64 i = 0; i < n; ++i) {
         /* A value that never crosses a call costs nothing to keep in a
          * caller-saved register - no save, no restore - so the floor,
@@ -676,15 +810,22 @@ void irOptPromoteToRegs(IrFunction *fn) {
         int crosses = setHas(crossers, (void *)(u64)irVarId(cands[i].val));
         int use_free = have_free && !crosses;
         if (!use_free && cands[i].uses < kMinUses) continue;
+        int is_call_arg =
+            setHas(call_args, (void *)(u64)irVarId(cands[i].val));
 
         AoStr *chosen = NULL;
         Vec *from = use_free ? pool->leaf_free_regs : pool->callee_saved_regs;
-        u64 *cursor = use_free ? &free_next
-                               : (cands[i].is_float ? &flt_next : &int_next);
+        u64 *cursor = use_free
+                    ? (cands[i].is_float ? &free_flt_next : &free_int_next)
+                    : (cands[i].is_float ? &flt_next : &int_next);
         for (u64 r = *cursor; r < from->size; ++r) {
             AoStr *cand = (AoStr *)from->entries[r];
             if (irPromoRegIsFloat(cand) != cands[i].is_float) continue;
             if (irRegIsHandPinned(fn, cand)) continue;
+            if (irRegIsAbiArg(pool, cand)) {
+                if (is_call_arg) continue;
+                if (irRegHoldsReadParam(fn, cand)) continue;
+            }
             chosen = cand;
             *cursor = r + 1;
             break;
@@ -692,6 +833,7 @@ void irOptPromoteToRegs(IrFunction *fn) {
         if (!chosen) continue;  /* pool exhausted; this one keeps its slot */
         cands[i].val->pinned_reg = chosen;
     }
+    setRelease(call_args);
     setRelease(crossers);
     free(cands);
 }
@@ -1120,6 +1262,12 @@ void irCgAllocAllTmps(IrRaCtx *ra, int starting_offset) {
     int *reg_last = NULL;
     int n_regs = 0;
     int *reg_survives = NULL;   /* 1 = safe for a value crossing a call */
+    int *reg_abi_arg  = NULL;   /* 1 = an ABI argument register        */
+    /* Values handed to a call as arguments; they may not take an ABI
+     * argument register, because the argument-loading sequence writes
+     * those in order. See irCollectCallArgValues. */
+    Set *tmp_call_args = setNew(16, &set_uint_type);
+    irCollectCallArgValues(ra->func, tmp_call_args);
     if (rpool) {
         /* Free registers first, callee-saved second: the former cost
          * nothing, the latter a save/restore pair, so exhaust the free
@@ -1135,14 +1283,25 @@ void irCgAllocAllTmps(IrRaCtx *ra, int starting_offset) {
             regs = (AoStr **)calloc(total, sizeof(AoStr *));
             reg_last = (int *)calloc(total, sizeof(int));
             reg_survives = (int *)calloc(total, sizeof(int));
+            reg_abi_arg  = (int *)calloc(total, sizeof(int));
             for (int L = 0; L < 2; ++L) {
                 if (!lists[L]) continue;
                 for (u64 i = 0; i < lists[L]->size; ++i) {
                     AoStr *cand = (AoStr *)lists[L]->entries[i];
                     if (irRegIsHandPinned(ra->func, cand)) continue;
+                    int is_arg = irRegIsAbiArg(rpool, cand);
+                    /* A parameter arrives in this register and is read
+                     * out of it - the register is spoken for, for the
+                     * whole function. Dropped from the pool entirely
+                     * rather than tested per range: reserving it only
+                     * up to the parameter's last read is unsound around
+                     * a loop. */
+                    if (is_arg && irRegHoldsReadParam(ra->func, cand))
+                        continue;
                     regs[n_regs] = cand;
                     reg_last[n_regs] = INT_MIN;   /* free from the start */
                     reg_survives[n_regs] = (L == 1);
+                    reg_abi_arg[n_regs] = is_arg;
                     n_regs++;
                 }
             }
@@ -1162,9 +1321,37 @@ void irCgAllocAllTmps(IrRaCtx *ra, int starting_offset) {
             if (sz > 0 && sz <= 8) {
                 int needs_survivor =
                     setHas(tmp_crossers, (void *)(u64)r->var_id);
+                /* A CALLEE-SAVED register has to be written in the
+                 * prologue and read back in the epilogue whatever it
+                 * holds, so it only repays that pair if the tmp it
+                 * holds would otherwise have done more memory traffic
+                 * than that: one store at the definition plus one load
+                 * per read. Two reads break even, so ask for two.
+                 *
+                 * A caller-saved (leaf-free) register costs nothing and
+                 * is handed out regardless - which is why this test is
+                 * on `reg_survives` rather than on the tmp.
+                 *
+                 * Without it, `int add(int a, int b)` put both of its
+                 * single-read temporaries in callee-saved registers and
+                 * paid six instructions - a frame, two saves and two
+                 * restores - to avoid four memory accesses.
+                 *
+                 * irOptPromoteToRegs applies the same reasoning to
+                 * locals and params via kMinUses; the tmp allocator had
+                 * no threshold at all. */
+                int reads = r->refs - 1;
+                int is_call_arg =
+                    setHas(tmp_call_args, (void *)(u64)r->var_id);
                 for (int k = 0; k < n_regs; ++k) {
                     if (irPromoRegIsFloat(regs[k]) != want_float) continue;
                     if (needs_survivor && !reg_survives[k]) continue;
+                    if (reg_survives[k] && reads < 2) continue;
+                    /* Handed to a call as an argument: the loading
+                     * sequence writes the argument registers in ABI
+                     * order, so one of them cannot also be where this
+                     * value is waiting. */
+                    if (reg_abi_arg[k] && is_call_arg) continue;
                     if (reg_last[k] >= r->first) continue;
                     reg_last[k] = r->last;
                     r->val->loc.kind   = IR_LOC_REG;
@@ -1204,6 +1391,8 @@ next_range: ;
     free(regs);
     free(reg_last);
     free(reg_survives);
+    free(reg_abi_arg);
+    setRelease(tmp_call_args);
 
     mapIterInit(ranges, &it_r);
     while (mapIterNext(&it_r)) {
@@ -1499,11 +1688,19 @@ static int irFnLocalSlotNeeded(IrFunction *fn, IrValue *local) {
  * the entry rsp to be 8 mod 16, which the rbp push gives us; without
  * a frame we'd be 8-misaligned by the return addr alone). */
 int irFnHasCalls(IrFunction *fn) {
+    return irFnHasOp(fn, IR_CALL);
+}
+
+/* True if fn contains `op` anywhere. Both backends ask this of the
+ * ops whose lowering constrains the FRAME - a `va_start` or a
+ * `__builtin_frame_address` reads x29/rbp, so the leaf-function frame
+ * elision has to be switched off for it. */
+int irFnHasOp(IrFunction *fn, IrOp op) {
     listForEach(fn->blocks) {
         IrBlock *bb = (IrBlock *)it->value;
         listForEach(bb->instructions) {
             IrInstr *I = (IrInstr *)it->value;
-            if (I->op == IR_CALL) return 1;
+            if (I->op == op) return 1;
         }
     }
     return 0;
@@ -1533,8 +1730,19 @@ int irCgComputeAstLayout(Ast *ast_func, IrFunction *ir_func) {
          * irCgBindAstLoffs so both agree on the surviving loffs. */
         if (iv && !irFnLocalSlotNeeded(ir_func, iv))
             continue;
-        total += align(size, 8);
-        new_offset -= size;
+        /* The SLOT, not the raw size, for both. `total` was already
+         * 8-aligned per local while the offset walked down by the raw
+         * width - so a single 4-byte local left every local after it
+         * at a 4-aligned address. An array of pointers landed on one,
+         * and `IrValue **slots[2] = { &I->r1, &I->r2 };` in
+         * irNarrowOpOperands indexed it with `ldr x, [base, i, lsl
+         * #3]` from a base 4 bytes out of true.
+         *
+         * It also meant `total` and the offsets disagreed, so the
+         * region was bigger than the addresses it handed out. */
+        int slot = align(size, 8);
+        total += slot;
+        new_offset -= slot;
         l->loff = new_offset;
     }
 

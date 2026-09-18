@@ -3,9 +3,9 @@
 
 #include "aarch64.h"
 #include "asm.h"
-#include "asm/asm.h"
-#include "asm/asm_enc.h"
-#include "asm/dis_arm64.h"
+#include "machine/asm.h"
+#include "machine/asm_enc.h"
+#include "machine/dis_arm64.h"
 #include "cctrl.h"
 #include "cli.h"
 #include "ir-inliner.h"
@@ -52,10 +52,30 @@ uint32_t ieee754_32(f32 _f32) {
  * are already final symbols. The SAME transform must be applied at the
  * definition and at every reference so they agree. */
 AoStr *asmNormaliseGlobalLabel(Cctrl *cc, AoStr *name) {
+    /* `extern long timezone __asm ("_timezone");` - a rename on DATA
+     * works exactly as one on a function, and for the same reason. */
+    const char *renamed = asmRenameFor(cc, name);
+    if (renamed) return aoStrDupRaw((char *)renamed, strlen(renamed));
     int is_macos = cc->target == TARGET_AARCH64_APPLE_DARWIN ||
                    cc->target == TARGET_X86_64_APPLE_DARWIN;
     if (!is_macos || !name || name->len == 0) return name;
     if (cc->raw_asm_labels && setHas(cc->raw_asm_labels, name->data)) {
+        return name;
+    }
+    /* A COMPILER-GENERATED label (`.L12`) is not a C identifier and
+     * never had C linkage, so the underscore that gives a name the
+     * platform's C spelling does not apply to it. Adding it did more
+     * than rename: Mach-O treats a symbol starting with `L` as
+     * assembler-local, so `.L12` is private and `_.L12` is PUBLIC.
+     * Every static global therefore exported its label, and the label
+     * counter restarts per translation unit - so linking any two
+     * objects that both had a static global failed on a duplicate
+     * `_.L12`. String literals were already exempt, having never been
+     * routed through here, which is why only static globals showed it.
+     *
+     * Both the definition (jit-common) and the references (the two
+     * backends) come through this function, so they stay in step. */
+    if (name->len >= 2 && name->data[0] == '.' && name->data[1] == 'L') {
         return name;
     }
     AoStr *out = aoStrNew();
@@ -84,7 +104,154 @@ int asmFunctionIsExtern(Cctrl *cc, AoStr *fname) {
     }
 }
 
+/* Under `-fPIC` a symbol with EXTERNAL linkage may be interposed when
+ * the image is loaded - another shared object's definition can win -
+ * so its address is not known until the dynamic loader has run.
+ * `adrp`+`add` (and a rip-relative `lea`) ask the STATIC linker to
+ * fold the address in, which it cannot do; `ld` rejects the object
+ * rather than guess: "relocation R_AARCH64_ADR_PREL_PG_HI21 against
+ * symbol `glbl_mem_ctx' which may bind externally ... recompile with
+ * -fPIC". The address has to be loaded from the GOT instead, which is
+ * the one slot the loader does get to fill in.
+ *
+ * Two kinds of symbol are exempt, having internal linkage and so never
+ * reaching the dynamic symbol table:
+ *   - compiler-generated labels (`.L12`): static globals, string
+ *     literals, jump tables.
+ *   - `static` functions, which keep their C name but no `.globl`.
+ *
+ * Mach-O is exempt wholesale: its two-level namespace makes a symbol
+ * defined in this image non-preemptible by default, and `@PAGE` /
+ * `@PAGEOFF` against it is exactly what clang emits for `-fPIC`.
+ *
+ * Calls need none of this - `bl` / `call` route through a PLT stub the
+ * linker synthesises - so this is only consulted where an ADDRESS is
+ * materialised. */
+int asmSymbolIsPreemptible(Cctrl *cc, const char *sym) {
+    if (!cc->is_pic || sym == NULL) return 0;
+    switch (cc->target) {
+        case TARGET_AARCH64_APPLE_DARWIN:
+        case TARGET_X86_64_APPLE_DARWIN:
+            return 0;
+        default:
+            break;
+    }
+    if (sym[0] == '.') return 0;
+    Ast *ast = (Ast *)mapGet(cc->global_env, (void *)sym);
+    if (ast && (ast->flags & AST_FLAG_STATIC_FN)) return 0;
+    return 1;
+}
+
+/* An `__asm("sym")` rename, if this name carries one.
+ *
+ * A rename REPLACES the symbol rather than decorating it, so it short-
+ * circuits everything else the normalisers do: no platform underscore
+ * (the headers already built the string out of
+ * `__USER_LABEL_PREFIX__`), no `main` special case, no Mach-O `L`
+ * escape. What the declaration asked for is what the assembler sees.
+ *
+ * Both normalisers consult this first, which is what lets one map
+ * cover the definition, every call, every address taken of it, both
+ * targets, and the AOT, JIT and object-writer paths alike - they all
+ * come through here. */
+/* `@[spangle]` - the symbol this name is emitted under.
+ *
+ * Deterministic, not random, however the attribute reads. A spangled
+ * global defined in one translation unit and referenced from another
+ * has to arrive at the same string in both, and a compiler that rolled
+ * dice would link only by luck. The hash IS the randomisation: nothing
+ * about `__k3f9zq7x.a1c9__` says `some_glbl`, and going back the other
+ * way means inverting murmur.
+ *
+ * The `.` is what makes it unspellable. Every ELF and Mach-O toolchain
+ * takes one in a symbol - gcc emits `foo.constprop.0` itself - and no C
+ * identifier may contain one, so no program can name this by accident
+ * or on purpose. `$` would do as well; a quote would NOT, and fails
+ * quietly rather than loudly: `__0oads'zda__` assembles to
+ * `__0oads122da__`, because gas reads `'z` as a character literal.
+ *
+ * Two hashes rather than one because they are printed in base 36 - one
+ * 64-bit value is about 12 characters of it, and the second block is
+ * what makes a collision between two names improbable rather than
+ * merely unlikely. */
+static const char spangle_digits[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+
+static void asmSpangleBase36(AoStr *out, u64 v, int n) {
+    char buf[16];
+    for (int i = 0; i < n; ++i) {
+        buf[n - 1 - i] = spangle_digits[v % 36];
+        v /= 36;
+    }
+    aoStrCatLen(out, buf, (u64)n);
+}
+
+AoStr *asmSpangleFor(AoStr *name) {
+    u64 a = cstringMurmur(name->data, (s64)name->len);
+    /* A second, independent value from the same bytes: the length is
+     * folded in so `ab`/`abc` do not differ only in the tail. */
+    u64 b = cstringMurmur(name->data, (s64)name->len) ^
+            (0x9e3779b97f4a7c15ULL * (name->len + 1));
+    AoStr *sym = aoStrNew();
+    aoStrCatLen(sym, str_lit("__"));
+    asmSpangleBase36(sym, a, 8);
+    aoStrPutChar(sym, '.');
+    asmSpangleBase36(sym, b, 6);
+    aoStrCatLen(sym, str_lit("__"));
+    return sym;
+}
+
+/* Bind `name` to its spangled symbol for the rest of the compilation.
+ *
+ * The forward direction is the same map `__asm("sym")` renames use, so
+ * the two features share every emit path - definitions, calls,
+ * addresses, both targets, AOT and JIT and the object writer alike. */
+void asmSpangleRegister(Cctrl *cc, char *name, int len) {
+    if (!cc->asm_renames || !name || len <= 0) return;
+    AoStr *from = aoStrDupRaw(name, (u64)len);
+    if (mapGetLen(cc->asm_renames, from->data, from->len)) {
+        aoStrRelease(from);
+        return;
+    }
+    AoStr *sym = asmSpangleFor(from);
+    mapAdd(cc->asm_spangled, aoStrMove(aoStrDup(sym)), aoStrMove(aoStrDup(from)));
+    mapAdd(cc->asm_renames, aoStrMove(from), aoStrMove(sym));
+}
+
+/* `-S` only: name the source symbol beside a spangled one.
+ *
+ * On its own line above the `.globl`, rather than trailing it, so it
+ * needs no agreement with whatever comment character the target's
+ * assembler wants - `<the slash asterix comment pattern>` is taken by all of
+ * them. Emitted for the reader; the object file carries none of it, which is
+ * the point. Nothing is written for a symbol that was not spangled. */
+void asmSpangleNote(Cctrl *cc, AoStr *buf, char *sym) {
+    const char *from = asmSpangledOrigin(cc, sym);
+    if (from) {
+        aoStrCatFmt(buf, "/* @[spangle] %s */\n", (char *)from);
+    }
+}
+
+/* The source name behind a spangled symbol, or NULL. */
+const char *asmSpangledOrigin(Cctrl *cc, const char *sym) {
+    if (!cc->asm_spangled || !sym) return NULL;
+    return (const char *)mapGet(cc->asm_spangled, (void *)sym);
+}
+
+const char *asmRenameFor(Cctrl *cc, AoStr *name) {
+    if (!cc->asm_renames || !name) return NULL;
+    return (const char *)mapGetLen(cc->asm_renames, name->data, name->len);
+}
+
+static char *asmRenamedSymbol(Cctrl *cc, AoStr *name) {
+    const char *sym = asmRenameFor(cc, name);
+    if (!sym) return NULL;
+    return aoStrMove(aoStrDupRaw((char *)sym, strlen(sym)));
+}
+
 char *asmNormaliseFunctionName(Cctrl *cc, AoStr *fname) {
+    char *renamed = asmRenamedSymbol(cc, fname);
+    if (renamed) return renamed;
+
     AoStr *newfn = aoStrNew();
     /* Raw assembly labels are already final symbols; C identifiers get
      * the platform prefix. Deciding this from the spelling ("starts
@@ -156,7 +323,7 @@ Ast *asmBuildInitialiserMain(Cctrl *cc) {
     /* A scripting-style file can drive execution itself with a trailing
      * `Main;` at file scope. If the initialisers already call Main,
      * don't auto-call it again. The auto-call only restores the
-     * convenience for the "globals + Main, no explicit call" case. */
+     * convenience for the "globals + main, no explicit call" case. */
     int calls_main = 0;
     listForEach(cc->initalisers) {
         Ast *a = (Ast *)it->value;
@@ -217,7 +384,7 @@ static AsmGenerator *AArch64CodeGenerator(Cctrl *cc) {
     gen->init_reg_pool = &aarch64InitRegPool;
     gen->paste_data_section = &aarch64PasteDataSection;
     gen->paste_asm_blocks = &aarch64PasteAsmBlocks;
-    gen->emit_function = &aarch64GenerateFunction;
+    gen->emit_function = &aarch64MirGenerateFunction;
     gen->emit_global = &aarch64GlobalVar;
     return gen;
 }
@@ -231,7 +398,7 @@ static AsmGenerator *x86_64CodeGenerator(Cctrl *cc) {
     gen->init_reg_pool = &x86_64InitRegPool;
     gen->paste_data_section = &x86_64PasteDataSection;
     gen->paste_asm_blocks = &x86_64PasteAsmBlocks;
-    gen->emit_function = &x86_64GenerateFunction;
+    gen->emit_function = &x86_64MirGenerateFunction;
     gen->emit_global = &x86_64GlobalVar;
     return gen;
 }
@@ -270,10 +437,7 @@ AoStr *asmGenerate(Cctrl *cc) {
         if (ast->kind == AST_FUNC) {
             IrFunction *fn = irLowerFunction(ir_ctx, ast);
             irBasicFunctionOptimisations(fn);
-            if (ast->flags & AST_FLAG_INLINE_HINT) {
-                if (irInlineFunction(ir_ctx, fn))
-                    irBasicFunctionOptimisations(fn);
-            }
+            if (irInlineFunction(ir_ctx, fn)) irBasicFunctionOptimisations(fn);
             irFunctionPrepForCodeGen(&gen->ctx, fn, ast);
             gen->emit_function(&gen->ctx, ast);
         } else if (ast->kind == AST_DECL || ast->kind == AST_GVAR) {
@@ -283,8 +447,7 @@ AoStr *asmGenerate(Cctrl *cc) {
     if (synth_main) {
         IrFunction *fn = irLowerFunction(ir_ctx, synth_main);
         irBasicFunctionOptimisations(fn);
-        if (irInlineFunction(ir_ctx, fn))
-            irBasicFunctionOptimisations(fn);
+        if (irInlineFunction(ir_ctx, fn)) irBasicFunctionOptimisations(fn);
         irFunctionPrepForCodeGen(&gen->ctx, fn, synth_main);
         gen->emit_function(&gen->ctx, synth_main);
     }
@@ -306,7 +469,7 @@ static int asmFixupOffsetCmp(const void *a, const void *b) {
     return 0;
 }
 
-/* An `asm { }` block is written in holyc's own dialect, which the
+/* An `asm { }` block is written in HolyC's own dialect, which the
  * system assembler does not accept - so it goes out as its encoded
  * bytes. That leaves `-S` showing `.byte 224, 0, 128, 210` where the
  * reader wanted an instruction.

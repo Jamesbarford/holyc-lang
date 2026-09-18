@@ -1,5 +1,13 @@
-/* This is not used but would be nice to use so then we only need a linker
- * and no longer need it to write object files. However it is _really_ fiddly */
+/* Mach-O relocatable-object writer, the Darwin twin of elf.c: the AOT
+ * pipeline compiles through the JIT selector in HCC_ADDR_RELOCATED
+ * mode and writes the encoder's bytes/labels/fixups here, so only a
+ * linker is needed - no external assembler.
+ *
+ * Mach-O carries no addend field: any addend lives in the bytes being
+ * relocated. hcc's emission style keeps every addend zero (constant
+ * displacements are separate instructions; data pointers point at the
+ * symbol itself), which is what makes the plain reloc table below
+ * sufficient. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,6 +54,8 @@
 #define ARM64_RELOC_BRANCH26   2
 #define ARM64_RELOC_PAGE21     3
 #define ARM64_RELOC_PAGEOFF12  4
+#define ARM64_RELOC_GOT_LOAD_PAGE21    5
+#define ARM64_RELOC_GOT_LOAD_PAGEOFF12 6
 
 /* x86_64 relocation type codes (from <mach-o/x86_64/reloc.h>). */
 #define X86_64_RELOC_UNSIGNED  0
@@ -149,12 +159,22 @@ macho_pack_reloc(uint32_t r_symbolnum, int r_pcrel, int r_length,
 static int
 macho_reloc_type_for(Target target, AsmFixupReloc tag)
 {
+    /* Absolute 64-bit data pointer - the same relocation on both
+     * architectures, so it is answered before the split. */
+    if (tag == AFR_ABS64) {
+        return target == TASM_ARCH_ARM64 ? ARM64_RELOC_UNSIGNED
+                                         : X86_64_RELOC_UNSIGNED;
+    }
     if (target == TASM_ARCH_ARM64) {
         switch (tag) {
             case AFR_AARCH64_CALL26:
             case AFR_AARCH64_JUMP26:   return ARM64_RELOC_BRANCH26;
             case AFR_AARCH64_PAGE21:   return ARM64_RELOC_PAGE21;
             case AFR_AARCH64_PAGEOFF12:return ARM64_RELOC_PAGEOFF12;
+            case AFR_AARCH64_GOT_PAGE21:
+                return ARM64_RELOC_GOT_LOAD_PAGE21;
+            case AFR_AARCH64_GOT_PAGEOFF12:
+                return ARM64_RELOC_GOT_LOAD_PAGEOFF12;
             /* BCOND19 has no first-class arm64 Mach-O reloc; ld can't
              * patch a 19-bit signed branch displacement directly. Real
              * code routes b.cond through a near unconditional jump
@@ -168,6 +188,7 @@ macho_reloc_type_for(Target target, AsmFixupReloc tag)
             case AFR_X86_64_JMP32:
             case AFR_X86_64_JCC32:   return X86_64_RELOC_BRANCH;
             case AFR_X86_64_SIGNED:  return X86_64_RELOC_SIGNED;
+            case AFR_X86_64_GOTPCREL: return X86_64_RELOC_GOT_LOAD;
             default: return -1;
         }
     }
@@ -254,6 +275,41 @@ macho_partition(AsmEnc *enc, AsmBlock *blk,
     uint8_t *text_buf = NULL, *data_buf = NULL;
     Remap *lr = xcalloc((size_t)(enc->n_labels > 0 ? enc->n_labels : 1), sizeof(*lr));
     Remap *fr = xcalloc((size_t)(enc->n_fixups > 0 ? enc->n_fixups : 1), sizeof(*fr));
+
+    /* An explicit split wins, exactly as in elf_partition: the producer
+     * (hccJitAppendDataSection) emitted code then data into one stream
+     * and knows where the boundary is. */
+    if (enc->data_split >= 0) {
+        uint32_t split = (uint32_t)enc->data_split;
+        if (split > enc->len) split = (uint32_t)enc->len;
+        text_sz = split;
+        data_sz = (uint32_t)enc->len - split;
+        if (text_sz) {
+            text_buf = xmalloc(text_sz);
+            memcpy(text_buf, enc->bytes, text_sz);
+        }
+        if (data_sz) {
+            data_buf = xmalloc(data_sz);
+            memcpy(data_buf, enc->bytes + split, data_sz);
+        }
+        for (int i = 0; i < enc->n_labels; i++) {
+            size_t o = enc->labels[i].byte_offset;
+            lr[i].section = o >= split ? 1 : 0;
+            lr[i].new_off = (uint32_t)(o >= split ? o - split : o);
+        }
+        for (int i = 0; i < enc->n_fixups; i++) {
+            size_t o = enc->fixups[i].patch_offset;
+            fr[i].section = o >= split ? 1 : 0;
+            fr[i].new_off = (uint32_t)(o >= split ? o - split : o);
+        }
+        *text_buf_out = text_buf;
+        *text_sz_out  = text_sz;
+        *data_buf_out = data_buf;
+        *data_sz_out  = data_sz;
+        *label_remap_out = lr;
+        *fixup_remap_out = fr;
+        return;
+    }
 
     if (!blk || !enc->line_offsets || blk->n_lines == 0) {
         /* No block context - identity mapping, everything is __text. */
@@ -359,8 +415,8 @@ macho_partition(AsmEnc *enc, AsmBlock *blk,
         }
     }
 
-    free(line_section);
-    free(line_new_off);
+    xfree(line_section);
+    xfree(line_new_off);
     *text_buf_out = text_buf;
     *text_sz_out  = text_sz;
     *data_buf_out = data_buf;
@@ -385,6 +441,14 @@ macho_write(AsmEnc *enc, AsmBlock *blk, Target target, FILE *out)
     int text_sect_idx = 1;            /* 1-based: __text is section #1 */
     int data_sect_idx = data_sz ? 2 : 0;
 
+    /* __data claims 8-byte alignment (it holds pointers), so its
+     * address in the segment must BE 8-aligned - x86 code length is
+     * arbitrary, and `ld` rejects a pointer relocation at a misaligned
+     * atom ("pointer not aligned"). Pad the gap in the file too, so
+     * offset and address stay congruent. */
+    uint32_t data_addr = (text_sz + 7u) & ~7u;
+    uint32_t data_pad  = data_addr - text_sz;
+
     /* ---------- 2. build symbol + string tables ----------
      * Sorted: locals first, then defined externals, then undefined
      * externals (no LC_DYSYMTAB needed). Each defined symbol's n_sect
@@ -402,9 +466,9 @@ macho_write(AsmEnc *enc, AsmBlock *blk, Target target, FILE *out)
 
     /* `n_value` is the symbol's segment-relative virtual address, NOT a
      * section-relative offset. In our single-segment .o, __text sits at
-     * addr=0 and __data sits at addr=text_sz, so data symbols need the
-     * text-section size folded in. */
-    uint64_t section_addr[2] = { 0, text_sz };
+     * addr=0 and __data at the 8-aligned address after it, so data
+     * symbols need that base folded in. */
+    uint64_t section_addr[2] = { 0, data_addr };
 
     /* Pass 1: local defined symbols (no leading `_`). */
     for (int i = 0; i < enc->n_labels; i++) {
@@ -425,7 +489,9 @@ macho_write(AsmEnc *enc, AsmBlock *blk, Target target, FILE *out)
         if (!L->name || L->name[0] != '_') continue;
         int sect = label_remap[i].section == 1 ? data_sect_idx : text_sect_idx;
         syms[n_syms].n_strx  = (uint32_t)strtab_add(&st, L->name);
-        syms[n_syms].n_type  = N_SECT | N_EXT;
+        /* A `static` function is defined in this section but not
+          * exported - N_SECT without N_EXT. */
+        syms[n_syms].n_type  = L->is_local ? N_SECT : (N_SECT | N_EXT);
         syms[n_syms].n_sect  = (uint8_t)sect;
         syms[n_syms].n_desc  = 0;
         syms[n_syms].n_value = section_addr[label_remap[i].section] +
@@ -476,9 +542,12 @@ macho_write(AsmEnc *enc, AsmBlock *blk, Target target, FILE *out)
         if (type < 0) continue;
         struct mh_reloc *dst = (fixup_remap[i].section == 1) ? data_relocs : text_relocs;
         int *cnt = (fixup_remap[i].section == 1) ? &n_data_relocs : &n_text_relocs;
+        /* r_length is log2 of the patched span: 2 for the 4-byte
+         * instruction fixups, 3 for an 8-byte ABS64 data pointer. */
+        int r_len = f->width == 8 ? 3 : 2;
         dst[*cnt].r_address = (int32_t)fixup_remap[i].new_off;
         dst[*cnt].r_packed  = macho_pack_reloc((uint32_t)fixup_sym_idx[i],
-                f->pcrel, /*length*/ 2, /*extern*/ 1, type);
+                f->pcrel, r_len, /*extern*/ 1, type);
         (*cnt)++;
     }
 
@@ -503,7 +572,7 @@ macho_write(AsmEnc *enc, AsmBlock *blk, Target target, FILE *out)
     uint32_t cmds_end   = header_sz + seg_cmdsz + bldver_sz + symtab_sz;
     uint32_t text_off   = cmds_end;
     uint32_t text_end   = text_off + text_sz;
-    uint32_t data_off   = data_sz ? text_end : 0;
+    uint32_t data_off   = data_sz ? text_end + data_pad : 0;
     uint32_t data_end   = data_off + data_sz;
     uint32_t section_bytes_end = data_sz ? data_end : text_end;
 
@@ -543,9 +612,9 @@ macho_write(AsmEnc *enc, AsmBlock *blk, Target target, FILE *out)
         .cmd      = LC_SEGMENT_64,
         .cmdsize  = seg_cmdsz,
         .vmaddr   = 0,
-        .vmsize   = text_sz + data_sz,
+        .vmsize   = data_sz ? data_addr + data_sz : text_sz,
         .fileoff  = text_off,
-        .filesize = text_sz + data_sz,
+        .filesize = data_sz ? data_addr + data_sz : text_sz,
         .maxprot  = VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE,
         .initprot = VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE,
         .nsects   = (uint32_t)n_sects,
@@ -553,7 +622,8 @@ macho_write(AsmEnc *enc, AsmBlock *blk, Target target, FILE *out)
     };
     macho_name(seg.segname, "", sizeof seg.segname); /* MH_OBJECT: anonymous */
 
-    struct mh_section64 sects[2] = { {0}, {0} };
+    struct mh_section64 sects[2];
+    memset(sects, 0, sizeof sects);
     {
         struct mh_section64 *s = &sects[0];
         s->addr      = 0;
@@ -569,7 +639,7 @@ macho_write(AsmEnc *enc, AsmBlock *blk, Target target, FILE *out)
     }
     if (data_sz) {
         struct mh_section64 *s = &sects[1];
-        s->addr      = text_sz; /* lives after __text in our single segment */
+        s->addr      = data_addr; /* 8-aligned, after __text */
         s->size      = data_sz;
         s->offset    = data_off;
         s->align     = 3; /* 2^3 = 8-byte align, conservative */
@@ -609,7 +679,12 @@ macho_write(AsmEnc *enc, AsmBlock *blk, Target target, FILE *out)
     WR(&symtab, sizeof symtab);
 
     if (text_sz) WR(text_buf, text_sz);
-    if (data_sz) WR(data_buf, data_sz);
+    if (data_sz) {
+        for (uint32_t p = 0; p < data_pad; p++) {
+            uint8_t z = 0; WR(&z, 1);
+        }
+        WR(data_buf, data_sz);
+    }
 
     if (n_text_relocs) {
         while ((uint32_t)ftell(out) < text_reloc_off) {
@@ -633,16 +708,16 @@ macho_write(AsmEnc *enc, AsmBlock *blk, Target target, FILE *out)
 
 #undef WR
 
-    free(text_buf); free(data_buf);
-    free(label_remap); free(fixup_remap);
-    free(syms); free(text_relocs); free(data_relocs);
-    free(fixup_sym_idx); free(st.buf);
+    xfree(text_buf); xfree(data_buf);
+    xfree(label_remap); xfree(fixup_remap);
+    xfree(syms); xfree(text_relocs); xfree(data_relocs);
+    xfree(fixup_sym_idx); xfree(st.buf);
     return 0;
 
 io_err:
-    free(text_buf); free(data_buf);
-    free(label_remap); free(fixup_remap);
-    free(syms); free(text_relocs); free(data_relocs);
-    free(fixup_sym_idx); free(st.buf);
+    xfree(text_buf); xfree(data_buf);
+    xfree(label_remap); xfree(fixup_remap);
+    xfree(syms); xfree(text_relocs); xfree(data_relocs);
+    xfree(fixup_sym_idx); xfree(st.buf);
     return -1;
 }

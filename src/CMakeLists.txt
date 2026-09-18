@@ -41,6 +41,7 @@ set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O2")
 
 set(SOURCES
     asm.c
+    jit-common.c
     aostr.c
     arena.c
     ast.c
@@ -70,11 +71,11 @@ set(SOURCES
     prslib.c
     prsutil.c
     transpiler.c
-    x86.c
     x86_64.c
 )
 
 set(HEADERS
+    jit-common.h
     aostr.h
     arena.h
     asm.h
@@ -105,18 +106,19 @@ set(HEADERS
     util.h
     transpiler.h
     version.h
-    x86.h
     x86_64.h
 )
 
-add_subdirectory(asm)
+# The machine layer: encoders, disassemblers, MIR, object writers.
+add_subdirectory(machine)
 
-option(HCC_ENABLE_JIT "Build the optional in-process JIT (aarch64 & x86_64)" OFF)
+# The JIT machinery is always built: the AOT path runs the same
+# instruction selector and prints its stream. HCC_ENABLE_JIT only gates
+# what needs code to RUN in-process - `-jit`, the REPL and -Memsafe.
+option(HCC_ENABLE_JIT "Build the in-process JIT runner, REPL and -Memsafe" OFF)
 if (HCC_ENABLE_JIT)
-    list(APPEND SOURCES jit-common.c aarch64-jit.c x86_64-jit.c repl.c
-         memsafe.c linenoise/linenoise.c)
-    list(APPEND HEADERS jit-common.h aarch64-jit.h x86_64-jit.h repl.h
-         memsafe.h linenoise/linenoise.h)
+    list(APPEND SOURCES repl.c memsafe.c linenoise/linenoise.c)
+    list(APPEND HEADERS repl.h memsafe.h linenoise/linenoise.h)
     # Vendored (antirez/linenoise) - don't hold it to our warning bar.
     set_source_files_properties(linenoise/linenoise.c
                                 PROPERTIES COMPILE_FLAGS "-w")
@@ -126,8 +128,8 @@ add_executable(hcc ${SOURCES} ${HEADERS})
 
 if (HCC_ENABLE_JIT)
     target_compile_definitions(hcc PRIVATE HCC_ENABLE_JIT)
-    target_link_libraries(hcc tasm ${CMAKE_DL_LIBS})
 endif()
+target_link_libraries(hcc tasm ${CMAKE_DL_LIBS})
 
 set(HCC_PATH "${CMAKE_INSTALL_PREFIX}/bin/hcc")
 

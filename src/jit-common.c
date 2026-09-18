@@ -233,7 +233,8 @@ static size_t jitGlobalsSize(HccJit *jit, List *from) {
  *   AST_STRING   - 8-byte pointer to the string's slot in the arena
  *                  (looked up via host_symbols, populated in pass 1)
  *   AST_ARRAY_INIT - recursively writes each element back-to-back */
-static size_t jitWriteInit(HccJit *jit, uint8_t *addr, Ast *init) {
+static size_t jitWriteInit(HccJit *jit, uint8_t *addr, Ast *init,
+                           AstType *dst) {
     if (!init) return 0;
     if (init->kind == AST_LITERAL) {
         size_t w = init->type ? (size_t)init->type->size : 8;
@@ -260,9 +261,53 @@ static size_t jitWriteInit(HccJit *jit, uint8_t *addr, Ast *init) {
      * right; falling through to `return 0` below wrote nothing AND
      * shifted every following field. */
     {
-        Ast *fn = init;
-        if (astIsUnOpKind(fn, AST_UN_OP_ADDR_OF) && fn->operand) {
-            fn = fn->operand;
+        /* `&Fn`, `Fn`, `&g`, or any of them behind a CAST. */
+        Ast *fn = astInitAddressTarget(init);
+        if (!fn) fn = init;
+        /* `&g` - the address of another GLOBAL. Same treatment as a
+         * function: the address does not exist until the linker (or,
+         * in ABSOLUTE mode, until every global has been laid out), so
+         * leave a hole and name the label. The deferred pass resolves
+         * it either way, which is what makes a FORWARD reference work:
+         * `AstType *p = &(AstType){...}` lays the pointer down before
+         * the object it points at.
+         *
+         * Its label, not its name - a static global's symbol is the
+         * generated `.L<n>`, and a file-scope compound literal is
+         * always static. */
+        /* `fn != init` means an address was unwrapped - `&g`. An ARRAY
+         * name needs no `&`: it decays to its own address, which is
+         * how a table-of-tables is written:
+         *
+         *     static const TasmMnemonicTable t = { entries, 85 };
+         *
+         * The text emitters take any AST_GVAR here, so this path was
+         * the only one that dropped it - `-S` piped through the
+         * assembler was right while `-c` left a null pointer, and the
+         * mnemonic lookup walked it. */
+        int gvar_is_address = fn->kind == AST_GVAR &&
+                              (fn != init ||
+                               (fn->type &&
+                                fn->type->kind == AST_TYPE_ARRAY));
+        if (gvar_is_address) {
+            AoStr *g = fn->is_static ? fn->glabel : fn->gname;
+            if (g) {
+                if (jit->n_ptr_fixups == jit->cap_ptr_fixups) {
+                    jit->cap_ptr_fixups = jit->cap_ptr_fixups
+                                        ? jit->cap_ptr_fixups * 2 : 16;
+                    jit->ptr_fixups = realloc(jit->ptr_fixups,
+                            jit->cap_ptr_fixups * sizeof(*jit->ptr_fixups));
+                }
+                jit->ptr_fixups[jit->n_ptr_fixups].addr = addr;
+                jit->ptr_fixups[jit->n_ptr_fixups].symbol =
+                    jit->addr_mode == HCC_ADDR_RELOCATED
+                    ? strdup(asmNormaliseGlobalLabel(jit->cc, g)->data)
+                    : strdup(g->data);
+                jit->n_ptr_fixups++;
+            }
+            uint64_t zero = 0;
+            memcpy(addr, &zero, 8);
+            return 8;
         }
         if (fn->kind == AST_FUNC || fn->kind == AST_FUN_PROTO ||
             fn->kind == AST_EXTERN_FUNC || fn->kind == AST_ASM_FUNCDEF ||
@@ -279,7 +324,15 @@ static size_t jitWriteInit(HccJit *jit, uint8_t *addr, Ast *init) {
                             jit->cap_ptr_fixups * sizeof(*jit->ptr_fixups));
                 }
                 jit->ptr_fixups[jit->n_ptr_fixups].addr = addr;
-                jit->ptr_fixups[jit->n_ptr_fixups].symbol = strdup(nm->data);
+                /* RELOCATED: the object's function labels carry the
+                 * platform prefix (`_FpAdd` on Mach-O), so the
+                 * relocation must name the same spelling. ABSOLUTE
+                 * resolution is underscore-tolerant and keeps the raw
+                 * name. */
+                jit->ptr_fixups[jit->n_ptr_fixups].symbol =
+                    jit->addr_mode == HCC_ADDR_RELOCATED
+                    ? strdup(asmNormaliseFunctionName(jit->cc, nm))
+                    : strdup(nm->data);
                 jit->n_ptr_fixups++;
             }
             uint64_t zero = 0;
@@ -288,6 +341,37 @@ static size_t jitWriteInit(HccJit *jit, uint8_t *addr, Ast *init) {
         }
     }
     if (init->kind == AST_STRING) {
+        /* `char buf[] = "hi"` keeps the BYTES inline; `char *p = "hi"`
+         * stores the address. Same initialiser, and only the
+         * destination says which - so without the type this wrote a
+         * pointer into the array and every such global read back
+         * empty. The AOT text emitter always distinguished them
+         * (aarch64.c/x86_64.c), which is why `-S` piped through the
+         * assembler was right while the object writer was not. */
+        if (dst && dst->kind == AST_TYPE_ARRAY && init->sval) {
+            int n = astDecodeStringLiteral(init->sval->data, (int)init->sval->len,
+                                    (char *)addr);
+            addr[n] = '\0';
+            return (size_t)n + 1;
+        }
+        /* RELOCATED: the string has no address yet either, so it takes
+         * the same treatment as a function pointer above - a hole and a
+         * fixup naming the label. */
+        if (jit->addr_mode == HCC_ADDR_RELOCATED && init->slabel) {
+            if (jit->n_ptr_fixups == jit->cap_ptr_fixups) {
+                jit->cap_ptr_fixups = jit->cap_ptr_fixups
+                                    ? jit->cap_ptr_fixups * 2 : 16;
+                jit->ptr_fixups = realloc(jit->ptr_fixups,
+                        jit->cap_ptr_fixups * sizeof(*jit->ptr_fixups));
+            }
+            jit->ptr_fixups[jit->n_ptr_fixups].addr = addr;
+            jit->ptr_fixups[jit->n_ptr_fixups].symbol =
+                strdup(init->slabel->data);
+            jit->n_ptr_fixups++;
+            uint64_t zero = 0;
+            memcpy(addr, &zero, 8);
+            return 8;
+        }
         void *p = init->slabel ? mapGet(jit->host_symbols,
                                         (void *)init->slabel->data) : NULL;
         uintptr_t v = (uintptr_t)p;
@@ -296,12 +380,27 @@ static size_t jitWriteInit(HccJit *jit, uint8_t *addr, Ast *init) {
     }
     if (init->kind == AST_ARRAY_INIT && init->arrayinit) {
         size_t total = 0;
-        /* arrayinit is a circular sentinel list; iterate it manually. */
-        List *head = init->arrayinit;
-        for (List *n = head->next; n && n != head; n = n->next) {
-            Ast *el = (Ast *)n->value;
-            total += jitWriteInit(jit, addr + total, el);
+        /* In OFFSET order, one entry per offset - astAggregateInitOrder
+         * explains why field order is not good enough. */
+        u64 n_slots = 0;
+        AstInitSlot *slots = astAggregateInitOrder(init->type,
+                                                  init->arrayinit, &n_slots);
+        for (u64 si = 0; si < n_slots; ++si) {
+            Ast *el = slots[si].value;
+            int off = slots[si].offset;
+            /* Placed at its own offset rather than at a running cursor.
+             * This writes into a buffer, so unlike the two text
+             * emitters it can go BACKWARDS - which is what a union of
+             * differently-sized members needs when a later designator
+             * overwrites part of an earlier one. The buffer was zeroed
+             * before this, so a gap needs no filling. */
+            size_t at = (off >= 0) ? (size_t)off : total;
+            size_t n = jitWriteInit(jit, addr + at, el,
+                            astAggregateFieldType(init->type,
+                                                  slots[si].index));
+            if (at + n > total) total = at + n;
         }
+        free(slots);
         /* Members the list did not mention are zero, and a NESTED
          * aggregate has to keep its full width or every field after it
          * lands at the wrong offset. Mirrors the AOT emitters. */
@@ -314,18 +413,56 @@ static size_t jitWriteInit(HccJit *jit, uint8_t *addr, Ast *init) {
     return 0;
 }
 
+
+/* RELOCATED mode: remember where a global or string landed in the data
+ * image so hccJitAppendDataSection can define a symbol for it. In
+ * ABSOLUTE mode the address IS the answer and goes to host_symbols
+ * instead, which is what the two call sites below select between. */
+static void jitDataSymAdd(HccJit *jit, const char *name, size_t off,
+                          int is_local)
+{
+    if (jit->n_data_syms == jit->cap_data_syms) {
+        jit->cap_data_syms = jit->cap_data_syms ? jit->cap_data_syms * 2 : 32;
+        jit->data_syms = realloc(jit->data_syms,
+                jit->cap_data_syms * sizeof(*jit->data_syms));
+    }
+    jit->data_syms[jit->n_data_syms].name = strdup(name);
+    jit->data_syms[jit->n_data_syms].off = off;
+    jit->data_syms[jit->n_data_syms].is_local = is_local;
+    jit->n_data_syms++;
+}
+
 /* Lay out the (from, sentinel] range's new strings + globals into a
  * fresh arena; register each by its mangled name so the backends'
  * global-address emitters can find them via host_symbols. Strings come
  * first so that AST_ARRAY_INIT initialisers in globals can reference
  * them by their already-known addresses. Anything a previous chunk
  * already laid out keeps its old (registered) address. */
+/* The arena's bytes and the record describing them. */
+static void jitArenaRelease(void *p) {
+    HccJitArena *arena = (HccJitArena *)p;
+    if (!arena) return;
+    free(arena->base);
+    free(arena);
+}
+
+/* `argc` / `argv`, with or without the platform's leading underscore. */
+static int jitLabelIsArgcArgv(AoStr *label) {
+    char *p = label->data;
+    s64 n = label->len;
+    if (n && *p == '_') { p++; n--; }
+    return n == 4 && (!memcmp(p, "argc", 4) || !memcmp(p, "argv", 4));
+}
+
 static int jitAllocateGlobals(HccJit *jit, List *from) {
     size_t sz = jitGlobalsSize(jit, from);
     if (sz == 0) return 0;
     sz += 64; /* slack */
     uint8_t *globals = calloc(1, sz);
-    listAppend(jit->globals_arenas, globals);
+    HccJitArena *arena = (HccJitArena *)malloc(sizeof(*arena));
+    arena->base = globals;
+    arena->size = sz;
+    listAppend(jit->globals_arenas, arena);
     size_t off = 0;
 
     if (jit->cc->strs) {
@@ -391,7 +528,13 @@ static int jitAllocateGlobals(HccJit *jit, List *from) {
                 }
             }
             addr[o] = '\0';
-            mapAdd(jit->host_symbols, strdup(ast->slabel->data), addr);
+            if (jit->addr_mode == HCC_ADDR_RELOCATED) {
+                /* A string literal's `.L<n>` label is this unit's own
+                 * name for it; nothing outside may reach it. */
+                jitDataSymAdd(jit, ast->slabel->data, off, 1);
+            } else {
+                mapAdd(jit->host_symbols, strdup(ast->slabel->data), addr);
+            }
             /* Allocate based on the *decoded* length plus NUL, 8-aligned. */
             size_t decoded_size = (size_t)(o + 1);
             off += (decoded_size + 7) & ~7;
@@ -404,18 +547,110 @@ static int jitAllocateGlobals(HccJit *jit, List *from) {
         Ast *ast = it->value;
         AoStr *label = jitGlobalLabel(ast);
         if (!label) continue;
-        if (mapGet(jit->host_symbols, (void *)label->data)) continue;
+        /* `argc`/`argv` belong to the PROGRAM, not to each translation
+         * unit, so only the object holding the entry point defines
+         * them; elsewhere they stay undefined and the linker binds them
+         * to that one definition. Two definitions made linking any two
+         * HolyC objects impossible.
+         *
+         * The text emitters make the same decision, but this path never
+         * consults them: the object writer builds its symbol table from
+         * here, so the choice has to be made before the encoder sees
+         * the name at all. */
+        if (jit->addr_mode == HCC_ADDR_RELOCATED &&
+            jitLabelIsArgcArgv(label) && !cctrlUnitHasEntryPoint(jit->cc))
+        {
+            continue;
+        }
+        /* The key both sides of the JIT agree on: the renamed symbol
+         * when the declaration carried one, the raw name otherwise -
+         * exactly what a64JitGlobalName hands the code. */
+        const char *host_key = asmRenameFor(jit->cc, label);
+        if (!host_key) host_key = label->data;
+        if (mapGet(jit->host_symbols, (void *)host_key)) continue;
         uint8_t *addr = globals + off;
         size_t slot = (size_t)ast->declvar->type->size;
-        mapAdd(jit->host_symbols, strdup(label->data), addr);
+        if (jit->addr_mode == HCC_ADDR_RELOCATED) {
+            /* The name the CODE references is the platform-normalised
+             * one (`_g` on Mach-O); the data symbol must match or the
+             * object defines `g` while every use asks for `_g`. On ELF
+             * the transform is the identity.
+             *
+             * Dedup HERE too: the host_symbols check above only guards
+             * the ABSOLUTE branch, so a global that appears twice in
+             * the ast list (declared, then defined) registered two
+             * symbols - Apple's ld asserts on the duplicate atom. */
+            const char *n = asmNormaliseGlobalLabel(jit->cc, label)->data;
+            if (hccJitDefinesSymbol(jit, n)) continue;
+            /* `static` is internal linkage, and jitGlobalLabel has
+             * already picked the `.L<n>` spelling for one - the same
+             * per-unit counter the strings use, so exporting it would
+             * collide with an unrelated static in the next object. */
+            jitDataSymAdd(jit, n, off, ast->declvar->is_static);
+        } else {
+            mapAdd(jit->host_symbols, strdup(host_key), addr);
+        }
         /* Zero first: an initialiser need not cover the whole object,
          * and what it leaves behind is defined to be zero rather than
          * whatever the arena happened to hold. */
         memset(addr, 0, slot);
-        jitWriteInit(jit, addr, ast->declinit);
+        jitWriteInit(jit, addr, ast->declinit,
+                     ast->declvar ? ast->declvar->type : NULL);
         off += (slot + 7) & ~7;
     }
+    /* RELOCATED: the image goes into the byte stream after the code,
+     * which has not been emitted yet - hold it until then. `off` is
+     * what was actually used; the arena is over-sized because the
+     * sizing pass counts undecoded escape sequences. */
+    if (jit->addr_mode == HCC_ADDR_RELOCATED) {
+        jit->data_base = globals;
+        jit->data_len = off;
+    }
     return 0;
+}
+
+int hccJitDefinesSymbol(HccJit *jit, const char *sym) {
+    if (hccJitIsInternalFunc(jit, sym)) return 1;
+    for (u32 i = 0; i < jit->n_data_syms; ++i) {
+        if (!strcmp(jit->data_syms[i].name, sym)) return 1;
+    }
+    return 0;
+}
+
+void hccJitAppendDataSection(HccJit *jit) {
+    if (jit->addr_mode != HCC_ADDR_RELOCATED) return;
+    if (!jit->data_base || jit->data_len == 0) return;
+
+    size_t split = jit->enc.len;
+    jit->enc.data_split = (long)split;
+    for (size_t i = 0; i < jit->data_len; ++i) {
+        put_byte(&jit->enc, jit->data_base[i]);
+    }
+
+    for (u32 i = 0; i < jit->n_data_syms; ++i) {
+        asm_define_label(&jit->enc, -1, jit->data_syms[i].name);
+        AsmLabelDef *L = &jit->enc.labels[jit->enc.n_labels - 1];
+        /* asm_define_label stamps the CURRENT end of the stream, which
+         * is past the whole image - correct it to where the symbol
+         * actually sits. */
+        L->byte_offset = split + jit->data_syms[i].off;
+        L->is_local = jit->data_syms[i].is_local;
+    }
+
+    /* Every hole a global's initialiser left for the address of a
+     * string or a function becomes an absolute 64-bit relocation. */
+    for (u32 i = 0; i < jit->n_ptr_fixups; ++i) {
+        size_t off = (size_t)(jit->ptr_fixups[i].addr - jit->data_base);
+        AsmFixup f = { 0 };
+        f.kind = AF_SYMBOL;
+        f.reloc = AFR_ABS64;
+        f.patch_offset = split + off;
+        f.width = 8;
+        f.pcrel = 0;
+        f.sym = strdup(jit->ptr_fixups[i].symbol);
+        asm_add_fixup(&jit->enc, f);
+    }
+    jit->n_ptr_fixups = 0;   /* consumed; nothing to patch at runtime */
 }
 
 /* Make the exception runtime's symbols (HCC_PushFrame, HCC_TryLeave,
@@ -538,7 +773,7 @@ static void jitLoadSharedObjects(Cctrl *cc) {
             if (setHas(loaded, so->data)) continue;
             setAdd(loaded, so->data);
             if (!jitDlopenLib(cc, so->data, 0)) {
-                fprintf(stderr, "jag: #link: failed to load '%s': %s\n",
+                fprintf(stderr, "hcc: #link: failed to load '%s': %s\n",
                         so->data, dlerror());
             }
         }
@@ -549,7 +784,7 @@ static void jitLoadSharedObjects(Cctrl *cc) {
             if (setHas(loaded, name->data)) continue;
             setAdd(loaded, name->data);
             if (!jitDlopenLib(cc, name->data, 1)) {
-                fprintf(stderr, "jag: #link: failed to load library '%s' "
+                fprintf(stderr, "hcc: #link: failed to load library '%s' "
                         "(probed lib%s.{dylib,so} in the dynamic linker's "
                         "default paths, %s/lib, /opt/homebrew/lib, "
                         "/usr/local/lib and the system lib dirs)\n",
@@ -562,9 +797,31 @@ static void jitLoadSharedObjects(Cctrl *cc) {
 
 /* ---------------- compile pipeline ---------------- */
 
-HccJit *hccJitNew(Cctrl *cc, const HccJitBackend *backend) {
-    if (!backend->target_ok(cc->target)) {
-        fprintf(stderr, "jag: JIT only supports %s targets\n", backend->name);
+/* `load_host_libs` distinguishes an EXECUTING context (the JIT, the
+ * REPL) from a purely-emitting one (the AOT text path, the object
+ * writer). Only the former needs the runtime and any `#link` shared
+ * objects dlopened into this process - doing it for an AOT compile
+ * was at best needless, and under a cross target it dlopen'd
+ * foreign-architecture libraries just to print a failure. */
+HccJit *hccJitNewEx(Cctrl *cc, const HccJitBackend *backend,
+                    int load_host_libs) {
+    return hccJitNewFor(cc, backend, load_host_libs, 1);
+}
+
+/* `check_target` is what `#eval` turns off.
+ *
+ * The guard asks whether the backend can emit for the target the
+ * PROGRAM is being built for, which is the right question for the REPL
+ * and for `-jit`. It is the wrong one for an `#eval` block: that code
+ * never ships, it runs here, and evalJit deliberately picks the HOST
+ * backend for exactly that reason. Everything below reaches codegen
+ * through `backend->`, and this is the only line in the JIT that reads
+ * `cc->target` at all, so declining to ask it is the whole change - no
+ * shared state is mutated and no other path is affected. */
+HccJit *hccJitNewFor(Cctrl *cc, const HccJitBackend *backend,
+                     int load_host_libs, int check_target) {
+    if (check_target && !backend->target_ok(cc->target)) {
+        fprintf(stderr, "hcc: JIT only supports %s targets\n", backend->name);
         return NULL;
     }
 
@@ -586,9 +843,15 @@ HccJit *hccJitNew(Cctrl *cc, const HccJitBackend *backend) {
 
     asm_enc_init(&jit->enc);
     backend->init_reg_pool();
-    jitLoadRuntime(cc);
-    jitLoadSharedObjects(cc);
+    if (load_host_libs) {
+        jitLoadRuntime(cc);
+        jitLoadSharedObjects(cc);
+    }
     return jit;
+}
+
+HccJit *hccJitNew(Cctrl *cc, const HccJitBackend *backend) {
+    return hccJitNewEx(cc, backend, 1);
 }
 
 /* Register a chunk-internal function name (emit-time calls/IR_LEA to
@@ -603,8 +866,9 @@ int hccJitCompileChunk(HccJit *jit, Ast *extra_fn) {
     Cctrl *cc = jit->cc;
 
     /* Pick up any `#link` libraries recorded since the last chunk
-     * (REPL inputs can add them at any point). */
-    jitLoadSharedObjects(cc);
+     * (REPL inputs can add them at any point). A RELOCATED chunk never
+     * executes, so it has no business loading anything. */
+    if (jit->addr_mode != HCC_ADDR_RELOCATED) jitLoadSharedObjects(cc);
 
     /* Reset the per-chunk encoder + internal-function set. Pending
      * line notes from a failed previous chunk die with it. */
@@ -657,15 +921,20 @@ int hccJitCompileChunk(HccJit *jit, Ast *extra_fn) {
     for (List *it = ast_from; it != cc->ast_list; it = it->next) {
         Ast *ast = it->value;
         if (ast->kind != AST_FUNC) continue;
-        /* `#test` code is absent from a build that is not running
-         * tests, exactly as in the AOT path. */
         if (jit->backend->compile_function(jit, ast, ir_ctx) != 0) return -1;
+        /* `static` means internal linkage. The label was defined while
+         * compiling; mark it so the object writers emit a local symbol
+         * rather than exporting a name another unit may also define
+         * privately. */
+        if (ast->flags & AST_FLAG_STATIC_FN) {
+            asm_mark_label_local(&jit->enc,
+                                 asmNormaliseFunctionName(cc, ast->fname));
+        }
     }
     if (extra_fn) {
         if (jit->backend->compile_function(jit, extra_fn, ir_ctx) != 0)
             return -1;
     }
-
     /* `asm {}` function bodies: define each public label, then splice
      * the libtasm-encoded bytes in. */
     if (asm_from) {
@@ -702,6 +971,20 @@ int hccJitCompileChunk(HccJit *jit, Ast *extra_fn) {
                     L->name ? "" : "L", L->local_num,
                     L->name ? L->name : "");
         }
+    }
+
+    /* RELOCATED: everything below turns the bytes into RUNNABLE code -
+     * mapping them RX, resolving symbols through dlsym, registering
+     * addresses. An object file wants none of it; the linker does all
+     * of it later. Append the data image and stop. */
+    if (jit->addr_mode == HCC_ADDR_RELOCATED) {
+        /* Branches between basic blocks are ours to resolve; only
+         * symbol references are the linker's. Without this every one of
+         * them reads zero and the code falls through instead of
+         * looping. */
+        if (asm_resolve_local_fixups(&jit->enc) != 0) return -1;
+        hccJitAppendDataSection(jit);
+        return 0;
     }
 
     AsmJitCode *code = calloc(1, sizeof *code);
@@ -775,6 +1058,33 @@ int hccJitCompileChunk(HccJit *jit, Ast *extra_fn) {
         jit->ptr_fixups[i] = jit->ptr_fixups[--jit->n_ptr_fixups];
     }
     return 0;
+}
+
+/* Lower the whole program and write it out as a relocatable object.
+ *
+ * The same lowering the JIT uses, with HCC_ADDR_RELOCATED selected so
+ * every global, string and function reference becomes a relocation
+ * rather than a baked address. Returns 0 on success. */
+int hccJitCompileObject(Cctrl *cc, const HccJitBackend *backend,
+                        Target target, ObjFormat fmt, FILE *out)
+{
+    HccJit *jit = hccJitNewEx(cc, backend, 0);
+    if (!jit) return -1;
+    jit->addr_mode = HCC_ADDR_RELOCATED;
+
+    /* Same file-scope-statement wrapping the JIT path does: statements
+     * at file scope become a synthetic `main`, and the user's own Main
+     * is renamed. An object has to agree with that or the entry point
+     * is missing. */
+    Ast *synth_main = asmBuildInitialiserMain(cc);
+
+    if (hccJitCompileChunk(jit, synth_main) != 0) {
+        hccJitFree(jit);
+        return -1;
+    }
+    int rc = asm_obj_write(&jit->enc, NULL, target, fmt, out);
+    hccJitFree(jit);
+    return rc;
 }
 
 HccJit *hccJitCompile(Cctrl *cc, const HccJitBackend *backend) {
@@ -937,7 +1247,8 @@ void hccJitFree(HccJit *jit) {
         }
         listRelease(jit->chunks, NULL);
     }
-    if (jit->globals_arenas) listRelease(jit->globals_arenas, free);
+    if (jit->globals_arenas)
+        listRelease(jit->globals_arenas, jitArenaRelease);
     if (jit->symbols) mapRelease(jit->symbols);
     if (jit->host_symbols) mapRelease(jit->host_symbols);
     if (jit->chunk_fns) mapRelease(jit->chunk_fns);

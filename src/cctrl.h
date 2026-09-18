@@ -20,11 +20,6 @@
 #define CCTRL_PASTE_DEFINES        (1<<2)
 #define CCTRL_PRESERVE_SIZEOF      (1<<3)
 #define CCTRL_ASM_HAS_INITIALISERS (1<<4)
-/* Escape hatch back to the legacy AST-based x86_64 codegen
- * (src/x86.c). Default is now the IR-based src/x86_64.c. The
- * legacy path will be deleted once the IR backend has full unit-
- * test coverage; until then this flag stays as a debugging tool. */
-#define CCTRL_USE_LEGACY_X86       (1<<5)
 /* REPL mode: re-defining a function replaces the previous definition
  * instead of raising "Cannot redefine function", and floating
  * expressions (`2+2;`, `(x*3);`) are legal at the top level so they
@@ -236,6 +231,11 @@ typedef struct Cctrl {
      * fill the system headers (`__swbuf`, `__sputc`). Provenance is the
      * only reliable way to tell the two apart; the spelling is not. */
     Set *raw_asm_labels;
+    /* `__asm("sym")` renames and `@[spangle]` bindings (see asm.c).
+     * Nothing in the HolyC front end populates these yet, so they stay
+     * NULL and every lookup falls through to the ordinary spelling. */
+    Map *asm_renames;
+    Map *asm_spangled;
 
     Set *extern_globals;
 } Cctrl;
@@ -340,6 +340,11 @@ void cctrlSyncToplevel(Cctrl *cc);
 void cctrlSyncStatement(Cctrl *cc);
 
 Map *cctrlCreateAstMap(Cctrl *cc);
+/* Does this translation unit own the program entry point - a `Main`
+ * definition or file-scope statements? Only that unit may define the
+ * `argc`/`argv` globals in an object file; every other unit leaves
+ * them undefined for the linker to bind. */
+int cctrlUnitHasEntryPoint(Cctrl *cc);
 void cctrlReleaseScopeMaps(Cctrl *cc);
 Map *cctrlCreateLexemeMap(void);
 void cctrlAddDefine(Cctrl *cc, char *name);

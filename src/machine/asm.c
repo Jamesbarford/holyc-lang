@@ -55,11 +55,21 @@ typedef struct AsmLex {
     int errors;
 } AsmLex;
 
+/* Standalone libtasm has nowhere to put a message but stderr, so it
+ * needs `file:line:` in front. An embedder does not: cctrl frames the
+ * text in its own `error: ... --> file:line` block, and a prefix baked
+ * into the message came out doubled. So the handler gets the bare
+ * message and whoever prints it decides the framing.
+ *
+ * Only reachable while `err_handler.data` is still the AsmLex - an
+ * installed handler replaces both the callback and the context. */
 static void
 asm_default_parse_err_cb(void *errctx, AsmLine *ln, const char *msg)
 {
-    (void)errctx; (void)ln;
-    fprintf(stderr, "%s\n", msg);
+    AsmLex *l = (AsmLex *)errctx;
+    fprintf(stderr, "%s:%d: error: %s\n",
+            l && l->src_file ? l->src_file : "<input>",
+            ln ? ln->line : 0, msg);
 }
 
 /* Format an error, call the handler, and resync the lexer to end-of-line
@@ -80,12 +90,15 @@ asm_parse_err_at(AsmLex *l, int line, const char *fmt, ...)
     AsmLine *ln = calloc(1,sizeof(AsmLine));
     ln->kind = AINS_NONE;
     ln->line = line;
+    /* Without a column the renderer has no anchor and draws the gutter
+     * with no `^` under it. `tok_start_col` is only refreshed on
+     * instruction lines, so compute it from the current token instead
+     * of reporting a stale one. */
+    if (l->start && l->line_start_ptr && l->start >= l->line_start_ptr) {
+        ln->col = (int)(l->start - l->line_start_ptr) + 1;
+    }
 
-    char full[640];
-    snprintf(full, sizeof full, "%s:%d: error: %s",
-             l->src_file ? l->src_file : "<input>", line, body);
-
-    l->err_handler.handler(l->err_handler.data, ln, full);
+    l->err_handler.handler(l->err_handler.data, ln, body);
     l->errors++;
 
     /* Skip to (but not past) the next '\n' so the next peek/consume sees a
@@ -172,7 +185,7 @@ asm_skip_inline_ws(AsmLex *l)
 static AsmTok
 asm_lex_next(AsmLex *l)
 {
-    free(l->text);
+    xfree(l->text);
     l->text = NULL;
     asm_skip_inline_ws(l);
     asm_lex_set_start(l);
@@ -294,7 +307,7 @@ asm_lex_next(AsmLex *l)
             }
             buf[j] = '\0';
             l->fval = strtod(buf, NULL);
-            free(buf);
+            xfree(buf);
             return ATK_FLOAT;
         }
         l->ival = v;
@@ -375,7 +388,10 @@ asm_lex_next(AsmLex *l)
         char *s = xmalloc(cap);
         while (l->pos < l->len) {
             int d = asm_lex_peek(l, 0);
-            if (!(isalnum(d) || d == '_')) break;
+            /* '@' continues an identifier for relocation-decorated
+             * symbols (`_free@GOTPCREL`); a LEADING '@' still starts a
+             * local label, so `@@1` is untouched. */
+            if (!(isalnum(d) || d == '_' || d == '@')) break;
             if (n + 1 >= cap) {
                 cap *= 2;
                 s = xrealloc(s, cap);
@@ -764,14 +780,14 @@ asm_parse_operand(AsmLex *l)
                 asm_lex_consume(l);
                 seg = sr;
                 has_seg = 1;
-                free(saved);
+                xfree(saved);
                 continue;
             }
             /* Bare segment register operand. */
             op.kind = AOP_REG;
             op.reg = sr;
             op.width = 2;
-            free(saved);
+            xfree(saved);
             return op;
         }
         break;
@@ -821,7 +837,7 @@ asm_parse_operand(AsmLex *l)
          * mis-parsed as `Class.field`.  The Class.field path runs only
          * if the identifier is not a known register. */
         if (asm_lookup_register(name, l->target, &r)) {
-            free(name);
+            xfree(name);
             op.kind = AOP_REG;
             op.reg = r;
             op.width = r.cls == AR_GPR8 || r.cls == AR_AHHIGH ? 1 :
@@ -1031,12 +1047,40 @@ asm_parse_operand(AsmLex *l)
             asm_lex_consume(l);
         }
         /* `[base + disp]` / `[base - disp]` - Intel-style displacement,
-         * the form the x86 disassembler prints. */
+         * the form the x86 disassembler prints - and the full
+         * `[base + index*scale +- disp]` the canonical formatter emits. */
         if (asm_lex_peek_tok(l) == ATK_PUNCT &&
                 (l->punc == '+' || l->punc == '-')) {
             int dneg = (l->punc == '-');
             asm_lex_consume(l);
-            if (asm_lex_peek_tok(l) != ATK_INT) {
+            AsmReg ir;
+            if (!dneg && asm_lex_peek_tok(l) == ATK_IDENT &&
+                    asm_lookup_register(l->text, l->target, &ir)) {
+                op.index = ir;
+                op.has_index = 1;
+                op.scale = 1;
+                asm_lex_consume(l);
+                if (asm_lex_peek_tok(l) == ATK_PUNCT && l->punc == '*') {
+                    asm_lex_consume(l);
+                    if (asm_lex_peek_tok(l) == ATK_INT) {
+                        op.scale = (int)l->ival;
+                        asm_lex_consume(l);
+                    }
+                }
+                if (asm_lex_peek_tok(l) == ATK_PUNCT &&
+                        (l->punc == '+' || l->punc == '-')) {
+                    dneg = (l->punc == '-');
+                    asm_lex_consume(l);
+                    if (asm_lex_peek_tok(l) == ATK_INT) {
+                        op.disp = dneg ? -l->ival : l->ival;
+                        asm_lex_consume(l);
+                    } else {
+                        asm_parse_err_at(l, l->line,
+                                "asm: expected displacement after '%c'",
+                                dneg ? '-' : '+');
+                    }
+                }
+            } else if (asm_lex_peek_tok(l) != ATK_INT) {
                 asm_parse_err_at(l, l->line,
                         "asm: expected displacement after '%c'", dneg ? '-' : '+');
             } else {
@@ -1148,7 +1192,7 @@ normalise_mnemonic(const char *m)
         *p = (char)tolower((unsigned char)*p);
     /* Terry-isms -> standard forms. */
     if (strcmp(out, "rep_movsb") == 0) {
-        free(out);
+        xfree(out);
         return xstrdup("rep_movsb");
     }
     /* Keep `ret1` as-is, it's caller-pops `ret imm16`; encoder picks it up. */
@@ -1245,7 +1289,7 @@ asm_parse_with_handler(const char *body,
                     memcpy(joined, name, a);
                     joined[a] = '.';
                     memcpy(joined + a + 1, l.text, b + 1);
-                    free(name);
+                    xfree(name);
                     name = joined;
                     asm_lex_consume(&l);
                 } else {
@@ -1293,7 +1337,7 @@ asm_parse_with_handler(const char *body,
                     ln.rep_prefix = (!strcmp(ln.mnemonic, "repne") ||
                                      !strcmp(ln.mnemonic, "repnz")) ? 0xF2
                                                                     : 0xF3;
-                    free(ln.mnemonic);
+                    xfree(ln.mnemonic);
                     ln.mnemonic = normalise_mnemonic(l.text);
                     asm_lex_consume(&l);
                 }
@@ -1310,7 +1354,7 @@ asm_parse_with_handler(const char *body,
                                                               &width_suffix);
                 }
             }
-            free(name);
+            xfree(name);
 
             /* Parse operands. */
             while (asm_lex_peek_tok(&l) != ATK_NEWLINE &&
@@ -1353,7 +1397,7 @@ asm_parse_with_handler(const char *body,
     }
 
     b->errors = l.errors;
-    free(l.text);
+    xfree(l.text);
     return b;
 }
 
@@ -1377,17 +1421,17 @@ asm_block_free(AsmBlock *b)
     if (!b) return;
     for (int i = 0; i < b->n_lines; i++) {
         AsmLine *ln = &b->lines[i];
-        free(ln->mnemonic);
-        free(ln->label_name);
+        xfree(ln->mnemonic);
+        xfree(ln->label_name);
         for (int j = 0; j < ln->n_operands; j++) {
-            free(ln->operands[j].cls_name);
-            free(ln->operands[j].member_name);
-            free(ln->operands[j].label_name);
+            xfree(ln->operands[j].cls_name);
+            xfree(ln->operands[j].member_name);
+            xfree(ln->operands[j].label_name);
         }
-        free(ln->operands);
+        xfree(ln->operands);
     }
-    free(b->lines);
-    free(b);
+    xfree(b->lines);
+    xfree(b);
 }
 
 static const char *
@@ -1414,17 +1458,28 @@ asm_reg_name(AsmReg r)
     };
     static char buf[16];
 
+    /* The r8..r15 sub-width forms suffix the 64-bit name (r8d/r8w/r8b);
+     * the low eight have their legacy names. */
+    static const char *low8[] = {
+        "al", "cl", "dl", "bl", "spl", "bpl", "sil", "dil",
+    };
+
     switch (r.cls) {
     case AR_GPR64: return names[r.num & 15];
     case AR_GPR32:
-        snprintf(buf, sizeof buf, "e%s", names[r.num & 15] + 1);
+        if (r.num >= 8) snprintf(buf, sizeof buf, "%sd", names[r.num & 15]);
+        else snprintf(buf, sizeof buf, "e%s", names[r.num & 15] + 1);
         return buf;
     case AR_GPR16:
-        snprintf(buf, sizeof buf, "%s", names[r.num & 15] + 1);
+        if (r.num >= 8) snprintf(buf, sizeof buf, "%sw", names[r.num & 15]);
+        else snprintf(buf, sizeof buf, "%s", names[r.num & 15] + 1);
         return buf;
     case AR_GPR8:
-        snprintf(buf, sizeof buf, "%sb", names[r.num & 15] + 1);
-        return buf;
+        if (r.num >= 8) {
+            snprintf(buf, sizeof buf, "%sb", names[r.num & 15]);
+            return buf;
+        }
+        return low8[r.num & 7];
     case AR_AHHIGH:
         snprintf(buf, sizeof buf, "%c%c", "abcd"[r.num - 4], 'h');
         return buf;
@@ -1605,6 +1660,25 @@ format_mem(Writer *w, const AsmOperand *op)
         w_printf(w, "u%d ", op->width * 8);
     if (op->has_seg) w_printf(w, "%s:", asm_reg_name(op->seg));
 
+    /* x86 memory operand (base register in an x86 class): print the
+     * Intel-style `[base + index*scale + disp]` the parser reads back -
+     * the arm64 comma-immediate form below is not in x86's grammar. */
+    if (!op->cls_name && !op->label_name && op->has_base &&
+        op->base.cls <= AR_AHHIGH && !op->writeback && !op->post_index)
+    {
+        w_putc(w, '[');
+        w_puts(w, asm_reg_name(op->base));
+        if (op->has_index) {
+            w_printf(w, " + %s", asm_reg_name(op->index));
+            if (op->scale > 1) w_printf(w, "*%d", op->scale);
+        }
+        if (op->disp)
+            w_printf(w, " %c %lld", op->disp < 0 ? '-' : '+',
+                     (long long)(op->disp < 0 ? -op->disp : op->disp));
+        w_putc(w, ']');
+        return;
+    }
+
     /* arm64 post-index: `[Xn], #imm` - printed differently. */
     if (op->post_index) {
         w_putc(w, '[');
@@ -1673,6 +1747,479 @@ format_operand(Writer *w, const AsmOperand *op)
     }
 }
 
+/* GNU-as flavoured formatting of one line, for feeding an external
+ * assembler. Three deltas from the canonical form above:
+ *
+ *   - a local label `@@N` becomes `<local_prefix>N` (".LjagN"), both
+ *     as a definition and as a branch operand - `@@` is this
+ *     assembler's own dialect;
+ *   - a memory operand carrying a symbol prints `[base, sym]`, the
+ *     GOT-load spelling, rather than the `[sym+base]` class form;
+ *   - a float immediate always carries a decimal point (`#0.0`) -
+ *     GNU as refuses `fcmp d0, #0`.
+ *
+ * Symbol operands print verbatim: relocation decorations (@PAGE,
+ * :lo12:) are the CALLER's dialect knowledge, baked into the operand
+ * text when the line is built. Public labels print as `name:`. */
+static void
+format_operand_gas(Writer *w, const AsmOperand *op, const char *local_prefix)
+{
+    if (op->kind == AOP_LABEL && op->label_name &&
+        op->label_name[0] == '@' && op->label_name[1] == '@')
+    {
+        w_printf(w, "%s%d", local_prefix, atoi(op->label_name + 2));
+        return;
+    }
+    if (op->kind == AOP_IMM && op->is_float) {
+        w_printf(w, "#%g", op->f64);
+        /* %g drops the point for whole values; put it back. */
+        if (op->f64 == (double)(long long)op->f64) w_puts(w, ".0");
+        return;
+    }
+    if (op->kind == AOP_MEM && op->label_name && op->has_base) {
+        w_putc(w, '[');
+        w_puts(w, asm_reg_name(op->base));
+        w_printf(w, ", %s", op->label_name);
+        w_putc(w, ']');
+        return;
+    }
+    format_operand(w, op);
+}
+
+int
+asm_line_format_gas(const AsmLine *ln, const char *local_prefix, char *buf,
+                    size_t buflen)
+{
+    Writer w; w_init(&w, buf, buflen);
+    if (!ln) { return 0; }
+    switch (ln->kind) {
+        case AINS_LABEL_LOCAL:
+            if (ln->label_name) w_printf(&w, "%s:", ln->label_name);
+            else w_printf(&w, "%s%d:", local_prefix, ln->local_num);
+            break;
+        case AINS_LABEL_PUBLIC:
+            w_printf(&w, "%s:", ln->label_name ? ln->label_name : "?");
+            break;
+        case AINS_INSTR:
+        case AINS_DIRECTIVE:
+            w_printf(&w, "%-8s", ln->mnemonic ? ln->mnemonic : "");
+            for (int i = 0; i < ln->n_operands; i++) {
+                w_puts(&w, i == 0 ? " " : ", ");
+                format_operand_gas(&w, &ln->operands[i], local_prefix);
+            }
+            break;
+        default:
+            break;
+    }
+    return (int)w.total;
+}
+
+/* x86 flavour of the GNU-as formatting, for `.intel_syntax noprefix`
+ * output. The canonical form is already Intel-shaped; the deltas are
+ * the pieces GNU as spells differently:
+ *
+ *   - immediates print bare - `#` opens a comment in some GAS modes;
+ *   - a memory size hint spells `byte/word/dword/qword ptr`, not the
+ *     TempleOS `u8`/`u16`/... prefix;
+ *   - `lea r, sym` prints `lea r, [rip + sym]` - the encoder emits the
+ *     RIP-relative form and the Intel spelling has to say so, or the
+ *     assembler makes it an absolute disp32;
+ *   - `mov r, sym@GOTPCREL` prints `mov r, qword ptr [rip + sym@GOTPCREL]`;
+ *   - `movsx` with a 4-byte source is spelled `movsxd` (GNU as rejects
+ *     the movsx form for a dword source).
+ *
+ * Labels and everything else follow asm_line_format_gas. */
+static void
+format_mem_gas_x86(Writer *w, const AsmOperand *op)
+{
+    static const char *const ptr[] = {
+        NULL, "byte ptr ", "word ptr ", NULL, "dword ptr ",
+        NULL, NULL, NULL, "qword ptr ",
+    };
+    if (op->width >= 1 && op->width <= 8 && ptr[op->width])
+        w_puts(w, ptr[op->width]);
+    w_putc(w, '[');
+    if (op->has_base) w_puts(w, asm_reg_name(op->base));
+    if (op->has_index) {
+        w_printf(w, " + %s", asm_reg_name(op->index));
+        if (op->scale > 1) w_printf(w, "*%d", op->scale);
+    }
+    if (op->disp)
+        w_printf(w, " %c %lld", op->disp < 0 ? '-' : '+',
+                 (long long)(op->disp < 0 ? -op->disp : op->disp));
+    w_putc(w, ']');
+}
+
+static void
+format_operand_gas_x86(Writer *w, const AsmOperand *op,
+                       const char *local_prefix)
+{
+    switch (op->kind) {
+        case AOP_LABEL:
+            if (op->label_name && op->label_name[0] == '@' &&
+                op->label_name[1] == '@')
+            {
+                w_printf(w, "%s%d", local_prefix, atoi(op->label_name + 2));
+                return;
+            }
+            w_puts(w, op->label_name ? op->label_name : "?");
+            return;
+        case AOP_IMM:
+            if (op->is_float) w_printf(w, "%g", op->f64);
+            else w_printf(w, "%lld", (long long)op->imm);
+            return;
+        case AOP_MEM:
+            format_mem_gas_x86(w, op);
+            return;
+        default:
+            format_operand(w, op);
+            return;
+    }
+}
+
+int
+asm_line_format_gas_x86(const AsmLine *ln, const char *local_prefix,
+                        char *buf, size_t buflen)
+{
+    Writer w; w_init(&w, buf, buflen);
+    if (!ln) { return 0; }
+    switch (ln->kind) {
+        case AINS_LABEL_LOCAL:
+            if (ln->label_name) w_printf(&w, "%s:", ln->label_name);
+            else w_printf(&w, "%s%d:", local_prefix, ln->local_num);
+            break;
+        case AINS_LABEL_PUBLIC:
+            w_printf(&w, "%s:", ln->label_name ? ln->label_name : "?");
+            break;
+        case AINS_INSTR:
+        case AINS_DIRECTIVE: {
+            const char *mn = ln->mnemonic ? ln->mnemonic : "?";
+            const AsmOperand *src =
+                ln->n_operands == 2 ? &ln->operands[1] : NULL;
+            /* movsx with a dword source is movsxd to GNU as. */
+            if (strcmp(mn, "movsx") == 0 && src &&
+                ((src->kind == AOP_REG && src->reg.cls == AR_GPR32) ||
+                 (src->kind == AOP_MEM && src->width == 4)))
+            {
+                mn = "movsxd";
+            }
+            /* `lea r, sym` / `mov r, sym@GOTPCREL`: RIP-relative forms
+             * whose Intel spelling is a [rip + sym] memory operand. */
+            if (src && src->kind == AOP_LABEL && src->label_name &&
+                !(src->label_name[0] == '@' && src->label_name[1] == '@'))
+            {
+                if (strcmp(mn, "lea") == 0) {
+                    w_printf(&w, "%-8s ", mn);
+                    format_operand_gas_x86(&w, &ln->operands[0],
+                                           local_prefix);
+                    w_printf(&w, ", [rip + %s]", src->label_name);
+                    break;
+                }
+                if (strcmp(mn, "mov") == 0 &&
+                    strstr(src->label_name, "@GOTPCREL"))
+                {
+                    w_printf(&w, "%-8s ", mn);
+                    format_operand_gas_x86(&w, &ln->operands[0],
+                                           local_prefix);
+                    w_printf(&w, ", qword ptr [rip + %s]", src->label_name);
+                    break;
+                }
+            }
+            w_printf(&w, "%-8s", mn);
+            for (int i = 0; i < ln->n_operands; i++) {
+                w_puts(&w, i == 0 ? " " : ", ");
+                format_operand_gas_x86(&w, &ln->operands[i], local_prefix);
+            }
+            break;
+        }
+        default:
+            break;
+    }
+    return (int)w.total;
+}
+
+/* ---------------- AT&T flavour of the x86 GNU-as formatting ----------
+ *
+ * The same instruction stream as asm_line_format_gas_x86, spelled the
+ * other way round. Everything the dialect needs is already on the
+ * operand - a register's class carries its width, a memory operand
+ * carries `width` - so this is a second rendering of the same facts,
+ * not a second model.
+ *
+ * The deltas, in the order they bite:
+ *
+ *   - operands print right to left: `mov dst, src` is `mov src, dst`;
+ *   - registers take `%`, immediates take `$`;
+ *   - `[base + index*scale + disp]` becomes `disp(base, index, scale)`,
+ *     and a symbol reached PC-relatively is `sym(%rip)`;
+ *   - an indirect call or jump takes `*` (`call *%rax`), which is what
+ *     distinguishes it from a direct one - AT&T has no other marker;
+ *   - a size suffix is required when NO operand is a register, since
+ *     then nothing else says how wide the access is: `mov qword ptr
+ *     [rax], 5` is `movq $5, (%rax)`. Where a register is present gas
+ *     infers the width and the suffix is left off, which is also what
+ *     gcc and clang emit;
+ *   - the extension mnemonics are spelled by their operand widths
+ *     (`movsx r64, r/m32` is `movslq`), and the sign-extend-accumulator
+ *     family has entirely different names (`cqo` is `cqto`). */
+
+static void
+format_reg_att(Writer *w, AsmReg r)
+{
+    w_printf(w, "%%%s", asm_reg_name(r));
+}
+
+static void
+format_mem_att(Writer *w, const AsmOperand *op)
+{
+    if (op->has_seg) {
+        format_reg_att(w, op->seg);
+        w_putc(w, ':');
+    }
+    /* A bare symbol in a memory operand is PC-relative here; the Intel
+     * side spells the same thing `[rip + sym]`. */
+    if (op->label_name) {
+        w_puts(w, op->label_name);
+        if (!op->has_base && !op->has_index) {
+            w_puts(w, "(%rip)");
+            return;
+        }
+    } else if (op->disp) {
+        w_printf(w, "%lld", (long long)op->disp);
+    }
+    if (!op->has_base && !op->has_index) {
+        /* Absolute address with no base: the displacement alone. */
+        if (!op->label_name && !op->disp) w_putc(w, '0');
+        return;
+    }
+    w_putc(w, '(');
+    if (op->has_base) format_reg_att(w, op->base);
+    if (op->has_index) {
+        w_puts(w, ", ");
+        format_reg_att(w, op->index);
+        w_printf(w, ", %d", op->scale > 0 ? op->scale : 1);
+    }
+    w_putc(w, ')');
+}
+
+static void
+format_operand_att(Writer *w, const AsmOperand *op, const char *local_prefix,
+                   int indirect)
+{
+    switch (op->kind) {
+        case AOP_LABEL:
+            /* A branch target is bare; an indirect one through a symbol
+             * still needs its `*`. */
+            if (indirect) w_putc(w, '*');
+            if (op->label_name && op->label_name[0] == '@' &&
+                op->label_name[1] == '@')
+            {
+                w_printf(w, "%s%d", local_prefix, atoi(op->label_name + 2));
+                return;
+            }
+            w_puts(w, op->label_name ? op->label_name : "?");
+            return;
+        case AOP_IMM:
+            if (op->is_float) w_printf(w, "$%g", op->f64);
+            else w_printf(w, "$%lld", (long long)op->imm);
+            return;
+        case AOP_REG:
+            if (indirect) w_putc(w, '*');
+            format_reg_att(w, op->reg);
+            return;
+        case AOP_MEM:
+            if (indirect) w_putc(w, '*');
+            format_mem_att(w, op);
+            return;
+        default:
+            format_operand(w, op);
+            return;
+    }
+}
+
+/* The b/w/l/q for a width, or 0 when there is nothing to say. */
+static char
+att_suffix_for_width(int width)
+{
+    switch (width) {
+        case 1:  return 'b';
+        case 2:  return 'w';
+        case 4:  return 'l';
+        case 8:  return 'q';
+        default: return 0;
+    }
+}
+
+static int
+att_reg_width(const AsmOperand *op)
+{
+    if (op->kind != AOP_REG) return 0;
+    switch (op->reg.cls) {
+        case AR_GPR8: case AR_AHHIGH: return 1;
+        case AR_GPR16:                return 2;
+        case AR_GPR32:                return 4;
+        case AR_GPR64:                return 8;
+        default:                      return 0;
+    }
+}
+
+/* movsx/movzx name both widths: `movs<src><dst>`. Returns NULL when the
+ * operands do not describe a pair we can spell. */
+static const char *
+att_extend_mnemonic(const char *mn, const AsmOperand *dst,
+                    const AsmOperand *src)
+{
+    int is_sx = strcmp(mn, "movsx") == 0 || strcmp(mn, "movsxd") == 0;
+    if (!is_sx && strcmp(mn, "movzx") != 0) return NULL;
+    if (!dst || !src) return NULL;
+
+    int dw = att_reg_width(dst);
+    int sw = src->kind == AOP_REG ? att_reg_width(src) : src->width;
+    char s = att_suffix_for_width(sw), d = att_suffix_for_width(dw);
+    if (!s || !d) return NULL;
+
+    static char buf[8];
+    snprintf(buf, sizeof(buf), "mov%c%c%c", is_sx ? 's' : 'z', s, d);
+    return buf;
+}
+
+/* Whether a mnemonic is spelled with a b/w/l/q size suffix.
+ *
+ * Only the integer instructions whose operands can be any of the four
+ * widths. Deliberately NOT here:
+ *
+ *   - the SSE forms (`movsd`, `movq`, `cvtsi2sd`, `ucomisd`, ...) -
+ *     their width is part of the mnemonic already, and `movsdq` is not
+ *     an instruction;
+ *   - branches and `setcc` - `jne` and `setne` have one operand size
+ *     between them, and gas rejects a suffix on either;
+ *   - the sign-extenders (`cqto`, `movslq`) - likewise already sized.
+ *
+ * gas can usually infer the width from a register operand and accepts
+ * the bare form, but the suffix is what gcc and clang emit and is the
+ * only spelling that says what a memory-only instruction does. */
+static int
+att_takes_suffix(const char *mn)
+{
+    static const char *const suffixable[] = {
+        "adc", "add", "and", "cmp", "dec", "div", "idiv", "imul", "inc",
+        "lea", "mov", "neg", "not", "or", "pop", "push", "sal", "sar",
+        "sbb", "shl", "shr", "sub", "test", "xchg", "xor",
+    };
+    for (size_t i = 0; i < sizeof(suffixable)/sizeof(suffixable[0]); i++) {
+        if (strcmp(mn, suffixable[i]) == 0) return 1;
+    }
+    return 0;
+}
+
+/* The width one operand implies, or 0 if it implies nothing. */
+static int
+att_operand_width(const AsmOperand *op)
+{
+    int w = att_reg_width(op);
+    if (w) return w;
+    if (op->kind == AOP_MEM && op->width) return op->width;
+    return 0;
+}
+
+/* The accumulator sign-extenders are simply different words. */
+static const char *
+att_rename_mnemonic(const char *mn)
+{
+    if (strcmp(mn, "cqo")  == 0) return "cqto";
+    if (strcmp(mn, "cdq")  == 0) return "cltd";
+    if (strcmp(mn, "cdqe") == 0) return "cltq";
+    if (strcmp(mn, "cwde") == 0) return "cwtl";
+    if (strcmp(mn, "cbw")  == 0) return "cbtw";
+    if (strcmp(mn, "movabs") == 0) return "movabsq";
+    return mn;
+}
+
+static int
+att_is_indirect_branch(const char *mn, const AsmOperand *op)
+{
+    if (strcmp(mn, "call") != 0 && strcmp(mn, "jmp") != 0) return 0;
+    return op->kind == AOP_REG || op->kind == AOP_MEM;
+}
+
+int
+asm_line_format_att_x86(const AsmLine *ln, const char *local_prefix,
+                        char *buf, size_t buflen)
+{
+    Writer w; w_init(&w, buf, buflen);
+    if (!ln) { return 0; }
+    switch (ln->kind) {
+        case AINS_LABEL_LOCAL:
+            if (ln->label_name) w_printf(&w, "%s:", ln->label_name);
+            else w_printf(&w, "%s%d:", local_prefix, ln->local_num);
+            break;
+        case AINS_LABEL_PUBLIC:
+            w_printf(&w, "%s:", ln->label_name ? ln->label_name : "?");
+            break;
+        case AINS_INSTR:
+        case AINS_DIRECTIVE: {
+            const char *mn = ln->mnemonic ? ln->mnemonic : "?";
+            const AsmOperand *dst =
+                ln->n_operands >= 1 ? &ln->operands[0] : NULL;
+            const AsmOperand *src =
+                ln->n_operands == 2 ? &ln->operands[1] : NULL;
+
+            const char *ext = att_extend_mnemonic(mn, dst, src);
+            char sfx = 0;
+            if (ext) {
+                mn = ext;
+            } else {
+                mn = att_rename_mnemonic(mn);
+                /* Destination first: operand 0 is what the instruction
+                 * writes, and it names the width. Taking any register
+                 * would get `sar %cl, %rax` wrong - the count is a byte
+                 * and the shift is not. */
+                if (att_takes_suffix(mn)) {
+                    int w = 0;
+                    for (int i = 0; i < ln->n_operands && !w; i++) {
+                        w = att_operand_width(&ln->operands[i]);
+                    }
+                    sfx = att_suffix_for_width(w);
+                }
+            }
+
+            char mnbuf[24];
+            if (sfx) {
+                snprintf(mnbuf, sizeof(mnbuf), "%s%c", mn, sfx);
+                mn = mnbuf;
+            }
+            w_printf(&w, "%-8s", mn);
+
+            /* `lea r, sym` and `mov r, sym@GOTPCREL` are the two places
+             * the Intel side has to spell out `[rip + sym]`; here the
+             * memory form falls out of the symbol operand itself. */
+            int rip_src = src && src->kind == AOP_LABEL && src->label_name &&
+                          !(src->label_name[0] == '@' &&
+                            src->label_name[1] == '@') &&
+                          (strcmp(ln->mnemonic ? ln->mnemonic : "", "lea") == 0 ||
+                           strstr(src->label_name, "@GOTPCREL") != NULL);
+            if (rip_src) {
+                w_printf(&w, " %s(%%rip), ", src->label_name);
+                format_operand_att(&w, dst, local_prefix, 0);
+                break;
+            }
+
+            for (int i = ln->n_operands - 1; i >= 0; i--) {
+                w_puts(&w, i == ln->n_operands - 1 ? " " : ", ");
+                format_operand_att(&w, &ln->operands[i], local_prefix,
+                                   ln->n_operands == 1 &&
+                                   att_is_indirect_branch(
+                                       ln->mnemonic ? ln->mnemonic : "",
+                                       &ln->operands[i]));
+            }
+            break;
+        }
+        default:
+            break;
+    }
+    return (int)w.total;
+}
+
 int
 asm_line_format(const AsmLine *ln, char *buf, size_t buflen)
 {
@@ -1688,7 +2235,7 @@ asm_line_format(const AsmLine *ln, char *buf, size_t buflen)
             break;
         case AINS_INSTR:
         case AINS_DIRECTIVE:
-            w_puts(&w, ln->mnemonic ? ln->mnemonic : "?");
+            w_printf(&w, "%-8s", ln->mnemonic ? ln->mnemonic : "");
             for (int i = 0; i < ln->n_operands; i++) {
                 w_puts(&w, i == 0 ? " " : ", ");
                 format_operand(&w, &ln->operands[i]);

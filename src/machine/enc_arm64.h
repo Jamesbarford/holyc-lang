@@ -13,6 +13,7 @@ typedef enum {
     A64MN_ADD,
     A64MN_ADRP,
     A64MN_AND,
+    A64MN_ASR,
     A64MN_B,
     A64MN_BFCVT,
     A64MN_BFCVTN,
@@ -28,6 +29,7 @@ typedef enum {
     A64MN_CBNZ,
     A64MN_CBZ,
     A64MN_CSEL,
+    A64MN_CSET,
     A64MN_CMP,
     A64MN_DMB,
     A64MN_DSB,
@@ -36,6 +38,7 @@ typedef enum {
     A64MN_FADD,
     A64MN_FCMP,
     A64MN_FCMPE,
+    A64MN_FCVT,
     A64MN_FCVTZS,
     A64MN_FCVTZU,
     A64MN_FDIV,
@@ -54,14 +57,19 @@ typedef enum {
     A64MN_LDRSH,
     A64MN_LDRSW,
     A64MN_LDUR,
+    A64MN_LDURB,
+    A64MN_LDURH,
     A64MN_LSL,
+    A64MN_LSR,
     A64MN_MOV,
     A64MN_MOVK,
     A64MN_MOVN,
     A64MN_MOVZ,
     A64MN_MRS,
     A64MN_MSR,
+    A64MN_MSUB,
     A64MN_MUL,
+    A64MN_MVN,
     A64MN_NEG,
     A64MN_NOP,
     A64MN_ORR,
@@ -75,13 +83,17 @@ typedef enum {
     A64MN_STRB,
     A64MN_STRH,
     A64MN_STUR,
+    A64MN_STURB,
+    A64MN_STURH,
     A64MN_SUB,
     A64MN_SUBS,
     A64MN_SXTB,
     A64MN_SXTH,
     A64MN_SXTW,
     A64MN_UCVTF,
+    A64MN_UDIV,
     A64MN_UXTB,
+    A64MN_UXTH,
 } AArch64Mn;
 
 /* Register numbers 0..31. 31 means XZR in most contexts and SP in a few
@@ -278,7 +290,8 @@ void aarch64_enc_barrier(AsmEnc *e, AsmLine *ln, int opc2);
 void aarch64_enc_mrs(AsmEnc *e, AsmLine *ln);
 void aarch64_enc_msr(AsmEnc *e, AsmLine *ln);
 void aarch64_enc_mov_wide_mn(AsmEnc *e, AsmLine *ln, uint32_t opc);
-void aarch64_enc_ldst_unscaled_mn(AsmEnc *e, AsmLine *ln, int is_load);
+void aarch64_enc_ldst_unscaled_mn(AsmEnc *e, AsmLine *ln, int is_load,
+                                  int width_override);
 void aarch64_enc_br_blr(AsmEnc *e, AsmLine *ln, int is_bl);
 
 /* Top level */
@@ -329,5 +342,10 @@ size_t aarch64_jit_emit_ldp_post(AsmEnc *e,
  * a label and point BLs at it. */
 size_t aarch64_jit_emit_trampoline(AsmEnc *e, void *target);
 int asm_encode_arm64(AsmBlock *blk, AsmResolver *r, AsmEnc *out);
+
+/* Encode ONE line into `e`, appending bytes and fixups. The per-line
+ * entry asm_encode_arm64 loops over; public so a MIR producer can
+ * interleave built lines with other emission into the same stream. */
+void aarch64_encode_instr(AsmEnc *e, AsmLine *ln);
 
 #endif

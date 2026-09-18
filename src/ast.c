@@ -2840,3 +2840,117 @@ AoStr *astClassToAoStr(AstType *cls) {
     aoStrCatFmt(s, "};");
     return s;
 }
+
+AstInitSlot *astAggregateInitOrder(AstType *type, List *init_list,
+                                   u64 *n_out)
+{
+    (void)type;
+    u64 n = 0;
+    if (init_list) {
+        for (List *it = init_list->next; it != init_list; it = it->next) n++;
+    }
+    AstInitSlot *slots = (AstInitSlot *)malloc(sizeof(AstInitSlot) * (n ? n : 1));
+    u64 i = 0;
+    if (init_list) {
+        for (List *it = init_list->next; it != init_list; it = it->next) {
+            slots[i].value = (Ast *)it->value;
+            slots[i].offset = -1;
+            slots[i].index = i;
+            i++;
+        }
+    }
+    *n_out = n;
+    return slots;
+}
+
+AstType *astAggregateFieldType(AstType *type, u64 index) {
+    if (!type) return NULL;
+    switch (type->kind) {
+        case AST_TYPE_CLASS:
+        case AST_TYPE_UNION:
+            return astClassFieldAt(type, (int)index);
+        case AST_TYPE_ARRAY:
+            return type->ptr;
+        default:
+            return NULL;
+    }
+}
+
+Ast *astInitAddressTarget(Ast *init) {
+    Ast *cur = init;
+    int unwrapped = 0;
+    while (cur) {
+        if (cur->kind == AST_CAST && cur->operand) {
+            cur = cur->operand;
+            continue;
+        }
+        if (astIsUnOpKind(cur, AST_UN_OP_ADDR_OF) && cur->operand) {
+            cur = cur->operand;
+            unwrapped = 1;
+            continue;
+        }
+        break;
+    }
+    if (!cur) return NULL;
+    if (unwrapped) return cur;
+    switch (cur->kind) {
+        case AST_FUNC:
+        case AST_FUN_PROTO:
+        case AST_EXTERN_FUNC:
+        case AST_ASM_FUNCDEF:
+        case AST_ASM_FUNC_BIND:
+            return cur;
+        default:
+            return NULL;
+    }
+}
+
+int astDecodeStringLiteral(const char *s, int len, char *out) {
+    int o = 0;
+    for (int i = 0; i < len; ++i) {
+        char c = s[i];
+        if (c != '\\' || i + 1 >= len) {
+            out[o++] = c;
+            continue;
+        }
+        char n = s[++i];
+        if (n >= '0' && n <= '7') {
+            int v = n - '0';
+            int d = 1;
+            while (d < 3 && i + 1 < len && s[i+1] >= '0' && s[i+1] <= '7') {
+                v = v * 8 + (s[++i] - '0');
+                d++;
+            }
+            out[o++] = (char)v;
+            continue;
+        }
+        switch (n) {
+            case 'n': out[o++] = '\n'; break;
+            case 't': out[o++] = '\t'; break;
+            case 'r': out[o++] = '\r'; break;
+            case 'b': out[o++] = '\b'; break;
+            case 'f': out[o++] = '\f'; break;
+            case 'v': out[o++] = '\v'; break;
+            case 'a': out[o++] = '\a'; break;
+            case 'e': out[o++] = 0x1B; break;
+            case '\\': out[o++] = '\\'; break;
+            case '"':  out[o++] = '"';  break;
+            case '\'': out[o++] = '\''; break;
+            case '?': out[o++] = '?'; break;
+            case 'x': case 'X': {
+                int v = 0, d = 0;
+                while (d < 2 && i + 1 < len && isxdigit((unsigned char)s[i+1])) {
+                    char h = s[++i];
+                    int hv = (h >= '0' && h <= '9') ? h - '0' : (h | 32) - 'a' + 10;
+                    v = v * 16 + hv;
+                    d++;
+                }
+                out[o++] = (char)v;
+                break;
+            }
+            default: out[o++] = n; break;
+        }
+    }
+    out[o] = '\0';
+    return o;
+}

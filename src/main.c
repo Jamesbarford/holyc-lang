@@ -17,8 +17,8 @@
 #include "ir.h"
 #include "ir-types.h"
 #ifdef HCC_ENABLE_JIT
-#include "aarch64-jit.h"
-#include "x86_64-jit.h"
+#include "aarch64.h"
+#include "x86_64.h"
 #include "memsafe.h"
 #include "repl.h"
 #endif
@@ -466,7 +466,6 @@ int main(int argc, char **argv) {
         cc->CC = mprintf("cc");
     }
 
-    if (args.use_legacy_x86) cc->flags |= CCTRL_USE_LEGACY_X86;
     if (args.werror)         cc->flags |= CCTRL_WERROR;
     if (args.memsafe)        cc->flags |= CCTRL_MEMSAFE;
 

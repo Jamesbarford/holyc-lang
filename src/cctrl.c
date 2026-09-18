@@ -308,6 +308,8 @@ Cctrl *cctrlNew(enum CliTarget target) {
     cc->asm_funcs = mapNew(32, &map_ast_type);
     cc->macro_defs = cctrlCreateLexemeMap();
     cc->raw_asm_labels = setNew(32, &set_cstring_type);
+    cc->asm_renames = NULL;
+    cc->asm_spangled = NULL;
     cc->x86_registers = setNew(32, &set_cstring_type);
     cc->libc_functions = setNew(32, &set_cstring_type);
     cc->strs = mapNew(32, &map_ast_type);
@@ -1483,4 +1485,10 @@ Ast *cctrlGetOrSetString(Cctrl *cc, char *str, int len, s64 real_len) {
         ast_str = astString(str,len,real_len);
     }
     return ast_str;
+}
+
+int cctrlUnitHasEntryPoint(Cctrl *cc) {
+    if (cc->initalisers && !listEmpty(cc->initalisers)) return 1;
+    Ast *user_main = (Ast *)mapGetLen(cc->global_env, str_lit("Main"));
+    return user_main && user_main->kind == AST_FUNC;
 }

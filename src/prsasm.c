@@ -27,9 +27,9 @@
 #include <stdio.h>
 
 #include "aostr.h"
-#include "asm/asm.h"
-#include "asm/asm_enc.h"
-#include "asm/target.h"
+#include "machine/asm.h"
+#include "machine/asm_enc.h"
+#include "machine/target.h"
 #include "ast.h"
 #include "cctrl.h"
 #include "lexer.h"

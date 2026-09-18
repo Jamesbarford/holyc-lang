@@ -51,7 +51,6 @@ enum CliArgType {
     CLI_TERRY,
     CLI_TO_STDOUT,
     CLI_TRANSPILE,
-    CLI_USE_LEGACY_X86,
     CLI_VERSION,
     CLI_WERROR,
 };
@@ -97,7 +96,6 @@ typedef struct CliArgs {
     int assemble;
     int transpile;
     int to_stdout;
-    int use_legacy_x86;
     int fPIC;
     int werror;
     char *infile;

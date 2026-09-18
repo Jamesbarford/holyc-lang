@@ -588,8 +588,7 @@ static int irInlineOne(IrFunction *caller, IrInstr *call, List *node,
 }
 
 int irInlineFunction(IrCtx *ctx, IrFunction *fn) {
-    if (!g_inline_enabled || !ctx || !ctx->cc)
-        return 0;
+    if (!g_inline_enabled || !ctx || !ctx->cc) return 0;
 
     int inlined = 0;
     listForEach(fn->blocks) {

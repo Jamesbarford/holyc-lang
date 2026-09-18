@@ -6,6 +6,12 @@
 
 int asm_encode_x86_64(AsmBlock *blk, AsmResolver *r, AsmEnc *out);
 
+/* Encode a single AINS_INSTR line at the AsmEnc's current position -
+ * the per-line entry the MIR flush sinks use, mirroring
+ * aarch64_encode_instr. Label definition and local-fixup resolution
+ * are the caller's business (asm_define_label / the JIT finalize). */
+void x86_64_encode_instr(AsmEnc *e, AsmLine *ln);
+
 /* Fallback resolution for AT&T-style width-suffixed spellings that
  * TempleOS-flavoured code mixes in (`movq`, `pushq`, `movb`, plus the
  * movz/movs src+dst forms `movzbq`/`movsbl`/...). Returns the base
@@ -66,12 +72,24 @@ void x86_64_enc_movsx_reg_reg(AsmEnc *e, int width, X86Reg dst, X86Reg src);
  * rules as the AOT backend: 1/2 zero-extend, 4 sign-extends (movslq),
  * 8 plain movq. */
 void x86_64_enc_load_mem(AsmEnc *e, int width, X86Reg dst, X86Reg base, int idx, int scale, int32_t disp);
+void x86_64_enc_load_mem_sx(AsmEnc *e, int width, X86Reg dst, X86Reg base, int idx, int scale, int32_t disp);
+void x86_64_enc_load_mem_zx(AsmEnc *e, int width, X86Reg dst, X86Reg base, int idx, int scale, int32_t disp);
 void x86_64_enc_store_mem(AsmEnc *e, int width, X86Reg src, X86Reg base, int idx, int scale, int32_t disp);
 void x86_64_enc_lea_mem(AsmEnc *e, X86Reg dst, X86Reg base, int idx, int scale, int32_t disp);
 size_t x86_64_enc_lea_rip_rel_reg(AsmEnc *e, X86Reg dst);
+/* movq sym@GOTPCREL(%rip), %dst - load the address from the GOT, for a
+ * symbol this module does not define. */
+size_t x86_64_enc_mov_gotpcrel_reg(AsmEnc *e, X86Reg dst);
 
 /* ALU: op selects via the AT&T operator char: '+' '-' '&' '|' '^'. */
 void x86_64_enc_alu_reg_reg(AsmEnc *e, int op, X86Reg dst, X86Reg src);
+/* `_w` variants: w=0 selects the 32-bit operand size, for the narrow
+ * integer ops IRCG_OP_NARROW authorises (see x86_64OpIs32Bit). */
+void x86_64_enc_alu_reg_reg_w(AsmEnc *e, int w, int op, X86Reg dst, X86Reg src);
+void x86_64_enc_alu_imm_reg_w(AsmEnc *e, int w, int op, X86Reg dst, int32_t imm);
+void x86_64_enc_imul_reg_reg_w(AsmEnc *e, int w, X86Reg dst, X86Reg src);
+void x86_64_enc_neg_reg_w(AsmEnc *e, int w, X86Reg reg);
+void x86_64_enc_not_reg_w(AsmEnc *e, int w, X86Reg reg);
 void x86_64_enc_alu_imm_reg(AsmEnc *e, int op, X86Reg dst, int32_t imm);
 void x86_64_enc_addq_imm_reg(AsmEnc *e, X86Reg dst, int32_t imm);
 void x86_64_enc_subq_imm_reg(AsmEnc *e, X86Reg dst, int32_t imm);
@@ -103,6 +121,7 @@ size_t x86_64_enc_jmp_rel32(AsmEnc *e);
 size_t x86_64_enc_jcc_rel32(AsmEnc *e, int cc);
 size_t x86_64_enc_call_rel32(AsmEnc *e);
 void x86_64_enc_call_reg(AsmEnc *e, X86Reg target);
+void x86_64_enc_call_mem(AsmEnc *e, X86Reg base, int idx, int scale, int32_t disp);
 
 /* SSE2 scalar-double helpers. xmm args are plain 0..15 indices. */
 void x86_64_enc_sse_arith(AsmEnc *e, uint8_t opcode, int dst_xmm, int src_xmm);
@@ -170,6 +189,17 @@ typedef enum {
     X86MN_CMOVE, X86MN_CMOVNE, X86MN_CMOVBE, X86MN_CMOVA,
     X86MN_CMOVS, X86MN_CMOVNS, X86MN_CMOVP, X86MN_CMOVNP,
     X86MN_CMOVL, X86MN_CMOVGE, X86MN_CMOVLE, X86MN_CMOVG,
+
+    /* SETcc r8, cc-ordered like CMOVcc: cc = id - X86MN_SETO. */
+    X86MN_SETO, X86MN_SETNO, X86MN_SETB, X86MN_SETAE,
+    X86MN_SETE, X86MN_SETNE, X86MN_SETBE, X86MN_SETA,
+    X86MN_SETS, X86MN_SETNS, X86MN_SETP, X86MN_SETNP,
+    X86MN_SETL, X86MN_SETGE, X86MN_SETLE, X86MN_SETG,
+
+    /* SSE gpr<->xmm bit moves (66 [REX.W] 0F 6E/7E). MOVQ with no XMM
+     * operand falls back to plain MOV so the AT&T-style `movq` width
+     * suffix keeps meaning `mov` on integer operands. */
+    X86MN_MOVQ, X86MN_MOVD,
 
     /* Byte string ops; REP-family prefixes glue on at parse time via
      * AsmLine.rep_prefix. */

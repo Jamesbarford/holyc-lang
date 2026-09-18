@@ -13,6 +13,10 @@ void irBasicFunctionOptimisations(IrFunction *fn);
 /* Pin single-use TMP producers to their consumer's input register
  * and rewrite adjacent CMP+BR into a single IR_CMP_BR. */
 void irOptPinResultReg(IrFunction *fn);
+/* Drop the widening read of a narrow local that promotion moved into a
+ * register - its home is already canonical. Must run AFTER
+ * irOptPromoteToRegs. */
+int irElideCanonicalWiden(IrFunction *fn);
 
 /* Iterate to fixed point dropping pure value-producers whose dst
  * tmp has zero uses. Pin unused IR_CALL result tmps to the result

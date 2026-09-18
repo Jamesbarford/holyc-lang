@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 #include "asm.h"
+#include "memory.h"
 
 /* Encode an AsmBlock into machine code bytes + a list of label definitions
  * and fixups. The fixups carry information the codegen layer turns into
@@ -33,6 +34,27 @@ typedef enum {
     AFR_X86_64_JMP32,   /* JMP  <sym>   - E9 + rel32 */
     AFR_X86_64_JCC32,   /* Jcc  <sym>   - 0F 8x + rel32 */
     AFR_X86_64_SIGNED,  /* LEA / MOV [rip+sym] - RIP-rel disp32, non-branch */
+    /* Absolute 64-bit address of a symbol, stored as data rather than
+     * folded into an instruction: a global initialised with the address
+     * of another global, or of a function. Deliberately NOT arch-tagged
+     * - the encoding is eight little-endian bytes on both targets, and
+     * every object format has a relocation that means exactly this
+     * (R_X86_64_64, R_AARCH64_ABS64, *_RELOC_UNSIGNED). */
+    AFR_ABS64,
+    /* MOV reg, [rip+sym@GOTPCREL] - the address of a symbol this module
+     * does NOT define, read out of the GOT slot the linker allocates.
+     * Distinct from AFR_X86_64_SIGNED because it names a different
+     * INSTRUCTION (a load, not an lea) as well as a different
+     * relocation: computing a PC-relative address only works when the
+     * target is in this module. */
+    AFR_X86_64_GOTPCREL,
+    /* The aarch64 twins: ADRP of a GOT slot's page and the LDR that
+     * reads the address out of it (`sym@GOTPAGE`/`sym@GOTPAGEOFF` on
+     * Darwin, `:got:`/`:got_lo12:` on ELF). Same reasoning as
+     * GOTPCREL: a symbol from another image cannot be reached by
+     * adrp+add, only loaded from the GOT. */
+    AFR_AARCH64_GOT_PAGE21,
+    AFR_AARCH64_GOT_PAGEOFF12,
 } AsmFixupReloc;
 
 typedef struct {
@@ -57,6 +79,12 @@ typedef struct {
     int local_num;
     char *name;
     size_t byte_offset;
+    /* A NAMED label that must not be exported: a `static` function has
+     * internal linkage, so two translation units may each define one
+     * privately and two global symbols would collide at link time.
+     * Distinct from `local_num`, which is a numbered block-internal
+     * label the encoder resolves and never emits a symbol for. */
+    int is_local;
 } AsmLabelDef;
 
 /* AsmErrHandler / asm_error_handler are now declared in asm.h so both the
@@ -80,8 +108,21 @@ typedef struct AsmEnc {
     size_t *line_offsets;
     int n_line_offsets;
 
+    /* Byte offset at which DATA begins; everything below it is code.
+     * -1 means the stream is all code, which is what the assembler
+     * produces (it describes its own sections through AsmBlock line
+     * kinds instead).
+     *
+     * Set by a producer that emits code and data into one stream and
+     * has no AsmBlock to describe them - the compiler, which appends
+     * its globals and string literals after the last function. An
+     * object writer prefers this over the line kinds when it is set. */
+    long data_split;
+
     int errors;
     const char *src_file; /* borrowed for diagnostics */
+
+    MemCtx mem;
 
     AsmErrHandler err_handler;
 } AsmEnc;
@@ -117,6 +158,9 @@ size_t put_word(AsmEnc *e, uint32_t w);
 void put_u64(AsmEnc *e, uint64_t v);
 void put_zero_n(AsmEnc *e, int n);
 void asm_define_label(AsmEnc *e, int local_num, const char *name);
+/* Mark an already-defined named label as internal. Idempotent, and a
+ * no-op when the name is not found. */
+void asm_mark_label_local(AsmEnc *e, const char *name);
 void asm_add_fixup(AsmEnc *e, AsmFixup f);
 int asm_operand_local_num(AsmOperand *o);
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 # End-to-end smoke tests for the IR -> native JIT path (aarch64 & x86_64).
 #
-# Each test compiles a HolyC program with `hcc -jit`, captures stdout
+# Each test compiles a program with `hcc -jit`, captures stdout
 # and exit code, and compares them against expected values.  Run from
 # anywhere; the script locates hcc relative to the project root.
 #
@@ -15,7 +15,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 HCC="${1:-$HERE/../../hcc}"
 
 if [[ ! -x "$HCC" ]]; then
-    echo "hcc not found at $HCC (build with -DHCC_ENABLE_JIT=ON)"
+    echo "hcc not found at $HCC (run make first)"
     exit 1
 fi
 

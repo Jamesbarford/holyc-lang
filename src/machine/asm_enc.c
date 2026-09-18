@@ -34,8 +34,13 @@ void
 put_byte(AsmEnc *e, uint8_t b)
 {
     if (e->len == e->cap) {
-        e->cap = e->cap ? e->cap * 2 : 256;
-        e->bytes = xrealloc(e->bytes, e->cap);
+        /* A byte buffer can use the whole bucket, so take the rounded
+         * capacity back. */
+        unsigned int actual = 0;
+        e->bytes = mem_ctx_realloc(&e->mem, e->bytes,
+                                   e->cap ? (unsigned int)e->cap * 2 : 256,
+                                   &actual);
+        e->cap = actual;
     }
     e->bytes[e->len++] = b;
 }
@@ -113,13 +118,24 @@ asm_define_label(AsmEnc *e, int local_num, const char *name)
 {
     if (e->n_labels == e->cap_labels) {
         e->cap_labels = e->cap_labels ? e->cap_labels * 2 : 32;
-        e->labels = xrealloc(e->labels,
-                sizeof(AsmLabelDef) * (size_t)e->cap_labels);
+        e->labels = mem_ctx_realloc(&e->mem, e->labels,
+                sizeof(AsmLabelDef) * (unsigned int)e->cap_labels, NULL);
     }
     AsmLabelDef *L = &e->labels[e->n_labels++];
     L->local_num = local_num;
     L->name = name ? xstrdup(name) : NULL;
     L->byte_offset = e->len;
+    L->is_local = 0;
+}
+
+void
+asm_mark_label_local(AsmEnc *e, const char *name)
+{
+    if (!name) return;
+    for (int i = 0; i < e->n_labels; i++) {
+        AsmLabelDef *L = &e->labels[i];
+        if (L->name && !strcmp(L->name, name)) L->is_local = 1;
+    }
 }
 
 void
@@ -127,8 +143,8 @@ asm_add_fixup(AsmEnc *e, AsmFixup f)
 {
     if (e->n_fixups == e->cap_fixups) {
         e->cap_fixups = e->cap_fixups ? e->cap_fixups * 2 : 32;
-        e->fixups = xrealloc(e->fixups,
-                sizeof(AsmFixup) * (size_t)e->cap_fixups);
+        e->fixups = mem_ctx_realloc(&e->mem, e->fixups,
+                sizeof(AsmFixup) * (unsigned int)e->cap_fixups, NULL);
     }
     e->fixups[e->n_fixups++] = f;
 }
@@ -175,6 +191,14 @@ asm_enc_directive(AsmEnc *e, AsmLine *ln)
             f.width = width;
             /* Data directives are NOT pc-relative - absolute address. */
             f.pcrel = 0;
+            /* An eight-byte one is a pointer, which every object format
+             * has a relocation for; tag it so an object writer can emit
+             * that rather than drop the fixup. Narrower widths are left
+             * untagged deliberately - a 32-bit absolute address is not
+             * generally representable in position-independent code, so
+             * there is nothing safe to emit and being told about it is
+             * better than a silently truncated pointer. */
+            if (width == 8) f.reloc = AFR_ABS64;
             asm_add_fixup(e, f);
             put_zero_n(e, width);
         } else {
@@ -259,26 +283,26 @@ void
 asm_enc_free(AsmEnc *e)
 {
     if (!e) return;
-    for (int i = 0; i < e->n_labels; i++)
-        free(e->labels[i].name);
-    for (int i = 0; i < e->n_fixups; i++) {
-        free(e->fixups[i].sym);
-        free(e->fixups[i].cls_name);
-        free(e->fixups[i].member_name);
-    }
-
-    if (e->bytes)        free(e->bytes);
-    if (e->labels)       free(e->labels);
-    if (e->fixups)       free(e->fixups);
-    if (e->line_offsets) free(e->line_offsets);
+    /* bytes/labels/fixups live in the encoder's own context and go
+     * down with its arena in one release. Label names and fixup syms
+     * are global-context strings; they recycle if someone frees them
+     * and are otherwise compile-lifetime by design. */
+    xfree(e->line_offsets);
+    mem_ctx_release(&e->mem);
+    e->bytes = NULL;
+    e->labels = NULL;
+    e->fixups = NULL;
+    e->line_offsets = NULL;
 }
 
 void
 asm_enc_init(AsmEnc *e)
 {
     memset(e, 0, sizeof(AsmEnc));
+    e->data_split = -1;   /* all code until a producer says otherwise */
     e->err_handler.handler = asm_default_err_cb;
     e->err_handler.data = e;
+    mem_ctx_init(&e->mem, 64 * 1024);
 }
 
 void

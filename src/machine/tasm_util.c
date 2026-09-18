@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "memory.h"
 #include "tasm_util.h"
 
 void
@@ -18,28 +19,28 @@ die(const char *fmt, ...)
     exit(1);
 }
 
+void
+xfree(void *ptr)
+{
+    glbl_mem_free(ptr);
+}
+
 void *
 xmalloc(size_t n)
 {
-    void *p = malloc(n);
-    if (!p && n) die("out of memory (malloc %zu)", n);
-    return p;
+    return glbl_mem_alloc(n, NULL);
 }
 
 void *
 xcalloc(size_t n, size_t sz)
 {
-    void *p = calloc(n ? n : 1, sz ? sz : 1);
-    if (!p) die("out of memory (calloc %zu*%zu)", n, sz);
-    return p;
+    return glbl_mem_calloc(n*sz, NULL);
 }
 
 void *
 xrealloc(void *p, size_t n)
 {
-    void *q = realloc(p, n);
-    if (!q && n) die("out of memory (realloc %zu)", n);
-    return q;
+    return glbl_mem_realloc(p, n, NULL);
 }
 
 char *

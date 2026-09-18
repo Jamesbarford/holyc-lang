@@ -52,6 +52,9 @@
 #include "enc_arm64.h"
 #include "tasm_util.h"
 
+static char *aarch64_peel_sym(const char *name, AsmFixupReloc dflt,
+                              AsmFixupReloc *out);
+
 /* ---------- operand helpers ---------- */
 /* Helper for parsing a conditional suffix */
 static int
@@ -419,18 +422,23 @@ aarch64_validate_and_enc_stx(AsmEnc *e, AsmLine *ln)
     /* We know we are looking at a correct mnemonic_id */
     switch (ln->mnemonic_id) {
         case A64MN_SXTB: {
-            if (aarch64_is_32bit_reg(rd) && aarch64_is_32bit_reg(rn)) {
+            /* The encoder only has the 64-bit form, so `Xd, Wn` is the
+             * honest spelling; `Wd, Wn` stays accepted for existing
+             * inline asm but encodes the same word. */
+            if ((aarch64_is_64bit_reg(rd) || aarch64_is_32bit_reg(rd)) &&
+                aarch64_is_32bit_reg(rn)) {
                 return aarch64_enc_sxtb(e, aarch64_reg_num(rd->reg), aarch64_reg_num(rn->reg));
             } else {
-                asm_err_at(e, ln, "`SXTB` expects all registers to be 32bit");
+                asm_err_at(e, ln, "`SXTB` expects `Xd|Wd, Wn`");
             }
             break;
         }
         case A64MN_SXTH:
-            if (aarch64_is_32bit_reg(rd) && aarch64_is_32bit_reg(rn)) {
+            if ((aarch64_is_64bit_reg(rd) || aarch64_is_32bit_reg(rd)) &&
+                aarch64_is_32bit_reg(rn)) {
                 return aarch64_enc_sxth(e, aarch64_reg_num(rd->reg), aarch64_reg_num(rn->reg));
             } else {
-                asm_err_at(e, ln, "`SXTH` expects all registers to be 32bit");
+                asm_err_at(e, ln, "`SXTH` expects `Xd|Wd, Wn`");
             }
             break;
         case A64MN_SXTW:
@@ -1948,6 +1956,7 @@ aarch64_emit_branch_local(AsmEnc *e, int local_num, int is_bl)
     else aarch64_enc_b(e, 0);
     AsmFixup f = { 0 };
     f.kind = AF_LOCAL;
+    f.reloc = is_bl ? AFR_AARCH64_CALL26 : AFR_AARCH64_JUMP26;
     f.local_num = local_num;
     f.patch_offset = patch;
     f.width = 4;
@@ -1965,6 +1974,7 @@ aarch64_emit_b_cond_local(AsmEnc *e, A64Cond cc, int local_num)
     aarch64_enc_b_cond(e, cc, 0);
     AsmFixup f = { 0 };
     f.kind = AF_LOCAL;
+    f.reloc = AFR_AARCH64_BCOND19;
     f.local_num = local_num;
     f.patch_offset = patch;
     f.width = 19; /* sentinel: B.cond/CBZ imm19, not BRANCH26 */
@@ -2087,7 +2097,12 @@ aarch64_enc_add_sub(AsmEnc *e, AsmLine *ln, int is_sub)
             asm_err_at(e, ln, "ADD/SUB: shift suffix not valid with immediate");
             return;
         }
-        if (m->imm < 0 || m->imm > 0xFFF) {
+        /* Plain imm12, or the shifted form the word builder encodes as
+         * `lsl #12` - `add sp, sp, #8192` is one instruction. */
+        int imm_ok = (m->imm >= 0 && m->imm <= 0xFFF) ||
+                     (m->imm > 0 && (m->imm & 0xFFF) == 0 &&
+                      (m->imm >> 12) <= 0xFFF);
+        if (!imm_ok) {
             asm_err_at(e, ln, "ADD/SUB imm out of 12-bit range");
             return;
         }
@@ -2106,20 +2121,21 @@ aarch64_enc_add_sub(AsmEnc *e, AsmLine *ln, int is_sub)
         }
         aarch64_enc_add_imm(e, is_64, rd, rn, 0);
         AsmFixup f = { 0 };
+        f.reloc = AFR_AARCH64_PAGEOFF12;
         int local_n = asm_operand_local_num(m);
         if (local_n >= 0) {
             f.kind = AF_LOCAL;
             f.local_num = local_n;
         } else {
             f.kind = AF_SYMBOL;
-            f.sym = xstrdup(m->label_name);
+            f.sym = aarch64_peel_sym(m->label_name, AFR_AARCH64_PAGEOFF12,
+                                     &f.reloc);
         }
         /* Fixup patches the imm12 field of the just-emitted ADD - the
          * instruction sits at e->len - 4. */
         f.patch_offset = e->len - 4;
         f.width = 4;
         f.pcrel = 0;
-        f.reloc = AFR_AARCH64_PAGEOFF12;
         asm_add_fixup(e, f);
         return;
     }
@@ -2236,7 +2252,10 @@ aarch64_enc_cmp(AsmEnc *e, AsmLine *ln)
                             aarch64_reg_num(a->reg),
                             aarch64_reg_num(b->reg));
 
-    } else if (asm_is_imm(b) && b->imm >= 0 && b->imm <= 0xFFF) {
+    } else if (asm_is_imm(b) && b->imm >= 0 &&
+               (b->imm <= 0xFFF ||
+                ((b->imm & 0xFFF) == 0 && (b->imm >> 12) <= 0xFFF))) {
+        /* Plain imm12 or the lsl-12 shifted form the encoder handles. */
         aarch64_enc_cmp_imm(e, is_64, aarch64_reg_num(a->reg), (uint32_t)b->imm);
     } else {
         asm_err_at(e, ln, "CMP: unsupported rhs");
@@ -2269,6 +2288,24 @@ aarch64_enc_ldst64(AsmEnc *e, AsmLine *ln, int is_load)
     int rt = aarch64_reg_num(r->reg);
     int rn = aarch64_reg_num(m->base);
     int width = (r->reg.cls == AR_A64_W) ? 4 : 8;
+
+    /* `ldr Xd, [Xn, _sym]` - the load half of a GOT access (or the low
+     * bits of an adrp pair): encode with imm12=0 and record the fixup
+     * the decoration means; the linker fills the offset in. */
+    if (is_load && m->label_name && !m->has_index && !m->writeback &&
+        !m->post_index)
+    {
+        aarch64_enc_ldr_imm(e, rt, rn, 0);
+        AsmFixup f = { 0 };
+        f.kind = AF_SYMBOL;
+        f.sym = aarch64_peel_sym(m->label_name, AFR_AARCH64_PAGEOFF12,
+                                 &f.reloc);
+        f.patch_offset = e->len - 4;
+        f.width = 4;
+        f.pcrel = 0;
+        asm_add_fixup(e, f);
+        return;
+    }
 
     /* Register-offset: [Xn, Xm] or [Xn, Xm, LSL #N]. */
     if (m->has_index) {
@@ -3710,7 +3747,8 @@ aarch64_enc_mov_wide_mn(AsmEnc *e, AsmLine *ln, uint32_t opc)
  * `ldr`/`str` fall back to for negative or misaligned offsets, but with
  * no scaled-imm12 path: the offset must fit signed 9 bits. */
 void
-aarch64_enc_ldst_unscaled_mn(AsmEnc *e, AsmLine *ln, int is_load)
+aarch64_enc_ldst_unscaled_mn(AsmEnc *e, AsmLine *ln, int is_load,
+                             int width_override)
 {
     if (ln->n_operands != 2 || !asm_is_reg(&ln->operands[0]) ||
             !asm_is_mem(&ln->operands[1])) {
@@ -3723,7 +3761,16 @@ aarch64_enc_ldst_unscaled_mn(AsmEnc *e, AsmLine *ln, int is_load)
         return;
     }
     int width;
-    if (r->reg.cls == AR_A64_X) width = 8;
+    if (width_override) {
+        /* ldurb/ldurh/sturb/sturh: the mnemonic names the width and the
+         * register is the 32-bit view, as everywhere sub-word. */
+        if (r->reg.cls != AR_A64_W) {
+            asm_err_at(e, ln, "LDURB/LDURH/STURB/STURH: register must be Wt");
+            return;
+        }
+        width = width_override;
+    }
+    else if (r->reg.cls == AR_A64_X) width = 8;
     else if (r->reg.cls == AR_A64_W) width = 4;
     else {
         asm_err_at(e, ln, "LDUR/STUR: register must be Xt or Wt");
@@ -3749,6 +3796,48 @@ aarch64_enc_br_blr(AsmEnc *e, AsmLine *ln, int is_bl)
     else aarch64_enc_br(e, aarch64_reg_num(ln->operands[0].reg));
 }
 
+/* Peel a relocation decoration off a symbol operand's text. The
+ * selector bakes the assembler dialect into the operand - `sym@PAGE`,
+ * `sym@GOTPAGEOFF` (Darwin) or `:lo12:sym`, `:got:sym` (ELF) - which
+ * the TEXT sink prints verbatim; the encoder wants the bare name plus
+ * the fixup tag the decoration means. `dflt` is the undecorated
+ * meaning at the call site (PAGE21 under an adrp, PAGEOFF12 under an
+ * add/ldr). Returns an xstrdup'd bare name; `*out` gets the tag. */
+static char *
+aarch64_peel_sym(const char *name, AsmFixupReloc dflt, AsmFixupReloc *out)
+{
+    static const struct { const char *suffix; AsmFixupReloc r; } sfx[] = {
+        { "@GOTPAGEOFF", AFR_AARCH64_GOT_PAGEOFF12 },
+        { "@GOTPAGE",    AFR_AARCH64_GOT_PAGE21 },
+        { "@PAGEOFF",    AFR_AARCH64_PAGEOFF12 },
+        { "@PAGE",       AFR_AARCH64_PAGE21 },
+    };
+    static const struct { const char *prefix; AsmFixupReloc r; } pfx[] = {
+        { ":got_lo12:", AFR_AARCH64_GOT_PAGEOFF12 },
+        { ":got:",      AFR_AARCH64_GOT_PAGE21 },
+        { ":lo12:",     AFR_AARCH64_PAGEOFF12 },
+    };
+    size_t len = strlen(name);
+    for (size_t i = 0; i < sizeof(sfx) / sizeof(sfx[0]); i++) {
+        size_t sl = strlen(sfx[i].suffix);
+        if (len > sl && strcmp(name + len - sl, sfx[i].suffix) == 0) {
+            char *bare = xstrdup(name);
+            bare[len - sl] = '\0';
+            *out = sfx[i].r;
+            return bare;
+        }
+    }
+    for (size_t i = 0; i < sizeof(pfx) / sizeof(pfx[0]); i++) {
+        size_t pl = strlen(pfx[i].prefix);
+        if (len > pl && strncmp(name, pfx[i].prefix, pl) == 0) {
+            *out = pfx[i].r;
+            return xstrdup(name + pl);
+        }
+    }
+    *out = dflt;
+    return xstrdup(name);
+}
+
 /* ADRP Xd, _sym
  *
  * Loads the page address of `_sym` (bits 12 and up of the symbol's
@@ -3772,18 +3861,19 @@ aarch64_enc_adrp_dispatch(AsmEnc *e, AsmLine *ln)
     }
     aarch64_enc_adrp(e, aarch64_reg_num(d->reg), 0);
     AsmFixup f = { 0 };
+    f.reloc = AFR_AARCH64_PAGE21;
     int local_n = asm_operand_local_num(s);
     if (local_n >= 0) {
         f.kind = AF_LOCAL;
         f.local_num = local_n;
     } else {
         f.kind = AF_SYMBOL;
-        f.sym = xstrdup(s->label_name);
+        f.sym = aarch64_peel_sym(s->label_name, AFR_AARCH64_PAGE21,
+                                 &f.reloc);
     }
     f.patch_offset = e->len - 4;
     f.width = 4;
     f.pcrel = 1;
-    f.reloc = AFR_AARCH64_PAGE21;
     asm_add_fixup(e, f);
 }
 
@@ -3878,6 +3968,43 @@ aarch64_jit_emit_trampoline(AsmEnc *e, void *target)
     return start;
 }
 
+/* LSR/ASR: same operand shape as LSL - `Rd, Rn, #imm` or `Rd, Rn, Rm` -
+ * with the immediate and register-variant emitters passed in. */
+static void
+aarch64_enc_shift_mn(AsmEnc *e, AsmLine *ln,
+        size_t (*immf)(AsmEnc *, int, A64Reg, A64Reg, uint32_t),
+        size_t (*regf)(AsmEnc *, int, A64Reg, A64Reg, A64Reg),
+        const char *what)
+{
+    if (ln->n_operands != 3 || !asm_is_reg(&ln->operands[0]) ||
+            !asm_is_reg(&ln->operands[1])) {
+        char *msg = asm_tmp_printf("%s: expected `Rd, Rn, #imm` or `Rd, Rn, Rm`", what);
+        asm_err_at(e, ln, msg);
+        return;
+    }
+    AsmOperand *d = &ln->operands[0];
+    AsmOperand *n = &ln->operands[1];
+    AsmOperand *m = &ln->operands[2];
+    int is_64 = (d->reg.cls == AR_A64_X);
+    if (asm_is_imm(m)) {
+        int64_t sh = m->imm;
+        uint32_t regsize = is_64 ? 64 : 32;
+        if (sh < 0 || (uint64_t)sh >= regsize) {
+            char *msg = asm_tmp_printf("%s: shift amount out of range", what);
+            asm_err_at(e, ln, msg);
+            return;
+        }
+        immf(e, is_64, aarch64_reg_num(d->reg), aarch64_reg_num(n->reg),
+                (uint32_t)sh);
+    } else if (asm_is_reg(m)) {
+        regf(e, is_64, aarch64_reg_num(d->reg), aarch64_reg_num(n->reg),
+                aarch64_reg_num(m->reg));
+    } else {
+        char *msg = asm_tmp_printf("%s: third operand must be reg or imm", what);
+        asm_err_at(e, ln, msg);
+    }
+}
+
 void
 aarch64_encode_instr(AsmEnc *e, AsmLine *ln)
 {
@@ -3891,6 +4018,16 @@ aarch64_encode_instr(AsmEnc *e, AsmLine *ln)
             }
             aarch64_enc_uxtb(e, 0, aarch64_reg_num(rd->reg),
                                    aarch64_reg_num(rn->reg));
+            return;
+        }
+        case A64MN_UXTH: {
+            AsmOperand *rd = &ln->operands[0];
+            AsmOperand *rn = &ln->operands[1];
+            if (!asm_is_reg(rd) || !asm_is_reg(rn)) {
+                asm_err_at(e, ln, "uxth only takes registers");
+            }
+            aarch64_enc_uxth(e, aarch64_reg_num(rd->reg),
+                                aarch64_reg_num(rn->reg));
             return;
         }
         case A64MN_ADD:      aarch64_enc_add_sub(e, ln, 0); return;
@@ -3910,7 +4047,46 @@ aarch64_encode_instr(AsmEnc *e, AsmLine *ln)
             return;
         case A64MN_MUL:      aarch64_enc_mulm(e, ln); return;
         case A64MN_SDIV:     aarch64_enc_sdi(e, ln); return;
+        case A64MN_UDIV:
+            aarch64_enc_logical_reg(e, ln, aarch64_enc_udiv,
+                    "UDIV needs 3 reg operands");
+            return;
+        case A64MN_MSUB: {
+            /* msub Rd, Rn, Rm, Ra: Rd = Ra - Rn*Rm. */
+            if (ln->n_operands != 4 || !asm_is_reg(&ln->operands[0]) ||
+                    !asm_is_reg(&ln->operands[1]) ||
+                    !asm_is_reg(&ln->operands[2]) ||
+                    !asm_is_reg(&ln->operands[3])) {
+                asm_err_at(e, ln, "MSUB needs 4 reg operands");
+                return;
+            }
+            aarch64_enc_msub(e, ln->operands[0].reg.cls == AR_A64_X,
+                    aarch64_reg_num(ln->operands[0].reg),
+                    aarch64_reg_num(ln->operands[1].reg),
+                    aarch64_reg_num(ln->operands[2].reg),
+                    aarch64_reg_num(ln->operands[3].reg));
+            return;
+        }
+        case A64MN_MVN: {
+            if (ln->n_operands != 2 || !asm_is_reg(&ln->operands[0]) ||
+                    !asm_is_reg(&ln->operands[1])) {
+                asm_err_at(e, ln, "MVN needs 2 reg operands");
+                return;
+            }
+            aarch64_enc_mvn_reg(e, ln->operands[0].reg.cls == AR_A64_X,
+                    aarch64_reg_num(ln->operands[0].reg),
+                    aarch64_reg_num(ln->operands[1].reg));
+            return;
+        }
         case A64MN_LSL:      aarch64_enc_lsl(e, ln); return;
+        case A64MN_LSR:
+            aarch64_enc_shift_mn(e, ln, aarch64_enc_lsr_imm,
+                    aarch64_enc_lsrv, "LSR");
+            return;
+        case A64MN_ASR:
+            aarch64_enc_shift_mn(e, ln, aarch64_enc_asr_imm,
+                    aarch64_enc_asrv, "ASR");
+            return;
         case A64MN_NEG:      aarch64_enc_neg(e, ln); return;
         case A64MN_CMP:      aarch64_enc_cmp(e, ln); return;
         case A64MN_LDR:
@@ -3937,6 +4113,22 @@ aarch64_encode_instr(AsmEnc *e, AsmLine *ln)
         case A64MN_SUBS:     aarch64_enc_subs(e, ln); return;
         case A64MN_CBZ:      aarch64_enc_cbz(e, ln, 0); return;
         case A64MN_CSEL:     aarch64_validate_and_enc_csel(e, ln); return;
+        case A64MN_CSET: {
+            /* CSET <Xd|Wd>, <cond> - always encoded 64-bit here, which
+             * is what the compiler emits; the alias is CSINC from XZR. */
+            if (ln->n_operands != 2 || !asm_is_reg(&ln->operands[0]) ||
+                    !asm_is_label(&ln->operands[1])) {
+                asm_err_at(e, ln, "CSET needs `Rd, <cond>`");
+                return;
+            }
+            A64Cond cc;
+            if (!aarch64_parse_cond_suffix(ln->operands[1].label_name, &cc)) {
+                asm_err_at(e, ln, "CSET: invalid condition");
+                return;
+            }
+            aarch64_enc_cset(e, aarch64_reg_num(ln->operands[0].reg), cc);
+            return;
+        }
         case A64MN_CBNZ:     aarch64_enc_cbz(e, ln, 1); return;
         case A64MN_FABS:     aarch64_enc_fp1src(e, ln, 1); return;  /* opcode6=000001 */
         case A64MN_FNEG:     aarch64_enc_fp1src(e, ln, 2); return;  /* opcode6=000010 */
@@ -3945,6 +4137,26 @@ aarch64_encode_instr(AsmEnc *e, AsmLine *ln)
         case A64MN_FCMPE:    aarch64_enc_fcmp(e, ln, 1); return;
         /* rmode<<3 | opcode: FCVTZS=11_000=24, FCVTZU=11_001=25,
          *                    SCVTF =00_010=2,  UCVTF=00_011=3 */
+        case A64MN_FCVT: {
+            /* Scalar F32<->F64: direction is spelled by the register
+             * classes, `fcvt s0, d0` narrows and `fcvt d0, s0` widens. */
+            if (ln->n_operands != 2 || !asm_is_reg(&ln->operands[0]) ||
+                    !asm_is_reg(&ln->operands[1])) {
+                asm_err_at(e, ln, "FCVT needs 2 fp reg operands");
+                return;
+            }
+            AsmRegClass dc = ln->operands[0].reg.cls;
+            AsmRegClass nc = ln->operands[1].reg.cls;
+            int rd = aarch64_reg_num(ln->operands[0].reg);
+            int rn = aarch64_reg_num(ln->operands[1].reg);
+            if (dc == AR_A64_S && nc == AR_A64_D)
+                aarch64_enc_fcvt_narrow(e, rd, rn);
+            else if (dc == AR_A64_D && nc == AR_A64_S)
+                aarch64_enc_fcvt_widen(e, rd, rn);
+            else
+                asm_err_at(e, ln, "FCVT: expected `Sd, Dn` or `Dd, Sn`");
+            return;
+        }
         case A64MN_FCVTZS:   aarch64_enc_fp_int_cvt(e, ln, 24, 1); return;
         case A64MN_FCVTZU:   aarch64_enc_fp_int_cvt(e, ln, 25, 1); return;
         case A64MN_SCVTF:    aarch64_enc_fp_int_cvt(e, ln, 2, 0); return;
@@ -3985,8 +4197,12 @@ aarch64_encode_instr(AsmEnc *e, AsmLine *ln)
         case A64MN_MOVN:     aarch64_enc_mov_wide_mn(e, ln, 0x0); return;
         case A64MN_MOVZ:     aarch64_enc_mov_wide_mn(e, ln, 0x2); return;
         case A64MN_MOVK:     aarch64_enc_mov_wide_mn(e, ln, 0x3); return;
-        case A64MN_LDUR:     aarch64_enc_ldst_unscaled_mn(e, ln, 1); return;
-        case A64MN_STUR:     aarch64_enc_ldst_unscaled_mn(e, ln, 0); return;
+        case A64MN_LDUR:     aarch64_enc_ldst_unscaled_mn(e, ln, 1, 0); return;
+        case A64MN_LDURB:    aarch64_enc_ldst_unscaled_mn(e, ln, 1, 1); return;
+        case A64MN_LDURH:    aarch64_enc_ldst_unscaled_mn(e, ln, 1, 2); return;
+        case A64MN_STUR:     aarch64_enc_ldst_unscaled_mn(e, ln, 0, 0); return;
+        case A64MN_STURB:    aarch64_enc_ldst_unscaled_mn(e, ln, 0, 1); return;
+        case A64MN_STURH:    aarch64_enc_ldst_unscaled_mn(e, ln, 0, 2); return;
         case A64MN_BNE:      aarch64_enc_branch(e, ln, 0, 1, A_NE); return;
 
         case A64MN_SXTB:
@@ -4061,7 +4277,8 @@ aarch64_resolve_local_fixups(AsmEnc *out)
 {
     if (!out || out->n_fixups == 0) return;
     int resolved = 0;
-    AsmFixup *kept = xmalloc(sizeof(AsmFixup) * (size_t)out->n_fixups);
+    AsmFixup *kept = mem_ctx_alloc(&out->mem,
+            sizeof(AsmFixup) * (unsigned int)out->n_fixups, NULL);
     for (int i = 0; i < out->n_fixups; i++) {
         AsmFixup *f = &out->fixups[i];
         if (f->kind != AF_LOCAL) {
@@ -4095,7 +4312,7 @@ aarch64_resolve_local_fixups(AsmEnc *out)
             aarch64_enc_patch_imm19(out, f->patch_offset, rel_words);
         else aarch64_enc_patch_branch26(out, f->patch_offset, rel_words);
     }
-    free(out->fixups);
+    mem_ctx_free(&out->mem, out->fixups);
     out->fixups = kept;
     out->n_fixups = resolved;
 }
@@ -4107,6 +4324,7 @@ static const TasmMnemonicEntry aarch64_mnemonic_entries[] = {
     { "add",      A64MN_ADD },
     { "adrp",     A64MN_ADRP },
     { "and",      A64MN_AND },
+    { "asr",      A64MN_ASR },
     { "b",        A64MN_B },
     { "bfcvt",    A64MN_BFCVT },
     { "bfcvtn",   A64MN_BFCVTN },
@@ -4127,6 +4345,7 @@ static const TasmMnemonicEntry aarch64_mnemonic_entries[] = {
     { "cbz",      A64MN_CBZ },
     { "cmp",      A64MN_CMP },
     { "csel",     A64MN_CSEL },
+    { "cset",     A64MN_CSET },
     { "dmb",      A64MN_DMB },
     { "dsb",      A64MN_DSB },
     { "eor",      A64MN_EOR },
@@ -4134,6 +4353,7 @@ static const TasmMnemonicEntry aarch64_mnemonic_entries[] = {
     { "fadd",     A64MN_FADD },
     { "fcmp",     A64MN_FCMP },
     { "fcmpe",    A64MN_FCMPE },
+    { "fcvt",     A64MN_FCVT },
     { "fcvtzs",   A64MN_FCVTZS },
     { "fcvtzu",   A64MN_FCVTZU },
     { "fdiv",     A64MN_FDIV },
@@ -4152,14 +4372,19 @@ static const TasmMnemonicEntry aarch64_mnemonic_entries[] = {
     { "ldrsh",    A64MN_LDRSH },
     { "ldrsw",    A64MN_LDRSW },
     { "ldur",     A64MN_LDUR },
+    { "ldurb",    A64MN_LDURB },
+    { "ldurh",    A64MN_LDURH },
     { "lsl",      A64MN_LSL },
+    { "lsr",      A64MN_LSR },
     { "mov",      A64MN_MOV },
     { "movk",     A64MN_MOVK },
     { "movn",     A64MN_MOVN },
     { "movz",     A64MN_MOVZ },
     { "mrs",      A64MN_MRS },
     { "msr",      A64MN_MSR },
+    { "msub",     A64MN_MSUB },
     { "mul",      A64MN_MUL },
+    { "mvn",      A64MN_MVN },
     { "neg",      A64MN_NEG },
     { "nop",      A64MN_NOP },
     { "orr",      A64MN_ORR },
@@ -4173,12 +4398,17 @@ static const TasmMnemonicEntry aarch64_mnemonic_entries[] = {
     { "strb",     A64MN_STRB },
     { "strh",     A64MN_STRH },
     { "stur",     A64MN_STUR },
+    { "sturb",    A64MN_STURB },
+    { "sturh",    A64MN_STURH },
     { "sub",      A64MN_SUB },
     { "subs",     A64MN_SUBS },
     { "sxtb",     A64MN_SXTB },
     { "sxth",     A64MN_SXTH },
     { "sxtw",     A64MN_SXTW },
     { "ucvtf",    A64MN_UCVTF },
+    { "udiv",     A64MN_UDIV },
+    { "uxtb",     A64MN_UXTB },
+    { "uxth",     A64MN_UXTH },
 };
 
 static const TasmMnemonicTable aarch64_mnemonic_table_v = {

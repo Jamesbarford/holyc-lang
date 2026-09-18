@@ -408,6 +408,7 @@ const char *irOpcodeToString(IrInstr *ir_instr) {
         case IR_SELECT:   ir_op_str = "select"; break;
         case IR_VA_ARG:   ir_op_str = "va_arg"; break;
         case IR_VA_START: ir_op_str = "va_start"; break;
+        case IR_FRAME_ADDR: ir_op_str = "frame_addr"; break;
         case IR_VA_END:   ir_op_str = "va_end"; break;
         default: loggerPanic("Unhandled opcode: %d\n", opcode);
     }

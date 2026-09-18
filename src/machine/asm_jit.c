@@ -75,7 +75,7 @@ static void *jit_macho_image_lookup(const struct mach_header_64 *mh,
 
 /* Scan loaded images' symbol tables, matching the name verbatim.
  * Only non-system images are scanned: the underscore-less
- * symbols are exclusive to hcc-compiled objects (libtos), and skipping
+ * symbols are exclusive to hcc-compiled objects, and skipping
  * the dyld shared cache keeps this fast and avoids its quirks. */
 static void *jit_macho_symtab_lookup(const char *want) {
     uint32_t n = _dyld_image_count();
@@ -263,6 +263,85 @@ veneer_lookup(const struct VeneerSlot *vmap, int n, void *target)
     for (int i = 0; i < n; i++)
         if (vmap[i].target == target) return vmap[i].veneer;
     return NULL;
+}
+
+/* Resolve the AF_LOCAL fixups - branches between basic blocks of the
+ * same function - directly in `enc->bytes`.
+ *
+ * A local branch needs no address: both ends are byte offsets in this
+ * stream, so the displacement is known as soon as encoding finishes.
+ * asm_jit_finalize does this as part of mapping the code RX, which is
+ * fine for the JIT but leaves anyone who does NOT map it - an object
+ * writer - with every intra-function branch still reading zero. The
+ * symptom is code that runs but never loops and never takes a branch:
+ * a `for` body executing once, an `if` falling through both ways, a
+ * recursive call that never reaches its base case.
+ *
+ * Only AF_LOCAL is touched. AF_SYMBOL stays for the linker.
+ * Returns 0 on success, -1 if a local label is missing or out of range. */
+int
+asm_resolve_local_fixups(AsmEnc *enc)
+{
+    if (!enc || !enc->bytes) return 0;
+    for (int i = 0; i < enc->n_fixups; i++) {
+        AsmFixup *f = &enc->fixups[i];
+        if (f->kind != AF_LOCAL) continue;
+
+        size_t target_off = 0;
+        int found = 0;
+        for (int k = 0; k < enc->n_labels; k++) {
+            AsmLabelDef *def = &enc->labels[k];
+            if (def->name == NULL && def->local_num == f->local_num) {
+                target_off = def->byte_offset;
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            asm_err_at(enc, NULL,
+                    asm_tmp_printf("unresolved local label @%d",
+                                   f->local_num));
+            return -1;
+        }
+
+        /* The patchers take a base and a target POINTER, but only ever
+         * use the difference, so the stream's own buffer works as the
+         * base and no real address is needed. */
+        uint8_t *buf = enc->bytes;
+        void *target = buf + target_off;
+        int rc;
+        switch (f->reloc) {
+            case AFR_AARCH64_CALL26:
+                rc = aarch64_patch_branch26(buf, f->patch_offset, target, 1);
+                break;
+            case AFR_AARCH64_JUMP26:
+                rc = aarch64_patch_branch26(buf, f->patch_offset, target, 0);
+                break;
+            case AFR_AARCH64_BCOND19:
+                rc = aarch64_patch_imm19(buf, f->patch_offset, target);
+                break;
+            case AFR_AARCH64_PAGE21:
+                rc = aarch64_patch_page21(buf, f->patch_offset, target);
+                break;
+            case AFR_AARCH64_PAGEOFF12:
+                rc = aarch64_patch_pageoff12(buf, f->patch_offset, target);
+                break;
+            default:
+                /* Everything x86_64 emits for a local branch is a rel32
+                 * whose field is the instruction's last four bytes.
+                 * AFR_NONE lands here too: the encoder's own jmp/jcc
+                 * local fixups predate the reloc tags. */
+                rc = x86_64_patch_rel32(buf, f->patch_offset, target);
+                break;
+        }
+        if (rc != 0) {
+            asm_err_at(enc, NULL,
+                    asm_tmp_printf("local label @%d is out of branch range",
+                                   f->local_num));
+            return -1;
+        }
+    }
+    return 0;
 }
 
 int

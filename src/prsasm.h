@@ -3,8 +3,8 @@
 
 #include "ast.h"
 #include "cctrl.h"
-#include "asm/asm.h"
-#include "asm/target.h"
+#include "machine/asm.h"
+#include "machine/target.h"
 
 /* Parse an `asm { ... }` block. The heavy lifting (TempleOS-style asm
  * parsing + encoding) lives in the libtasm assembler under src/asm;

@@ -13,6 +13,7 @@ void *xcalloc(size_t n, size_t sz);
 void *xrealloc(void *p, size_t n);
 char *xstrdup(const char *s);
 char *xstrndup(const char *s, size_t n);
+void xfree(void *ptr);
 
 /* Read entire file. Returns owned buffer with trailing NULL.
  * *out_len excludes NULL. */

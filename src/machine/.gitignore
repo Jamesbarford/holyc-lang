@@ -21,8 +21,10 @@ hcc
 sagaris
 scratch
 test-runner
-test_aarch64
 test_jit
+test_aarch64
+test_mir_arm64
+test_mir_x86_64
 test_x86_64
 unit_tests
 watch

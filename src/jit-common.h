@@ -7,7 +7,7 @@
  * and the compile-pipeline driver. The per-arch files own only the
  * instruction selection and emission.
  *
- * Build-gated: only compiled when JAG_ENABLE_JIT is defined. */
+ * Always built: the AOT path prints the same selector's stream. */
 
 #include <stdint.h>
 
@@ -15,11 +15,41 @@
 #include "cctrl.h"
 #include "containers.h"
 #include "ir.h"
-#include "asm/asm_enc.h"
-#include "asm/asm_jit.h"
+#include "machine/asm_enc.h"
+#include "machine/asm_jit.h"
+#include "machine/obj.h"
+
+/* How a reference to a global, string literal or function becomes an
+ * address.
+ *
+ * ABSOLUTE   the address is known NOW - this process's own arenas and
+ *            dlsym - so it is materialised inline (movabs on x86_64, a
+ *            movz/movk sequence on aarch64). Only possible because the
+ *            code is about to run in this process.
+ * RELOCATED  the address is not known until link time, so the reference
+ *            is emitted PC-relative with a fixup and somebody else
+ *            fills it in. This is what an object file needs.
+ *
+ * Both backends already emitted the RELOCATED shape for calls to
+ * functions defined in the same chunk, since those addresses do not
+ * exist yet either - so selecting it everywhere is choosing an existing
+ * branch rather than a new one. */
+typedef enum {
+    HCC_ADDR_ABSOLUTE = 0,
+    HCC_ADDR_RELOCATED,
+} HccAddrMode;
+
+/* One chunk's globals-and-strings arena. */
+typedef struct HccJitArena {
+    unsigned char *base;
+    size_t size;
+} HccJitArena;
 
 typedef struct HccJit {
     Cctrl *cc;
+
+    /* See HccAddrMode. Defaults to ABSOLUTE, which is the JIT. */
+    HccAddrMode addr_mode;
 
     /* The arch backend driving compile_function for every chunk. */
     const struct HccJitBackend *backend;
@@ -47,7 +77,10 @@ typedef struct HccJit {
     List *chunks;
 
     /* RW arenas for globals + string literals, one per chunk; the
-     * absolute addresses are registered in host_symbols. */
+     * absolute addresses are registered in host_symbols. Each entry is
+     * an HccJitArena: the size is carried because -Memsafe range-checks
+     * a suspect pointer against them, and a bare base cannot say
+     * whether an address falls inside. */
     List *globals_arenas;
 
     /* Incremental cursors: last node of cc->ast_list / cc->asm_blocks
@@ -81,7 +114,42 @@ typedef struct HccJit {
         char *symbol;
     } *ptr_fixups;
     u32 n_ptr_fixups, cap_ptr_fixups;
+
+    /* RELOCATED mode only: the `.data` image and where each symbol sits
+     * within it.
+     *
+     * Globals are laid out BEFORE any function is compiled, but the
+     * data has to land AFTER the code in the byte stream - so it is
+     * held here and appended once emission is done, by
+     * hccJitAppendDataSection. `data_base` is the arena the layout
+     * wrote into, which is also what ptr_fixups point into. */
+    unsigned char *data_base;
+    size_t data_len;
+    struct HccJitDataSym {
+        char *name;
+        size_t off;
+        /* Private to this translation unit, so the object writer must
+         * emit an internal symbol rather than export the name. True for
+         * every string literal and every `static` global: both are
+         * named by astMakeLabel's `.L<n>` counter, which restarts at
+         * zero in each compilation, so any two objects would otherwise
+         * both export `.L12` and refuse to link. */
+        int is_local;
+    } *data_syms;
+    u32 n_data_syms, cap_data_syms;
 } HccJit;
+
+/* Append the RELOCATED-mode `.data` image to `jit->enc`, define a
+ * symbol for every global and string in it, and turn the pointer
+ * fixups into AFR_ABS64 relocations. No-op in ABSOLUTE mode. Call once
+ * code emission for the chunk is complete. */
+void hccJitAppendDataSection(HccJit *jit);
+
+/* Does THIS object define `sym`? Functions compiled into this chunk and
+ * globals/strings laid into its data image do; anything else is the
+ * linker's to find, and its address cannot be computed PC-relatively.
+ * Only meaningful in HCC_ADDR_RELOCATED mode. */
+int hccJitDefinesSymbol(HccJit *jit, const char *sym);
 
 typedef struct HccJitLine {
     uintptr_t addr; /* absolute pc in `lines`; enc offset in pending */
@@ -108,6 +176,23 @@ HccJit *hccJitCompile(Cctrl *cc, const HccJitBackend *backend);
  * Checks target compatibility, installs the register pool and loads
  * libtos. NULL on error. */
 HccJit *hccJitNew(Cctrl *cc, const HccJitBackend *backend);
+
+/* Same, but `load_host_libs` 0 skips dlopening the runtime and any
+ * `#link` shared objects - for contexts that only EMIT (the AOT text
+ * path, the object writer) and never execute what they compile. */
+/* As hccJitNewEx, but the caller says whether the backend has to match
+ * the PROGRAM's target. `#eval` says no: its code runs on the host. */
+HccJit *hccJitNewFor(Cctrl *cc, const HccJitBackend *backend,
+                     int load_host_libs, int check_target);
+
+HccJit *hccJitNewEx(Cctrl *cc, const HccJitBackend *backend,
+                    int load_host_libs);
+
+/* Lower the whole program and write it as a relocatable object, using
+ * the same lowering as the JIT with HCC_ADDR_RELOCATED selected.
+ * Returns 0 on success. */
+int hccJitCompileObject(Cctrl *cc, const HccJitBackend *backend,
+                        Target target, ObjFormat fmt, FILE *out);
 
 /* Compile everything appended to cc->ast_list / cc->asm_blocks since
  * the previous chunk - plus `extra_fn` if non-NULL (a synthetic

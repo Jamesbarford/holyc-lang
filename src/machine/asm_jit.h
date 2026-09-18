@@ -43,4 +43,10 @@ int asm_jit_finalize(AsmEnc *enc, asm_jit_resolver_fn resolver, void *ud,
 /* Unmap the executable region. Safe to call on a zeroed AsmJitCode. */
 void asm_jit_free(AsmJitCode *code);
 
+/* Resolve intra-function (AF_LOCAL) branches directly in enc->bytes.
+ * Needed by any consumer that does NOT go through asm_jit_finalize -
+ * an object writer, most obviously - because those branches are
+ * otherwise left reading zero. See the definition for the symptoms. */
+int asm_resolve_local_fixups(AsmEnc *enc);
+
 #endif
