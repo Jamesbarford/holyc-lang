@@ -10,7 +10,11 @@ U0 RunTest(U8 *filename)
    * hcc happens to be on PATH (e.g. an installed /usr/local/bin/hcc
    * from a prior version - this trap cost us a session of confused
    * cross-test triage). */
-  if (g_target[0] == '\0') {
+  U8 *install_dir = getenv("HCC_INSTALL_DIR");
+  if (g_target[0] == '\0' && install_dir) {
+    len = snprintf(buffer, sizeof(buffer), "../../hcc -jit --install-dir=%s %s",
+                   install_dir, filename);
+  } else if (g_target[0] == '\0') {
     len = snprintf(buffer, sizeof(buffer), "../../hcc -jit %s", filename);
   } else {
     len = snprintf(buffer, sizeof(buffer),

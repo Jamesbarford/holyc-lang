@@ -45,12 +45,12 @@ System("printf '"
        "}\n"
        "' > /tmp/hcc-64-sret.HC");
 
-if (System("../../hcc /tmp/hcc-64-sret.HC -o /tmp/hcc-64-sret && "
+if (System("../../hcc ${HCC_INSTALL_DIR:+--install-dir=$HCC_INSTALL_DIR} /tmp/hcc-64-sret.HC -o /tmp/hcc-64-sret && "
            "/tmp/hcc-64-sret") == 0) {
   correct++;
 }
 
-if (System("../../hcc -jit /tmp/hcc-64-sret.HC") == 0) {
+if (System("../../hcc ${HCC_INSTALL_DIR:+--install-dir=$HCC_INSTALL_DIR} -jit /tmp/hcc-64-sret.HC") == 0) {
   correct++;
 }
 

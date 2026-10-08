@@ -21,7 +21,7 @@ System("printf '#link \"/tmp/hcc-60-link.so\"\n"
        "extern \"c\" I64 HccLinkTestValue();\n"
        "I32 Main() { if (HccLinkTestValue() == 42) return 0; return 1; }\n'"
        " > /tmp/hcc-60-link-path.HC");
-if (System("../../hcc /tmp/hcc-60-link-path.HC -o /tmp/hcc-60-link-path && "
+if (System("../../hcc ${HCC_INSTALL_DIR:+--install-dir=$HCC_INSTALL_DIR} /tmp/hcc-60-link-path.HC -o /tmp/hcc-60-link-path && "
            "/tmp/hcc-60-link-path") == 0) {
   correct++;
 }
@@ -30,7 +30,7 @@ System("printf '#link <m>\n"
        "extern \"c\" F64 cos(F64 x);\n"
        "I32 Main() { if (cos(0.0) == 1.0) return 0; return 1; }\n'"
        " > /tmp/hcc-60-link-name.HC");
-if (System("../../hcc /tmp/hcc-60-link-name.HC -o /tmp/hcc-60-link-name && "
+if (System("../../hcc ${HCC_INSTALL_DIR:+--install-dir=$HCC_INSTALL_DIR} /tmp/hcc-60-link-name.HC -o /tmp/hcc-60-link-name && "
            "/tmp/hcc-60-link-name") == 0) {
   correct++;
 }
