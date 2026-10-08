@@ -73,6 +73,11 @@ Bool ShouldExclude(U8 *filename, I64 namelen)
  * before any reader runs. */
 U8 *g_target;
 
+/* Optional libtos prefix for host runs, e.g. build.sh sets
+ * HCC_INSTALL_DIR=build/prefix so the tests link the in-tree library
+ * rather than whatever is installed in /usr/local. */
+extern "c" U8 *getenv(U8 *name);
+
 PtrVec *CollectTests()
 {
   auto dir = opendir(".");
