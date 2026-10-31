@@ -77,6 +77,7 @@ class LspPollFd
 I64 g_pass;
 I64 g_fail;
 U8 *g_dir;  /* fixture dir, realpath'd */
+U8 *g_prefix; /* the stdlib `make lsp-test` staged, realpath'd */
 U8 *g_hcc;  /* absolute path of the hcc under test */
 
 /* ---------------- fixtures ---------------- */
@@ -402,10 +403,13 @@ LspClient *LspStart()
     if (devnull >= 0) dup2(devnull, 2);
     close(to_child[1]);
     close(from_child[0]);
-    U8 *args[3];
+    U8 install_dir[1100];
+    snprintf(install_dir, 1100, "--install-dir=%s", g_prefix);
+    U8 *args[4];
     args[0] = g_hcc;
-    args[1] = "-lsp";
-    args[2] = NULL;
+    args[1] = install_dir;
+    args[2] = "-lsp";
+    args[3] = NULL;
     execv(g_hcc, args);
     Exit(127);
   }
@@ -747,18 +751,18 @@ U0 TestDefinition()
   resp = LspPositionRequest(l, "textDocument/definition", buri, line, chr);
   Check("missing include target answers null", IsNullResult(resp));
 
-  /* Builtin <tos.HH>: only when a stdlib is installed to point at. */
-  if (access("/usr/local/include/tos.HH", 0) == 0) {
+  /* Builtin <tos.HH>: the stdlib staged by `make lsp-test`. */
+  {
     I64 cap = StrLen(MAIN_HC) + 32;
     U8 *with_tos = MAlloc(cap);
     snprintf(with_tos, cap, "%s#include <tos.HH>\n", MAIN_HC);
     LspDidChange(l, uri, with_tos);
     PosOf(with_tos, "#include <tos.HH>", 11, &line, &chr);
     resp = LspPositionRequest(l, "textDocument/definition", uri, line, chr);
+    U8 tos_uri[1100];
+    snprintf(tos_uri, 1100, "file://%s/include/tos.HH", g_prefix);
     Check("include jump: <tos.HH> via builtin root",
-          LocEq(resp, "file:///usr/local/include/tos.HH", 0, 0, TRUE));
-  } else {
-    "  (skipped <tos.HH> jump: no installed stdlib)\n";
+          LocEq(resp, tos_uri, 0, 0, TRUE));
   }
   Check("clean shutdown", LspClose(l) == 0);
 }
@@ -814,15 +818,13 @@ U0 TestHoverCompletion()
   /* Most of the stdlib is declared `public _extern _LABEL ...`, an asm
    * binding rather than a plain prototype. Those used to fall through
    * to printing the raw function type (`<fn> U0 * MAlloc`). */
-  if (access("/usr/local/include/tos.HH", 0) == 0) {
+  {
     U8 *std_uri = UriOf("std.HC");
     LspDidOpen(l, std_uri, STD_HC);
     PosOf(STD_HC, "MAlloc", 0, &line, &chr);
     resp = LspPositionRequest(l, "textDocument/hover", std_uri, line, chr);
     Check("hover on an asm-bound stdlib function shows a prototype",
           HoverContains(resp, "MAlloc(") && !HoverContains(resp, "<fn>"));
-  } else {
-    "  (skipped stdlib prototype hover: no installed stdlib)\n";
   }
 
   /* Prefix "Lib" - cursor after the 3rd char of the call site. */
@@ -1030,8 +1032,8 @@ U0 TestRename()
   resp = LspPositionRequest(l, "textDocument/prepareRename", uri, 0, 0);
   Check("prepareRename on a non-symbol is null", IsNullResult(resp));
 
-  /* Stdlib guard - only when an installed stdlib was bootstrapped. */
-  if (access("/usr/local/include/tos.HH", 0) == 0) {
+  /* Stdlib guard. */
+  {
     U8 *suri = UriOf("std.HC");
     LspDidOpen(l, suri, STD_HC);
     PosOf(STD_HC, "MAlloc", 0, &line, &chr);
@@ -1041,8 +1043,6 @@ U0 TestRename()
              "\"newName\":\"MyAlloc\"}", suri, line, chr);
     resp = LspRequest(l, "textDocument/rename", params);
     Check("stdlib symbol rename is refused", IsErrorResult(resp));
-  } else {
-    "  (skipped stdlib rename guard: no installed stdlib)\n";
   }
   Check("clean shutdown", LspClose(l) == 0);
 }
@@ -1104,7 +1104,7 @@ U0 TestReferences()
 
   /* Stdlib references ALLOWED (rename refuses these): the use here +
    * the declaration synthesized from tos.HH provenance. */
-  if (access("/usr/local/include/tos.HH", 0) == 0) {
+  {
     U8 *suri = UriOf("std.HC");
     LspDidOpen(l, suri, STD_HC);
     PosOf(STD_HC, "MAlloc", 0, &line, &chr);
@@ -1116,8 +1116,6 @@ U0 TestReferences()
     arr = JsonSelect(resp, ".result:a");
     Check("references: stdlib symbol allowed, decl from tos.HH",
           JsonArrayCount(arr) == 2 && HasLocation(arr, suri, line, chr));
-  } else {
-    "  (skipped stdlib references: no installed stdlib)\n";
   }
   Check("clean shutdown", LspClose(l) == 0);
 }
@@ -1132,6 +1130,12 @@ I32 Main()
 
   /* Test the LOCAL build: this runner lives in src/tests/lsp and is
    * compiled+run from there by `make lsp-test`. */
+  g_prefix = MAlloc(1024);
+  if (realpath("../../../build/test-prefix", g_prefix) == NULL) {
+    "\033[0;31mFAILED\033[0;0m: no stdlib staged in build/test-prefix "
+    "(run this via `make lsp-test`)\n";
+    return 1;
+  }
   g_hcc = MAlloc(1024);
   if (realpath("../../../hcc", g_hcc) == NULL ||
       access(g_hcc, 1) != 0)
