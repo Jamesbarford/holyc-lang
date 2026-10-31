@@ -20,7 +20,7 @@ U0 Cleanup()
   Rm("./a.out");
 }
 
-Bool Rejected(U8 *source)
+Bool Rejected(U8 *source, U8 *printed)
 {
   U8 *out;
   Bool ok;
@@ -33,6 +33,9 @@ Bool Rejected(U8 *source)
   res = System("../../hcc $HCC_TEST_FLAGS " MACRO_TEST_FILE " > " MACRO_TEST_OUT " 2>&1");
   out = FileRead(MACRO_TEST_OUT);
   ok = res != 0 && out && strstr(out, "Function-like macros are not supported");
+  /* The error prints the line back. A `#` directive used to re-lex with no
+   * text of its own, which dropped it from the line or crashed hcc. */
+  ok = ok && strstr(out, printed);
   if (!ok && out) "%s\n", out;
   if (out) Free(out);
   Cleanup;
@@ -43,9 +46,9 @@ I32 Main()
 {
   "Test - function macros rejected: ";
   I64 correct = 0;
-  if (Rejected("#define SQ(x) ((x) * (x))\nI32 Main() { return SQ(3); }\n")) correct++;
-  if (Rejected("#define EMPTY() 1\nI32 Main() { return 0; }\n")) correct++;
-  if (Rejected("#define ADD(a, b) a + b\nI32 Main() { return 0; }\n")) correct++;
+  if (Rejected("#define SQ(x) ((x) * (x))\nI32 Main() { return SQ(3); }\n", "#define SQ(x)")) correct++;
+  if (Rejected("#define EMPTY() 1\nI32 Main() { return 0; }\n", "#define EMPTY()")) correct++;
+  if (Rejected("#define ADD(a, b) a + b\nI32 Main() { return 0; }\n", "#define ADD(a, b)")) correct++;
   if (SPACED == 3) correct++;
   if (TABBED == 3) correct++;
   PrintResult(correct, 5);

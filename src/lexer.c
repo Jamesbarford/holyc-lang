@@ -1446,6 +1446,9 @@ static int lexCore(Lexer *l, Lexeme *le) {
                 }
                 le->tk_type = TK_KEYWORD;
                 le->i64 = type->kind;
+                /* A diagnostic re-lexes its source line to print it */
+                le->start = start;
+                le->len = l->ptr - start;
                 return 1;
             }
 
