@@ -1029,6 +1029,45 @@ int astIsFnLike(Ast *maybe_fn) {
                         maybe_fn->kind == AST_EXTERN_FUNC);
 }
 
+int astIsU64(AstType *type) {
+    return type && type->kind == AST_TYPE_INT && type->size == 8 &&
+           !type->issigned;
+}
+
+/* These yield 0 or 1 whatever they compared. */
+static int astBinOpIsTruthValue(AstBinOp op) {
+    switch (op) {
+        case AST_BIN_OP_LT:
+        case AST_BIN_OP_GT:
+        case AST_BIN_OP_LE:
+        case AST_BIN_OP_GE:
+        case AST_BIN_OP_EQ:
+        case AST_BIN_OP_NE:
+        case AST_BIN_OP_LOG_AND:
+        case AST_BIN_OP_LOG_OR:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+/* HolyC does its arithmetic in 64 bits. Anything narrower widens with its
+ * value intact, so U64 is the only operand that can make a result unsigned.
+ * A shift or an assignment takes its type from the left alone: `-8 >> u`
+ * still shifts a signed value. */
+static AstType *astIntResultType(AstBinOp op, AstType *a, AstType *b) {
+    int is_unsigned;
+    if (astBinOpIsTruthValue(op)) {
+        is_unsigned = 0;
+    } else if (op == AST_BIN_OP_SHL || op == AST_BIN_OP_SHR ||
+               op == AST_BIN_OP_ASSIGN) {
+        is_unsigned = astIsU64(a);
+    } else {
+        is_unsigned = astIsU64(a) || astIsU64(b);
+    }
+    return astTypeCopy(is_unsigned ? ast_uint_type : ast_int_type);
+}
+
 /* This is pretty gross to look at but, eliminated recursion */
 AstType *astGetResultType(AstBinOp op, AstType *a, AstType *b) {
     AstType *tmp;
@@ -1053,7 +1092,8 @@ start_routine:
         }
 
         if (ptr2->kind == ptr1->kind) {
-            return ast_uint_type;
+            /* `p - q` can be negative and a comparison is a truth value */
+            return astTypeCopy(ast_int_type);
         }
 
         /* Any integer offsets a pointer, a `U8` included. */
@@ -1063,7 +1103,7 @@ start_routine:
         /* These are the only arithmetic operators for pointers,
          * the rest are boolean */
         if (op != AST_BIN_OP_ADD && op != AST_BIN_OP_SUB) {
-            return ast_uint_type;
+            return astTypeCopy(ast_int_type);
         }
         return ptr2;
     }
@@ -1075,7 +1115,7 @@ start_routine:
             switch (ptr2->kind) {
                 case AST_TYPE_INT:
                 case AST_TYPE_CHAR:
-                    return astTypeCopy(ast_int_type);
+                    return astIntResultType(op, a, b);
                 case AST_TYPE_CLASS:
                     if (ptr2->is_intrinsic) {
                         return astTypeCopy(ast_int_type);
@@ -1085,6 +1125,9 @@ start_routine:
                 case AST_TYPE_FLOAT:
                     /* int/char OP float -> the float type (preserves
                      * F32 vs F64). ptr2 is the float operand. */
+                    if (astBinOpIsTruthValue(op)) {
+                        return astTypeCopy(ast_int_type);
+                    }
                     return astTypeCopy(ptr2);
                 case AST_TYPE_ARRAY:
                 case AST_TYPE_POINTER:
@@ -1094,7 +1137,15 @@ start_routine:
             }
             break;
         case AST_TYPE_FLOAT:
-            if (ptr2->kind == AST_TYPE_FLOAT) {
+            /* The kinds sort INT < FLOAT < CHAR, so `Bool && F64` and
+             * `U8 + F64` arrive here with the float in ptr1. */
+            if (ptr2->kind == AST_TYPE_FLOAT || ptr2->kind == AST_TYPE_CHAR) {
+                if (astBinOpIsTruthValue(op)) {
+                    return astTypeCopy(ast_int_type);
+                }
+                if (ptr2->kind == AST_TYPE_CHAR) {
+                    return astTypeCopy(ptr1);
+                }
                 /* float OP float -> the wider of the two (F32 promotes
                  * to F64 when mixed, matching C usual conversions). */
                 return astTypeCopy(ptr1->size >= ptr2->size ? ptr1 : ptr2);
@@ -1188,6 +1239,11 @@ check_type:
         }
     } else if (e->kind == AST_TYPE_POINTER && a->kind != AST_TYPE_POINTER) {
         if (a->kind == AST_TYPE_VOID && actual->kind == AST_TYPE_POINTER) {
+            ret = e;
+            goto out;
+        }
+        /* `U0 *f = &abs;` a function's address is a generic pointer */
+        if (a->kind == AST_TYPE_FUNC && e->ptr->kind == AST_TYPE_VOID) {
             ret = e;
             goto out;
         }

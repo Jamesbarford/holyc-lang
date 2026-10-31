@@ -790,6 +790,10 @@ void irEmitCond(IrCtx *ctx, Ast *ast, IrBlock *true_block,
     irBranch(ctx->cur_func, ctx->cur_block, cond, true_block, false_block);
 }
 
+static IrOp irIntToFloatOp(Ast *operand) {
+    return astIsU64(operand->type) ? IR_UITOFP : IR_SITOFP;
+}
+
 /* Binary expressions are assumed to always be assigning to something. I'm not
  * 100% sure this is a valid assumption to make. Well I guess;
  * `I64 x = y + 32 * 10` _could_ continually be assigned to `x` */
@@ -940,10 +944,12 @@ IrValue *irLowerBinOpExpr(IrCtx *ctx, Ast *ast) {
                                     : (int)irValueByteSize(rhs);
             IrValue *prom = irTmp(fty, fsz);
             if (!left_is_float) {
-                irBlockAddInstr(ctx, irInstrNew(IR_SITOFP, prom, lhs, NULL));
+                irBlockAddInstr(ctx, irInstrNew(irIntToFloatOp(ast_lhs), prom,
+                                                lhs, NULL));
                 lhs = prom;
             } else {
-                irBlockAddInstr(ctx, irInstrNew(IR_SITOFP, prom, rhs, NULL));
+                irBlockAddInstr(ctx, irInstrNew(irIntToFloatOp(ast_rhs), prom,
+                                                rhs, NULL));
                 rhs = prom;
             }
         }
@@ -972,11 +978,13 @@ IrValue *irLowerBinOpExpr(IrCtx *ctx, Ast *ast) {
             IrValue *prom = irTmp(fty, fsz);
             IrInstr *cast_instr = NULL;
             if (!left_is_float) {
-                cast_instr = irInstrNew(IR_SITOFP, prom, lhs, NULL);
+                cast_instr = irInstrNew(irIntToFloatOp(ast_lhs), prom, lhs,
+                                        NULL);
                 lhs = prom;
             }
             if (!right_is_float) {
-                cast_instr = irInstrNew(IR_SITOFP, prom, rhs, NULL);
+                cast_instr = irInstrNew(irIntToFloatOp(ast_rhs), prom, rhs,
+                                        NULL);
                 rhs = prom;
             }
             irBlockAddInstr(ctx, cast_instr);
@@ -1266,7 +1274,7 @@ static IrOp irCompoundAssignToIrOp(AstBinOp op, int issigned) {
         case AST_BIN_OP_DIV_ASSIGN: return issigned ? IR_IDIV : IR_UDIV;
         case AST_BIN_OP_MOD_ASSIGN: return issigned ? IR_IREM : IR_UREM;
         case AST_BIN_OP_SHL_ASSIGN: return IR_SHL;
-        case AST_BIN_OP_SHR_ASSIGN: return IR_SHR;
+        case AST_BIN_OP_SHR_ASSIGN: return issigned ? IR_SAR : IR_SHR;
         case AST_BIN_OP_AND_ASSIGN: return IR_AND;
         case AST_BIN_OP_XOR_ASSIGN: return IR_XOR;
         case AST_BIN_OP_OR_ASSIGN:  return IR_OR;
@@ -2106,6 +2114,13 @@ IrValue *irLowerUnOp(IrCtx *ctx, Ast *ast) {
          * Lower as ICMP_EQ with 0. */
         IrValue *v = irExpr(ctx, ast->operand);
         IrValue *dst = irTmp(IR_TYPE_I64, 8);
+        if (irIsFloat(v->type)) {
+            IrInstr *fcmp = irInstrNew(IR_FCMP, dst, v,
+                                       irConstFloat(v->type, 0.0));
+            fcmp->extra.cmp_kind = IR_CMP_EQ;
+            irBlockAddInstr(ctx, fcmp);
+            return dst;
+        }
         IrValue *zero = irConstInt(IR_TYPE_I64, 0);
         irBlockAddInstr(ctx, irICmp(dst, IR_CMP_EQ, v, zero));
         return dst;

@@ -1343,6 +1343,13 @@ Ast *parseReturnStatement(Cctrl *cc) {
         Ast *func = mapGet(cc->global_env, cc->tmp_fname->data);
         typeCheckReturnTypeWarn(cc,func,check,retval);
     }
+    /* An int and a float come back in different registers. */
+    if (retval && retval->type &&
+        ((astIsFloatType(retval->type) && astIsIntType(cc->tmp_rettype)) ||
+         (astIsIntType(retval->type) && astIsFloatType(cc->tmp_rettype))))
+    {
+        retval = astCast(retval,cc->tmp_rettype);
+    }
     return astReturn(retval,cc->tmp_rettype);
 }
 
@@ -2434,11 +2441,48 @@ Ast *parseAsmFunctionBinding(Cctrl *cc) {
     return asm_func;
 }
 
+/* parseDeclSpec, keeping the type a `,` goes back to: in `I64 *a, b;` the
+ * pointer belongs to `a` alone. */
+static AstType *parseToplevelType(Cctrl *cc, AstType **_base) {
+    AstType *base = parseBaseDeclSpec(cc);
+    if (base == NULL) {
+        cctrlRaiseException(cc, "Unexpected end of input, expected a type");
+    }
+    *_base = base;
+    return parsePointerType(cc,base);
+}
+
+/* End of a declarator whose terminator is still to come. */
+static void parseToplevelDeclEnd(Cctrl *cc, AstType *base) {
+    if (tokenPunctIs(cctrlTokenPeek(cc),',')) {
+        cctrlTokenGet(cc);
+        cc->tmp_decl_base = base;
+    } else {
+        cctrlTokenExpect(cc,';');
+    }
+}
+
+/* parseVariableInitialiser has already consumed the terminator. */
+static void parseToplevelInitEnd(Cctrl *cc, AstType *base) {
+    cctrlTokenRewind(cc);
+    if (tokenPunctIs(cctrlTokenGet(cc),',')) {
+        cc->tmp_decl_base = base;
+    }
+}
+
 Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
     Ast *variable, *asm_block, *asm_func, *extern_func, *ast;
     AstType *type = NULL;
+    AstType *base = cc->tmp_decl_base;
     Lexeme *tok, *name, *peek;
     int is_static = 0;
+    int is_next_declarator = base != NULL;
+
+    if (base) {
+        cc->tmp_decl_base = NULL;
+        type = parsePointerType(cc,base);
+        goto declarator;
+    }
 
     while (1) {
         if ((tok = cctrlTokenGet(cc)) == NULL) {
@@ -2518,10 +2562,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
                     continue;
 
                 case KW_STATIC:
-                    type = parseDeclSpec(cc);
-                    if (type == NULL) {
-                        cctrlRaiseException(cc,"Expected type declaration");
-                    }
+                    type = parseToplevelType(cc,&base);
                     /* static at the global scope does not yet do anything */
                     is_static = 1;
                     (void)is_static;
@@ -2551,7 +2592,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
                 case KW_F64:
                 case KW_AUTO:
                     cctrlTokenRewind(cc);
-                    type = parseDeclSpec(cc);
+                    type = parseToplevelType(cc,&base);
                     break;
 
                 case KW_IF:
@@ -2611,10 +2652,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
                 return ast;
             } else {
                 cctrlTokenRewind(cc);
-                type = parseDeclSpec(cc);
-                if (type == NULL) {
-                    cctrlRaiseException(cc,"Undefined type: %.*s",tok->len,tok->start);
-                }
+                type = parseToplevelType(cc,&base);
             }
         } else if (tok->tk_type == TK_CHAR_CONST) {
             ast = parseFloatingCharConst(cc,tok);
@@ -2668,6 +2706,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
             return ast;
         }
 
+declarator:
         name = cctrlTokenGet(cc);
         /* End of input mid-definition: stop parsing so any accumulated
          * diagnostics surface, rather than dereferencing a NULL token. */
@@ -2722,8 +2761,10 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
             variable = astGVar(type,name->start,name->len,0);
             mapAdd(cc->global_env,variable->gname->data,variable);
             cc->tmp_gvar_decl = variable;
-            return parseVariableInitialiser(cc,variable,
-                                            PUNCT_TERM_COMMA|PUNCT_TERM_SEMI);
+            ast = parseVariableInitialiser(cc,variable,
+                                           PUNCT_TERM_COMMA|PUNCT_TERM_SEMI);
+            parseToplevelInitEnd(cc,base);
+            return ast;
         }
 
         if (tokenPunctIs(tok,'=') && type->kind != AST_TYPE_ARRAY) {
@@ -2750,14 +2791,14 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
                 variable->type = rhs->type;
                 if (rhs->kind == AST_STRING) {
                     ast_decl->declinit = rhs;
-                    cctrlTokenExpect(cc,';');
+                    parseToplevelDeclEnd(cc,base);
                     return ast_decl;
                 }
                 int is_err = 0;
                 Ast *assign = astBinaryOp(AST_BIN_OP_ASSIGN, variable,
                                           rhs, &is_err);
                 *is_global = 1;
-                cctrlTokenExpect(cc,';');
+                parseToplevelDeclEnd(cc,base);
                 return assign;
             }
 
@@ -2769,10 +2810,10 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
                 *is_global = 1;
             } else {
                 ast_decl->declinit = ast_expr->right;
-                cctrlTokenExpect(cc,';');
+                parseToplevelDeclEnd(cc,base);
                 return ast_decl;
             }
-            cctrlTokenExpect(cc,';');
+            parseToplevelDeclEnd(cc,base);
             return ast_expr;
         } else if (type->kind == AST_TYPE_ARRAY) {
             variable = astGVar(type,name->start,name->len,0);
@@ -2782,10 +2823,16 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
             if (type->kind == AST_TYPE_AUTO) {
                 parseAssignAuto(cc,ast);
             }
+            parseToplevelInitEnd(cc,base);
             return ast;
         }
 
         if (tokenPunctIs(tok, '(')) {
+            if (is_next_declarator) {
+                cctrlRaiseException(cc,
+                        "Function `%.*s` cannot follow a `,` in a variable declaration",
+                        name->len, name->start);
+            }
             Ast *fn = parseFunctionOrDef(cc,type,name->start,name->len,0);
             /* Anchor to the name token - covers prototypes too, and
              * corrects the in-function anchor (a token get+rewind
@@ -2798,7 +2845,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
         }
 
         if (tokenPunctIs(tok,';') || tokenPunctIs(tok, ',')) {
-            cctrlTokenGet(cc);
+            parseToplevelDeclEnd(cc,base);
             variable = astGVar(type,name->start,name->len,0);
             mapAdd(cc->global_env,variable->gname->data,variable);
             return astDecl(variable,NULL);
@@ -2820,6 +2867,7 @@ void parseToAst(Cctrl *cc) {
     cc->tmp_locals = NULL;
     cc->localenv = NULL;
     cc->tmp_gvar_decl = NULL;
+    cc->tmp_decl_base = NULL;
 
     /* Top-level recovery point. cctrlRaiseException longjmps here
      * once a CctrlDiagnostic is queued; we wipe function-scoped state
@@ -2850,6 +2898,7 @@ void parseToAst(Cctrl *cc) {
             cc->tmp_rettype = NULL;
             cc->tmp_loop_begin = NULL;
             cc->tmp_loop_end = NULL;
+            cc->tmp_decl_base = NULL;
             /* The lists below roll back the half-built AST_DECL; the
              * variable's global_env entry must go with it, or later
              * statements can reference storage that no longer exists. */

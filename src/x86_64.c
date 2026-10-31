@@ -852,6 +852,51 @@ static void x86EmitJccLocal(X86Ctx *ctx, int cc, int local_num) {
     E1(ctx, x86MirJccMn(cc), mir_label_local(local_num));
 }
 
+/* rax -> xmm0. x86 only has signed conversions before AVX-512, so a U64
+ * with the top bit set is halved, converted and doubled. The bit the halving
+ * drops is ORed back in so that rounding still sees it. */
+static void x86U64ToFp(X86Ctx *ctx, int is_dbl) {
+    int cvt = is_dbl ? X86MN_CVTSI2SD : X86MN_CVTSI2SS;
+    int big = hccJitFreshLocalNum(ctx->jit);
+    int done = hccJitFreshLocalNum(ctx->jit);
+
+    E2(ctx, X86MN_TEST, mir_r64(R_RAX), mir_r64(R_RAX));
+    x86EmitJccLocal(ctx, X86_CC_S, big);
+    E2(ctx, cvt, mir_xmm(0), mir_r64(R_RAX));
+    x86EmitBranchLocal(ctx, done);
+    x86MirLocalLabel(ctx, big);
+    E2(ctx, X86MN_MOV, mir_r64(R_RCX), mir_r64(R_RAX));
+    E2(ctx, X86MN_SHR, mir_r64(R_RCX), mir_imm(1));
+    E2(ctx, X86MN_AND, mir_r64(R_RAX), mir_imm(1));
+    E2(ctx, X86MN_OR, mir_r64(R_RCX), mir_r64(R_RAX));
+    E2(ctx, cvt, mir_xmm(0), mir_r64(R_RCX));
+    E2(ctx, is_dbl ? X86MN_ADDSD : X86MN_ADDSS, mir_xmm(0), mir_xmm(0));
+    x86MirLocalLabel(ctx, done);
+}
+
+/* xmm0 -> rax. The signed conversion stops at 2^63, so anything from there
+ * up has 2^63 taken off first and the top bit put back afterwards. */
+static void x86FpToU64(X86Ctx *ctx, int is_dbl) {
+    int big = hccJitFreshLocalNum(ctx->jit);
+    int done = hccJitFreshLocalNum(ctx->jit);
+
+    if (!is_dbl) {
+        E2(ctx, X86MN_CVTSS2SD, mir_xmm(0), mir_xmm(0));
+    }
+    x86EmitMovImm(ctx, R_RAX, 0x43E0000000000000); /* 2^63 as an F64 */
+    E2(ctx, X86MN_MOVQ, mir_xmm(1), mir_r64(R_RAX));
+    E2(ctx, X86MN_UCOMISD, mir_xmm(0), mir_xmm(1));
+    x86EmitJccLocal(ctx, X86_CC_AE, big);
+    E2(ctx, X86MN_CVTTSD2SI, mir_r64(R_RAX), mir_xmm(0));
+    x86EmitBranchLocal(ctx, done);
+    x86MirLocalLabel(ctx, big);
+    E2(ctx, X86MN_SUBSD, mir_xmm(0), mir_xmm(1));
+    E2(ctx, X86MN_CVTTSD2SI, mir_r64(R_RAX), mir_xmm(0));
+    x86EmitMovImm(ctx, R_RCX, INT64_MIN);
+    E2(ctx, X86MN_XOR, mir_r64(R_RAX), mir_r64(R_RCX));
+    x86MirLocalLabel(ctx, done);
+}
+
 static void x86EmitCallSym(X86Ctx *ctx, const char *sym) {
     E1(ctx, X86MN_CALL, mir_sym(sym));
 }
@@ -1811,9 +1856,13 @@ static void x86EmitInstr(X86Ctx *ctx, IrInstr *instr) {
 
         case IR_FPTOSI:
         case IR_FPTOUI:
-            /* x86 has no unsigned truncation pre-AVX512; treat as
-             * signed (same simplification as the AOT backend). */
             x86LoadFirstSrcFpr(ctx, instr->r1);
+            if (instr->op == IR_FPTOUI && irValueByteSize(instr->dst) == 8) {
+                x86FpToU64(ctx, x86FpDbl(instr->r1));
+                x86SpillDst(ctx, instr, R_RAX);
+                break;
+            }
+            /* Anything narrower fits the signed conversion. */
             x86MirLine(ctx, mir2(m, x86FpDbl(instr->r1) ? X86MN_CVTTSD2SI
                                                         : X86MN_CVTTSS2SI,
                                  mir_r64(R_RAX), mir_xmm(0)));
@@ -1822,8 +1871,13 @@ static void x86EmitInstr(X86Ctx *ctx, IrInstr *instr) {
 
         case IR_SITOFP:
         case IR_UITOFP:
-            /* Signed conversion either way (matches the AOT backend). */
             x86LoadFirstSrc(ctx, instr->r1);
+            if (instr->op == IR_UITOFP && irValueByteSize(instr->r1) == 8) {
+                x86U64ToFp(ctx, x86FpDbl(instr->dst));
+                x86SpillDstFpr(ctx, instr, 0);
+                break;
+            }
+            /* Anything narrower is zero-extended, so positive. */
             x86MirLine(ctx, mir2(m, x86FpDbl(instr->dst) ? X86MN_CVTSI2SD
                                                          : X86MN_CVTSI2SS,
                                  mir_xmm(0), mir_r64(R_RAX)));
