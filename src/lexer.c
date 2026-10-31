@@ -1446,6 +1446,9 @@ static int lexCore(Lexer *l, Lexeme *le) {
                 }
                 le->tk_type = TK_KEYWORD;
                 le->i64 = type->kind;
+                /* A diagnostic re-lexes its source line to print it */
+                le->start = start;
+                le->len = l->ptr - start;
                 return 1;
             }
 
@@ -1631,6 +1634,15 @@ Lexeme *lexDefine(Map *macro_defs, Lexer *l) {
     }
 
     ident = aoStrDupRaw(next.start, next.len);
+    /* The `(` has to touch the name: `#define X (1 + 2)` is a value. */
+    if (lexPeekMatch(l, '(')) {
+        /* The rest of the line would only parse as a second error */
+        while (*l->ptr && *l->ptr != '\n') l->ptr++;
+        lexRaise(l,
+                "Function-like macros are not supported: `#define %s(...)`; "
+                "#define takes a name and a constant value",
+                ident->data);
+    }
     /* A define must be on one line a \n determines the end of a define */
     l->flags |= CCF_ACCEPT_NEWLINES;
     iters = 0;

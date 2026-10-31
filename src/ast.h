@@ -563,6 +563,7 @@ Ast *astClassRef(AstType *type, Ast *cls, char *field_name);
 AstType *astClassType(Map *fields, AoStr *clsname, int size, int is_intrinsic);
 Ast *astCast(Ast *var, AstType *to);
 
+int astIsU64(AstType *type);
 AstType *astGetResultType(AstBinOp op, AstType *a, AstType *b);
 AstType *astTypeCheck(AstType *expected, Ast *ast, AstBinOp op);
 

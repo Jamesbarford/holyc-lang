@@ -1677,11 +1677,17 @@ Ast *parseUnaryExpr(Cctrl *cc) {
         Ast *operand = NULL;
         AstType *type = NULL;
 
-        /* XXX: This feels wrong but allows things like:
-         * !arr[0][1][2] to work properly */
+        /* The operand of `!arr[0][1][2]` is the whole postfix chain and
+         * nothing after it: `-v[0] * 10` is `(-v[0]) * 10`. Priority 3 is
+         * the last that binds tighter than a binary operator. */
         if (tokenPunctIs(peek, '[') && !(unary_op == AST_UN_OP_ADDR_OF ||
                                          unary_op == AST_UN_OP_DEREF)) {
-            operand = parseExpr(cc,16);
+            operand = parseExpr(cc,4);
+            if (!operand) {
+                cctrlRaiseException(cc,
+                    "Expected expression after unary '%s'",
+                    lexemePunctToString(tok->i64));
+            }
         } else {
             operand = parseUnaryExpr(cc);
             /* parsePrimary returns NULL when it sees a punct that
@@ -1752,7 +1758,10 @@ Ast *parseUnaryExpr(Cctrl *cc) {
                 break;
             }
             case AST_UN_OP_DEREF:   type = operand->type->ptr; break;
-            case AST_UN_OP_BIT_NOT: type = ast_int_type; break;
+            case AST_UN_OP_BIT_NOT:
+                type = astIsU64(operand->type) ? ast_uint_type : ast_int_type;
+                break;
+            case AST_UN_OP_LOG_NOT: type = ast_int_type; break;
             default:                type = operand->type; break;
         }
 

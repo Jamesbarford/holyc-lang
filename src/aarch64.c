@@ -519,6 +519,35 @@ static void a64FrameStore(A64Ctx *ctx, int reg, int size, int loff) {
                          mir_mem(mir_x(A_FP), loff)));
 }
 
+/* A struct's last register holds whatever is left of it, and 3, 5, 6 and 7
+ * bytes have no single load or store: reading a whole register could run
+ * off the end of a mapping and writing one would clobber the neighbour. So
+ * they go a piece at a time, largest first, through x10. */
+static int a64ChunkPiece(int left) {
+    return left >= 4 ? 4 : left >= 2 ? 2 : 1;
+}
+
+static int a64PieceLoad(int piece) {
+    return piece == 4 ? A64MN_LDR : piece == 2 ? A64MN_LDRH : A64MN_LDRB;
+}
+
+static int a64PieceStore(int piece) {
+    return piece == 4 ? A64MN_STR : piece == 2 ? A64MN_STRH : A64MN_STRB;
+}
+
+/* OR the piece in x10 into `reg` at byte `off`. */
+static void a64ChunkMerge(A64Ctx *ctx, int reg, int off) {
+    E3(ctx, A64MN_LSL, mir_x(A_X10), mir_x(A_X10), mir_imm(off * 8));
+    E3(ctx, A64MN_ORR, mir_x(reg), mir_x(reg), mir_x(A_X10));
+}
+
+/* The register holding `reg`'s bytes from `off` up. */
+static int a64ChunkExtract(A64Ctx *ctx, int reg, int off) {
+    if (!off) return reg;
+    E3(ctx, A64MN_LSR, mir_x(A_X10), mir_x(reg), mir_imm(off * 8));
+    return A_X10;
+}
+
 /* FP frame load/store via the FP load/store encoder family.
  *
  * AArch64's scaled `LDR Dt, [Xn, #imm]` only accepts non-negative
@@ -1440,21 +1469,12 @@ static void a64CopyToSlot(A64Ctx *ctx, int base, int size, int src,
         a64FrameStore(ctx, A_X10, 8, dst + o);
         o += 8;
     }
-    int rem = size - o;
-    if (rem == 4) {
-        a64MirLine(ctx, mir2(m, A64MN_LDR, mir_w(A_X10),
+    while (o < size) {
+        int piece = a64ChunkPiece(size - o);
+        a64MirLine(ctx, mir2(m, a64PieceLoad(piece), mir_w(A_X10),
                              mir_mem(mir_x(base), src + o)));
-        a64FrameStore(ctx, A_X10, 4, dst + o);
-    } else if (rem == 2) {
-        a64MirLine(ctx, mir2(m, A64MN_LDRH, mir_w(A_X10),
-                             mir_mem(mir_x(base), src + o)));
-        a64FrameStore(ctx, A_X10, 2, dst + o);
-    } else if (rem == 1) {
-        a64MirLine(ctx, mir2(m, A64MN_LDRB, mir_w(A_X10),
-                             mir_mem(mir_x(base), src + o)));
-        a64FrameStore(ctx, A_X10, 1, dst + o);
-    } else if (rem != 0) {
-        loggerPanic("jit-aarch64: %d-byte param copy chunk not supported\n", rem);
+        a64FrameStore(ctx, A_X10, piece, dst + o);
+        o += piece;
     }
 }
 
@@ -1469,16 +1489,14 @@ static void a64CopyToSp(A64Ctx *ctx, int src, int size, int dst) {
                              mir_mem(mir_sp(), dst + o)));
         o += 8;
     }
-    int rem = size - o;
-    if (rem == 0) return;
-    int ld = rem == 4 ? A64MN_LDR : rem == 2 ? A64MN_LDRH :
-             rem == 1 ? A64MN_LDRB : TASM_MN_UNKNOWN;
-    int st = rem == 4 ? A64MN_STR : rem == 2 ? A64MN_STRH :
-             rem == 1 ? A64MN_STRB : TASM_MN_UNKNOWN;
-    if (ld == TASM_MN_UNKNOWN)
-        loggerPanic("jit-aarch64: %d-byte arg copy chunk not supported\n", rem);
-    a64MirLine(ctx, mir2(m, ld, mir_w(A_X10), mir_mem(mir_x(src), o)));
-    a64MirLine(ctx, mir2(m, st, mir_w(A_X10), mir_mem(mir_sp(), dst + o)));
+    while (o < size) {
+        int piece = a64ChunkPiece(size - o);
+        a64MirLine(ctx, mir2(m, a64PieceLoad(piece), mir_w(A_X10),
+                             mir_mem(mir_x(src), o)));
+        a64MirLine(ctx, mir2(m, a64PieceStore(piece), mir_w(A_X10),
+                             mir_mem(mir_sp(), dst + o)));
+        o += piece;
+    }
 }
 
 /* ---------------- the main IR emitter ---------------- */
@@ -1566,12 +1584,17 @@ static void a64AggLoad(A64Ctx *ctx, int is_fp, int reg, int src_off, int size) {
         E2(ctx, A64MN_LDR, a64MirFpSized(size, reg), mir_mem(mir_x(A_X9), src_off));
         return;
     }
-    int mn = size >= 8 ? A64MN_LDR : size == 4 ? A64MN_LDR :
-             size == 2 ? A64MN_LDRH : size == 1 ? A64MN_LDRB
-                                                : TASM_MN_UNKNOWN;
-    if (mn == TASM_MN_UNKNOWN)
-        loggerPanic("jit-aarch64: %d-byte struct chunk not supported\n", size);
-    E2(ctx, mn, a64MirGp(size >= 8, reg), mir_mem(mir_x(A_X9), src_off));
+    if (size >= 8) {
+        E2(ctx, A64MN_LDR, mir_x(reg), mir_mem(mir_x(A_X9), src_off));
+        return;
+    }
+    for (int o = 0; o < size; ) {
+        int piece = a64ChunkPiece(size - o);
+        E2(ctx, a64PieceLoad(piece), mir_w(o ? A_X10 : reg),
+           mir_mem(mir_x(A_X9), src_off + o));
+        if (o) a64ChunkMerge(ctx, reg, o);
+        o += piece;
+    }
 }
 
 static void a64PtrInReg(A64Ctx *ctx, int reg, int sp_off) {
@@ -1644,12 +1667,16 @@ static void a64RetChunkStore(A64Ctx *ctx, int is_fp, int reg, int off, int size)
         E2(ctx, A64MN_STR, a64MirFpSized(size, reg), mir_mem(mir_x(d), off));
         return;
     }
-    int mn = size >= 8 ? A64MN_STR : size == 4 ? A64MN_STR :
-             size == 2 ? A64MN_STRH : size == 1 ? A64MN_STRB
-                                                : TASM_MN_UNKNOWN;
-    if (mn == TASM_MN_UNKNOWN)
-        loggerPanic("jit-aarch64: %d-byte ret chunk not supported\n", size);
-    E2(ctx, mn, a64MirGp(size >= 8, reg), mir_mem(mir_x(d), off));
+    if (size >= 8) {
+        E2(ctx, A64MN_STR, mir_x(reg), mir_mem(mir_x(d), off));
+        return;
+    }
+    for (int o = 0; o < size; ) {
+        int piece = a64ChunkPiece(size - o);
+        E2(ctx, a64PieceStore(piece), mir_w(a64ChunkExtract(ctx, reg, o)),
+           mir_mem(mir_x(d), off + o));
+        o += piece;
+    }
 }
 
 static void a64SpillStructDst(A64Ctx *ctx, IrInstr *instr) {
@@ -1909,10 +1936,15 @@ static void a64AggStore(A64Ctx *ctx, int is_fp, int reg, int loff, int size) {
     if (is_fp) {
         a64FpFrameStore(ctx, (int)reg, size, loff);
     } else {
-        if (size != 1 && size != 2 && size != 4 && size != 8)
-            loggerPanic("jit-aarch64: %d-byte struct chunk not supported\n",
-                        size);
-        a64FrameStore(ctx, (int)reg, size, loff);
+        if (size >= 8) {
+            a64FrameStore(ctx, (int)reg, size, loff);
+            return;
+        }
+        for (int o = 0; o < size; ) {
+            int piece = a64ChunkPiece(size - o);
+            a64FrameStore(ctx, a64ChunkExtract(ctx, reg, o), piece, loff + o);
+            o += piece;
+        }
     }
 }
 
@@ -2957,8 +2989,25 @@ static void a64EmitInstr(A64Ctx *ctx, IrInstr *instr) {
                     int ngp = (t->size + 7) / 8;
                     for (int k = 0; k < ngp; ++k) {
                         int off = k * 8, rem = t->size - off;
-                        a64FrameLoad(ctx, (int)k, rem >= 8 ? 8 : rem,
-                                     loff + off);
+                        if (rem >= 8) {
+                            a64FrameLoad(ctx, k, 8, loff + off);
+                            continue;
+                        }
+                        for (int o = 0; o < rem; ) {
+                            int piece = a64ChunkPiece(rem - o);
+                            a64FrameLoad(ctx, o ? A_X10 : k, piece,
+                                         loff + off + o);
+                            /* A word load sign-extends, which would
+                             * smear over the bytes merged in above it. */
+                            if (piece == 4 && !o && rem > 4) {
+                                E3(ctx, A64MN_LSL, mir_x(k), mir_x(k),
+                                   mir_imm(32));
+                                E3(ctx, A64MN_LSR, mir_x(k), mir_x(k),
+                                   mir_imm(32));
+                            }
+                            if (o) a64ChunkMerge(ctx, k, o);
+                            o += piece;
+                        }
                     }
                 }
             } else if (instr->dst) {
