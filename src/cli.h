@@ -42,6 +42,8 @@ enum CliArgType {
     CLI_MEMSAFE,
     CLI_MEM_STATS,
     CLI_NO_INLINE,
+    CLI_NO_REG_PROMOTE,
+    CLI_OPTIMISE,
     CLI_OUTPUT_FILENAME,
     CLI_PRINT_AST,
     CLI_PRINT_TOKENS,
@@ -92,6 +94,8 @@ typedef struct CliArgs {
     int lsp;
     int memsafe;
     int no_inline;
+    int no_reg_promote;
+    int optimise;
     int repl;
     int assemble;
     int transpile;

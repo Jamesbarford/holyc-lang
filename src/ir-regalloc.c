@@ -2,6 +2,7 @@
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "ast.h"
 #include "containers.h"
@@ -393,6 +394,12 @@ static void irMarkDeadDsts(IrFunction *fn, IrLiveness *lv) {
     }
 }
 
+/* A call, or an `asm {}` block - which may write any caller-saved
+ * register, so a value live across one needs a callee-saved home. */
+static int irOpIsCallLike(IrInstr *I) {
+    return I->op == IR_CALL || I->op == IR_ASM;
+}
+
 /* Values whose live range crosses a call.
  *
  * A value that dies before the first call - a parameter read once to
@@ -414,7 +421,7 @@ static void irCollectCallCrossers(IrFunction *fn, IrLiveness *lv,
         int has_call = 0;
         listForEach(bb->instructions) {
             IrInstr *I = (IrInstr *)it->value;
-            if (I->op == IR_CALL) { has_call = 1; break; }
+            if (irOpIsCallLike(I)) { has_call = 1; break; }
         }
         if (!has_call) continue;
 
@@ -460,7 +467,7 @@ static void irCollectCallCrossers(IrFunction *fn, IrLiveness *lv,
             IrInstr *I = (IrInstr *)it->value;
             if (I->op == IR_NOP) continue;
             pos++;
-            if (I->op == IR_CALL) {
+            if (irOpIsCallLike(I)) {
                 if (n_calls == cap_calls) {
                     cap_calls = cap_calls ? cap_calls * 2 : 8;
                     call_pos = (int *)realloc(call_pos,
@@ -543,10 +550,10 @@ static int irRegIsHandPinned(IrFunction *fn, AoStr *reg) {
  *              dies AT the call - so irCollectCallCrossers does not
  *              catch it.
  *
- * Both tests below are deliberately whole-function and conservative.
- * The precise versions want parameter live ranges in the interference
- * graph, which is a bigger change; these give most of the benefit for
- * a fraction of the risk, and err only towards refusing a register.
+ * The tests below are conservative: precise only where every read is
+ * in the entry block (irParamRegHeld) or a value goes to one argument
+ * register at every call (irCollectCallArgHomes), and otherwise err
+ * towards refusing a register.
  *
  * Every test is gated on the register actually BEING an argument
  * register, so a pool whose leaf-free list contains none of them - as
@@ -577,6 +584,36 @@ int irRegIsAbiArg(IrRegPool *pool, AoStr *reg) {
     return 0;
 }
 
+static int irParamInReg(IrValue *v, AoStr *reg) {
+    return v && v->kind == IR_VAL_PARAM && v->loc.kind == IR_LOC_REG &&
+           v->loc.as.reg && irRegNameEq(v->loc.as.reg, reg);
+}
+
+/* Does `I` read a parameter still sitting in `reg`? */
+static int irInstrReadsParamReg(IrInstr *I, AoStr *reg) {
+    if (irParamInReg(I->r1, reg) || irParamInReg(I->r2, reg) ||
+        irParamInReg(I->idx, reg))
+    {
+        return 1;
+    }
+    /* A dst that is an operand: the value of IR_BR / IR_RET, the
+     * address of a deref store. */
+    if (!irLiveInstrDefines(I) && irParamInReg(I->dst, reg)) return 1;
+    if (I->op == IR_CALL && I->r1 && I->r1->as.array.values) {
+        Vec *cargs = I->r1->as.array.values;
+        for (u64 i = 0; i < cargs->size; ++i) {
+            if (irParamInReg((IrValue *)cargs->entries[i], reg)) return 1;
+        }
+    }
+    if (I->op == IR_PHI && I->extra.phi_pairs) {
+        for (u64 i = 0; i < I->extra.phi_pairs->size; ++i) {
+            IrPair *p = vecGet(IrPair *, I->extra.phi_pairs, i);
+            if (irParamInReg(p->ir_value, reg)) return 1;
+        }
+    }
+    return 0;
+}
+
 /* INCOMING: does a parameter arrive in `reg` and get read from it?
  *
  * "Read anywhere" rather than "read up to position N" on purpose. A
@@ -589,35 +626,40 @@ static int irRegHoldsReadParam(IrFunction *fn, AoStr *reg) {
     listForEach(fn->blocks) {
         IrBlock *bb = (IrBlock *)it->value;
         listForEach(bb->instructions) {
-            IrInstr *I = (IrInstr *)it->value;
-            IrValue *ops[3];
-            ops[0] = I->r1; ops[1] = I->r2; ops[2] = I->idx;
-            for (int k = 0; k < 3; ++k) {
-                IrValue *v = ops[k];
-                if (!v || v->kind != IR_VAL_PARAM) continue;
-                if (v->loc.kind != IR_LOC_REG || !v->loc.as.reg) continue;
-                if (irRegNameEq(v->loc.as.reg, reg)) return 1;
-            }
-            /* IR_BR / IR_RET carry their value operand in dst. */
-            if ((I->op == IR_BR || I->op == IR_RET) && I->dst &&
-                I->dst->kind == IR_VAL_PARAM &&
-                I->dst->loc.kind == IR_LOC_REG && I->dst->loc.as.reg &&
-                irRegNameEq(I->dst->loc.as.reg, reg))
-            {
-                return 1;
-            }
-            if (I->op == IR_CALL && I->r1 && I->r1->as.array.values) {
-                Vec *cargs = I->r1->as.array.values;
-                for (u64 i = 0; i < cargs->size; ++i) {
-                    IrValue *v = (IrValue *)cargs->entries[i];
-                    if (!v || v->kind != IR_VAL_PARAM) continue;
-                    if (v->loc.kind != IR_LOC_REG || !v->loc.as.reg) continue;
-                    if (irRegNameEq(v->loc.as.reg, reg)) return 1;
-                }
-            }
+            if (irInstrReadsParamReg((IrInstr *)it->value, reg)) return 1;
         }
     }
     return 0;
+}
+
+/* The precise version: when every read of the
+ * parameter in `reg` is in the entry block - which nothing branches
+ * back to - the parameter is dead after the last one, and `reg` is
+ * free from there on. Sets [*first, *last] to the positions it is
+ * held for, counted as irCgAllocAllTmps counts them, and returns 1;
+ * returns 0 when it is read elsewhere and must be held throughout.
+ * A parameter never read leaves *last below *first. */
+static int irParamRegHeld(IrFunction *fn, AoStr *reg, int *first, int *last) {
+    IrBlock *entry = fn->entry_block;
+    Map *preds = entry ? irBlockGetPredecessors(fn, entry) : NULL;
+    if (!entry || (preds && preds->size)) return 0;
+    int pos = 0;
+    *first = 0;
+    *last = -1;
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        if (bb == entry) *first = pos;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (I->op == IR_NOP) continue;
+            if (irInstrReadsParamReg(I, reg)) {
+                if (bb != entry) return 0;
+                *last = pos;
+            }
+            pos++;
+        }
+    }
+    return 1;
 }
 
 /* OUTGOING: which values are handed to a call as arguments. */
@@ -637,6 +679,173 @@ void irCollectCallArgValues(IrFunction *fn, Set *out) {
             if (I->r2) irLiveAddRef(out, I->r2);
         }
     }
+}
+
+/* The one argument register every call a value feeds moves it into.
+ * `Map<id, AoStr *>`; NULL where no single register serves - the
+ * value goes to the stack, two calls disagree, or it is a call target.
+ * Living there already makes its own move a no-op, and the in-order
+ * staging writes no other argument register over it. */
+static Map *irCollectCallArgHomes(IrFunction *fn, Cctrl *cc,
+                                  IrRegPool *pool)
+{
+    Map *homes = mapNew(16, &map_uint_to_uint_type);
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (I->op != IR_CALL) continue;
+            Vec *cargs = I->r1 ? I->r1->as.array.values : NULL;
+            u64 n = cargs ? cargs->size : 0;
+            for (u64 i = 0; i <= n; ++i) {
+                IrValue *v = i < n ? (IrValue *)cargs->entries[i] : I->r2;
+                if (!v || (v->kind != IR_VAL_TMP && v->kind != IR_VAL_LOCAL &&
+                           v->kind != IR_VAL_PARAM)) continue;
+                AoStr *reg = i < n && pool->call_arg_reg
+                           ? pool->call_arg_reg(cc, I, i) : NULL;
+                void *key = (void *)(u64)irVarId(v);
+                if (mapHas(homes, key)) {
+                    if (!irRegNameEq((AoStr *)mapGet(homes, key), reg))
+                        reg = NULL;
+                    mapRemove(homes, key);
+                }
+                mapAdd(homes, key, reg);
+            }
+        }
+    }
+    return homes;
+}
+
+/* Values a `ret` returns, mapped to the register it returns them in. */
+static Map *irCollectRetHomes(IrFunction *fn, IrRegPool *pool) {
+    Map *homes = mapNew(16, &map_uint_to_uint_type);
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            IrValue *v = I->dst;
+            if (I->op != IR_RET || !v) continue;
+            if (v->kind != IR_VAL_TMP && v->kind != IR_VAL_LOCAL) continue;
+            void *key = (void *)(u64)irVarId(v);
+            if (mapHas(homes, key)) continue;
+            mapAdd(homes, key, irIsFloat(v->type) ? pool->float_return_reg
+                                                  : pool->int_return_reg);
+        }
+    }
+    return homes;
+}
+
+/* A register a tmp holds before allocation - irOptPinResultReg's pins.
+ * The scan never sees these, so they are checked separately. */
+typedef struct IrCgPin {
+    u32 var_id;
+    AoStr *reg;
+    int first;
+    int last;
+} IrCgPin;
+
+static int irRegPinnedDuring(IrCgPin *pins, int n, AoStr *reg,
+                             int first, int last)
+{
+    for (int i = 0; i < n; ++i) {
+        if (pins[i].first <= last && pins[i].last >= first &&
+            irRegNameEq(pins[i].reg, reg))
+        {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Where each value is referenced, as [first, last] positions, for the
+ * values referenced only in the entry block - counted as
+ * irParamRegHeld counts. `Map<id, IrCgPin *>`; a value referenced
+ * anywhere else maps to NULL. */
+static Map *irCollectEntrySpans(IrFunction *fn) {
+    Map *spans = mapNew(64, &map_uint_to_uint_type);
+    IrBlock *entry = fn->entry_block;
+    Map *preds = entry ? irBlockGetPredecessors(fn, entry) : NULL;
+    int entry_ok = entry && !(preds && preds->size);
+    int pos = 0;
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (I->op == IR_NOP) continue;
+            Set *refs = setNew(8, &set_uint_type);
+            irLiveForEachRead(I, refs);
+            irLiveAddRef(refs, I->dst);
+            SetIter rit;
+            setIterInit(refs, &rit);
+            while (setIterNext(&rit)) {
+                void *k = rit.value;
+                IrCgPin *sp = (IrCgPin *)mapGet(spans, k);
+                if (!entry_ok || bb != entry) {
+                    if (sp || !mapHas(spans, k)) {
+                        free(sp);
+                        mapRemove(spans, k);
+                        mapAdd(spans, k, NULL);
+                    }
+                } else if (sp) {
+                    sp->last = pos;
+                } else if (!mapHas(spans, k)) {
+                    sp = (IrCgPin *)calloc(1, sizeof(IrCgPin));
+                    sp->first = sp->last = pos;
+                    mapAdd(spans, k, sp);
+                }
+            }
+            setRelease(refs);
+            pos++;
+        }
+    }
+    return spans;
+}
+
+static void irReleaseEntrySpans(Map *spans) {
+    MapIter mit;
+    mapIterInit(spans, &mit);
+    while (mapIterNext(&mit)) free(mit.node->value);
+    mapRelease(spans);
+}
+
+/* irOptPinResultReg's pins, as spans: unknown (the whole function)
+ * unless the pinned tmp lives only in the entry block. */
+static IrCgPin *irCollectPromoPins(IrFunction *fn, Map *spans, int *n_out) {
+    IrCgPin *pins = NULL;
+    int n = 0, cap = 0;
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (!irLiveInstrDefines(I)) continue;
+            IrValue *d = I->dst;
+            if (!d || d->kind != IR_VAL_TMP || d->loc.kind != IR_LOC_REG ||
+                !d->loc.as.reg) continue;
+            IrCgPin *sp = (IrCgPin *)mapGet(spans, (void *)(u64)irVarId(d));
+            if (n == cap) {
+                cap = cap ? cap * 2 : 8;
+                pins = (IrCgPin *)realloc(pins, cap * sizeof(IrCgPin));
+            }
+            pins[n].var_id = irVarId(d);
+            pins[n].reg = d->loc.as.reg;
+            pins[n].first = sp ? sp->first : INT_MIN;
+            pins[n].last = sp ? sp->last : INT_MAX;
+            /* A call reads its arguments before writing its result. */
+            if (sp && I->op == IR_CALL) pins[n].first++;
+            n++;
+        }
+    }
+    *n_out = n;
+    return pins;
+}
+
+/* A direct call to one of the functions that can return twice. The
+ * runtime's own frames call plain `setjmp`; C code may use any of them. */
+static int irCallIsSetjmp(IrInstr *I) {
+    if (!I->r1 || !I->r1->as.array.label) return 0;
+    const char *name = I->r1->as.array.label->data;
+    return !strcmp(name, "setjmp") || !strcmp(name, "_setjmp") ||
+           !strcmp(name, "sigsetjmp") || !strcmp(name, "__sigsetjmp");
 }
 
 void irOptPromoteToRegs(IrFunction *fn) {
@@ -670,6 +879,20 @@ void irOptPromoteToRegs(IrFunction *fn) {
         listForEach(bb->instructions) {
             IrInstr *I = (IrInstr *)it->value;
             if (I->op == IR_ASM) return;
+            /* Nor in a function that calls setjmp - which every `try`
+             * does, and every function whose `defer`s a throw may
+             * unwind through (irUnwindEmitPrologue). longjmp comes back
+             * with each callee-saved register as it was AT THE SETJMP,
+             * so a local promoted into one and assigned afterwards is
+             * read back stale by the catch block or the cleanup pad.
+             * C makes the programmer write `volatile` for exactly this;
+             * here the compiler emits the setjmp, so the compiler has
+             * to keep such locals in memory. It showed as a segfault: a
+             * `@[drop] Str *name` set after the prologue, thrown past,
+             * and dropped from the register's old contents. Temporaries
+             * are unaffected - any that a pad reads were defined before
+             * the setjmp, so the value restored is the value they had. */
+            if (I->op == IR_CALL && irCallIsSetjmp(I)) return;
         }
     }
 
@@ -794,12 +1017,34 @@ void irOptPromoteToRegs(IrFunction *fn) {
     Set *call_args = setNew(16, &set_uint_type);
     irCollectCallArgValues(fn, call_args);
 
-    /* Separate free-list cursors per class: the list mixes x and d
-     * registers, and one shared cursor let a float candidate taking
-     * d16 strand the x registers before it for every later int
-     * candidate. The classes are disjoint, so two cursors over the
-     * same list cannot double-allocate. */
-    u64 int_next = 0, flt_next = 0, free_int_next = 0, free_flt_next = 0;
+    Map *arg_homes = irCollectCallArgHomes(fn, fn->ra.cc, pool);
+    Map *ret_homes = irCollectRetHomes(fn, pool);
+    /* Promotion has no live ranges, so only a value referenced in the
+     * entry block alone gets a precise answer about sharing an ABI
+     * register with a parameter or a result pin. */
+    Map *spans = irCollectEntrySpans(fn);
+    int n_pins = 0;
+    IrCgPin *pins = irCollectPromoPins(fn, spans, &n_pins);
+    /* Per leaf register: the span a parameter holds it for. */
+    IrCgPin *held = NULL;
+    if (pool->leaf_free_regs) {
+        held = calloc(pool->leaf_free_regs->size + 1, sizeof(IrCgPin));
+        for (u64 r = 0; r < pool->leaf_free_regs->size; ++r) {
+            AoStr *reg = (AoStr *)pool->leaf_free_regs->entries[r];
+            held[r].first = 0;          /* empty */
+            held[r].last = -1;
+            if (!irRegIsAbiArg(pool, reg) || !irRegHoldsReadParam(fn, reg))
+                continue;
+            if (!irParamRegHeld(fn, reg, &held[r].first, &held[r].last)) {
+                held[r].first = INT_MIN;
+                held[r].last = INT_MAX;
+            }
+        }
+    }
+    /* A register goes to one candidate for the whole function. */
+    u8 *free_taken = pool->leaf_free_regs
+                   ? calloc(pool->leaf_free_regs->size + 1, 1) : NULL;
+    u8 *saved_taken = calloc(pool->callee_saved_regs->size + 1, 1);
     for (u64 i = 0; i < n; ++i) {
         /* A value that never crosses a call costs nothing to keep in a
          * caller-saved register - no save, no restore - so the floor,
@@ -807,32 +1052,59 @@ void irOptPromoteToRegs(IrFunction *fn) {
          * Asking per value rather than per function is what lets a
          * parameter read once before the first call stop living in a
          * stack slot, in a function that calls plenty of things. */
-        int crosses = setHas(crossers, (void *)(u64)irVarId(cands[i].val));
+        u32 id = irVarId(cands[i].val);
+        int crosses = setHas(crossers, (void *)(u64)id);
         int use_free = have_free && !crosses;
         if (!use_free && cands[i].uses < kMinUses) continue;
-        int is_call_arg =
-            setHas(call_args, (void *)(u64)irVarId(cands[i].val));
+        int is_call_arg = setHas(call_args, (void *)(u64)id);
+        AoStr *arg_home = mapHas(arg_homes, (void *)(u64)id)
+                        ? (AoStr *)mapGet(arg_homes, (void *)(u64)id) : NULL;
+        AoStr *hint = arg_home ? arg_home
+                    : (AoStr *)mapGet(ret_homes, (void *)(u64)id);
+        IrCgPin *span = (IrCgPin *)mapGet(spans, (void *)(u64)id);
+        int span_first = span ? span->first : INT_MIN;
+        int span_last = span ? span->last : INT_MAX;
 
         AoStr *chosen = NULL;
         Vec *from = use_free ? pool->leaf_free_regs : pool->callee_saved_regs;
-        u64 *cursor = use_free
-                    ? (cands[i].is_float ? &free_flt_next : &free_int_next)
-                    : (cands[i].is_float ? &flt_next : &int_next);
-        for (u64 r = *cursor; r < from->size; ++r) {
+        u8 *taken = use_free ? free_taken : saved_taken;
+        /* Where it is passed or returned first, so that move goes. */
+        int hint_r = -1;
+        for (u64 r = 0; hint && r < from->size; ++r) {
+            if (irRegNameEq((AoStr *)from->entries[r], hint)) {
+                hint_r = (int)r;
+                break;
+            }
+        }
+        for (int step = -1; step < (int)from->size; ++step) {
+            int r = step < 0 ? hint_r : step;
+            if (r < 0 || (step >= 0 && r == hint_r) || taken[r]) continue;
             AoStr *cand = (AoStr *)from->entries[r];
             if (irPromoRegIsFloat(cand) != cands[i].is_float) continue;
             if (irRegIsHandPinned(fn, cand)) continue;
             if (irRegIsAbiArg(pool, cand)) {
-                if (is_call_arg) continue;
-                if (irRegHoldsReadParam(fn, cand)) continue;
+                if (is_call_arg && !irRegNameEq(cand, arg_home)) continue;
+                /* Only the leaf list holds ABI registers. */
+                if (held[r].first <= held[r].last &&
+                    held[r].first <= span_last && held[r].last >= span_first)
+                    continue;
+                if (irRegPinnedDuring(pins, n_pins, cand,
+                                      span_first, span_last)) continue;
             }
             chosen = cand;
-            *cursor = r + 1;
+            taken[r] = 1;
             break;
         }
         if (!chosen) continue;  /* pool exhausted; this one keeps its slot */
         cands[i].val->pinned_reg = chosen;
     }
+    free(free_taken);
+    free(saved_taken);
+    free(held);
+    free(pins);
+    irReleaseEntrySpans(spans);
+    mapRelease(arg_homes);
+    mapRelease(ret_homes);
     setRelease(call_args);
     setRelease(crossers);
     free(cands);
@@ -1210,7 +1482,7 @@ void irCgAllocAllTmps(IrRaCtx *ra, int starting_offset) {
      * from the callee-saved pool and paid a save/restore pair - even
      * one produced and consumed entirely on one side of the call. */
     Set *tmp_crossers = setNew(16, &set_uint_type);
-    if (irFnHasCalls(ra->func)) {
+    if (irFnHasCalls(ra->func) || irFnHasOp(ra->func, IR_ASM)) {
         irCollectCallCrossers(ra->func, &lv, tmp_crossers);
     }
     irMarkDeadDsts(ra->func, &lv);
@@ -1219,13 +1491,23 @@ void irCgAllocAllTmps(IrRaCtx *ra, int starting_offset) {
     IrCgRange *arr = NULL;
     u64 n = 0;
     u64 cap = 0;
+    IrCgPin *pins = NULL;
+    int n_pins = 0, pin_cap = 0;
     MapIter it_r;
     mapIterInit(ranges, &it_r);
     while (mapIterNext(&it_r)) {
         IrCgRange *r = (IrCgRange *)it_r.node->value;
         if (!r) continue;
         if (mapHasInt(ra->id_to_loff, r->var_id)) continue;
-        if (r->val && r->val->loc.kind == IR_LOC_REG) continue;
+        if (r->val && r->val->loc.kind == IR_LOC_REG) {
+            if (n_pins == pin_cap) {
+                pin_cap = pin_cap ? pin_cap * 2 : 16;
+                pins = (IrCgPin *)realloc(pins, pin_cap * sizeof(IrCgPin));
+            }
+            pins[n_pins++] = (IrCgPin){ r->var_id, r->val->loc.as.reg,
+                                        r->first, r->last };
+            continue;
+        }
         if (n == cap) {
             cap = cap ? cap * 2 : 16;
             arr = (IrCgRange *)realloc(arr, cap * sizeof(IrCgRange));
@@ -1268,6 +1550,30 @@ void irCgAllocAllTmps(IrRaCtx *ra, int starting_offset) {
      * those in order. See irCollectCallArgValues. */
     Set *tmp_call_args = setNew(16, &set_uint_type);
     irCollectCallArgValues(ra->func, tmp_call_args);
+    Map *arg_homes = NULL;
+    Map *ret_homes = NULL;
+    /* Where each call result is born, so it can stay there. */
+    Map *born_in = mapNew(16, &map_uint_to_uint_type);
+    if (rpool) {
+        arg_homes = irCollectCallArgHomes(ra->func, ra->cc, rpool);
+        ret_homes = irCollectRetHomes(ra->func, rpool);
+        listForEach(ra->func->blocks) {
+            IrBlock *bb = (IrBlock *)it->value;
+            listForEach(bb->instructions) {
+                IrInstr *I = (IrInstr *)it->value;
+                if (I->op != IR_CALL || !I->dst || !irIsTmp(I->dst)) continue;
+                mapAdd(born_in, (void *)(u64)irVarId(I->dst),
+                       irIsFloat(I->dst->type) ? rpool->float_return_reg
+                                               : rpool->int_return_reg);
+            }
+        }
+        /* A call reads its arguments before writing its result, so a
+         * result needs its register only from the next position. */
+        for (int i = 0; i < n_pins; ++i) {
+            if (pins[i].var_id &&
+                mapHas(born_in, (void *)(u64)pins[i].var_id)) pins[i].first++;
+        }
+    }
     if (rpool) {
         /* Free registers first, callee-saved second: the former cost
          * nothing, the latter a save/restore pair, so exhaust the free
@@ -1291,13 +1597,25 @@ void irCgAllocAllTmps(IrRaCtx *ra, int starting_offset) {
                     if (irRegIsHandPinned(ra->func, cand)) continue;
                     int is_arg = irRegIsAbiArg(rpool, cand);
                     /* A parameter arrives in this register and is read
-                     * out of it - the register is spoken for, for the
-                     * whole function. Dropped from the pool entirely
-                     * rather than tested per range: reserving it only
-                     * up to the parameter's last read is unsound around
-                     * a loop. */
-                    if (is_arg && irRegHoldsReadParam(ra->func, cand))
-                        continue;
+                     * out of it. Held up to its last read when every
+                     * read is in the entry block; otherwise dropped
+                     * from the pool, since a last-read position is
+                     * unsound around a loop. */
+                    if (is_arg) {
+                        int held_first, held_last;
+                        if (!irParamRegHeld(ra->func, cand,
+                                            &held_first, &held_last))
+                            continue;
+                        if (held_last >= held_first) {
+                            if (n_pins == pin_cap) {
+                                pin_cap = pin_cap ? pin_cap * 2 : 16;
+                                pins = (IrCgPin *)realloc(pins,
+                                        pin_cap * sizeof(IrCgPin));
+                            }
+                            pins[n_pins++] =
+                                (IrCgPin){ 0, cand, held_first, held_last };
+                        }
+                    }
                     regs[n_regs] = cand;
                     reg_last[n_regs] = INT_MIN;   /* free from the start */
                     reg_survives[n_regs] = (L == 1);
@@ -1343,7 +1661,25 @@ void irCgAllocAllTmps(IrRaCtx *ra, int starting_offset) {
                 int reads = r->refs - 1;
                 int is_call_arg =
                     setHas(tmp_call_args, (void *)(u64)r->var_id);
-                for (int k = 0; k < n_regs; ++k) {
+                void *key = (void *)(u64)r->var_id;
+                AoStr *arg_home = arg_homes && mapHas(arg_homes, key)
+                                ? (AoStr *)mapGet(arg_homes, key) : NULL;
+                /* Try first where the value is born or is going, so the
+                 * move into or out of that register disappears. */
+                int born_of_call = mapHas(born_in, key);
+                AoStr *hint = arg_home ? arg_home
+                            : born_of_call ? (AoStr *)mapGet(born_in, key)
+                            : ret_homes ? (AoStr *)mapGet(ret_homes, key)
+                                        : NULL;
+                /* Same reasoning as the pins: free from the next one. */
+                int start = r->first + born_of_call;
+                int hint_k = -1;
+                for (int k = 0; hint && k < n_regs; ++k) {
+                    if (irRegNameEq(regs[k], hint)) { hint_k = k; break; }
+                }
+                for (int step = -1; step < n_regs; ++step) {
+                    int k = step < 0 ? hint_k : step;
+                    if (k < 0 || (step >= 0 && k == hint_k)) continue;
                     if (irPromoRegIsFloat(regs[k]) != want_float) continue;
                     if (needs_survivor && !reg_survives[k]) continue;
                     if (reg_survives[k] && reads < 2) continue;
@@ -1351,8 +1687,11 @@ void irCgAllocAllTmps(IrRaCtx *ra, int starting_offset) {
                      * sequence writes the argument registers in ABI
                      * order, so one of them cannot also be where this
                      * value is waiting. */
-                    if (reg_abi_arg[k] && is_call_arg) continue;
-                    if (reg_last[k] >= r->first) continue;
+                    if (reg_abi_arg[k] && is_call_arg &&
+                        !irRegNameEq(regs[k], arg_home)) continue;
+                    if (reg_last[k] >= start) continue;
+                    if (irRegPinnedDuring(pins, n_pins, regs[k],
+                                          start, r->last)) continue;
                     reg_last[k] = r->last;
                     r->val->loc.kind   = IR_LOC_REG;
                     r->val->loc.as.reg = regs[k];
@@ -1392,7 +1731,11 @@ next_range: ;
     free(reg_last);
     free(reg_survives);
     free(reg_abi_arg);
+    free(pins);
     setRelease(tmp_call_args);
+    if (arg_homes) mapRelease(arg_homes);
+    if (ret_homes) mapRelease(ret_homes);
+    mapRelease(born_in);
 
     mapIterInit(ranges, &it_r);
     while (mapIterNext(&it_r)) {
@@ -1541,8 +1884,9 @@ void irCgBindAstLoffs(IrRaCtx *ra, Ast *ast_func) {
      * pass stashed its loff on `ast_func->loff` and the IR-side
      * IR_VAL_PARAM lives on `ra->func->return_value`. */
     AstType *rt = ast_func->type ? ast_func->type->rettype : NULL;
-    /* Must match irRetIsIndirect in ir.c: only an aggregate LARGER than
-     * 16 bytes gets a hidden out-pointer. Anything at or below that is
+    /* Must match irRetIsIndirect in ir.c: only an aggregate the ABI
+     * returns INDIRECTLY gets a hidden out-pointer (over 16 bytes, and
+     * on AArch64 not an HFA). Anything else is
      * returned in registers and needs a full-size buffer, not an 8-byte
      * pointer slot.
      *
@@ -1554,7 +1898,7 @@ void irCgBindAstLoffs(IrRaCtx *ra, Ast *ast_func) {
      * overrun reached the saved frame pointer. */
     int has_hidden_out_ptr = rt &&
         (rt->kind == AST_TYPE_CLASS || rt->kind == AST_TYPE_UNION) &&
-        !rt->is_intrinsic && rt->size > 16;
+        !rt->is_intrinsic && astAggRetIsIndirect(rt, ra->func->aapcs64);
 
     if (has_hidden_out_ptr && ra->func->return_value) {
         irCgSetLoff(ra, irVarId(ra->func->return_value), ast_func->loff);
@@ -1748,8 +2092,9 @@ int irCgComputeAstLayout(Ast *ast_func, IrFunction *ir_func) {
 
     int param_total = 0;
     AstType *rt = ast_func->type ? ast_func->type->rettype : NULL;
-    /* Must match irRetIsIndirect in ir.c: only an aggregate LARGER than
-     * 16 bytes gets a hidden out-pointer. Anything at or below that is
+    /* Must match irRetIsIndirect in ir.c: only an aggregate the ABI
+     * returns INDIRECTLY gets a hidden out-pointer (over 16 bytes, and
+     * on AArch64 not an HFA). Anything else is
      * returned in registers and needs a full-size buffer, not an 8-byte
      * pointer slot.
      *
@@ -1761,7 +2106,7 @@ int irCgComputeAstLayout(Ast *ast_func, IrFunction *ir_func) {
      * overrun reached the saved frame pointer. */
     int has_hidden_out_ptr = rt &&
         (rt->kind == AST_TYPE_CLASS || rt->kind == AST_TYPE_UNION) &&
-        !rt->is_intrinsic && rt->size > 16;
+        !rt->is_intrinsic && astAggRetIsIndirect(rt, ir_func->aapcs64);
     if (has_hidden_out_ptr) {
         param_total += 8;
     }

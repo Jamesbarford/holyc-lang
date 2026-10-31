@@ -24,7 +24,7 @@ Full documentation for the language and this compiler can be found here:
 https://holyc-lang.com/
 
 # What's here?
-- AOT compiler (uses clang internally to create and link object files)
+- AOT compiler (writes object files itself, uses `cc` to link)
 - JIT compiler - `hcc -jit <files...>`
 - [REPL](#repl)
 - [LSP][#lsp] and [see here for setup with neovim](#neovim-lsp-example)
@@ -33,13 +33,16 @@ https://holyc-lang.com/
 - A myriad of pernicious bugs
 
 ## Introduction
-A holyc compiler built from scratch in C. Basic optimisations like constant,
-folding and some dead code elimination occurs. But broadly it should be easy
-to see how the assembly maps to the source code. It works by creating an AST,
-lowering to an SSA based IR and emitting x86_64/AArch64 assembly code as text
-which is fed into gcc to assemble. Alternatively a JIT can be invoked which
-maps machine code to executable memory and then runs it, this is done with a
-builtin assembler. Floating point arithmetic is supported as are most of the
+A holyc compiler built from scratch in C. Constant folding, dead code
+elimination, inlining and register promotion are always on, and `-O` goes
+further: indirect calls whose target is known become direct calls, and stores
+are forwarded through locals whose address does not escape. But broadly it
+should be easy to see how the assembly maps to the source code. It works by
+creating an AST, lowering to an SSA based IR and selecting x86_64/AArch64
+machine code, which is written straight to an object file (`cc` is only the
+linker) or printed as assembly with `-S`. Alternatively a JIT can be invoked
+which maps machine code to executable memory and then runs it, this is done
+with a builtin assembler. Floating point arithmetic is supported as are most of the
 major language features. There is experimental support for transpiling HolyC to
 C, which is in varying states of broken and not properly supported.
 

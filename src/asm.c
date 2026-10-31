@@ -548,6 +548,13 @@ int asmEmitBlockBytes(Cctrl *cc, AoStr *buf, AoStr *text, int src_line) {
          * for them on Darwin and everywhere on Linux. */
         AoStr *raw = aoStrDupRaw(f->sym, strlen(f->sym));
         char *sym = asmNormaliseFunctionName(cc, raw);
+        char quoted[512];
+        const char *text_sym = sym;
+        if (cc->target == TARGET_X86_64_APPLE_DARWIN ||
+            cc->target == TARGET_X86_64_UNKNOWN_LINUX_GNU)
+        {
+            text_sym = asm_sym_gas_x86(sym, quoted, sizeof(quoted));
+        }
         /* Branch fixups go back out as textual instructions: Mach-O
          * has no subtraction reloc for undefined symbols, and
          * `call sym` assembles to the exact bytes libtasm produced
@@ -563,7 +570,7 @@ int asmEmitBlockBytes(Cctrl *cc, AoStr *buf, AoStr *text, int src_line) {
                 if (f->patch_offset < 1) { rc = -1; break; }
                 asmEmitByteRun(buf, enc.bytes, pos, f->patch_offset - 1);
                 int is_call = (f->reloc == AFR_X86_64_CALL32);
-                aoStrCatFmt(buf, "\t%s %s\n", is_call ? "call" : "jmp", sym);
+                aoStrCatFmt(buf, "\t%s %s\n", is_call ? "call" : "jmp", text_sym);
                 pos = f->patch_offset + 4;
                 break;
             }
@@ -571,7 +578,7 @@ int asmEmitBlockBytes(Cctrl *cc, AoStr *buf, AoStr *text, int src_line) {
                 if (f->patch_offset < 2) { rc = -1; break; }
                 asmEmitByteRun(buf, enc.bytes, pos, f->patch_offset - 2);
                 int cc4 = enc.bytes[f->patch_offset - 1] & 0x0F;
-                aoStrCatFmt(buf, "\tj%s %s\n", kCcNames[cc4], sym);
+                aoStrCatFmt(buf, "\tj%s %s\n", kCcNames[cc4], text_sym);
                 pos = f->patch_offset + 4;
                 break;
             }
@@ -579,7 +586,7 @@ int asmEmitBlockBytes(Cctrl *cc, AoStr *buf, AoStr *text, int src_line) {
                 /* RIP-relative data ref; subtraction works for symbols
                  * defined in this translation unit. */
                 asmEmitByteRun(buf, enc.bytes, pos, f->patch_offset);
-                aoStrCatFmt(buf, "\t.long %s - . - 4\n", sym);
+                aoStrCatFmt(buf, "\t.long %s - . - 4\n", text_sym);
                 pos = f->patch_offset + 4;
                 break;
             case AFR_AARCH64_CALL26:
@@ -598,7 +605,7 @@ int asmEmitBlockBytes(Cctrl *cc, AoStr *buf, AoStr *text, int src_line) {
             default:
                 if (!f->pcrel && f->width == 8) {
                     asmEmitByteRun(buf, enc.bytes, pos, f->patch_offset);
-                    aoStrCatFmt(buf, "\t.quad %s\n", sym);
+                    aoStrCatFmt(buf, "\t.quad %s\n", text_sym);
                     pos = f->patch_offset + 8;
                     break;
                 }

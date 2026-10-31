@@ -154,8 +154,8 @@ mir_ldur_stur_test(TestCtx *T)
     MirFn *fn = mir_fn_new(NULL, TASM_ARCH_ARM64);
     mir2(fn, A64MN_LDUR, mir_x(0), mir_mem(mir_x(29), -8));
     mir2(fn, A64MN_STUR, mir_x(0), mir_mem(mir_x(29), -16));
-    return mir_roundtrip(T, fn, "ldur x0, [fp, #-8]\n"
-                                "stur x0, [fp, #-16]\n");
+    return mir_roundtrip(T, fn, "ldur x0, [x29, #-8]\n"
+                                "stur x0, [x29, #-16]\n");
 }
 
 static int
@@ -343,12 +343,12 @@ mir_ldur_subword_test(TestCtx *T)
     mir2(fn, A64MN_STURH, mir_w(0), mir_mem(mir_x(29), 10));
     mir2(fn, A64MN_LDUR, mir_w(1), mir_mem(mir_x(29), -8));
     mir2(fn, A64MN_STUR, mir_w(1), mir_mem(mir_x(29), -8));
-    return mir_roundtrip(T, fn, "ldurb w0, [fp, #-3]\n"
-                                "ldurh w0, [fp, #10]\n"
-                                "sturb w0, [fp, #-3]\n"
-                                "sturh w0, [fp, #10]\n"
-                                "ldur w1, [fp, #-8]\n"
-                                "stur w1, [fp, #-8]\n");
+    return mir_roundtrip(T, fn, "ldurb w0, [x29, #-3]\n"
+                                "ldurh w0, [x29, #10]\n"
+                                "sturb w0, [x29, #-3]\n"
+                                "sturh w0, [x29, #10]\n"
+                                "ldur w1, [x29, #-8]\n"
+                                "stur w1, [x29, #-8]\n");
 }
 
 static int
@@ -360,11 +360,11 @@ mir_frame_regoff_test(TestCtx *T)
     mir2(fn, A64MN_STR, mir_w(0), mir_mem_idx(mir_x(29), mir_x(9), 0));
     mir2(fn, A64MN_LDR, mir_d(0), mir_mem_idx(mir_x(29), mir_x(9), 0));
     mir2(fn, A64MN_STR, mir_s(0), mir_mem_idx(mir_x(29), mir_x(9), 0));
-    return mir_roundtrip(T, fn, "ldr x0, [fp, x9]\n"
-                                "ldrb w0, [fp, x9]\n"
-                                "str w0, [fp, x9]\n"
-                                "ldr d0, [fp, x9]\n"
-                                "str s0, [fp, x9]\n");
+    return mir_roundtrip(T, fn, "ldr x0, [x29, x9]\n"
+                                "ldrb w0, [x29, x9]\n"
+                                "str w0, [x29, x9]\n"
+                                "ldr d0, [x29, x9]\n"
+                                "str s0, [x29, x9]\n");
 }
 
 static int
@@ -374,9 +374,9 @@ mir_fp_frame_imm_test(TestCtx *T)
     mir2(fn, A64MN_LDR, mir_d(0), mir_mem(mir_x(29), 16));
     mir2(fn, A64MN_STR, mir_s(1), mir_mem(mir_x(29), 8));
     mir2(fn, A64MN_LDRSW, mir_x(0), mir_mem(mir_x(29), 16));
-    return mir_roundtrip(T, fn, "ldr d0, [fp, #16]\n"
-                                "str s1, [fp, #8]\n"
-                                "ldrsw x0, [fp, #16]\n");
+    return mir_roundtrip(T, fn, "ldr d0, [x29, #16]\n"
+                                "str s1, [x29, #8]\n"
+                                "ldrsw x0, [x29, #16]\n");
 }
 
 static int
@@ -424,9 +424,9 @@ mir_pair_writeback_test(TestCtx *T)
     mir2(fn, A64MN_MOV, mir_x(29), mir_sp());
     mir3(fn, A64MN_LDP, mir_x(29), mir_x(30), mir_mem_post(mir_sp(), 16));
     mir0(fn, A64MN_RET);
-    return mir_roundtrip(T, fn, "stp fp, lr, [sp, #-16]!\n"
-                                "mov fp, sp\n"
-                                "ldp fp, lr, [sp], #16\n"
+    return mir_roundtrip(T, fn, "stp x29, x30, [sp, #-16]!\n"
+                                "mov x29, sp\n"
+                                "ldp x29, x30, [sp], #16\n"
                                 "ret\n");
 }
 
@@ -485,6 +485,10 @@ mir_peephole_test(TestCtx *T)
     mir2(fn, A64MN_SXTW, mir_x(0), mir_w(0));
     mir2(fn, A64MN_SXTW, mir_x(0), mir_w(0));           /* dup */
     mir2(fn, A64MN_MOV, mir_w(3), mir_w(3));            /* NOT a no-op */
+    mir2(fn, A64MN_MOV, mir_x(15), mir_x(0));
+    mir2(fn, A64MN_MOV, mir_x(0), mir_x(15));           /* move back */
+    mir2(fn, A64MN_MOV, mir_w(4), mir_w(5));
+    mir2(fn, A64MN_MOV, mir_w(5), mir_w(4));            /* NOT: zero-extends */
     mir2(fn, A64MN_STUR, mir_x(0), mir_mem(mir_x(29), -16));
     mir2(fn, A64MN_LDUR, mir_x(0), mir_mem(mir_x(29), -16))->line = 0;
     mir_local_label(fn, 2);                             /* dead */
@@ -495,7 +499,10 @@ mir_peephole_test(TestCtx *T)
                                 "@@1:\n"
                                 "sxtw x0, w0\n"
                                 "mov w3, w3\n"
-                                "stur x0, [fp, #-16]\n"
+                                "mov x15, x0\n"
+                                "mov w4, w5\n"
+                                "mov w5, w4\n"
+                                "stur x0, [x29, #-16]\n"
                                 "ret\n");
 }
 
@@ -507,9 +514,9 @@ mir_fp_unscaled_test(TestCtx *T)
     mir2(fn, A64MN_STR, mir_d(0), mir_mem(mir_x(29), -16));
     mir2(fn, A64MN_LDR, mir_d(1), mir_mem(mir_x(29), -8));
     mir2(fn, A64MN_STR, mir_s(2), mir_mem(mir_x(29), -4));
-    return mir_roundtrip(T, fn, "str d0, [fp, #-16]\n"
-                                "ldr d1, [fp, #-8]\n"
-                                "str s2, [fp, #-4]\n");
+    return mir_roundtrip(T, fn, "str d0, [x29, #-16]\n"
+                                "ldr d1, [x29, #-8]\n"
+                                "str s2, [x29, #-4]\n");
 }
 
 /* ============================================================ main */

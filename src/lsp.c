@@ -1452,8 +1452,10 @@ static void lspDefinition(LspCtx *ctx, Json *id, Json *params) {
      * a file:// uri must be absolute or the editor guesses. */
     char abs_path[PATH_MAX];
     const char *out_path = fname->data;
-    if (out_path[0] != '/' && realpath(out_path, abs_path) != NULL)
-        out_path = abs_path;
+    /* Canonical even when already absolute: the include root is joined
+     * with a slash of its own, and `include//tos.HH` is a different file
+     * to an editor than the one it has open. */
+    if (realpath(out_path, abs_path) != NULL) out_path = abs_path;
     AoStr *result = aoStrNew();
     aoStrCatPrintf(result, "{\"uri\":\"file://");
     jsonEscapeInto(result, out_path, strlen(out_path));

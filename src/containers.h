@@ -141,6 +141,9 @@ int mapAdd(Map *map, void *key, void *value);
 int mapAddOrErr(Map *map, void *key, void *value);
 int mapAddLen(Map *map, char *key, s64 key_len, void *value);
 void mapRemove(Map *map, void *key);
+/* Remove by explicit length - required when the key was added with
+ * `mapAddLen` from a non-terminated pointer. */
+void mapRemoveLen(Map *map, char *key, s64 len);
 int mapHas(Map *map, void *key);
 int mapHasAll(Map *map, ...);
 void *mapGet(Map *map, void *key);
@@ -203,7 +206,7 @@ struct SetType {
 };
 
 struct SetNode {
-    int occupied;
+    u32 flags;
     void *key;
     s64 key_len;
 };

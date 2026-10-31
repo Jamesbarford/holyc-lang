@@ -172,6 +172,12 @@ struct IrValueArray {
     int length_per_array;
     Vec *values; /* `Vec<IrValue *>` recurisve array definition,
                   * also used for storing function arguments */
+    /* An INDIRECT call's callee as its pointer's type describes it - a
+     * stand-in declaration with the parameters and `...`. With no name
+     * to look a declaration up by, it is the only way a backend can know
+     * the target is variadic, which on Apple arm64 moves the variadic
+     * arguments onto the stack. NULL for a direct call. */
+    struct Ast *callee_decl;
 };
 
 struct IrValueGlobal {
@@ -200,6 +206,10 @@ typedef struct IrVar {
  * IR_VAL_LOCAL / IR_VAL_PARAM at lowering, where the AstType is still
  * in hand. */
 #define IR_VAL_FLAG_UNSIGNED 0x2
+/* With IR_VAL_FLAG_FUNC: the function is variadic. A direct call to one
+ * is lowered by its own convention - HolyC's counted varargs differ
+ * from C's - so an indirect call through its address must stay one. */
+#define IR_VAL_FLAG_VARIADIC_FUNC 0x4
 
 /* Where an IrValue physically lives after register allocation.
  * Filled in by the regalloc pass; consumed by codegen so it never
@@ -373,6 +383,8 @@ typedef struct IrRaCtx {
      * (for IR tmps and anything alloca'd at lowering time). The layout pass
      * reserves this in the function prologue. */
     int extra_stack;
+    /* For backend hooks that need the callee's calling convention. */
+    Cctrl *cc;
 } IrRaCtx;
 
 typedef struct IrFunction {
@@ -383,6 +395,11 @@ typedef struct IrFunction {
     u16 stack_space;
     /* Does the function have variable arguments? */
     u8 has_var_args;
+    /* Is the target AArch64? Decides whether an aggregate over 16 bytes
+     * is still returned in registers (an HFA is) - see
+     * `astAggRetIsIndirect`. Carried here because the frame layout and
+     * the optimiser ask the same question with no `Cctrl` in reach. */
+    u8 aapcs64;
     /* Not sure if this is needed but for printing as a 
      * string it looks pretty! */
     IrValue *return_value; 
@@ -530,6 +547,14 @@ typedef struct IrCtx {
      * IrValueType carries width but not sign, and IrFunction has no
      * link back to the AST. */
     AstType *cur_rettype;
+
+    /* While an assignment's right side is lowered: its target, already
+     * computed. The parser rewrites `a op= b` to `a = a op b` with the
+     * SAME node for both `a`s, so meeting `reuse_lhs` again means
+     * loading through this address instead of evaluating `a` twice. */
+    Ast *reuse_lhs;
+    IrValue *reuse_target;
+    int reuse_indirect;
 
     IrLoopCtx loop_stack[IR_LOOP_STACK_MAX];
     u16 loop_depth;

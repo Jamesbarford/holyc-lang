@@ -618,6 +618,14 @@ int astDecodeStringLiteral(const char *s, int len, char *out);
 typedef enum { AAPCS_INTEGER, AAPCS_HFA, AAPCS_INDIRECT } AapcsClass;
 AapcsClass astAapcsClassify(AstType *type, int *hfa_elem, int *hfa_count);
 
+/* Is an aggregate of this type RETURNED through a hidden out-pointer?
+ *
+ * Size alone does not decide it. SysV sends anything over 16 bytes to
+ * memory, but AAPCS64 classifies first: an HFA of three or four doubles
+ * is 24 or 32 bytes and still comes back in d0-d3. `aapcs64` is non-zero
+ * when the target is AArch64. */
+int astAggRetIsIndirect(AstType *type, int aapcs64);
+
 /* System V AMD64 classification of an aggregate passed/returned by value.
  * The aggregate is split into 8-byte "eightbytes"; each is classified
  * SYSV_INTEGER (-> GP reg) or SYSV_SSE (-> XMM reg). Aggregates larger than

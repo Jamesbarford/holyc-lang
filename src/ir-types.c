@@ -695,6 +695,9 @@ IrCtx *irCtxNew(Cctrl *cc) {
     ctx->prog->functions = irFunctionVecNew();
     ctx->prog->globals = NULL;
     ctx->cc = cc;
+    ctx->reuse_lhs = NULL;
+    ctx->reuse_target = NULL;
+    ctx->reuse_indirect = 0;
     ctx->loop_depth = 0;
     memset(ctx->loop_stack, 0, sizeof(ctx->loop_stack));
     ctx->labels = NULL;

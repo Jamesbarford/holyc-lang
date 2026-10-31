@@ -366,6 +366,21 @@ mir_x86_gotpcrel_test(TestCtx *T)
                                 "mov r11, _malloc@GOTPCREL\n");
 }
 
+/* A symbol that spells a register or operator: bare, GNU as reads `Fs`
+ * as the segment register and takes `call Si` for an indirect call. */
+static int
+mir_x86_gas_sym_quoting_test(TestCtx *T)
+{
+    (void)T;
+    char buf[64];
+    return !strcmp(asm_sym_gas_x86("Fs", buf, sizeof(buf)), "\"Fs\"") &&
+           !strcmp(asm_sym_gas_x86("Fs@GOTPCREL", buf, sizeof(buf)),
+                   "\"Fs\"@GOTPCREL") &&
+           !strcmp(asm_sym_gas_x86("_Fs", buf, sizeof(buf)), "_Fs") &&
+           !strcmp(asm_sym_gas_x86(".L12", buf, sizeof(buf)), ".L12") &&
+           !strcmp(asm_sym_gas_x86("Fs+8", buf, sizeof(buf)), "Fs+8");
+}
+
 static int
 mir_x86_sse_arith_test(TestCtx *T)
 {
@@ -511,6 +526,7 @@ main(void)
         PrepTest(mir_x86_frame_test),
         PrepTest(mir_x86_lea_sym_test),
         PrepTest(mir_x86_gotpcrel_test),
+        PrepTest(mir_x86_gas_sym_quoting_test),
         PrepTest(mir_x86_sse_arith_test),
         PrepTest(mir_x86_sse_mem_test),
         PrepTest(mir_x86_movq_movd_test),

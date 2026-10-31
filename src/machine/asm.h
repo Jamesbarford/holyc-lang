@@ -195,6 +195,10 @@ int asm_line_format_gas(const AsmLine *ln, const char *local_prefix,
 int asm_line_format_gas_x86(const AsmLine *ln, const char *local_prefix,
                             char *buf, size_t buflen);
 
+/* `name` as Intel-dialect GNU-as text must spell it - see the definition.
+ * Returns `buf`, or `name` itself when it needs nothing. */
+const char *asm_sym_gas_x86(const char *name, char *buf, size_t buflen);
+
 /* The same stream in AT&T: reversed operands, `%`/`$` sigils,
  * `disp(base, index, scale)` memory, `*` on indirect branches, and a
  * b/w/l/q suffix where no register operand implies the width. Assembles

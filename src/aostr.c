@@ -147,6 +147,11 @@ AoStr *aoStrAlloc(u64 capacity) {
     buf->data = aoStrBufferAlloc(capacity, &actual);
     buf->capacity = actual;
     buf->len = 0;
+    /* An AoStr nothing is ever appended to is still handed to `%s`. The
+     * buffer comes off the pool's free list, so without this it reads
+     * as whatever the last string to occupy it left behind,
+     * unterminated. */
+    if (buf->data) buf->data[0] = '\0';
     return buf;
 }
 

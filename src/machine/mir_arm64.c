@@ -20,6 +20,8 @@
  *     label chief among them) and is dropped;
  *   - `b @@N` straight into `@@N:` falls through anyway;
  *   - `mov r, r` moves nothing;
+ *   - `mov a, b; mov b, a` - the second copies b onto itself. X-form
+ *     only, for the same reason as the self-move;
  *   - two identical adjacent extensions compute the same value twice
  *     (the ops are idempotent: their source bits are unchanged by the
  *     first application);
@@ -96,6 +98,20 @@ static int mir_is_self_move(const AsmLine *ln) {
     if (ln->mnemonic_id != A64MN_MOV && ln->mnemonic_id != A64MN_FMOV)
         return 0;
     return mir_same_reg(&ln->operands[0], &ln->operands[1]);
+}
+
+/* `mov xA, xB` straight after `mov xB, xA`: B already holds A. */
+static int mir_is_move_back(const AsmLine *a, const AsmLine *b) {
+    if (a->kind != AINS_INSTR || b->kind != AINS_INSTR) return 0;
+    if (a->mnemonic_id != A64MN_MOV || b->mnemonic_id != A64MN_MOV) return 0;
+    if (a->n_operands != 2 || b->n_operands != 2) return 0;
+    if (!mir_is_reg(&a->operands[0], AR_A64_X) ||
+        !mir_is_reg(&a->operands[1], AR_A64_X))
+    {
+        return 0;
+    }
+    return mir_same_reg(&a->operands[0], &b->operands[1]) &&
+           mir_same_reg(&a->operands[1], &b->operands[0]);
 }
 
 /* Ops whose repetition computes the same value: the extension family
@@ -200,6 +216,11 @@ int mir_fn_peephole_arm64(MirFn *fn, int from) {
 
             if (i + 1 < b->n_lines) {
                 AsmLine *nx = &b->lines[i + 1];
+                if (mir_is_move_back(ln, nx)) {
+                    mir_block_delete_line(b, i + 1);
+                    removed++; changed = 1;
+                    continue;
+                }
                 if (mir_is_idempotent_op(ln) && mir_line_eq(ln, nx)) {
                     mir_block_delete_line(b, i + 1);
                     removed++; changed = 1;

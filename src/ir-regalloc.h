@@ -137,6 +137,12 @@ typedef struct IrRegPool {
     AoStr *sret_reg;
     /* Float return register (xmm0 / v0). */
     AoStr *float_return_reg;
+    /* Where the codegen leaves an instruction's result when it has no
+     * home of its own: the accumulator. The result-register pin targets
+     * it. Equal to the return registers on x86-64; distinct on AAPCS64,
+     * whose scratch is kept off x0-x2. */
+    AoStr *int_result_reg;
+    AoStr *float_result_reg;
     /* Per-instruction scratch surface: registers the codegen clobbers
      * while emitting an arithmetic/load/store/cast. Forward-store
      * passes drop any forwarded source whose loc names one of these
@@ -154,6 +160,10 @@ typedef struct IrRegPool {
      * means "assume every op clobbers every scratch reg", which is the
      * conservative behaviour a backend gets for free. */
     int (*op_clobbers)(IrInstr *I, AoStr *reg, IrClobberPoint at);
+    /* The register argument `i` of `call` is moved into, or NULL when
+     * it goes anywhere else (the stack, a struct-by-value sequence).
+     * NULL hook: no argument may live in an argument register. */
+    AoStr *(*call_arg_reg)(Cctrl *cc, IrInstr *call, u64 i);
     /* Registers the ABI requires a function to preserve across a call.
      * A `<Type> reg <REG> name` binding to one of these has to be saved
      * and restored, or the function silently destroys a value its

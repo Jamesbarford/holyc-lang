@@ -8,6 +8,15 @@
  * eval, return-slot forwarding, store-to-reads forwarding, dead
  * store elimination, and the addressing-mode + RMW fusion chain. */
 void irBasicFunctionOptimisations(IrFunction *fn);
+/* Indirect calls through a slot that only ever holds one function become
+ * direct calls to it. Returns how many were rewritten. */
+int irDevirtualiseCalls(IrFunction *fn);
+/* `-O`. Off by default: devirtualisation and whatever builds on it are
+ * the optimisations a program opts into. */
+void irOptSetDevirtualise(int enabled);
+/* `-O`: store-to-load forwarding, `*&x` to `x`, and dead stores, on
+ * locals whose address does not escape. */
+int irOptLocalMemory(IrFunction *fn);
 
 
 /* Pin single-use TMP producers to their consumer's input register

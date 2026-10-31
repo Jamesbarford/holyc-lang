@@ -217,7 +217,7 @@ void vecInsertAt(Vec *vec, void *value, u64 idx) {
     }
 #ifdef DEBUG
     if (idx >= vec->size) {
-        loggerWarning("Vec - idx %llu is out of range\n", idx);
+        loggerWarning("Vec - idx %zu is out of range\n", idx);
     }
 #endif
     u64 elements_to_move = vec->size - idx;
@@ -232,7 +232,7 @@ void *vecGetAt(Vec *vec, u64 idx) {
     /* Bounds check */
 #ifdef DEBUG
     if (idx >= vec->size) {
-        loggerWarning("Vec - idx %llu is out of range for Vec of size %llu\n",
+        loggerWarning("Vec - idx %zu is out of range for Vec of size %zu\n",
                 idx, vec->size);
     }
 #endif
@@ -340,7 +340,7 @@ Set *setNew(u64 capacity, SetType *type) {
     set->threashold = (unsigned long)(MAP_LOAD * set->capacity);
 
     set->entries = (SetNode *)malloc(set->capacity * sizeof(SetNode));
-    memset(set->entries, 0, set->capacity * sizeof(SetNode));
+    memset(set->entries, 1, set->capacity * sizeof(SetNode));
     set->indexes = vecNew(&vec_unsigned_long_type);
     set->type = type;
     return set;
@@ -349,94 +349,120 @@ Set *setNew(u64 capacity, SetType *type) {
 static u64 setGetNextIdx(Set *set, void *key, int *_is_free) { 
     u64 hash = set->type->hash(key);
     u64 idx = hash & set->mask;
-    SetNode *cur = &set->entries[idx];
+    int have_hole = 0;
+    int hole = 0;
+    *_is_free = 1;
 
-    while (cur->occupied) {
-        if (cur && set->type->match(cur->key, key)) {
+    for (u64 probes = 0; probes <= set->mask; ++probes) {
+        SetNode *cur = &set->entries[idx];
+        if (cur->flags & MAP_FLAG_FREE) {
+            return have_hole ? hole : idx;
+        }
+        if (cur->flags & MAP_FLAG_DELETED) {
+            if (!have_hole) { hole = idx; have_hole = 1; }
+        } else if ((cur->flags & MAP_FLAG_TAKEN) &&
+                   set->type->match(cur->key, key))
+        {
             *_is_free = 0;
             return idx;
         }
         idx = (idx + 1) & set->mask;
-        cur = &set->entries[idx];
     }
-    *_is_free = 1;
-    return idx;
-}
-
-/* We need this function as often we are storing a key which may be a pointer 
- * to a larger string and we want to be able to use the length of the part of
- * the string we are interested in. */
-static u64 setGetCStringNextIdx(Set *set,
-                                          char *key,
-                                          s64 key_len,
-                                          int *_is_free)
-{
-    u64 hash = mapCStringHashLen(key, key_len);
-    u64 idx = hash & set->mask;
-    SetNode *cur = &set->entries[idx];
-
-    while (cur->occupied) {
-        if (cur->key_len == key_len && !memcmp(cur->key, key, key_len)) {
-            *_is_free = 0;
-            break;
-        }
-        idx = (idx + 1) & set->mask;
-        cur = &set->entries[idx];
-    }
-
-    *_is_free = 1;
-    return idx;
+    return have_hole ? hole : idx;
 }
 
 static u64 setGetIdx(Set *set, void *key, int *_ok) {
     u64 hash = set->type->hash(key);
     u64 idx = hash & set->mask;
-    SetNode *cur = &set->entries[idx];
 
-    while (cur->occupied) { 
-        if (set->type->match(cur->key, key)) {
+    for (u64 probes = 0; probes <= set->mask; ++probes) {
+        SetNode *cur = &set->entries[idx];
+        if (cur->flags & MAP_FLAG_FREE) break;
+        if ((cur->flags & MAP_FLAG_TAKEN) &&
+            set->type->match(cur->key, key))
+        {
             *_ok = 1;
             return idx;
         }
         idx = (idx + 1) & set->mask;
-        cur = &set->entries[idx];
     }
     *_ok = 0;
     return 0;
 }
 
-static u64 setGetCStringIdx(Set *set, char *key, s64 len, int *_ok) {
-    u64 hash = cstringMurmur(key, len);
-    u64 idx = hash & set->mask;
-    SetNode *cur = &set->entries[idx];
+#ifdef DEBUG
+/* Deliberately as simple as possible, with no consideration for speed so it's
+ * trivial to debug */
+typedef struct SList {
+    void *data;
+    struct SList *next;
+} SList;
 
-    while (cur->occupied) {
-        if (cur->key_len == len && !memcmp(cur->key, key, len)) {
-            *_ok = 1;
-            return idx;
-        }
-        idx = (idx + 1) & set->mask;
-        cur = &set->entries[idx];
+int sListHas(SList *l, void *v, int (*match)(void *, void *)) {
+    if (l->next == NULL) return 0;
+    for (SList *it = l; it != NULL; it = it->next) {
+        if (match(v, l->data)) return 1;
     }
-    *_ok = 0;
     return 0;
 }
+
+void sListFree(SList *l) {
+    SList *it = l;
+    while (it) {
+        SList *next = it->next;
+        free(it);
+        it = next;
+    }
+}
+
+static int setHasDuplicates(Set *set) {
+    if (set->size <= 1) return 0;
+
+    SetIter it;
+    SList *l = malloc(sizeof(SList));
+    l->next = NULL;
+    SList *head = l;
+
+    setIterInit(set,&it);
+    while (setIterNext(&it)) {
+        if (sListHas(head, it.value, set->type->match)) {
+            AoStr *s = set->type->stringify(it.value);
+            aoStrRelease(s);
+            goto yes;
+        }
+        l->data = it.value;
+        SList *next = malloc(sizeof(SList));
+        next->next = NULL;
+        l = next;
+    }
+    sListFree(head);
+    return 0;
+yes:
+    sListFree(head);
+    return 1;
+}
+#endif 
 
 static int setResize(Set *set) {
     SetNode *old_entries = set->entries;
     Vec *old_index_entries = set->indexes;
 
+#ifdef DEBUG
+    if (setHasDuplicates(set)) {
+        setPrint(set);
+    }
+#endif
+
     u64 new_capacity = set->capacity << 1;
     u64 new_mask = new_capacity - 1;
     u64 indexes_size = set->indexes->size;
 
-    int is_cstring_key = !strncmp(set->type->type, str_lit("char *"));
-
-    SetNode *new_entries = (SetNode *)calloc(new_capacity, sizeof(SetNode));
+    SetNode *new_entries = (SetNode *)malloc(new_capacity * sizeof(SetNode));
     /* OOM */
     if (new_entries == NULL) {
         return 0;
     }
+    memset(new_entries, 1, new_capacity * sizeof(SetNode));
 
     void **new_indexes = (void **)calloc(indexes_size, sizeof(void *));
     /* OOM */
@@ -452,23 +478,16 @@ static int setResize(Set *set) {
     u64 new_size = 0;
     int is_free;
     for (u64 i = 0; i < indexes_size; ++i) {
-        u64 idx = (unsigned long)vecGetAt(old_index_entries, i);
+        u64 idx = (u64)vecGetAt(old_index_entries, i);
         SetNode *old = &old_entries[idx];
-        if (old->occupied) {
+        if (old->flags & MAP_FLAG_TAKEN) {
             u64 new_idx = 0;
-            if (is_cstring_key) {
-                new_idx = setGetCStringNextIdx(set,
-                                           old->key,
-                                           old->key_len,
-                                           &is_free);
-            } else {
-                new_idx = setGetNextIdx(set, old->key, &is_free);
-            }
+            new_idx = setGetNextIdx(set, old->key, &is_free);
             assert(is_free);
             SetNode *new_node = &new_entries[new_idx];
-            new_node->occupied = 1;
             new_node->key = old->key;
             new_node->key_len = old->key_len;
+            new_node->flags = MAP_FLAG_TAKEN;
             /* keep track of the new size of this Set */
             new_indexes[new_size++] = (void *)new_idx;
         }
@@ -495,19 +514,20 @@ int setAdd(Set *set, void *key) {
 
     int is_free = 0;
     u64 idx = setGetNextIdx(set, key, &is_free);
+    SetNode *node = &set->entries[idx];
 
-    /* Add only if not in the set */
     if (is_free) {
-        SetNode *node = &set->entries[idx];
-        node->occupied = 1;
-        node->key = key;
-        node->key_len = set->type->get_key_len(key);
-        vecPushInt(set->indexes, idx);
+        if (!(node->flags & MAP_FLAG_DELETED)) {
+            vecPushInt(set->indexes, idx);
+        }
         set->size++;
-        return 1;
     }
 
-    return 0;
+    /* Add only if not in the set */
+    node->flags = MAP_FLAG_TAKEN;
+    node->key = key;
+    node->key_len = set->type->get_key_len(key);
+    return is_free;
 }
 
 void *setRemove(Set *set, void *key) {
@@ -518,9 +538,8 @@ void *setRemove(Set *set, void *key) {
          * deletes the indexes vector would grow indefinitely */
         SetNode *node = &set->entries[idx];
         void *key = node->key;
-        node->occupied = 0;
-        node->key = NULL;
-        node->key_len = 0;
+        memset(node,0,sizeof(SetNode));
+        node->flags = MAP_FLAG_DELETED;
         set->size--;
         return key;
     }
@@ -535,7 +554,8 @@ int setHas(Set *set, void *key) {
 
 int setHasLen(Set *set, char *key, s64 len) {
     int ok = 0;
-    setGetCStringIdx(set, key, len, &ok);
+    (void)len;
+    setGetIdx(set,key,&ok);
     return ok == 1;
 }
 
@@ -586,7 +606,7 @@ void *setNext(SetIter *it) {
         s64 idx = (long)vecGetAt(it->set->indexes, it->vecidx);
         SetNode *node = &it->set->entries[idx];
         it->vecidx++;
-        if (node->occupied) {
+        if (node->flags & MAP_FLAG_TAKEN) {
             it->idx++;
             it->value = node->key;
             return it->value;
@@ -600,7 +620,7 @@ int setIterNext(SetIter *it) {
         s64 idx = (long)vecGetAt(it->set->indexes, it->vecidx);
         SetNode *node = &it->set->entries[idx];
         it->vecidx++;
-        if (node->occupied) {
+        if (node->flags & MAP_FLAG_TAKEN) {
             it->idx++;
             it->value = node->key;
             return 1;
@@ -817,49 +837,76 @@ Map *mapNewWithParent(Map *parent, u64 capacity, MapType *type) {
     return map;
 }
 
+/* Where should `key` go?
+ *
+ * A tombstone is reusable, but stopping at the first one would insert
+ * a SECOND copy of a key that already lives further along the chain -
+ * the mirror of the lookup bug above. Remember the first hole and keep
+ * probing; only settle for it once a FREE slot proves the key is not
+ * present. */
 static u64 mapGetNextIdx(Map *map, void *key, int *_is_free) {
     u64 hash = map->type->hash(key);
     u64 idx = hash & map->mask;
-    MapNode *cur = &map->entries[idx];
+    u64 hole = 0;
+    int have_hole = 0;
     *_is_free = 1;
 
-    /* A free node is one that is either free or previously deleted */
-    while (1) {
-        if (cur->flags & (MAP_FLAG_FREE | MAP_FLAG_DELETED)) {
-            break;
+    for (u64 probes = 0; probes <= map->mask; ++probes) {
+        MapNode *cur = &map->entries[idx];
+        if (cur->flags & MAP_FLAG_FREE) {
+            return have_hole ? hole : idx;
         }
-        /* This means we have found a node with the same key we are trying to
-         * add*/
-        else if (cur->flags & MAP_FLAG_TAKEN && map->type->match(cur->key, key)) {
+        if (cur->flags & MAP_FLAG_DELETED) {
+            if (!have_hole) { hole = idx; have_hole = 1; }
+        } else if ((cur->flags & MAP_FLAG_TAKEN) &&
+                   map->type->match(cur->key, key))
+        {
             *_is_free = 0;
-            break;
+            return idx;
         }
         idx = (idx + 1) & map->mask;
-        cur = &map->entries[idx];
     }
-
-    return idx;
+    return have_hole ? hole : idx;
 }
 
+/* Probing must run PAST a tombstone and stop only at a FREE slot.
+ *
+ * Deletion cannot clear a slot outright: an entry whose hash landed
+ * here may have been pushed further along the chain, and clearing
+ * would strand it. So a removal leaves MAP_FLAG_DELETED behind - and a
+ * lookup that treats DELETED as the end of the chain cannot see
+ * anything past it.
+ *
+ * That made removing ANY key silently unreachable every key whose
+ * probe chain crossed the hole. It showed up as a generic value
+ * parameter losing methods: `N` is bound into global_env for the
+ * duration of an `impl<T, int N>` and unbound afterwards, and the
+ * methods whose names happened to hash into the freed slot's chain
+ * vanished with it. `Len` and `Iter` did; `Make` did not.
+ *
+ * The scan is bounded by the capacity: a table that is entirely TAKEN
+ * and DELETED has no FREE slot to stop at, and the load factor alone
+ * cannot rule that out. */
 static u64 mapGetIdx(Map *map, void *key, int *_ok) {
     u64 hash = map->type->hash(key);
     u64 idx = hash & map->mask;
-    MapNode *cur = &map->entries[idx];
 
-    /* We are only interested in TAKEN nodes */
-    while (cur->flags & MAP_FLAG_TAKEN) {
-        /* We know something is in this position as it is flagged as TAKEN */
-        if (map->type->match(cur->key, key)) {
+    for (u64 probes = 0; probes <= map->mask; ++probes) {
+        MapNode *cur = &map->entries[idx];
+        if (cur->flags & MAP_FLAG_FREE) break;
+        if ((cur->flags & MAP_FLAG_TAKEN) &&
+            map->type->match(cur->key, key))
+        {
             *_ok = 1;
             return idx;
         }
         idx = (idx + 1) & map->mask;
-        cur = &map->entries[idx];
     }
     *_ok = 0;
     return 0;
 }
 
+/* See mapGetNextIdx. */
 static u64 mapGetCStringNextIdx(Map *map,
                                           char *key,
                                           s64 key_len,
@@ -867,31 +914,31 @@ static u64 mapGetCStringNextIdx(Map *map,
 {
     u64 hash = mapCStringHashLen(key, key_len);
     u64 idx = hash & map->mask;
-    MapNode *cur = &map->entries[idx];
+    u64 hole = 0;
+    int have_hole = 0;
     *_is_free = 1;
 
-    /* A free node is one that is either free or previously deleted */
-    while (1) {
-        if (cur->flags & (MAP_FLAG_FREE | MAP_FLAG_DELETED)) {
-            break;
+    for (u64 probes = 0; probes <= map->mask; ++probes) {
+        MapNode *cur = &map->entries[idx];
+        if (cur->flags & MAP_FLAG_FREE) {
+            return have_hole ? hole : idx;
         }
-        /* This means we have found a node with the same key we are trying to
-         * add*/
-        else if (cur->flags & MAP_FLAG_TAKEN &&
-                 cur->key_len == key_len &&
-                 !memcmp(cur->key, key, key_len))
+        if (cur->flags & MAP_FLAG_DELETED) {
+            if (!have_hole) { hole = idx; have_hole = 1; }
+        } else if ((cur->flags & MAP_FLAG_TAKEN) &&
+                   cur->key_len == key_len &&
+                   !memcmp(cur->key, key, key_len))
         {
             *_is_free = 0;
-            break;
+            return idx;
         }
         idx = (idx + 1) & map->mask;
-        cur = &map->entries[idx];
     }
-
-    return idx;
+    return have_hole ? hole : idx;
 }
 
 
+/* See mapGetIdx: skip tombstones, stop at FREE. */
 static u64 mapGetCStringIdx(Map *map,
                                       char *key,
                                       s64 key_len,
@@ -899,17 +946,17 @@ static u64 mapGetCStringIdx(Map *map,
 {
     u64 hash = mapCStringHashLen(key, key_len);
     u64 idx = hash & map->mask;
-    MapNode *cur = &map->entries[idx];
 
-    /* We are only interested in TAKEN nodes */
-    while (cur->flags & MAP_FLAG_TAKEN) {
-        /* We know something is in this position as it is flagged as TAKEN */
-        if (cur->key_len == key_len && !memcmp(cur->key, key, key_len)) {
+    for (u64 probes = 0; probes <= map->mask; ++probes) {
+        MapNode *cur = &map->entries[idx];
+        if (cur->flags & MAP_FLAG_FREE) break;
+        if ((cur->flags & MAP_FLAG_TAKEN) &&
+            cur->key_len == key_len && !memcmp(cur->key, key, key_len))
+        {
             *_ok = 1;
             return idx;
         }
         idx = (idx + 1) & map->mask;
-        cur = &map->entries[idx];
     }
     *_ok = 0;
     return 0;
@@ -1071,6 +1118,27 @@ int mapAddOrErr(Map *map, void *key, void *value) {
         return 1;
     }
     return 0;
+}
+
+/* `mapRemove` finds its key with `strlen`, which is wrong for anything
+ * added by `mapAddLen` from a pointer INTO a source buffer - the key
+ * is not terminated at its own end, so the compare runs off into the
+ * rest of the file and never matches. Removal then silently does
+ * nothing. Take the length explicitly, exactly as `mapGetLen` does. */
+void mapRemoveLen(Map *map, char *key, s64 len) {
+    int ok = 0;
+    u64 idx = mapGetCStringIdx(map, key, len, &ok);
+    if (!ok) return;
+    MapNode *n = &map->entries[idx];
+    if (map->type->value_release) map->type->value_release(n->value);
+    if (map->type->key_release) map->type->key_release(n->key);
+    n->flags = MAP_FLAG_DELETED;
+    n->value = NULL;
+    n->key = NULL;
+    n->key_len = 0;
+    map->size--;
+    map->cached_key = (void *)ULONG_MAX;
+    map->cached_idx = ULONG_MAX;
 }
 
 void mapRemove(Map *map, void *key) {
@@ -1333,6 +1401,7 @@ void mapPrint(Map *map) {
 }
 
 /*================= Map speciality ===========================================*/
+
 int mapIntKeyMatch(void *a, void *b) {
     return (long)a == (long)b;
 }
@@ -1346,8 +1415,19 @@ s64 mapIntKeyLen(void *key) {
  * enough. _mostly_ in this application the integers are incrementing 
  * which means they're not going to clash, though will bunch together meaning
  * wasted space */
+
+static u64 xorshift(const u64 n,int i) {
+  return n ^ (n>>i);
+}
+
+u64 intHashFn(const u64 n) {
+  const u64 p = 0x5555555555555555ull;
+  const u64 c = 17316035218449499591ull;
+  return c * xorshift( p * xorshift(n, 32), 32);
+}
+
 u64 mapIntKeyHash(void *key) {
-    return (unsigned long)(long)key;
+    return intHashFn((unsigned long)(long)key);
 }
 
 AoStr *mapIntToString(void *key) {
@@ -1375,7 +1455,11 @@ u64 mapCStringHashLen(void *str, s64 len) {
 }
 
 u64 mapCStringHash(void *str) {
-    s64 len = strlen(str);
+    s64 len;
+    if (!str)
+        len = 0;
+    else
+        len = strlen(str);
     return cstringMurmur(str, len);
 }
 
@@ -1387,6 +1471,7 @@ int mapCStringEq(void *s1, void *s2) {
 }
 
 s64 mapCStringLen(void *s) {
+    if (!s) return 0;
     return strlen((char *)s);
 }
 

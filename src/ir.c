@@ -27,6 +27,8 @@ typedef struct IrAssignTarget {
 /* Forward declarations */
 static IrAssignTarget irLowerAssignTarget(IrCtx *ctx, Ast *lhs);
 static IrValue *irLowerAssign(IrCtx *ctx, Ast *ast);
+static IrValue *irFieldLoad(IrCtx *ctx, Ast *ast, IrValue *load_dst,
+                            IrValue *addr, int indirect);
 void irLowerAst(IrCtx *ctx, Ast *ast);
 
 static void irPushLoopCtx(IrCtx *ctx,
@@ -39,7 +41,70 @@ static void irPushLoopCtx(IrCtx *ctx,
     }
     ctx->loop_stack[ctx->loop_depth].continue_block = continue_blk;
     ctx->loop_stack[ctx->loop_depth].break_block = break_blk;
+    ctx->loop_stack[ctx->loop_depth].scope_depth = ctx->scope_depth;
     ctx->loop_depth++;
+}
+
+static IrValue *irEmitRuntimeCall1(IrCtx *ctx, const char *fname,
+                                   IrValueType ret_type, int ret_size,
+                                   IrValue *arg);
+
+/* ---- scope-exit cleanups -------------------------------------------
+ *
+ * A `try` body is a scope with one cleanup: popping its catch frame.
+ * Keeping the pop on the scope rather than at the end of the body means
+ * EVERY way out runs it - a `return` used to jump to the exit block
+ * leaving Fs->catch_top pointing at a frame that no longer exists, and
+ * the next throw longjmp'd into it. Several open at once - a `return`
+ * from inside nested trys - run innermost first. */
+static void irPushScope(IrCtx *ctx) {
+    if (ctx->scope_depth >= IR_SCOPE_STACK_MAX) {
+        loggerPanic("Block nesting above %d not supported\n",
+                    IR_SCOPE_STACK_MAX);
+    }
+    ctx->scope_stack[ctx->scope_depth].cleanups = NULL;
+    ctx->scope_depth++;
+}
+
+static void irScopeAddTryLeave(IrCtx *ctx, IrValue *frame) {
+    IrScopeCtx *sc = &ctx->scope_stack[ctx->scope_depth - 1];
+    if (!sc->cleanups) sc->cleanups = listNew();
+    IrCleanup *c = (IrCleanup *)malloc(sizeof(IrCleanup));
+    c->kind = IR_CLEANUP_TRY_LEAVE;
+    c->stmt = NULL;
+    c->frame = frame;
+    c->bit = -1;
+    listAppend(sc->cleanups, c);
+}
+
+static void irRunOneScopeCleanups(IrCtx *ctx, IrScopeCtx *sc) {
+    if (!sc->cleanups) return;
+    /* Reverse registration order: the list is circular and doubly
+     * linked, so walking `prev` from the head is the last one first. */
+    for (List *p = sc->cleanups->prev; p != sc->cleanups; p = p->prev) {
+        if (ctx->cur_block->sealed) return;
+        IrCleanup *c = (IrCleanup *)p->value;
+        irEmitRuntimeCall1(ctx, "HCC_TryLeave", IR_TYPE_VOID, 8, c->frame);
+    }
+}
+
+/* Run the cleanups of every scope deeper than `keep`, innermost first.
+ * `keep` is a DEPTH, so `keep == 0` means the whole function. */
+static void irRunCleanupsTo(IrCtx *ctx, u16 keep) {
+    for (u16 d = ctx->scope_depth; d > keep; --d) {
+        if (ctx->cur_block->sealed) return;
+        irRunOneScopeCleanups(ctx, &ctx->scope_stack[d - 1]);
+    }
+}
+
+static void irPopScope(IrCtx *ctx) {
+    IrScopeCtx *sc = &ctx->scope_stack[ctx->scope_depth - 1];
+    irRunOneScopeCleanups(ctx, sc);
+    if (sc->cleanups) {
+        listRelease(sc->cleanups, free);
+        sc->cleanups = NULL;
+    }
+    ctx->scope_depth--;
 }
 
 static void irPopLoopCtx(IrCtx *ctx) {
@@ -52,6 +117,21 @@ static void irPopLoopCtx(IrCtx *ctx) {
 static IrLoopCtx *irCurLoopCtx(IrCtx *ctx) {
     if (ctx->loop_depth == 0) return NULL;
     return &ctx->loop_stack[ctx->loop_depth - 1];
+}
+
+/* The nearest enclosing context a `continue` can jump to.
+ *
+ * NOT the innermost one: `switch` pushes a context too, so that `break`
+ * inside it leaves the switch rather than the loop around it. But a
+ * `continue` in the same place belongs to the LOOP, and the switch's
+ * context has no continue target at all. Taking the innermost meant
+ * jumping to NULL, and the jump builder panicked with `NULL param` and
+ * no location. */
+static IrLoopCtx *irCurContinueCtx(IrCtx *ctx) {
+    for (int i = ctx->loop_depth - 1; i >= 0; --i) {
+        if (ctx->loop_stack[i].continue_block) return &ctx->loop_stack[i];
+    }
+    return NULL;
 }
 
 /* Collapse something that looks like `a.b.c` or `p->a.b`*/
@@ -361,16 +441,19 @@ static int irRetTypeIsAggregate(AstType *rettype) {
 }
 
 /* A struct return is passed INDIRECTLY (hidden out-pointer the caller
- * supplies and the callee writes through) only when it is larger than 16
- * bytes. This 16-byte threshold is the same for AArch64 AAPCS and x86-64
- * SysV, so the indirect-vs-register decision is ABI-agnostic and lives here;
- * *which* registers a <=16-byte aggregate uses is decided per-backend
+ * supplies and the callee writes through) when the ABI says so, and the
+ * two ABIs do not quite agree: SysV draws the line at 16 bytes, AAPCS64
+ * draws it at 16 bytes UNLESS the aggregate is an HFA, which comes back
+ * in d0-d3 at up to 32. `astAggRetIsIndirect` holds that rule; *which*
+ * registers a register-returned aggregate uses is decided per-backend
  * (astAapcsClassify / astSysvClassify). */
-static int irRetIsIndirect(AstType *rettype) {
-    return irRetTypeIsAggregate(rettype) && rettype->size > 16;
+static int irRetIsIndirect(IrFunction *func, AstType *rettype) {
+    return irRetTypeIsAggregate(rettype) &&
+           astAggRetIsIndirect(rettype, func->aapcs64);
 }
-static int irRetIsRegisterAggregate(AstType *rettype) {
-    return irRetTypeIsAggregate(rettype) && rettype->size <= 16;
+static int irRetIsRegisterAggregate(IrFunction *func, AstType *rettype) {
+    return irRetTypeIsAggregate(rettype) &&
+           !astAggRetIsIndirect(rettype, func->aapcs64);
 }
 
 /* Make a call to holyc's memcpy routine. Used for struct by value returns. 
@@ -506,6 +589,18 @@ static IrValue *irEmitRuntimeCall1(IrCtx *ctx, const char *fname,
 }
 
 
+static IrValue *irNormaliseNarrowCall(IrCtx *ctx, IrValue *v, AstType *ty) {
+    if (!ty || !irIsInt(v->type)) return v;
+    if (ty->kind != AST_TYPE_INT && ty->kind != AST_TYPE_CHAR) return v;
+    if (ty->size == 0 || ty->size >= 8) return v;
+
+    IrValue *narrow = irTmp(v->type, ty->size);
+    IrInstr *tr = irInstrNew(IR_TRUNC, narrow, v, NULL);
+    if (ty->issigned) tr->flags |= IRCG_TRUNC_SIGNED;
+    irBlockAddInstr(ctx, tr);
+    return narrow;
+}
+
 IrValue *irFnCallTo(IrCtx *ctx, Ast *ast, IrValue *preallocated_buffer) {
     /* `__builtin_va_region()` is not a call - there is nothing to call.
      * It names the address where this function's variadic arguments
@@ -574,6 +669,16 @@ IrValue *irFnCallTo(IrCtx *ctx, Ast *ast, IrValue *preallocated_buffer) {
         ir_call_args->as.array.label = NULL;
         IrValue *ptr = irExpr(ctx, ast->ref);
         ir_call_instr->r2 = ptr;
+        Ast *ref = ast->ref;
+        AstType *ft = ref ? ref->type : NULL;
+        if (ft && ft->kind == AST_TYPE_POINTER && ft->ptr) ft = ft->ptr;
+        if (ref && ref->kind == AST_FUNPTR && ref->params) {
+            ir_call_args->as.array.callee_decl = ref;
+        } else if (ft && ft->kind == AST_TYPE_FUNC) {
+            Ast *decl = astFunctionPtr(ft, str_lit("<indirect>"), ft->params);
+            decl->has_var_args = ft->has_var_args;
+            ir_call_args->as.array.callee_decl = decl;
+        }
     } else {
         ir_call_args->as.array.label = ast->fname;
     }
@@ -620,6 +725,19 @@ IrValue *irFnCallTo(IrCtx *ctx, Ast *ast, IrValue *preallocated_buffer) {
     }
 
     irBlockAddInstr(ctx, ir_call_instr);
+
+    /* A narrow return arrives CANONICAL for its declared type.
+     *
+     * The platform ABI does not promise this. SysV defines only %eax
+     * for an `I32` return and leaves the upper 32 bits unspecified;
+     * AAPCS64 says the same of the bits above a 32-bit value in x0. A
+     * HolyC callee happens to leave them extended, but an EXTERNAL C
+     * function keeps no such promise - glibc's strcmp leaves rubbish
+     * above bit 31 - and comparisons read the whole register, so
+     * `strcmp(a, b) < 0` could answer FALSE for a negative result. */
+    if (!agg_return) {
+        return irNormaliseNarrowCall(ctx, ir_ret_val, ast->type);
+    }
     return ir_ret_val;
 }
 
@@ -1101,12 +1219,39 @@ static IrValue *irLowerCast(IrCtx *ctx,
     if (from_int && to_int) {
         int from_size = from_type->size ? from_type->size : 8;
         int to_size = to_type->size ? to_type->size : 8;
-        if (to_size < from_size && to_size < 8) {
+        int narrowing = to_size < from_size;
+        /* Same width, OPPOSITE signedness - `c(U8)` - needs the
+         * re-extension just as much as a narrowing one does. A sub-word
+         * value sits in the register already extended by its SOURCE's
+         * signedness, and the result has to be extended by the
+         * destination's instead. Without this the cast emitted nothing:
+         * an `I8` of -95 stayed -95 as a `U8`, not 161. */
+        int resign = to_size == from_size &&
+                     from_type->issigned != to_type->issigned;
+        if (to_size < 8 && (narrowing || resign)) {
+            /* An UNSIGNED destination is masked rather than truncated,
+             * and the result keeps the wider type: the IR has no
+             * unsigned integer types, so a truncated value cannot tell
+             * its consumer to zero-extend it. Masking produces a value
+             * that is already correct at any width. */
+            if (!to_type->issigned) {
+                u64 mask = ((u64)1 << (to_size * 8)) - 1;
+                IrValue *dst = irTmp(IR_TYPE_I64, 8);
+                irBlockAddInstr(ctx, irInstrNew(IR_AND, dst, src,
+                                                irConstInt(IR_TYPE_I64,
+                                                           (s64)mask)));
+                return dst;
+            }
+            /* A SIGNED destination is truncated and then sign-extended
+             * back to full width, for the same reason. */
             IrValueType t = irConvertType(to_type);
-            IrValue *dst = irTmp(t, to_size);
-            IrInstr *tr = irInstrNew(IR_TRUNC, dst, src, NULL);
-            if (to_type->issigned) tr->flags |= IRCG_TRUNC_SIGNED;
+            IrValue *narrow = irTmp(t, to_size);
+            IrInstr *tr = irInstrNew(IR_TRUNC, narrow, src, NULL);
+            tr->flags |= IRCG_TRUNC_SIGNED;
             irBlockAddInstr(ctx, tr);
+
+            IrValue *dst = irTmp(IR_TYPE_I64, 8);
+            irBlockAddInstr(ctx, irInstrNew(IR_SEXT, dst, narrow, NULL));
             return dst;
         }
     }
@@ -1258,6 +1403,30 @@ static int irIsByValAggregate(AstType *ty) {
 
 /* Lower `<lhs> op= rhs` (or `<lhs> = rhs` when op is AST_BIN_OP_ASSIGN)
  * and return the value written back. */
+/* Lower an assignment's right side with `tgt` - the address of `lhs`,
+ * already computed - offered for reuse; see IrCtx.reuse_lhs. Only for
+ * a member access or a dereference: those are the targets with
+ * sub-expressions to re-run, and variable nodes are shared across
+ * uses, so matching one by identity would catch unrelated reads. */
+static IrValue *irAssignRhs(IrCtx *ctx, Ast *rhs, Ast *lhs,
+                            IrAssignTarget *tgt)
+{
+    if (lhs->kind != AST_CLASS_REF && !astIsUnOpKind(lhs, AST_UN_OP_DEREF)) {
+        return irExpr(ctx, rhs);
+    }
+    Ast *saved_lhs = ctx->reuse_lhs;
+    IrValue *saved_target = ctx->reuse_target;
+    int saved_indirect = ctx->reuse_indirect;
+    ctx->reuse_lhs = lhs;
+    ctx->reuse_target = tgt->target;
+    ctx->reuse_indirect = tgt->indirect;
+    IrValue *v = irExpr(ctx, rhs);
+    ctx->reuse_lhs = saved_lhs;
+    ctx->reuse_target = saved_target;
+    ctx->reuse_indirect = saved_indirect;
+    return v;
+}
+
 static IrValue *irLowerAssign(IrCtx *ctx, Ast *ast) {
     IrAssignTarget tgt = irLowerAssignTarget(ctx, ast->left);
 
@@ -1292,7 +1461,7 @@ static IrValue *irLowerAssign(IrCtx *ctx, Ast *ast) {
 
     IrValue *new_val;
     if (astIsBinOpKind(ast, AST_BIN_OP_ASSIGN)) {
-        new_val = irExpr(ctx, ast->right);
+        new_val = irAssignRhs(ctx, ast->right, ast->left, &tgt);
     } else {
         /* Compound: load through target, op, store back. */
         IrValueType ir_type = irConvertType(tgt.type);
@@ -1510,6 +1679,36 @@ static int irLowerArrayInitWalk(IrCtx *ctx,
             offset_bytes += slot_size;
             continue;
         }
+        /* A whole STRUCT as one element - `P ops[3] = { a, b, c };` where
+         * a, b and c are classes. It needs a copy; the scalar path below
+         * stores 8 bytes of whatever the expression yields, which for an
+         * aggregate is its ADDRESS, so every slot held a pointer to the
+         * source instead of the source's bytes. */
+        if (parent_is_array && irIsByValAggregate(elem_ty)) {
+            /* LEA, not GEP: the copy consumes this as a raw ADDRESS, and
+             * a GEP is folded into the load/store that reads it. */
+            IrValue *slot = irTmp(IR_TYPE_PTR, 8);
+            irBlockAddInstr(ctx, irInstrNew(IR_LEA, slot, base, NULL));
+            if (offset_bytes != 0) {
+                IrValue *adj = irTmp(IR_TYPE_PTR, 8);
+                irBlockAddInstr(ctx, irInstrNew(IR_IADD, adj, slot,
+                                irConstInt(IR_TYPE_I64, offset_bytes)));
+                slot = adj;
+            }
+            if ((item->kind == AST_FUNCALL ||
+                 item->kind == AST_FUNPTR_CALL ||
+                 item->kind == AST_ASM_FUNCALL) &&
+                item->type && irRetTypeIsAggregate(item->type))
+            {
+                irFnCallTo(ctx, item, slot);
+            } else {
+                IrValue *src = irLValueAddr(ctx, item);
+                irEmitMemcpy(ctx, slot, src, elem_ty->size);
+            }
+            offset_bytes += elem_ty->size;
+            continue;
+        }
+
         IrValue *val = irExpr(ctx, item);
         AstType *narrow_ty = (parent_is_array && elem_ty)
                              ? elem_ty : item->type;
@@ -1640,6 +1839,17 @@ IrValue *irLowerFunPtr(IrCtx *ctx, Ast *ast) {
     return dst;
 }
 
+/* A loaded `.`/`->` field: `addr` is a pointer when `indirect`, else a
+ * slot alias. */
+static IrValue *irFieldLoad(IrCtx *ctx, Ast *ast, IrValue *load_dst,
+                            IrValue *addr, int indirect)
+{
+    irBlockAddInstr(ctx, indirect
+                         ? irInstrNew(IR_LOAD_DEREF, load_dst, addr, NULL)
+                         : irLoad(load_dst, addr));
+    return irPromoteNarrowInt(ctx, load_dst, ast->type);
+}
+
 IrValue *irLowerClassRef(IrCtx *ctx, Ast *ast) {
     /* Two shapes:
      *   stack class: cls is AST_LVAR with class type. Field is at a known offset
@@ -1683,8 +1893,7 @@ IrValue *irLowerClassRef(IrCtx *ctx, Ast *ast) {
              * element - that's just the field pointer itself. */
             return addr;
         }
-        irBlockAddInstr(ctx, irInstrNew(IR_LOAD_DEREF, load_dst, addr, NULL));
-        return irPromoteNarrowInt(ctx, load_dst, ast->type);
+        return irFieldLoad(ctx, ast, load_dst, addr, 1);
     }
 
     if (cls && cls->kind == AST_GVAR) {
@@ -1703,8 +1912,7 @@ IrValue *irLowerClassRef(IrCtx *ctx, Ast *ast) {
         if (field_decays) {
             return addr;
         }
-        irBlockAddInstr(ctx, irInstrNew(IR_LOAD_DEREF, load_dst, addr, NULL));
-        return irPromoteNarrowInt(ctx, load_dst, ast->type);
+        return irFieldLoad(ctx, ast, load_dst, addr, 1);
     }
 
     if (cls && (cls->kind == AST_FUNCALL || cls->kind == AST_FUNPTR_CALL ||
@@ -1723,8 +1931,7 @@ IrValue *irLowerClassRef(IrCtx *ctx, Ast *ast) {
         if (field_decays) {
             return addr;
         }
-        irBlockAddInstr(ctx, irInstrNew(IR_LOAD_DEREF, load_dst, addr, NULL));
-        return irPromoteNarrowInt(ctx, load_dst, ast->type);
+        return irFieldLoad(ctx, ast, load_dst, addr, 1);
     }
 
     if (!cls || cls->kind != AST_LVAR) {
@@ -1746,8 +1953,7 @@ IrValue *irLowerClassRef(IrCtx *ctx, Ast *ast) {
         irBlockAddInstr(ctx, irInstrNew(IR_LEA, dst, field_addr, NULL));
         return dst;
     }
-    irBlockAddInstr(ctx, irLoad(load_dst, field_addr));
-    return irPromoteNarrowInt(ctx, load_dst, ast->type);
+    return irFieldLoad(ctx, ast, load_dst, field_addr, 0);
 }
 
 IrValue *irLowerUnOp(IrCtx *ctx, Ast *ast) {
@@ -1809,6 +2015,14 @@ IrValue *irLowerUnOp(IrCtx *ctx, Ast *ast) {
             src->as.global.name = operand->fname;
             src->as.global.value = NULL;
             src->flags |= IR_VAL_FLAG_FUNC;
+            int variadic = operand->has_var_args ||
+                           (operand->type && operand->type->has_var_args);
+            if (!variadic && operand->params && operand->params->size > 0) {
+                Ast *last = vecGet(Ast *, operand->params,
+                                   operand->params->size - 1);
+                variadic = last && last->kind == AST_VAR_ARGS;
+            }
+            if (variadic) src->flags |= IR_VAL_FLAG_VARIADIC_FUNC;
         } else if (operand->kind == AST_ASM_FUNCDEF ||
                 operand->kind == AST_ASM_FUNC_BIND) {
             /* Asm-bound function - use the raw asm name */
@@ -1831,6 +2045,13 @@ IrValue *irLowerUnOp(IrCtx *ctx, Ast *ast) {
             IrValue *dst = irTmp(IR_TYPE_PTR, 8);
             irBlockAddInstr(ctx, irInstrNew(IR_LEA, dst, tgt.target, NULL));
             return dst;
+        } else if (operand->kind == AST_FUNPTR &&
+                   irFnGetVar(ctx->cur_func, operand->fn_ptr_id))
+        {
+            /* `&fp` - a function pointer VARIABLE is a slot like any
+             * other local, keyed by its own id, and `int (**pp)(int) =
+             * &fp` is how C hands one to something that sets it. */
+            src = irFnGetVar(ctx->cur_func, operand->fn_ptr_id);
         } else if ((operand->kind == AST_FUNCALL ||
                     operand->kind == AST_FUNPTR_CALL ||
                     operand->kind == AST_ASM_FUNCALL) &&
@@ -1972,6 +2193,11 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
      * the rest of the statement (and anything after) to the decl. */
     if (ast && ast->line && ast->kind != AST_LVAR && ast->kind != AST_GVAR)
         ir_line_hint = ast->line;
+    if (ast && ast == ctx->reuse_lhs) {
+        IrValue *dst = irTmp(irConvertType(ast->type), ast->type->size);
+        return irFieldLoad(ctx, ast, dst, ctx->reuse_target,
+                           ctx->reuse_indirect);
+    }
     switch (ast->kind) {
         case AST_BINOP: {
             if (astIsBinOpKind(ast, AST_BIN_OP_ASSIGN) ||
@@ -2036,6 +2262,25 @@ IrValue *irExpr(IrCtx *ctx, Ast *ast) {
     }
 }
 
+/* Falling off the end of an int `main` returns 0, as C requires; a
+ * bare `return;` there does too. Stored on the exiting path, not
+ * seeded at entry: a seed keeps the slot live across every call, so
+ * it never earns a register. The void-main half is in the exit block. */
+/* `Main` under any capitalisation, and the synthetic initialiser
+ * driver, which is main under another name. */
+static int irFnIsMainLike(IrFunction *func) {
+    return (func->name->len == 4 &&
+            !strncasecmp(func->name->data, str_lit("Main"))) ||
+           (func->name->len == 11 &&
+            !strncmp(func->name->data, str_lit("__hcc_entry")));
+}
+
+static void irStoreImplicitMainZero(IrCtx *ctx) {
+    IrValue *rv = ctx->cur_func->return_value;
+    if (!rv || !irFnIsMainLike(ctx->cur_func) || !irIsInt(rv->type)) return;
+    irBlockAddInstr(ctx, irStore(rv, irConstInt(rv->type, 0)));
+}
+
 void irLowerReturn(IrCtx *ctx, Ast *ast) {
     if (ast->retval && ctx->cur_func->return_value) {
         /* Struct-by-value return: copy the retval's bytes into
@@ -2047,7 +2292,7 @@ void irLowerReturn(IrCtx *ctx, Ast *ast) {
             /* The destination is computed FIRST so a struct-returning
              * call can be pointed straight at it. */
             IrValue *dst_addr = irTmp(IR_TYPE_PTR, 8);
-            if (irRetIsIndirect(rt)) {
+            if (irRetIsIndirect(ctx->cur_func, rt)) {
                 /* return_value holds the caller's hidden out-pointer: load
                  * it, then copy the struct bytes through it. */
                 irBlockAddInstr(ctx,
@@ -2125,7 +2370,12 @@ void irLowerReturn(IrCtx *ctx, Ast *ast) {
             IrInstr *st = irStore(ctx->cur_func->return_value, val);
             irBlockAddInstr(ctx, st);
         }
+    } else if (!ast->retval) {
+        irStoreImplicitMainZero(ctx);
     }
+    /* After the return value is stored, before the jump. */
+    irRunCleanupsTo(ctx, 0);
+
     IrInstr *jmp = irJump(ctx->cur_func,
                           ctx->cur_block,
                           ctx->cur_func->exit_block);
@@ -2194,10 +2444,11 @@ void irLowerTry(IrCtx *ctx, Ast *ast) {
     /* 5. body_block: lower try body, leave the catch frame, jump to end. */
     irFnAddBlock(ctx->cur_func, body_block);
     ctx->cur_block = body_block;
+    irPushScope(ctx);
+    irScopeAddTryLeave(ctx, frame_addr);
     irLowerAst(ctx, ast->try_body);
+    irPopScope(ctx);
     if (!ctx->cur_block->sealed) {
-        irEmitRuntimeCall1(ctx, "HCC_TryLeave",
-                            IR_TYPE_VOID, 8, frame_addr);
         IrInstr *jmp = irJump(ctx->cur_func, ctx->cur_block, end_block);
         irBlockAddInstr(ctx, jmp);
     }
@@ -2386,6 +2637,17 @@ void irLowerDoWhileLoop(IrCtx *ctx, Ast *ast) {
  * doesn't collide with tmp ids in the loff map (the two id spaces both
  * start at 1). `irFnGetVar(func, lvar_id)` still finds the IrValue;
  * the codegen looks up loff via `IrValue.var.id`. */
+/* Record the declared signedness on a local/param, so a narrow value
+ * held in a register can be canonicalised to its own type on write.
+ * See IR_VAL_FLAG_UNSIGNED. */
+static void irMarkSignedness(IrValue *v, AstType *ty) {
+    if (!v || !ty) return;
+    if ((ty->kind == AST_TYPE_INT || ty->kind == AST_TYPE_CHAR) &&
+        !ty->issigned) {
+        v->flags |= IR_VAL_FLAG_UNSIGNED;
+    }
+}
+
 static IrValue *irMakeLocalSlot(IrCtx *ctx,
                                 IrValueType ir_type,
                                 int size,
@@ -2451,12 +2713,62 @@ void irLowerDecl(IrCtx *ctx, Ast *ast) {
                                 irConvertType(var->type),
                                 var->type->size,
                                 var->lvar_id);
+        irMarkSignedness(local, var->type);
         var_id = var->lvar_id;
     }
     (void)var_id;
 
     if (init) {
         IrValue *ir_init = NULL;
+
+        /* `U8 buf[] = "hi"` keeps the BYTES inline; a pointer stores the
+         * address. Same initialiser, and only the declared type says
+         * which. It fell to the default below and stored an 8-byte
+         * pointer into the array's slot: the contents read back as
+         * rubbish, and for an array smaller than a pointer the store ran
+         * off the end of it. Handled before the switch because a string
+         * initialising a POINTER takes the default path. */
+        if (init->kind == AST_STRING && var->type &&
+            var->type->kind == AST_TYPE_ARRAY)
+        {
+            int slot_size = var->type->size;
+            char *decoded = (char *)malloc((size_t)slot_size + 1);
+            int n = 0;
+            if (init->sval) {
+                n = astDecodeStringLiteral(init->sval->data,
+                                           (int)init->sval->len, decoded);
+            }
+            if (n > slot_size) n = slot_size;
+            /* Packed into the widest immediates that fit and stored
+             * inline. Anything past the text is zero. */
+            int pos = 0;
+            while (pos < slot_size) {
+                int remaining = slot_size - pos;
+                int chunk;
+                IrValueType chunk_ty;
+                if      (remaining >= 8) { chunk = 8; chunk_ty = IR_TYPE_I64; }
+                else if (remaining >= 4) { chunk = 4; chunk_ty = IR_TYPE_I32; }
+                else if (remaining >= 2) { chunk = 2; chunk_ty = IR_TYPE_I16; }
+                else                     { chunk = 1; chunk_ty = IR_TYPE_I8;  }
+                u64 packed = 0;
+                for (int i = 0; i < chunk; i++) {
+                    int idx = pos + i;
+                    u8 b = (idx < n) ? (u8)decoded[idx] : 0;
+                    packed |= (u64)b << (i * 8);
+                }
+                /* GEP off the SLOT itself, as irLowerArrayInitWalk does.
+                 * An LEA into a temporary first leaves regalloc with a
+                 * value it has no slot for. */
+                IrValue *field = irTmp(IR_TYPE_PTR, 8);
+                IrValue *off = irConstInt(IR_TYPE_I64, pos);
+                irBlockAddInstr(ctx, irInstrNew(IR_GEP, field, local, off));
+                IrValue *val = irConstInt(chunk_ty, (s64)packed);
+                irBlockAddInstr(ctx, irInstrNew(IR_STORE, field, val, NULL));
+                pos += chunk;
+            }
+            free(decoded);
+            return;
+        }
 
         switch (init->kind) {
             case AST_ARRAY_INIT: {
@@ -2794,14 +3106,16 @@ void irLowerAst(IrCtx *ctx, Ast *ast) {
         case AST_BREAK: {
             IrLoopCtx *lc = irCurLoopCtx(ctx);
             if (!lc) loggerPanic("break outside a loop\n");
+            irRunCleanupsTo(ctx, lc->scope_depth);
             IrInstr *j = irJump(ctx->cur_func, ctx->cur_block, lc->break_block);
             irBlockAddInstr(ctx, j);
             break;
         }
 
         case AST_CONTINUE: {
-            IrLoopCtx *lc = irCurLoopCtx(ctx);
+            IrLoopCtx *lc = irCurContinueCtx(ctx);
             if (!lc) loggerPanic("continue outside a loop\n");
+            irRunCleanupsTo(ctx, lc->scope_depth);
             IrInstr *j = irJump(ctx->cur_func, ctx->cur_block, lc->continue_block);
             irBlockAddInstr(ctx, j);
             break;
@@ -3046,12 +3360,16 @@ IrFunction *irLowerFunction(IrCtx *ctx, Ast *ast_func) {
     ir_line_hint = ast_func->line;
 
     IrFunction *func = irFunctionNew(ast_func->fname);
+    func->aapcs64 = ctx->cc->target == TARGET_AARCH64_APPLE_DARWIN ||
+                    ctx->cc->target == TARGET_AARCH64_UNKNOWN_LINUX_GNU;
     IrBlock *entry = irBlockNew();
     IrBlock *exit_block = irBlockNew();
 
     ctx->cur_block = entry;
     ctx->cur_func = func;
     ctx->labels = NULL; /* fresh label table per function */
+    ctx->scope_depth = 0;
+    ctx->loop_depth = 0;
     if (ctx->escape_set) setRelease(ctx->escape_set);
     ctx->escape_set = irCollectEscapingLVars(ast_func);
     func->entry_block = entry;
@@ -3090,7 +3408,7 @@ IrFunction *irLowerFunction(IrCtx *ctx, Ast *ast_func) {
      * A <=16-byte aggregate is returned in registers, so it has a normal
      * struct-sized return slot (the scalar-return branch below) and no
      * hidden parameter. */
-    int has_hidden_out_ptr = rettype && irRetIsIndirect(rettype);
+    int has_hidden_out_ptr = rettype && irRetIsIndirect(func, rettype);
     /* Struct-by-value return: SysV passes the hidden out-pointer in the
      * first int-arg register, so it consumes an arg slot and the user's
      * first real int param lands on the second arg reg. An ABI with a
@@ -3236,6 +3554,7 @@ IrFunction *irLowerFunction(IrCtx *ctx, Ast *ast_func) {
         {
             IrValue *slot = irTmp(ir_type, size);
             slot->kind = IR_VAL_LOCAL;
+            irMarkSignedness(slot, ast_param->type);
             irFnAddVar(func, key, slot);
             vecPush(func->params, slot);
             irAddStackSpace(ctx, size);
@@ -3278,6 +3597,7 @@ IrFunction *irLowerFunction(IrCtx *ctx, Ast *ast_func) {
 
         IrValue *slot = irTmp(ir_type, size);
         slot->kind = IR_VAL_LOCAL;
+        irMarkSignedness(slot, ast_param->type);
         irFnAddVar(func, key, slot);
         vecPush(func->params, arrive);
         irAddStackSpace(ctx, size);
@@ -3319,6 +3639,7 @@ IrFunction *irLowerFunction(IrCtx *ctx, Ast *ast_func) {
 
     /* Fall through to exit if the body didn't already end in a return. */
     if (!ctx->cur_block->sealed) {
+        irStoreImplicitMainZero(ctx);
         IrInstr *jmp = irJump(func, ctx->cur_block, exit_block);
         irBlockAddInstr(ctx, jmp);
     }
@@ -3326,7 +3647,7 @@ IrFunction *irLowerFunction(IrCtx *ctx, Ast *ast_func) {
     /* Populate the exit block: optional load, then ret. */
     irFnAddBlock(func, exit_block);
     ctx->cur_block = exit_block;
-    if (ir_return_var && irRetIsRegisterAggregate(rettype)) {
+    if (ir_return_var && irRetIsRegisterAggregate(func, rettype)) {
         /* <=16-byte struct returned in registers: ir_return_var is the
          * struct-sized return slot. Tag it so the backend RET loads its
          * bytes into the result registers (v0.. / x0,x1 - SSE/INTEGER per
@@ -3344,12 +3665,10 @@ IrFunction *irLowerFunction(IrCtx *ctx, Ast *ast_func) {
         irBlockAddInstr(ctx, ir_ret);
     } else {
         IrInstr *ir_ret = NULL;
-        /* Falling off the end of main returns 0, as C requires. The
-         * synthetic initialiser driver is main under another name. */
-        if ((func->name->len == 4 &&
-                !strncasecmp(func->name->data, str_lit("Main"))) ||
-            (func->name->len == 11 &&
-                !strncmp(func->name->data, str_lit("__hcc_entry")))) {
+        /* Falling off the end of main returns 0, as C requires - the
+         * void-return-type half of the rule; irStoreImplicitMainZero
+         * is the non-void half. */
+        if (irFnIsMainLike(func)) {
             ir_ret = irInstrNew(IR_RET, irConstInt(IR_TYPE_I32, 0), NULL, NULL);
         } else {
             ir_ret = irInstrNew(IR_RET, NULL, NULL, NULL);
@@ -3379,6 +3698,7 @@ void irFunctionPrepForCodeGen(IrCgCtx *ctx, IrFunction *fn, Ast *ast_fn) {
     fn->ra.func = fn;
     fn->ra.id_to_loff = mapNew(32, &map_uint_to_uint_type);
     fn->ra.extra_stack = 0;
+    fn->ra.cc = ctx->cc;
 
     irOptPinResultReg(fn);
     irOptDeadCodeElim(fn);
@@ -3386,6 +3706,9 @@ void irFunctionPrepForCodeGen(IrCgCtx *ctx, IrFunction *fn, Ast *ast_fn) {
      * register - and before the layout pass, which skips slots for
      * anything now carrying a pinned_reg. */
     irOptPromoteToRegs(fn);
+    /* After promotion: a narrow local now in a register keeps its home
+     * canonical, so the widening read lowering inserted is redundant. */
+    irElideCanonicalWiden(fn);
 
 
 

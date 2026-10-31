@@ -1056,7 +1056,8 @@ start_routine:
             return ast_uint_type;
         }
 
-        if (ptr1->kind != AST_TYPE_INT) {
+        /* Any integer offsets a pointer, a `U8` included. */
+        if (ptr1->kind != AST_TYPE_INT && ptr1->kind != AST_TYPE_CHAR) {
             goto error;
         }
         /* These are the only arithmetic operators for pointers,
@@ -1168,7 +1169,10 @@ check_type:
     {
         ret = e;
         goto out;
-    } else if ((e->kind == AST_TYPE_POINTER || e->kind == AST_TYPE_FUNC) && a->kind == AST_TYPE_INT) {
+    } else if ((e->kind == AST_TYPE_POINTER || e->kind == AST_TYPE_FUNC) &&
+               (a->kind == AST_TYPE_INT || a->kind == AST_TYPE_CHAR)) {
+        /* `U8` included, as in astGetResultType: `p += (U8)n` is pointer
+         * arithmetic. */
         if (ast->kind == AST_LITERAL && ast->i64 == 0) {
             ret = e;
             goto out;
@@ -1287,6 +1291,11 @@ AapcsClass astAapcsClassify(AstType *t, int *hfa_elem, int *hfa_count) {
         return AAPCS_HFA;
     }
     return t->size <= 16 ? AAPCS_INTEGER : AAPCS_INDIRECT;
+}
+
+int astAggRetIsIndirect(AstType *t, int aapcs64) {
+    if (aapcs64) return astAapcsClassify(t, NULL, NULL) == AAPCS_INDIRECT;
+    return t->size > 16;
 }
 
 /* System V AMD64 eightbyte classification. We walk every scalar field

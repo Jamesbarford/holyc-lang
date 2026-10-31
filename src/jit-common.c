@@ -180,7 +180,23 @@ int hccJitAssembleText(HccJit *jit, AoStr *text, int src_line) {
     for (int i = 0; i < sub.n_fixups; ++i) {
         AsmFixup f = sub.fixups[i];
         f.patch_offset += base;
-        if (f.sym) f.sym = strdup(f.sym);
+        if (f.sym) {
+            /* An `asm {}` body names C functions by their raw spelling
+             * (`CALL malloc`). The object writer hands the name to the
+             * linker as-is, so it has to carry the platform prefix
+             * (`_malloc` on Mach-O) - exactly what the text path did
+             * before the assembler saw it. Raw assembly labels are
+             * already final and come back unchanged. The JIT's own
+             * resolver is underscore-tolerant, so ABSOLUTE mode keeps
+             * the raw name. */
+            if (jit->addr_mode == HCC_ADDR_RELOCATED) {
+                AoStr *raw = aoStrDupRaw(f.sym, strlen(f.sym));
+                f.sym = strdup(asmNormaliseFunctionName(cc, raw));
+                aoStrRelease(raw);
+            } else {
+                f.sym = strdup(f.sym);
+            }
+        }
         asm_add_fixup(&jit->enc, f);
     }
     asm_enc_free(&sub);
