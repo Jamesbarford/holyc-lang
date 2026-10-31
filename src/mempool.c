@@ -47,7 +47,7 @@ char *memChunkToString(MemChunk *chunk) {
     return aoStrMove(str);
 }
 
-/* This is a messy implmentation but good enough as it is for debugging not 
+/* This is a messy implementation but good enough as it is for debugging not 
  * really for actual use. */
 char *memPoolToString(MemPool *pool) {
     pthread_mutex_lock(&pool->mutex);
