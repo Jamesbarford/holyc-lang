@@ -111,7 +111,7 @@ static CliParser parsers[] = {
     CliNopParser("-fPIC", CLI_fPIC, "For use when making making an object file, indicates the code shall be position independent"),
     {str_lit("-lib"),       1, CLI_EMIT_DYLIB, "-lib <libname>", "Emit a dynamic and static library: `-lib <libname>`", &cliParseString},
     {str_lit("-clibs"),     1, CLI_CLIBS, "-clibs", "Link c libraries like: -clibs=`-lSDL2 -lxml2 -lcurl...`", &cliParseString},
-    {str_lit("-run"),       0, CLI_RUN, "-run", "Immediately run the file (not JIT)", &cliParseNop},
+    {str_lit("-run"),       0, CLI_RUN, "-run", "DEPRECATED use `-jit` instead. Immediately run the file (not JIT)", &cliParseNop},
     {str_lit("-jit"),       0, CLI_JIT, "-jit", "JIT-compile and run main() in-process (aarch64 & x86_64)", &cliParseNop},
     {str_lit("-Memsafe"),   0, CLI_MEMSAFE, "-Memsafe", "With -jit: track MAlloc/Free, report double/wild frees and leaks at exit (the REPL always tracks)", &cliParseNop},
     {str_lit("-repl"),      0, CLI_REPL, "-repl", "Start an interactive HolyC REPL on top of the JIT (aarch64 & x86_64)", &cliParseNop},
@@ -470,7 +470,11 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
             }
             case CLI_EMIT_OBJECT:        args->emit_object = 1; break;
             case CLI_fPIC:               args->fPIC = 1; break;
-            case CLI_RUN:                args->run = 1; break;
+            case CLI_RUN: {
+                loggerWarning("Using depricated option `-run`, use `-jit` instead. This will be removed in the next release v0.0.17\n");
+                args->jit = 1;
+                break;
+            }
             case CLI_JIT:                args->jit = 1; break;
             case CLI_MEMSAFE:            args->memsafe = 1; break;
             case CLI_REPL:               args->repl = 1; break;
@@ -533,7 +537,7 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
                  "printing assembly to stdout\n");
     }
 
-    if (args->argc > 0 && !args->jit && !args->run) {
+    if (args->argc > 0 && !args->jit) {
         AoStr *s = cliConcatArgv(args);
         cliPanic("Unknown commandline options: %s\n", s->data);
     }

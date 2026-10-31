@@ -147,16 +147,16 @@ static void x86MirLine(X86Ctx *ctx, AsmLine *ln) {
     ln->line = ctx->cur_line;
 }
 
-static void E0(X86Ctx *c, int mn) { x86MirLine(c, mir0(c->mir, mn)); }
+//static void E0(X86Ctx *c, int mn) { x86MirLine(c, mir0(c->mir, mn)); }
 static void E1(X86Ctx *c, int mn, AsmOperand a) {
     x86MirLine(c, mir1(c->mir, mn, a));
 }
 static void E2(X86Ctx *c, int mn, AsmOperand a, AsmOperand b) {
     x86MirLine(c, mir2(c->mir, mn, a, b));
 }
-static void E3(X86Ctx *c, int mn, AsmOperand a, AsmOperand b, AsmOperand d) {
-    x86MirLine(c, mir3(c->mir, mn, a, b, d));
-}
+//static void E3(X86Ctx *c, int mn, AsmOperand a, AsmOperand b, AsmOperand d) {
+//    x86MirLine(c, mir3(c->mir, mn, a, b, d));
+//}
 /* A local label is only a stream line until the flush defines it. */
 static void x86MirLocalLabel(X86Ctx *ctx, int local_num) {
     mir_local_label(ctx->mir, local_num);

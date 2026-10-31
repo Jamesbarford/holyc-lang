@@ -38,7 +38,6 @@
 
 int is_terminal;
 
-#define ASM_TMP_FILE "/tmp/holyc-asm.s"
 #define LIB_BUFSIZ 256
 
 #ifndef INSTALL_PREFIX
@@ -218,38 +217,6 @@ int hccLibInit(Cctrl *cc, hccLib *lib, CliArgs *args, char *name) {
     return 1;
 }
 
-int writeAsmToTmp(AoStr *asmbuf) {
-    int fd;
-    s64 written = 0;
-    u64 towrite = 0;
-    char *ptr;
-    ptr = asmbuf->data;
-
-    if ((fd = open(ASM_TMP_FILE,O_RDWR|O_TRUNC|O_CREAT,0644)) == -1) {
-        loggerPanic("Failed to create file for intermediary assembly: %s\n",
-                strerror(errno));
-    }
-
-    towrite = asmbuf->len;
-    ptr = asmbuf->data;
-
-    while (towrite > 0) {
-        written = write(fd,ptr,towrite);
-        if (written < 0) {
-            if (written == EINTR) {
-                continue;
-            }
-            close(fd);
-            loggerPanic("Failed to create file for intermediary assembly: %s\n",
-                    strerror(errno));
-        }
-        towrite -= written;
-        ptr += written;
-    }
-    close(fd);
-    return 1;
-} 
-
 /* Lower the whole program and write it as a relocatable object at
  * `path`, through the machine layer's Mach-O / ELF writer - the same
  * selection the JIT runs, with every global and call left for the
@@ -348,28 +315,6 @@ void emitFile(Cctrl *cc, CliArgs *args) {
 
         writeObjectFile(cc, obj_tmp);
 
-        if (args->run) {
-            AoStr *run_cmd = aoStrNew();
-            AoStr *argv = cliConcatArgv(args);
-            aoStrCatPrintf(run_cmd,"%s -L%s/lib %s %s %s %s "CLIBS" -ltos && ./a.out && rm ./a.out %s",
-                    cc->CC,
-                    args->install_dir,
-                    obj_tmp,
-                    ofiles->data,
-                    link_flags->data,
-                    args->clibs ? args->clibs : "",
-                    argv->data);
-            aoStrRelease(argv);
-            /* Don't use 'safeSystem' else anything other than a '0' exit
-             * code will cause a panic which is incorrect... This is a bit of a
-             * hack as run, in an ideal world, would not be calling out to `_CC` */
-            int ret = system(run_cmd->data);
-            (void)ret;
-            aoStrRelease(run_cmd);
-            remove(obj_tmp);
-            exit(EXIT_SUCCESS);
-        }
-
         if (args->output_filename == NULL) {
             args->output_filename = "a.out";
         }
@@ -399,27 +344,9 @@ void emitFile(Cctrl *cc, CliArgs *args) {
 void assemble(Cctrl *cc, CliArgs *args) {
     AoStr *run_cmd = aoStrNew();
 
-    if (args->run) {
-        s64 len = 0;
-        char *buffer = lexReadfile(args->infile,&len);
-        AoStr asm_buf = {
-            .data = buffer,
-            .len = len,
-            .capacity = len,
-        };
-        writeAsmToTmp(&asm_buf);
-        aoStrCatPrintf(run_cmd,
-                "%s -L"INSTALL_PREFIX"/lib %s "CLIBS" -ltos && ./a.out && rm ./a.out",
-                cc->CC,
-                ASM_TMP_FILE);
-        free(buffer);
-        int ret = system(run_cmd->data);
-        (void)ret;
-    } else {
-        aoStrCatPrintf(run_cmd, "%s %s -L"INSTALL_PREFIX"/lib "CLIBS" -ltos",
-                cc->CC, args->infile);
-        safeSystem(run_cmd->data, 0);
-    }
+    aoStrCatPrintf(run_cmd, "%s %s -L"INSTALL_PREFIX"/lib "CLIBS" -ltos",
+            cc->CC, args->infile);
+    safeSystem(run_cmd->data, 0);
     aoStrRelease(run_cmd);
 }
 
