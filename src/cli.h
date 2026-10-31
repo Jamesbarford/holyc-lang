@@ -89,7 +89,6 @@ typedef struct CliArgs {
     int assemble_only;
     int emit_dylib;
     int emit_object;
-    int run;
     int jit;
     int lsp;
     int memsafe;
