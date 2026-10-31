@@ -1,12 +1,13 @@
 name: release
 
 # Runs when you publish a release in the GitHub UI (or via `gh release
-# create`). Each matrix leg builds hcc + libtos for one target and
-# attaches hcc-<version>-<os>-<arch>.zip to that release.
+# create`). The test suite runs first (ci.yml) and nothing is built
+# unless it passes. Each matrix leg then builds hcc + libtos for one
+# target and attaches hcc-<version>-<os>-<arch>.zip to that release.
 #
-# workflow_dispatch is kept for dry runs: it builds and tests every
-# target and uploads the zips as workflow artifacts instead, so the
-# pipeline can be exercised without cutting a release.
+# workflow_dispatch is kept for dry runs: it does the same and uploads
+# the zips as workflow artifacts instead, so the pipeline can be
+# exercised without cutting a release.
 on:
   release:
     types: [published]
@@ -16,7 +17,11 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
   build:
+    needs: test
     name: ${{ matrix.os_name }}-${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -134,9 +139,7 @@ jobs:
 
           if [ "${{ matrix.os_name }}" = "linux" ]; then
             # -Bsymbolic binds libtos's internal global references
-            # (e.g. the `Fs` exception object) to its own definitions,
-            # which is what lets codegen use direct RIP-relative /
-            # adrp+add addressing instead of the GOT.
+            # (e.g. the `Fs` exception object) to its own definitions.
             cc -fPIC -shared -Wl,-Bsymbolic -Wl,-soname,libtos.so.0.0.1 \
               ./tos.o -o "$stage/lib/libtos.so.0.0.1" -lpthread -lc -lm
           else

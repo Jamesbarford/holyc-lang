@@ -209,8 +209,16 @@ Ast *prsAsm(Cctrl *cc, int parse_one) {
     cctrlTokenExpect(cc, '{');
     Lexeme *tok = cctrlAsmTokenGet(cc);
     /* This is so we can preserve column numbers for the assembly parser errors
-     * that parse has a skip whitespace function so there is no harm in using it*/
-    cc->lexer_->flags |= CCF_ACCEPT_WHITESPACE;
+     * that parse has a skip whitespace function so there is no harm in using it.
+     *
+     * Only while the lexer is still inside the block: it clears this flag
+     * when it reaches the closing `}`, and in a short block the lookahead
+     * has already been there. Setting it then left it on for the rest of
+     * the file, so whitespace reached the parser as tokens - or not, as
+     * it depended on where the lookahead happened to stand. */
+    if (cc->lexer_->flags & CCF_ASM_BLOCK) {
+        cc->lexer_->flags |= CCF_ACCEPT_WHITESPACE;
+    }
     
     while (tok && !tokenPunctIs(tok, '}')) {
         /* `NAME::` (or `NAME:`) opens a new function. */

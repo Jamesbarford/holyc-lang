@@ -9,7 +9,7 @@ class Point
 I32 Main()
 {
   "Test - Pointer to a pointer from a class: ";
-  Point *p = MAlloc(sizeof(Point *));
+  Point *p = MAlloc(sizeof(Point));
   p->y = 420; // assign 420
   Point **ptr = &p; // Take a pointer to pointer p
   Point *x = *ptr;  // Dereference to get the pointer to p

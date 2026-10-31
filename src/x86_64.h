@@ -2,7 +2,7 @@
 #define X86_64_H__
 
 /* The x86_64 backend: one MIR selector (x86_64.c) drives every sink -
- * JIT bytes, the object writer, Intel-dialect AOT text - plus the
+ * JIT bytes, the object writer, AT&T AOT text - plus the
  * target description and the file-format emission around function
  * bodies. Arch-independent machinery (state, globals, symbol
  * resolution, the runner) lives in jit-common.h.

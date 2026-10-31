@@ -1848,32 +1848,6 @@ format_mem_gas_x86(Writer *w, const AsmOperand *op)
     w_putc(w, ']');
 }
 
-/* Under `.intel_syntax noprefix` a bare name is looked up as a register
- * or operator first, in any case. ELF symbols carry no prefix, so the
- * global `Fs` reads as the segment register, `Mod` as an operator, and
- * nothing guarantees an error: `call Si` assembles, as an indirect call
- * through %si. Quoting makes it a symbol again, and both GNU as and
- * clang accept the quotes.
- *
- * A name led by `_` or `.` cannot collide, which covers every Mach-O
- * symbol and every compiler-generated label. `@GOTPCREL` and the like
- * stay outside the quotes. Anything that is not a plain symbol - raw
- * `asm {}` text can write `sym+8` - is left alone. */
-const char *
-asm_sym_gas_x86(const char *name, char *buf, size_t buflen)
-{
-    if (!name || !name[0] || name[0] == '_' || name[0] == '.') return name;
-    size_t len = 0;
-    while (name[len] && name[len] != '@') {
-        char c = name[len];
-        if (!isalnum((unsigned char)c) && c != '_' && c != '$' && c != '.')
-            return name;
-        len++;
-    }
-    snprintf(buf, buflen, "\"%.*s\"%s", (int)len, name, name + len);
-    return buf;
-}
-
 static void
 format_operand_gas_x86(Writer *w, const AsmOperand *op,
                        const char *local_prefix)
@@ -1886,12 +1860,7 @@ format_operand_gas_x86(Writer *w, const AsmOperand *op,
                 w_printf(w, "%s%d", local_prefix, atoi(op->label_name + 2));
                 return;
             }
-            if (op->label_name) {
-                char sym[512];
-                w_puts(w, asm_sym_gas_x86(op->label_name, sym, sizeof(sym)));
-            } else {
-                w_puts(w, "?");
-            }
+            w_puts(w, op->label_name ? op->label_name : "?");
             return;
         case AOP_IMM:
             if (op->is_float) w_printf(w, "%g", op->f64);
@@ -1937,14 +1906,11 @@ asm_line_format_gas_x86(const AsmLine *ln, const char *local_prefix,
             if (src && src->kind == AOP_LABEL && src->label_name &&
                 !(src->label_name[0] == '@' && src->label_name[1] == '@'))
             {
-                char sym[512];
-                const char *spelt = asm_sym_gas_x86(src->label_name, sym,
-                                                    sizeof(sym));
                 if (strcmp(mn, "lea") == 0) {
                     w_printf(&w, "%-8s ", mn);
                     format_operand_gas_x86(&w, &ln->operands[0],
                                            local_prefix);
-                    w_printf(&w, ", [rip + %s]", spelt);
+                    w_printf(&w, ", [rip + %s]", src->label_name);
                     break;
                 }
                 if (strcmp(mn, "mov") == 0 &&
@@ -1953,7 +1919,7 @@ asm_line_format_gas_x86(const AsmLine *ln, const char *local_prefix,
                     w_printf(&w, "%-8s ", mn);
                     format_operand_gas_x86(&w, &ln->operands[0],
                                            local_prefix);
-                    w_printf(&w, ", qword ptr [rip + %s]", spelt);
+                    w_printf(&w, ", qword ptr [rip + %s]", src->label_name);
                     break;
                 }
             }

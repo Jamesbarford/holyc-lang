@@ -11,7 +11,7 @@
  *                  materialised inline (HCC_ADDR_ABSOLUTE).
  *   object writer  the same, with HCC_ADDR_RELOCATED selected so every
  *                  global reference is a RIP-relative lea with a fixup.
- *   -S / AOT text  the lines are printed in Intel-dialect GNU-as text
+ *   -S / AOT text  the lines are printed in AT&T GNU-as text
  *                  (asm_line_format_gas_x86) and handed to the system
  *                  assembler. Same selection, same peephole, so what
  *                  `-S` shows is what the JIT runs.
@@ -64,7 +64,7 @@ typedef struct {
      * here and committed by x86MirFlush. */
     MirFn *mir;
     /* AOT text sink. NULL = JIT (encode to bytes); non-NULL = format
-     * each line as `.intel_syntax noprefix` GNU-as text into this
+     * each line as AT&T GNU-as text into this
      * buffer instead. Same selection either way - the sink is the
      * only difference. */
     AoStr *text_out;
@@ -162,8 +162,15 @@ static void x86MirLocalLabel(X86Ctx *ctx, int local_num) {
     mir_local_label(ctx->mir, local_num);
 }
 
-/* Text sink: format every line in Intel-dialect GNU-as (labels
- * unindented). */
+/* Text sink: format every line as AT&T GNU-as (labels unindented).
+ *
+ * AT&T rather than Intel because `.intel_syntax noprefix` reads a bare
+ * name as a register or operator first, in any case, and ELF symbols
+ * carry no prefix. The global `Fs` is the segment register, `Mod` an
+ * operator, and nothing guarantees an error: `call Si` assembles as
+ * `call *%rsi`. Quoting the name is no way out - binutils 2.38 still
+ * reads `"Si"` as the register, again silently. Registers here carry a
+ * `%`, so a symbol can only ever be a symbol. */
 static void x86MirFlushText(X86Ctx *ctx) {
     AsmBlock *b = ctx->mir->block;
     char line[512];
@@ -174,7 +181,7 @@ static void x86MirFlushText(X86Ctx *ctx) {
         {
             continue;
         }
-        asm_line_format_gas_x86(ln, X86_LOCAL_PREFIX, line, sizeof(line));
+        asm_line_format_att_x86(ln, X86_LOCAL_PREFIX, line, sizeof(line));
         if (ln->kind != AINS_INSTR)
             aoStrRemovePreviousChar(ctx->text_out, '\t');
         aoStrCatFmt(ctx->text_out, "%s\n\t", line);
@@ -2131,7 +2138,7 @@ static void x86EmitEpilogue(X86Ctx *ctx) {
 
 /* Emit one ALREADY-LOWERED-AND-PREPPED function. `text_out` selects
  * the sink: NULL encodes bytes into jit->enc (the JIT / object
- * writer), a buffer gets Intel-dialect GNU-as text appended (the AOT
+ * writer), a buffer gets AT&T GNU-as text appended (the AOT
  * path, sharing this selector). */
 static int x86EmitFunctionBody(HccJit *jit, Ast *ast, IrFunction *fn,
                                AoStr *text_out) {
@@ -2242,7 +2249,7 @@ static const HccJitBackend x86_64_jit_backend = {
 /* AOT text generation through the SAME selector as the JIT: the driver
  * (asm.c) has already lowered, optimised and prepped ctx->fn; this
  * runs x86EmitFunctionBody with the text sink so every instruction is
- * built as MIR and printed by the machine layer's Intel-dialect
+ * built as MIR and printed by the machine layer's AT&T
  * formatter. One HccJit context for the whole file keeps the .Ljag
  * label numbers unique across functions. */
 void x86_64MirGenerateFunction(IrCgCtx *cgctx, Ast *ast) {
@@ -2267,7 +2274,7 @@ void x86_64MirGenerateFunction(IrCgCtx *cgctx, Ast *ast) {
      * Omitting `.globl` is what makes the symbol local, on both Mach-O
      * and ELF. */
     int is_local = (ast->flags & AST_FLAG_STATIC_FN) != 0;
-    aoStrCatFmt(cgctx->buf, ".intel_syntax noprefix\n\t.text\n\t.p2align 4\n");
+    aoStrCatFmt(cgctx->buf, ".text\n\t.p2align 4\n");
     if (!is_local) {
         char *__sym = asmNormaliseFunctionName(cgctx->cc, ast->fname);
         asmSpangleNote(cgctx->cc, cgctx->buf, __sym);
@@ -2662,23 +2669,17 @@ static int x86_64DataInternal(Cctrl *cc, AoStr *buf, Ast *data) {
         data->kind == AST_EXTERN_FUNC)
     {
         char *fn = asmNormaliseFunctionName(cc, data->fname);
-        char sym[512];
-        aoStrCatPrintf(buf, ".quad %s\n\t",
-                       asm_sym_gas_x86(fn, sym, sizeof(sym)));
+        aoStrCatPrintf(buf, ".quad %s\n\t", fn);
         return 8;
     }
     if (data->kind == AST_ASM_FUNCDEF || data->kind == AST_ASM_FUNC_BIND) {
-        char sym[512];
-        aoStrCatPrintf(buf, ".quad %s\n\t",
-                       asm_sym_gas_x86(data->asmfname->data, sym, sizeof(sym)));
+        aoStrCatFmt(buf, ".quad %S\n\t", data->asmfname);
         return 8;
     }
     if (data->kind == AST_GVAR) {
         AoStr *g = asmNormaliseGlobalLabel(cc,
                 data->is_static ? data->glabel : data->gname);
-        char sym[512];
-        aoStrCatPrintf(buf, ".quad %s\n\t",
-                       asm_sym_gas_x86(g->data, sym, sizeof(sym)));
+        aoStrCatFmt(buf, ".quad %S\n\t", g);
         return 8;
     }
     if (data->kind == AST_STRING) {

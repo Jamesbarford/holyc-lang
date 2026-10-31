@@ -9,7 +9,7 @@ class Point
 U0 PointerAddressing()
 {
   I64 *j = 0, correct = 0, tests = 2;
-  Point *ptr = MAlloc(sizeof(Point *));
+  Point *ptr = MAlloc(sizeof(Point));
 
   ptr->x = 10;
   if (ptr->x == 10) {

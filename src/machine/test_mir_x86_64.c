@@ -366,19 +366,40 @@ mir_x86_gotpcrel_test(TestCtx *T)
                                 "mov r11, _malloc@GOTPCREL\n");
 }
 
-/* A symbol that spells a register or operator: bare, GNU as reads `Fs`
- * as the segment register and takes `call Si` for an indirect call. */
+/* A symbol that spells a register or operator stays a symbol: under
+ * `.intel_syntax noprefix` GNU as reads `Fs` as the segment register and
+ * takes `call Si` for an indirect call through %rsi. */
 static int
-mir_x86_gas_sym_quoting_test(TestCtx *T)
+mir_x86_att_symbols_test(TestCtx *T)
 {
     (void)T;
-    char buf[64];
-    return !strcmp(asm_sym_gas_x86("Fs", buf, sizeof(buf)), "\"Fs\"") &&
-           !strcmp(asm_sym_gas_x86("Fs@GOTPCREL", buf, sizeof(buf)),
-                   "\"Fs\"@GOTPCREL") &&
-           !strcmp(asm_sym_gas_x86("_Fs", buf, sizeof(buf)), "_Fs") &&
-           !strcmp(asm_sym_gas_x86(".L12", buf, sizeof(buf)), ".L12") &&
-           !strcmp(asm_sym_gas_x86("Fs+8", buf, sizeof(buf)), "Fs+8");
+    MirFn *fn = mir_fn_new(NULL, TASM_ARCH_X86_64);
+    mir2(fn, X86MN_MOV, mir_r64(R_RCX), mir_sym("Fs@GOTPCREL"));
+    mir2(fn, X86MN_LEA, mir_r64(R_RAX), mir_sym("Cx"));
+    mir1(fn, X86MN_CALL, mir_sym("Si"));
+    const char *want[] = {
+        "movq Fs@GOTPCREL(%rip), %rcx",
+        "leaq Cx(%rip), %rax",
+        "call Si",
+    };
+    char line[256], squeezed[256];
+    int ok = fn->block->n_lines == 3;
+    for (int i = 0; ok && i < 3; ++i) {
+        asm_line_format_att_x86(&fn->block->lines[i], ".LBB", line,
+                                sizeof(line));
+        size_t n = 0;
+        for (char *p = line; *p; ++p) {
+            if (*p == ' ' && n && squeezed[n - 1] == ' ') continue;
+            squeezed[n++] = *p;
+        }
+        squeezed[n] = 0;
+        if (strcmp(squeezed, want[i])) {
+            printf("got `%s` want `%s`\n", squeezed, want[i]);
+            ok = 0;
+        }
+    }
+    mir_fn_free(fn);
+    return ok;
 }
 
 static int
@@ -526,7 +547,7 @@ main(void)
         PrepTest(mir_x86_frame_test),
         PrepTest(mir_x86_lea_sym_test),
         PrepTest(mir_x86_gotpcrel_test),
-        PrepTest(mir_x86_gas_sym_quoting_test),
+        PrepTest(mir_x86_att_symbols_test),
         PrepTest(mir_x86_sse_arith_test),
         PrepTest(mir_x86_sse_mem_test),
         PrepTest(mir_x86_movq_movd_test),

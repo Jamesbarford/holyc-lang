@@ -1,0 +1,73 @@
+name: ci
+
+# The test suite, on every push and PR. release.yml also calls this
+# (workflow_call) so that nothing gets packaged without passing it.
+#
+# ubuntu-22.04 to match the runners the release is built on: binutils
+# 2.38 there rejects assembly that the newer versions and clang accept.
+#
+# There is no x86_64 macOS leg because no Intel runners remain. x86_64 is
+# covered natively by the Linux leg.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  test:
+    name: test-${{ matrix.os_name }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            os_name: linux
+            arch: x86_64
+          - runner: ubuntu-22.04-arm
+            os_name: linux
+            arch: aarch64
+          - runner: macos-15
+            os_name: macos
+            arch: aarch64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          if [ "${{ matrix.os_name }}" = "linux" ]; then
+            sudo apt-get update
+            sudo apt-get install -y cmake build-essential
+          else
+            command -v cmake >/dev/null || brew install cmake
+          fi
+
+      - name: Build hcc
+        run: make C_COMPILER=cc BUILD_TYPE=Release
+
+      - name: Machine layer tests
+        run: make machine-test
+
+      - name: Unit tests (AOT)
+        if: ${{ !cancelled() }}
+        run: make unit-test
+
+      - name: Unit tests (JIT)
+        if: ${{ !cancelled() }}
+        run: make jit-unit-test
+
+      # The optimiser and allocator can hide a bug behind one
+      # configuration, so the suite runs under both extremes.
+      - name: Unit tests (-O)
+        if: ${{ !cancelled() }}
+        run: ./src/tests/run.sh --cflags=-O
+
+      - name: Unit tests (no inlining or register promotion)
+        if: ${{ !cancelled() }}
+        run: ./src/tests/run.sh '--cflags=-fno-inline -fno-reg-promote'
+
+      - name: LSP tests
+        if: ${{ !cancelled() }}
+        run: make lsp-test
