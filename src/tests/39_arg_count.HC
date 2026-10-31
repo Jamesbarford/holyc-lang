@@ -21,7 +21,7 @@ Bool CompileFailsWith(U8 *source, U8 *expected)
     return FALSE;
   }
 
-  res = System("../../hcc " ARG_COUNT_TEST_FILE " > " ARG_COUNT_TEST_OUT " 2>&1");
+  res = System("../../hcc $HCC_TEST_FLAGS " ARG_COUNT_TEST_FILE " > " ARG_COUNT_TEST_OUT " 2>&1");
   if (res == 0) {
     CleanupArgCountTest;
     return FALSE;

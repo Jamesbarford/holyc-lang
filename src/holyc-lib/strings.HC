@@ -253,11 +253,35 @@ _STRHASH::
     MOV    RAX, RCX
     RET
 
+/* Atoi(str) == atol(str), which is exactly what the aarch64 build of
+ * this same function calls. That contract includes skipping leading
+ * whitespace and accepting a leading `+`; without the skip, the very
+ * ordinary `Atoi(header + StrLen("Content-Length:"))` parsed " 382"
+ * as 0.
+ *
+ * Scratch goes in RCX, not RBX: RBX is callee-saved under SysV, so
+ * clobbering it here corrupted whatever the caller had parked there. */
 _ATOI::
     PUSH    RBP
     MOV     RBP, RSP
     MOV     RAX, 0
     XOR     R8,  R8
+@@04:
+    CMPB    [RDI], ' '
+    JE      @@05
+    CMPB    [RDI], 0x09 // \t, and 0x0A..0x0D are \n \v \f \r
+    JL      @@06
+    CMPB    [RDI], 0x0D
+    JG      @@06
+@@05:
+    ADD     RDI, 1
+    JMP     @@04
+@@06:
+    CMPB    [RDI], '+'
+    JNE     @@07
+    ADD     RDI, 1
+    JMP     @@01
+@@07:
     CMPB    [RDI], '-'
     JNE     @@01
     ADD     RDI, 1
@@ -267,11 +291,11 @@ _ATOI::
     JL      @@02
     CMPB    [RDI], '9'
     JG      @@02
-    MOVB    BL, [RDI]
-    SUBB    BL, '0'
-    MOVZBQ  RBX, BL
+    MOVB    CL, [RDI]
+    SUBB    CL, '0'
+    MOVZBQ  RCX, CL
     IMUL    RAX, 10
-    ADD     RAX, RBX
+    ADD     RAX, RCX
     ADD     RDI, 1
     JMP     @@01
 @@02:

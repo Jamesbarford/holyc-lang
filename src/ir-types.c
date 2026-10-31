@@ -25,8 +25,24 @@ void irMemoryRelease(void) {
     }
 }
 
+/* Zeroed, unlike the arena underneath it.
+ *
+ * Every IR constructor sets the fields it cares about and leaves the
+ * rest, which is only safe if "the rest" reads as 0 - and a bump
+ * allocator hands back whatever the last owner of those bytes left
+ * there. irFunctionNew, for one, initialises six of IrFunction's
+ * twelve fields; `has_var_args` was among the leftovers, and
+ * irOptPromoteToRegs reads it to decide whether a function's values
+ * may live in callee-saved registers. So the same source compiled to
+ * different code depending on arena history: run the compiler under a
+ * different MALLOC_PERTURB_ and the register allocation changed.
+ *
+ * Zeroing here rather than in each constructor because the bug is the
+ * ASSUMPTION, and it is made everywhere. */
 void *irAlloc(u32 size) {
-    return arenaAlloc(&ir_arena, size);
+    void *p = arenaAlloc(&ir_arena, size);
+    memset(p, 0, size);
+    return p;
 }
 
 void irMemoryStats(void) {
@@ -319,10 +335,13 @@ IrValueType irConvertType(AstType *type) {
         }
         case AST_TYPE_CHAR:    return IR_TYPE_I8;
         case AST_TYPE_FLOAT: {
-            if (type->size == 8)
-                return IR_TYPE_F64;
-            else
-                return IR_TYPE_F32;
+            if (type->size == 8) return IR_TYPE_F64;
+            if (type->size == 4) return IR_TYPE_F32;
+            /* Half precision exists as a type so the platform headers
+             * parse, but no backend can operate on it. Say so rather
+             * than quietly widening to F32. */
+            loggerPanic("Half-precision floats (`_Float16`) can be "
+                        "declared but not used\n");
         }
         case AST_TYPE_ARRAY:   return IR_TYPE_ARRAY;
         case AST_TYPE_POINTER: return IR_TYPE_PTR;
@@ -676,10 +695,24 @@ IrCtx *irCtxNew(Cctrl *cc) {
     ctx->prog->functions = irFunctionVecNew();
     ctx->prog->globals = NULL;
     ctx->cc = cc;
+    ctx->reuse_lhs = NULL;
+    ctx->reuse_target = NULL;
+    ctx->reuse_indirect = 0;
     ctx->loop_depth = 0;
     memset(ctx->loop_stack, 0, sizeof(ctx->loop_stack));
     ctx->labels = NULL;
     ctx->escape_set = NULL;
+    /* Scope-exit and unwind state. `malloc` does not zero, and a
+     * context the driver does not fill in - the inliner builds one -
+     * would otherwise read a garbage analysis pointer. */
+    ctx->scope_depth = 0;
+    ctx->cleanup_depth = 0;
+    memset(ctx->scope_stack, 0, sizeof(ctx->scope_stack));
+    ctx->unwind_frame = NULL;
+    ctx->unwind_defers = NULL;
+    ctx->unwind_next_bit = 0;
+    ctx->throw_info = NULL;
+    ctx->label_depths = NULL;
     return ctx;
 }
 

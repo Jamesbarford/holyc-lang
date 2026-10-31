@@ -69,7 +69,9 @@ Bool FloatDivision()
   F64 f5 = 0.3333333333333333 / 0.3333333333333333;
   if (f5 == 1) correct++;
 
-  if (23/9 == 2.5555555555555554)correct++;
+  /* Integer division, so 2 - and comparing it against a float promotes
+   * the int to F64 rather than truncating the float. */
+  if (23/9 == 2) correct++;
 
   if (24/10 < 50) correct++;
 

@@ -41,6 +41,7 @@ set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O2")
 
 set(SOURCES
     asm.c
+    jit-common.c
     aostr.c
     arena.c
     ast.c
@@ -54,6 +55,7 @@ set(SOURCES
     ir.c
     ir-debug.c
     ir-eval.c
+    ir-inliner.c
     ir-optimise.c
     ir-regalloc.c
     ir-types.c
@@ -69,11 +71,11 @@ set(SOURCES
     prslib.c
     prsutil.c
     transpiler.c
-    x86.c
     x86_64.c
 )
 
 set(HEADERS
+    jit-common.h
     aostr.h
     arena.h
     asm.h
@@ -90,6 +92,7 @@ set(HEADERS
     ir.h
     ir-debug.h
     ir-eval.h
+    ir-inliner.h
     ir-regalloc.h
     ir-types.h
     lexer.h
@@ -103,18 +106,19 @@ set(HEADERS
     util.h
     transpiler.h
     version.h
-    x86.h
     x86_64.h
 )
 
-add_subdirectory(asm)
+# The machine layer: encoders, disassemblers, MIR, object writers.
+add_subdirectory(machine)
 
-option(HCC_ENABLE_JIT "Build the optional in-process JIT (aarch64 & x86_64)" OFF)
+# The JIT machinery is always built: the AOT path runs the same
+# instruction selector and prints its stream. HCC_ENABLE_JIT only gates
+# what needs code to RUN in-process - `-jit`, the REPL and -Memsafe.
+option(HCC_ENABLE_JIT "Build the in-process JIT runner, REPL and -Memsafe" OFF)
 if (HCC_ENABLE_JIT)
-    list(APPEND SOURCES jit-common.c aarch64-jit.c x86_64-jit.c repl.c
-         memsafe.c linenoise/linenoise.c)
-    list(APPEND HEADERS jit-common.h aarch64-jit.h x86_64-jit.h repl.h
-         memsafe.h linenoise/linenoise.h)
+    list(APPEND SOURCES repl.c memsafe.c linenoise/linenoise.c)
+    list(APPEND HEADERS repl.h memsafe.h linenoise/linenoise.h)
     # Vendored (antirez/linenoise) - don't hold it to our warning bar.
     set_source_files_properties(linenoise/linenoise.c
                                 PROPERTIES COMPILE_FLAGS "-w")
@@ -124,8 +128,8 @@ add_executable(hcc ${SOURCES} ${HEADERS})
 
 if (HCC_ENABLE_JIT)
     target_compile_definitions(hcc PRIVATE HCC_ENABLE_JIT)
-    target_link_libraries(hcc tasm ${CMAKE_DL_LIBS})
 endif()
+target_link_libraries(hcc tasm ${CMAKE_DL_LIBS})
 
 set(HCC_PATH "${CMAKE_INSTALL_PREFIX}/bin/hcc")
 
@@ -148,9 +152,23 @@ install(TARGETS hcc DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
 # Install the header file
 install(FILES ${CMAKE_SOURCE_DIR}/holyc-lib/tos.HH DESTINATION ${CMAKE_INSTALL_PREFIX}/include)
 
-# Custom installation step to run `hcc` during install
+# Custom installation step to run `hcc` during install.
+#
+# The working directory is a scratch dir inside the build tree, NOT
+# holyc-lib/. `hcc -lib` drops all.o / libtos.a / libtos.so wherever it
+# is run from, and `make install` is normally run under sudo - pointed
+# at the source tree it left root-owned artifacts there, and every
+# later non-root `hcc -lib tos` then died on
+# `ar: unable to copy file 'libtos.a'; reason: Permission denied`
+# (which is exactly what broke `make lsp-test`). Includes resolve
+# relative to all.HC, so the cwd is free to be anywhere.
+#
+# `libtos-install`, not the `libtos-build` the dev targets use: sudo
+# would own whichever directory it touched, so sharing one just moved
+# the permission clash from the source tree into the build tree.
+install(CODE "file(MAKE_DIRECTORY \"${CMAKE_BINARY_DIR}/libtos-install\")")
 if (DEFINED HCC_LINK_SQLITE3)
-    install(CODE "execute_process(COMMAND \"${HCC_PATH}\" -DHCC_LINK_SQLITE3 -lib tos ${CMAKE_SOURCE_DIR}/holyc-lib/all.HC WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/holyc-lib)")
+    install(CODE "execute_process(COMMAND \"${HCC_PATH}\" -DHCC_LINK_SQLITE3 -lib tos ${CMAKE_SOURCE_DIR}/holyc-lib/all.HC WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/libtos-install)")
 else()
-  install(CODE "execute_process(COMMAND \"${HCC_PATH}\" -fPIC -lib tos ${CMAKE_SOURCE_DIR}/holyc-lib/all.HC WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/holyc-lib)")
+  install(CODE "execute_process(COMMAND \"${HCC_PATH}\" -fPIC -lib tos ${CMAKE_SOURCE_DIR}/holyc-lib/all.HC WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/libtos-install)")
 endif()

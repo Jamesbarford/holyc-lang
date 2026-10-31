@@ -1,6 +1,7 @@
 #include <stdlib.h>
 
 #include "ir-types.h"
+#include "ir-regalloc.h"
 #include "ir-eval.h"
 #include "containers.h"
 
@@ -107,6 +108,15 @@ int irEvalBlock(IrBlock *bb, Map *resolver) {
 
         I->r1 = irResolveTmp(resolver, I->r1);
         I->r2 = irResolveTmp(resolver, I->r2);
+        /* The scaled-index operand of a fused addressing mode is a use
+         * like any other. It was safe to skip only while this pass ran
+         * strictly BEFORE addressing-mode fusion, so no `idx` existed
+         * yet. Inlining broke that assumption: it splices an already
+         * fused body into a caller and the optimiser is then re-run
+         * over it, so a folded index left the load pointing at a
+         * definition this pass had just turned into a nop - and the
+         * register it named was never written. */
+        I->idx = irResolveTmp(resolver, I->idx);
 
         /* IR_BR/IR_RET pass a value via dst; IR_STORE_DEREF's dst is
          * the pointer being written through (an input, not a write
@@ -136,6 +146,68 @@ int irEvalBlock(IrBlock *bb, Map *resolver) {
 
         s64 result;
         u8 was_eval = 0;
+
+        /* Unary ops and the int conversions carry their only operand
+         * in r1; the two-operand path below never sees them, which is
+         * why `return -5` used to emit a runtime negate. The folded
+         * value is kept CANONICAL for its width (sign- or
+         * zero-extended to 64 bits per the destination's signedness),
+         * matching what the equivalent runtime op ends up with in a
+         * register. */
+        if (!I->r2 && irIsConstInt(I->r1) && irIsTmp(I->dst) &&
+            irIsInt(I->dst->type))
+        {
+            s64 v = I->r1->as._i64;
+            switch (I->op) {
+            case IR_INEG: result = -v; was_eval = 1; break;
+            case IR_NOT:  result = ~v; was_eval = 1; break;
+            case IR_TRUNC: {
+                /* Signedness travels on the INSTRUCTION - the same
+                 * IRCG_TRUNC_SIGNED the emitters read to pick sxtb
+                 * from uxtb - and the default is zero-extension. */
+                u32 w = irValueByteSize(I->dst);
+                if (w >= 8) { result = v; }
+                else {
+                    int sh = 64 - 8 * (int)w;
+                    if (I->flags & IRCG_TRUNC_SIGNED)
+                        result = (v << sh) >> sh;
+                    else
+                        result = (s64)(((u64)v << sh) >> sh);
+                }
+                was_eval = 1;
+                break;
+            }
+            case IR_SEXT: {
+                u32 w = irValueByteSize(I->r1);
+                if (w >= 8) { result = v; }
+                else {
+                    int sh = 64 - 8 * (int)w;
+                    result = (v << sh) >> sh;
+                }
+                was_eval = 1;
+                break;
+            }
+            case IR_ZEXT: {
+                u32 w = irValueByteSize(I->r1);
+                if (w >= 8) { result = v; }
+                else {
+                    int sh = 64 - 8 * (int)w;
+                    result = (s64)(((u64)v << sh) >> sh);
+                }
+                was_eval = 1;
+                break;
+            }
+            default: break;
+            }
+            if (was_eval) {
+                IrValue *evaled = irConstInt(I->dst->type, result);
+                mapAddIntOrErr(resolver, irDstVarId(I), evaled);
+                I->op = IR_NOP;
+                I->r1 = I->r2 = NULL;
+                changed++;
+                continue;
+            }
+        }
 
         if (I->op == IR_ICMP && irIsConstInt(I->r1) && irIsConstInt(I->r2)) {
             was_eval = irEvalCmp(I->extra.cmp_kind,

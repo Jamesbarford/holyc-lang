@@ -1,3 +1,0 @@
-# sagaris
-
-An assembler / jitter

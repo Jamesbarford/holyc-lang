@@ -18,6 +18,43 @@ static Arena ast_type_arena;
 static int ast_arena_init = 0;
 static int ast_type_arena_init = 0;
 
+/* The Vecs and Lists hanging off Ast nodes - argument vectors, statement
+ * bodies - are ordinary malloc'd containers, so resetting the AST arena
+ * reclaims the nodes and leaves their spines behind. Recording them here
+ * lets astMemoryRelease free the whole AST, not just the parts that
+ * happen to live in the arena.
+ *
+ * Only containers that are ONLY ever reached through an Ast belong on
+ * these lists - anything the parser might listMergeAppend (which frees
+ * the merged-from head) or release itself must keep allocating with
+ * plain listNew, or the release below would be a double free. */
+static Vec *ast_owned_vecs = NULL;
+static Vec *ast_owned_lists = NULL;
+
+static void astOwnedStringify(AoStr *buf, void *ptr) {
+    aoStrCatFmt(buf, "%p", ptr);
+}
+
+static int astOwnedMatch(void *a, void *b) {
+    return a == b;
+}
+
+/* Release is driven explicitly by astReleaseOwnedContainers, which has
+ * to pick the right destructor per list. */
+static int astOwnedRelease(void *ptr) {
+    (void)ptr;
+    return 1;
+}
+
+static VecType vec_ast_owned_type = {
+    .stringify = astOwnedStringify,
+    .match     = astOwnedMatch,
+    .release   = astOwnedRelease,
+    .type_str  = "void *",
+};
+
+static void astReleaseOwnedContainers(void);
+
 void astMemoryInit(void) {
     if (!ast_arena_init) {
         arenaInit(&ast_arena, sizeof(Ast) * 512);
@@ -25,15 +62,27 @@ void astMemoryInit(void) {
         ast_arena_init = 1;
         ast_type_arena_init = 1;
     }
+    if (!ast_owned_vecs)  ast_owned_vecs  = vecNew(&vec_ast_owned_type);
+    if (!ast_owned_lists) ast_owned_lists = vecNew(&vec_ast_owned_type);
 }
 
 void astMemoryRelease(void) {
+    astReleaseOwnedContainers();
     if (ast_arena_init) {
         ast_arena_init = 0;
-        ast_type_arena_init = 1;
+        ast_type_arena_init = 0;
         arenaClear(&ast_arena);
         arenaClear(&ast_type_arena);
     }
+}
+
+/* Bytes handed out since the arenas were last (re)initialised. A parse
+ * never gives any of it back, so this is the compiler's accumulated
+ * AST garbage - which is what `hcc -lsp` watches to decide when to
+ * recycle. */
+u64 astArenaBytes(void) {
+    if (!ast_arena_init) return 0;
+    return (u64)ast_arena.used + (u64)ast_type_arena.used;
 }
 
 void astMemoryStats(void) {
@@ -68,7 +117,35 @@ VecType vec_ast_type = {
 };
 
 Vec *astVecNew(void) {
-    return vecNew(&vec_ast_type);
+    Vec *vec = vecNew(&vec_ast_type);
+    if (ast_owned_vecs) vecPush(ast_owned_vecs, vec);
+    return vec;
+}
+
+/* A List that belongs to the AST and dies with it. */
+List *astListNew(void) {
+    List *list = listNew();
+    if (ast_owned_lists) vecPush(ast_owned_lists, list);
+    return list;
+}
+
+static void astReleaseOwnedContainers(void) {
+    if (ast_owned_vecs) {
+        for (u64 i = 0; i < ast_owned_vecs->size; ++i) {
+            /* vec_ast_type has no release hook, so this frees the
+             * vector's own storage and not the Ast pointers in it. */
+            vecRelease((Vec *)ast_owned_vecs->entries[i]);
+        }
+        vecRelease(ast_owned_vecs);
+        ast_owned_vecs = NULL;
+    }
+    if (ast_owned_lists) {
+        for (u64 i = 0; i < ast_owned_lists->size; ++i) {
+            listRelease((List *)ast_owned_lists->entries[i], NULL);
+        }
+        vecRelease(ast_owned_lists);
+        ast_owned_lists = NULL;
+    }
 }
 
 AoStr *mapAstTypeToString(void *ast_type) {
@@ -935,9 +1012,19 @@ int astIsIntrinsicClass(AstType *ty) {
     return ty && ty->kind == AST_TYPE_CLASS && ty->is_intrinsic;
 }
 
+/* Is this a function-shaped declaration - something with a return type
+ * and a parameter list that astFunctionToString can render?
+ *
+ * AST_ASM_FUNC_BIND counts: `public _extern _MALLOC U0 *MAlloc(U64 size);`
+ * is a prototype like any other, and most of the stdlib is declared that
+ * way. Leaving it out meant hover fell through to printing the raw
+ * function TYPE (`<fn> U0 * MAlloc`), and left
+ * lspAsmFunctionSuggestionResolver - whose whole job is asm bindings -
+ * returning NULL for every one of them. */
 int astIsFnLike(Ast *maybe_fn) {
     return maybe_fn && (maybe_fn->kind == AST_FUNC ||
                         maybe_fn->kind == AST_ASM_FUNCDEF ||
+                        maybe_fn->kind == AST_ASM_FUNC_BIND ||
                         maybe_fn->kind == AST_FUN_PROTO ||
                         maybe_fn->kind == AST_EXTERN_FUNC);
 }
@@ -969,7 +1056,8 @@ start_routine:
             return ast_uint_type;
         }
 
-        if (ptr1->kind != AST_TYPE_INT) {
+        /* Any integer offsets a pointer, a `U8` included. */
+        if (ptr1->kind != AST_TYPE_INT && ptr1->kind != AST_TYPE_CHAR) {
             goto error;
         }
         /* These are the only arithmetic operators for pointers,
@@ -1081,7 +1169,10 @@ check_type:
     {
         ret = e;
         goto out;
-    } else if ((e->kind == AST_TYPE_POINTER || e->kind == AST_TYPE_FUNC) && a->kind == AST_TYPE_INT) {
+    } else if ((e->kind == AST_TYPE_POINTER || e->kind == AST_TYPE_FUNC) &&
+               (a->kind == AST_TYPE_INT || a->kind == AST_TYPE_CHAR)) {
+        /* `U8` included, as in astGetResultType: `p += (U8)n` is pointer
+         * arithmetic. */
         if (ast->kind == AST_LITERAL && ast->i64 == 0) {
             ret = e;
             goto out;
@@ -1200,6 +1291,11 @@ AapcsClass astAapcsClassify(AstType *t, int *hfa_elem, int *hfa_count) {
         return AAPCS_HFA;
     }
     return t->size <= 16 ? AAPCS_INTEGER : AAPCS_INDIRECT;
+}
+
+int astAggRetIsIndirect(AstType *t, int aapcs64) {
+    if (aapcs64) return astAapcsClassify(t, NULL, NULL) == AAPCS_INDIRECT;
+    return t->size > 16;
 }
 
 /* System V AMD64 eightbyte classification. We walk every scalar field
@@ -1357,6 +1453,25 @@ int astIsUnionPointer(AstType *type) {
 int astIsLabelMatch(Ast *ast, AoStr *goto_label) {
     return ast->kind == AST_LABEL &&
            aoStrCmp(goto_label, astHackedGetLabel(ast));
+}
+
+/* Does a call to `callee` use HolyC's varargs convention (a synthetic
+ * `argc` count followed by every variadic argument spilled to the stack,
+ * read back through `argc`/`argv`) rather than the platform C one?
+ *
+ * `parseArgv()` is the authority: it only inserts the `argc` prefix when
+ * the callee is NOT an `extern "c"` function, so codegen has to draw the
+ * line in exactly the same place. Getting this wrong on an `extern "c"`
+ * variadic (`printf`) silently pushes the arguments past the first onto
+ * the stack while the callee reads them from %rdx/%rcx/%r8/%r9. */
+int astUsesHolyCVarargs(Ast *callee) {
+    if (!callee || !callee->params) return 0;
+    if (callee->kind == AST_EXTERN_FUNC) return 0;
+    for (u64 i = 0; i < callee->params->size; ++i) {
+        Ast *p = (Ast *)callee->params->entries[i];
+        if (p && p->kind == AST_VAR_ARGS) return p->argc != NULL;
+    }
+    return 0;
 }
 
 static AoStr *astTypeToAoStrInternal(AstType *type) {
@@ -1560,8 +1675,13 @@ static char *astParamsToString(Vec *params) {
                 } else {
                     if (!is_last && label) aoStrCatFmt(str,"%S %s, ",tmp, label);
                     else if (!is_last && !label) aoStrCatFmt(str,"%S, ",tmp);
-                    else if (label)              aoStrCatFmt(str,"%S% s",tmp, label);     
-                    else                         aoStrCatFmt(str,"%S",tmp); 
+                    /* `%S %s`, not `%S% s`: the misplaced space made
+                     * `% ` an unknown spec and left a literal `s`, so
+                     * the LAST parameter of every prototype whose tail
+                     * argument is not a pointer printed as its type
+                     * plus the letter s - `U0 *MAlloc(U64 s)`. */
+                    else if (label)              aoStrCatFmt(str,"%S %s",tmp, label);
+                    else                         aoStrCatFmt(str,"%S",tmp);
                 }
             }
         }
@@ -1601,6 +1721,7 @@ static char *astFunctionToStringInternal(Ast *func, AstType *type) {
         case AST_FUNC:
         case AST_FUN_PROTO:
         case AST_EXTERN_FUNC:
+        case AST_ASM_FUNC_BIND:
             strparams = astParamsToString(func->params);
             break;
         default:
@@ -1835,7 +1956,7 @@ void _astToString(AoStr *str, Ast *ast, int depth) {
 
         case AST_FUNC: {
             tmp = astFunctionToString(ast);
-            if (ast->flags & AST_FLAG_INLINE) {
+            if (ast->flags & AST_FLAG_INLINE_HINT) {
                 aoStrCatPrintf(str, "<function_def_inline> %s\n", tmp);
             } else {
                 aoStrCatPrintf(str, "<function_def> %s\n", tmp);
@@ -2727,4 +2848,118 @@ AoStr *astClassToAoStr(AstType *cls) {
     astClassFieldsToString(cls->fields,seen,cls->clsname->data,s,&indent);
     aoStrCatFmt(s, "};");
     return s;
+}
+
+AstInitSlot *astAggregateInitOrder(AstType *type, List *init_list,
+                                   u64 *n_out)
+{
+    (void)type;
+    u64 n = 0;
+    if (init_list) {
+        for (List *it = init_list->next; it != init_list; it = it->next) n++;
+    }
+    AstInitSlot *slots = (AstInitSlot *)malloc(sizeof(AstInitSlot) * (n ? n : 1));
+    u64 i = 0;
+    if (init_list) {
+        for (List *it = init_list->next; it != init_list; it = it->next) {
+            slots[i].value = (Ast *)it->value;
+            slots[i].offset = -1;
+            slots[i].index = i;
+            i++;
+        }
+    }
+    *n_out = n;
+    return slots;
+}
+
+AstType *astAggregateFieldType(AstType *type, u64 index) {
+    if (!type) return NULL;
+    switch (type->kind) {
+        case AST_TYPE_CLASS:
+        case AST_TYPE_UNION:
+            return astClassFieldAt(type, (int)index);
+        case AST_TYPE_ARRAY:
+            return type->ptr;
+        default:
+            return NULL;
+    }
+}
+
+Ast *astInitAddressTarget(Ast *init) {
+    Ast *cur = init;
+    int unwrapped = 0;
+    while (cur) {
+        if (cur->kind == AST_CAST && cur->operand) {
+            cur = cur->operand;
+            continue;
+        }
+        if (astIsUnOpKind(cur, AST_UN_OP_ADDR_OF) && cur->operand) {
+            cur = cur->operand;
+            unwrapped = 1;
+            continue;
+        }
+        break;
+    }
+    if (!cur) return NULL;
+    if (unwrapped) return cur;
+    switch (cur->kind) {
+        case AST_FUNC:
+        case AST_FUN_PROTO:
+        case AST_EXTERN_FUNC:
+        case AST_ASM_FUNCDEF:
+        case AST_ASM_FUNC_BIND:
+            return cur;
+        default:
+            return NULL;
+    }
+}
+
+int astDecodeStringLiteral(const char *s, int len, char *out) {
+    int o = 0;
+    for (int i = 0; i < len; ++i) {
+        char c = s[i];
+        if (c != '\\' || i + 1 >= len) {
+            out[o++] = c;
+            continue;
+        }
+        char n = s[++i];
+        if (n >= '0' && n <= '7') {
+            int v = n - '0';
+            int d = 1;
+            while (d < 3 && i + 1 < len && s[i+1] >= '0' && s[i+1] <= '7') {
+                v = v * 8 + (s[++i] - '0');
+                d++;
+            }
+            out[o++] = (char)v;
+            continue;
+        }
+        switch (n) {
+            case 'n': out[o++] = '\n'; break;
+            case 't': out[o++] = '\t'; break;
+            case 'r': out[o++] = '\r'; break;
+            case 'b': out[o++] = '\b'; break;
+            case 'f': out[o++] = '\f'; break;
+            case 'v': out[o++] = '\v'; break;
+            case 'a': out[o++] = '\a'; break;
+            case 'e': out[o++] = 0x1B; break;
+            case '\\': out[o++] = '\\'; break;
+            case '"':  out[o++] = '"';  break;
+            case '\'': out[o++] = '\''; break;
+            case '?': out[o++] = '?'; break;
+            case 'x': case 'X': {
+                int v = 0, d = 0;
+                while (d < 2 && i + 1 < len && isxdigit((unsigned char)s[i+1])) {
+                    char h = s[++i];
+                    int hv = (h >= '0' && h <= '9') ? h - '0' : (h | 32) - 'a' + 10;
+                    v = v * 16 + hv;
+                    d++;
+                }
+                out[o++] = (char)v;
+                break;
+            }
+            default: out[o++] = n; break;
+        }
+    }
+    out[o] = '\0';
+    return o;
 }

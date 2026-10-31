@@ -16,6 +16,94 @@
  * so this flag is informational. */
 #define IRCG_CALL_AGG_RETURN (1u << 1)
 
+/* Set on an IR_TRUNC whose destination type is SIGNED. Truncating to a
+ * narrower width still leaves the value in a 64-bit register, so the
+ * high bits have to be filled correctly or any later 64-bit compare
+ * reads a different number: `(int)(3L - 5L)` zero-extended reads as
+ * +4294967294 and tests greater-than-zero. Unsigned destinations keep
+ * the zero-extending forms. */
+#define IRCG_TRUNC_SIGNED    (1u << 2)
+
+/* Set on an IR_SEXT whose operand a 4-byte load already sign-extended.
+ * Every 4-byte load on this target widens to 64 bits (`ldrsw`/`ldursw`,
+ * matching x86's `movslq`), so the widen that follows it re-does work
+ * already done. The emitter cannot see the producer, so an IR pass
+ * marks it - the same arrangement IRCG_TRUNC_SIGNED uses to carry
+ * signedness the value type does not hold. */
+#define IRCG_SEXT_NOOP       (1u << 3)
+
+/* Set on an instruction whose destination is dead immediately after it.
+ * The instruction still runs - it may be a call - but writing the
+ * result to the destination's home is pointless. Only honoured for a
+ * REGISTER home: a dead store to a stack SLOT is skipped too readily,
+ * because parts of the emitter read a slot the IR never mentions (the
+ * struct-return out-pointer being the case that bit). */
+#define IRCG_DST_DEAD        (1u << 4)
+
+/* One omission described from both ends: a call whose register-returned
+ * aggregate IS this function's return value, followed immediately by
+ * the `ret` that returns it. The callee has already left the bytes in
+ * the very registers the epilogue wants, so the buffer store and the
+ * reload that follows it are a round trip to nowhere.
+ *
+ * IRCG_AGG_RET_FORWARD sits on the IR_CALL and says "leave the result
+ * registers alone"; IRCG_RET_IN_REGS sits on the IR_RET and says "they
+ * already hold the value, emit only the epilogue". They are set and
+ * cleared together by irForwardAggReturn - one without the other
+ * either returns garbage or drops the value on the floor, so neither
+ * backend may honour one alone. */
+#define IRCG_AGG_RET_FORWARD (1u << 5)
+#define IRCG_RET_IN_REGS     (1u << 6)
+
+/* This integer op may be computed in the 32-bit form (`add w0, w0, w1`).
+ *
+ * Only where a canonicalising IR_TRUNC follows - which is exactly what
+ * irNormaliseNarrowInt emits, and where it sets this. That coupling is
+ * the whole safety argument, so the flag is set THERE rather than
+ * inferred from the width here.
+ *
+ * A W-register write ZERO-extends into the full X register, where the
+ * rest of the compiler keeps a narrow SIGNED value sign-extended. So a
+ * w-form op whose truncation was elided produces a positive number for
+ * a negative result. Widths alone cannot tell the two apart: a narrow
+ * IADD reached by a path that does not normalise (`x += y`, RMW, GEP
+ * address arithmetic) must keep the 64-bit form. */
+#define IRCG_OP_NARROW       (1u << 7)
+
+/* Set on an IR_SEXT / IR_ZEXT that widens a PROMOTED narrow local whose
+ * register home is already canonical - the extension would compute the
+ * value the register already holds. The pass also gives the
+ * destination that same home, so the whole instruction is a
+ * register-to-itself copy and the backend emits nothing.
+ *
+ * The instruction is NOT removed, and that is the point: it is the only
+ * record that the local is READ here. Deleting it made liveness
+ * conclude nothing consumed the local, so the store that filled its
+ * home was marked dead and never emitted - `unsigned char a = big;`
+ * printed 0. See irElideCanonicalWiden. */
+#define IRCG_WIDEN_IS_COPY   (1u << 8)
+
+/* Bytes to move when SPILLING a value to its own slot and reading it
+ * back, which is not the same question as how wide the value is.
+ *
+ * A TEMPORARY always gets a full 8-byte slot (irCgAllocTmp), and the
+ * register holds a value already canonical for its type. Storing only
+ * the tagged width and reloading it re-derives the upper bits from the
+ * load - and a sub-word load ZERO-extends on both targets. That turned
+ * a `short` round trip into an unsigned one: `sturh w0` / `ldurh w9`
+ * (and `movw` / `movzwq`) read 60000 back out of -5536.
+ *
+ * A LOCAL keeps its declared width: its slot is that wide, and writing
+ * eight bytes would tread on its neighbours.
+ *
+ * Sign is not consulted, and does not need to be - moving all 64 bits
+ * preserves whatever canonical form the register already held. */
+u32 irValueByteSize(IrValue *v);
+static inline u32 irSpillWidth(IrValue *v) {
+    if (!v) return 8;
+    return v->kind == IR_VAL_TMP ? 8u : irValueByteSize(v);
+}
+
 /* Where in an instruction's emission a clobber question is asked.
  * Both backends materialise r1 into their first scratch register and
  * r2 into the second, so a forwarded value's survival depends on how
@@ -24,6 +112,11 @@ typedef enum IrClobberPoint {
     IR_CLOBBER_AFTER = 0,   /* after the whole instruction is emitted */
     IR_CLOBBER_BEFORE_R1,   /* before r1 is read */
     IR_CLOBBER_BEFORE_R2,   /* before r2 is read */
+    /* Before `dst` is read AS AN ADDRESS - the deref stores only.
+     * Their dst is an input, and it is the FIRST thing materialised,
+     * so nothing in the instruction has run yet. Distinct from
+     * BEFORE_R1, which for those ops is the last thing. */
+    IR_CLOBBER_BEFORE_DST,
 } IrClobberPoint;
 
 /* Per-backend ABI descriptor. The peephole reads this to know which
@@ -44,6 +137,12 @@ typedef struct IrRegPool {
     AoStr *sret_reg;
     /* Float return register (xmm0 / v0). */
     AoStr *float_return_reg;
+    /* Where the codegen leaves an instruction's result when it has no
+     * home of its own: the accumulator. The result-register pin targets
+     * it. Equal to the return registers on x86-64; distinct on AAPCS64,
+     * whose scratch is kept off x0-x2. */
+    AoStr *int_result_reg;
+    AoStr *float_result_reg;
     /* Per-instruction scratch surface: registers the codegen clobbers
      * while emitting an arithmetic/load/store/cast. Forward-store
      * passes drop any forwarded source whose loc names one of these
@@ -61,6 +160,21 @@ typedef struct IrRegPool {
      * means "assume every op clobbers every scratch reg", which is the
      * conservative behaviour a backend gets for free. */
     int (*op_clobbers)(IrInstr *I, AoStr *reg, IrClobberPoint at);
+    /* The register argument `i` of `call` is moved into, or NULL when
+     * it goes anywhere else (the stack, a struct-by-value sequence).
+     * NULL hook: no argument may live in an argument register. */
+    AoStr *(*call_arg_reg)(Cctrl *cc, IrInstr *call, u64 i);
+    /* Registers the ABI requires a function to preserve across a call.
+     * A `<Type> reg <REG> name` binding to one of these has to be saved
+     * and restored, or the function silently destroys a value its
+     * caller was relying on. Vec<AoStr *>, lowercase. */
+    Vec *callee_saved_regs;
+    /* Caller-saved registers that no part of codegen reserves for
+     * itself. Usable without save/restore in a function that makes no
+     * calls, where nothing can clobber them - which is most leaf
+     * functions. Empty is always safe: the allocator just falls back to
+     * the callee-saved pool and pays the save. Vec<AoStr *>. */
+    Vec *leaf_free_regs;
     /* Apple AArch64 ABI: variadic args (incl. HolyC's implicit argc)
      * are passed on the stack, not in arg regs. The IR builder and
      * layout pass consult this to skip the argc spill and place argc
@@ -109,5 +223,38 @@ u32 irValueByteSize(IrValue *v);
  * prologue (calls require rsp to be 16-byte aligned at the call
  * point). Linear in function size; codegen-driver only. */
 int irFnHasCalls(IrFunction *fn);
+int irFnHasOp(IrFunction *fn, IrOp op);
+
+/* The callee-saved registers this function pins, in pool order and
+ * without duplicates. Vec<AoStr *> borrowed from the pool; caller frees
+ * the vector, not the strings. Empty when nothing is pinned. */
+Vec *irCgPinnedCalleeSaved(IrFunction *fn);
+
+/* Is `reg` one of the ABI's argument registers?
+ *
+ * Exported because register assignment does not all happen in one
+ * place: irOptPromoteToRegs and irCgAssignRegisters hand them out, but
+ * irElideCanonicalWiden SHARES one it did not choose, and any of them
+ * can land a value in an argument register. See irCollectCallArgValues
+ * for why that needs asking about. */
+int irRegIsAbiArg(IrRegPool *pool, AoStr *reg);
+int irRegSurvivesCall(IrRegPool *pool, AoStr *reg);
+
+/* Every value handed to a call as an argument (and an indirect call's
+ * target). None of them may live in an ABI argument register: the
+ * argument-loading sequence writes those in ABI order, so a value
+ * waiting in argument register K that is itself a later argument has
+ * been overwritten by the time it is read.
+ *
+ * Such a value is NOT a call "crosser" - it dies AT the call - so
+ * irCollectCallCrossers does not catch it. */
+void irCollectCallArgValues(IrFunction *fn, Set *out);
+
+/* Bind hot address-free locals and params to callee-saved registers by
+ * setting `pinned_reg`, the same field a source-level `reg <REG>` uses.
+ * No-op when the target has no callee-saved pool, when the function
+ * contains an `asm { }` block, or under -fno-reg-promote. */
+void irOptPromoteToRegs(IrFunction *fn);
+void irRegPromoteSetEnabled(int enabled);
 
 #endif

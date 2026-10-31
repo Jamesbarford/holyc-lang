@@ -125,7 +125,12 @@ static const int aostr_tmp_buf_size = 512;
 static char *aostr_tmp_buf = NULL;
 
 void aoStrTmpBufInit(void) {
-    aostr_tmp_buf = malloc(sizeof(char) * aostr_tmp_buf_size);
+    /* Idempotent: a long-lived process re-inits its memory subsystem
+     * when it recycles arenas, and this buffer is plain malloc - it
+     * survives, and re-allocating would just leak the old one. */
+    if (aostr_tmp_buf == NULL) {
+        aostr_tmp_buf = malloc(sizeof(char) * aostr_tmp_buf_size);
+    }
 }
 
 static AoStr *_aoStrAlloc(void) {
@@ -142,6 +147,11 @@ AoStr *aoStrAlloc(u64 capacity) {
     buf->data = aoStrBufferAlloc(capacity, &actual);
     buf->capacity = actual;
     buf->len = 0;
+    /* An AoStr nothing is ever appended to is still handed to `%s`. The
+     * buffer comes off the pool's free list, so without this it reads
+     * as whatever the last string to occupy it left behind,
+     * unterminated. */
+    if (buf->data) buf->data[0] = '\0';
     return buf;
 }
 

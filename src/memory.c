@@ -9,6 +9,9 @@
 
 #include "aostr.h"
 #include "arena.h"
+#include "ast.h"
+#include "cctrl.h"
+#include "lexer.h"
 #include "memory.h"
 #include "util.h"
 
@@ -34,6 +37,32 @@ void globalArenaRelease(void) {
         arenaClear(&global_memory_arena);
         global_memory_arena_init = 0;
     }
+}
+
+u64 globalArenaBytes(void) {
+    if (!global_memory_arena_init) return 0;
+    return (u64)global_memory_arena.used;
+}
+
+u64 memoryArenaBytes(void) {
+    return astArenaBytes() + lexemeArenaBytes() + globalArenaBytes();
+}
+
+void memoryRecycleArenas(void) {
+    /* Caches first. Both hold arena pointers, and reaching one through
+     * a reset arena is a use-after-free, not a leak. */
+    lexerForgetMacroProcessor();
+    cctrlForgetTokenFiller();
+
+    astMemoryRelease();
+    lexemeMemoryRelease();
+    /* Also empties the AoStr free-list buckets, whose nodes are
+     * addresses inside this arena's blocks. */
+    globalArenaRelease();
+
+    astMemoryInit();
+    lexemeMemoryInit();
+    globalArenaInit(4096 * 10);
 }
 
 void globalArenaPrintStats(void) {

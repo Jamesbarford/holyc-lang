@@ -5,7 +5,7 @@ CFLAGS         ?= '-Wextra -Wall -Wpedantic'
 
 default: all
 
-.PHONY: all
+.PHONY: all unit-test jit-unit-test machine-test lsp-test
 
 # To add sqlite3 support add -DHCC_LINK_SQLITE3=1 to the below like so:
 #```
@@ -35,11 +35,19 @@ install:
 release-unit-test:
 	$(MAKE) -C ./build unit-test
 
+# Hermetic, and exits non-zero on a failure. Builds libtos from the tree
+# into ./build/test-prefix, so nothing needs installing first.
 unit-test:
-	cd ./src/tests && ../../hcc ./run.HC -o test-runner && ./test-runner && cd ../../
+	./src/tests/run.sh
 
 jit-unit-test:
-	cd ./src/tests && ../../hcc ./run_jit.HC -o test-runner-jit && ./test-runner-jit && cd ../../
+	./src/tests/run.sh --jit
+
+# The assembler, encoders and machine IR, tested on their own.
+machine-test:
+	$(MAKE) -C ./src/machine CC=cc
+	cd ./src/machine && ./test_aarch64 && ./test_x86_64 && ./test_jit \
+		&& ./test_mir_arm64 && ./test_mir_x86_64
 
 # Hermetic: builds libtos from the tree into a local prefix and
 # compiles the (HolyC) harness against it, so the suite tests in-tree
@@ -47,7 +55,7 @@ jit-unit-test:
 lsp-test:
 	mkdir -p ./build/test-prefix/include ./build/test-prefix/lib
 	cp ./src/holyc-lib/tos.HH ./build/test-prefix/include/tos.HH
-	cd ./src/holyc-lib && ../../hcc -lib tos --install-dir=$(CURDIR)/build/test-prefix ./all.HC
+	cd ./src/holyc-lib && ../../hcc -fPIC -lib tos --install-dir=$(CURDIR)/build/test-prefix ./all.HC
 	cd ./src/tests/lsp && ../../../hcc --install-dir=$(CURDIR)/build/test-prefix ./run_lsp_tests.HC -o lsp-test-runner && ./lsp-test-runner
 
 lib-tos:

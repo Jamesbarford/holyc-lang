@@ -58,11 +58,11 @@
 #include "jit-common.h"
 #include "memsafe.h"
 #if defined(__aarch64__) || defined(__arm64__)
-#include "aarch64-jit.h"
-#include "asm/dis_arm64.h"
+#include "aarch64.h"
+#include "machine/dis_arm64.h"
 #elif defined(__x86_64__)
-#include "x86_64-jit.h"
-#include "asm/dis_x86_64.h"
+#include "x86_64.h"
+#include "machine/dis_x86_64.h"
 #endif
 
 #define REPL_PROMPT      ">>> "

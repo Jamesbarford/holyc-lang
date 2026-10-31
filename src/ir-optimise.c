@@ -125,7 +125,28 @@ static void irRemoveRedundantBlocks(IrFunction *fn) {
             if (successors && mapHasInt(successors, R->id)) {
                 irRemapInstrBlockIds(bb, R->id, target);
                 mapRemoveInt(successors, R->id);
-                mapAdd(successors, (void *)(u64)target->id, target);
+                if (bb == target) {
+                    /* `target` absorbed R's instructions, so it now
+                     * ends with R's terminator and leaves where R left.
+                     * Pointing it at `target` instead - which is what
+                     * every OTHER predecessor of R correctly wants -
+                     * made the merged block its own successor, and a
+                     * self-loop is not something the source contained.
+                     * Latent until something read the edges; the
+                     * liveness pass is the first thing that does. */
+                    Map *r_succ = irBlockGetSuccessors(fn, R);
+                    if (r_succ) {
+                        MapIter sit;
+                        mapIterInit(r_succ, &sit);
+                        while (mapIterNext(&sit)) {
+                            IrBlock *S = (IrBlock *)sit.node->value;
+                            if (!S || S == R) continue;
+                            mapAdd(successors, (void *)(u64)S->id, S);
+                        }
+                    }
+                } else {
+                    mapAdd(successors, (void *)(u64)target->id, target);
+                }
             }
 
             /* Remap predecessors */
@@ -308,6 +329,402 @@ static void irForwardReturnSlot(IrFunction *fn) {
     }
 }
 
+/* The cross-block half of irForwardReturnSlot. Both arms of
+ *
+ *     if (a < 0) return 0;
+ *     return a;
+ *
+ * store into the alloca'd return slot and the exit block loads it
+ * back - a frame slot and a round-trip through memory for a value
+ * that merges cleanly in a register. When a slot's ONLY uses are one
+ * store in each predecessor of the block whose first instruction
+ * loads it, the load IS a phi:
+ *
+ *     %t = phi [(v1, P1), (v2, P2), ...]
+ *
+ * The phi machinery downstream already does everything else: codegen
+ * materialises the value at each predecessor's terminator, the tmp
+ * allocator gives %t a register home, and with the slot gone the
+ * frame usually goes with it. */
+static int irPromoteSlotToPhi(IrFunction *fn) {
+    int changed = 0;
+    listForEach(fn->blocks) {
+        IrBlock *join = (IrBlock *)it->value;
+
+        IrInstr *ld = NULL;
+        listForEach(join->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (I->op == IR_NOP) continue;
+            ld = I;
+            break;
+        }
+        if (!ld || ld->op != IR_LOAD) continue;
+        if (!irIsTmp(ld->dst) || !irIsTmp(ld->r1)) continue;
+        u32 slot = irR1VarId(ld);
+
+        /* Survey every mention of the slot: the alloca that defines
+         * it, stores into it, and this one load. Anything else - a
+         * second load, an address-taken use, a deref - disqualifies. */
+        IrInstr *slot_alloca = NULL;
+        Map *store_of = mapNew(16, &map_uint_to_uint_type); /* block->store */
+        int bad = 0;
+        listForEach(fn->blocks) {
+            IrBlock *bb = (IrBlock *)it->value;
+            listForEach(bb->instructions) {
+                IrInstr *I = (IrInstr *)it->value;
+                if (I->op == IR_NOP || I == ld) continue;
+                int dst_is_slot = irIsTmp(I->dst) && irDstVarId(I) == slot;
+                if (I->op == IR_ALLOCA && dst_is_slot) {
+                    slot_alloca = I;
+                    continue;
+                }
+                if (I->op == IR_STORE && dst_is_slot &&
+                    I->dst->kind == ld->r1->kind)
+                {
+                    if (bb == join) { bad = 1; break; }
+                    /* Two stores in one block: the later one is the
+                     * value that reaches the block's end - overwrite. */
+                    mapRemove(store_of, (void *)(u64)bb->id);
+                    mapAdd(store_of, (void *)(u64)bb->id, I);
+                    continue;
+                }
+                IrValue *vs[4] = { I->dst, I->r1, I->r2, I->idx };
+                for (int k = 0; k < 4 && !bad; ++k) {
+                    if (irIsTmp(vs[k]) && irVarId(vs[k]) == slot) bad = 1;
+                }
+                if (I->op == IR_CALL && I->r1 && I->r1->as.array.values) {
+                    Vec *args = I->r1->as.array.values;
+                    for (u64 a = 0; a < args->size && !bad; ++a) {
+                        IrValue *v = (IrValue *)args->entries[a];
+                        if (irIsTmp(v) && irVarId(v) == slot) bad = 1;
+                    }
+                }
+                if (bad) break;
+            }
+            if (bad) break;
+        }
+
+        Map *preds = irFunctionGetPredecessors(fn, join);
+        if (bad || !slot_alloca || !preds || preds->size == 0 ||
+            preds->size != store_of->size)
+        {
+            mapRelease(store_of);
+            continue;
+        }
+        /* Every predecessor must be a storing block (the size check
+         * above then makes the sets equal). */
+        int all_covered = 1;
+        MapIter pit;
+        mapIterInit(preds, &pit);
+        while (mapIterNext(&pit)) {
+            IrBlock *P = (IrBlock *)pit.node->value;
+            if (!P || !mapHasInt(store_of, P->id)) { all_covered = 0; break; }
+        }
+        if (!all_covered) {
+            mapRelease(store_of);
+            continue;
+        }
+
+        /* Rewrite the load into the phi and retire the stores. */
+        ld->op = IR_PHI;
+        ld->r1 = NULL;
+        ld->extra.phi_pairs = irPairVecNew();
+        mapIterInit(preds, &pit);
+        while (mapIterNext(&pit)) {
+            IrBlock *P = (IrBlock *)pit.node->value;
+            IrInstr *st = (IrInstr *)mapGetInt(store_of, P->id);
+            vecPush(ld->extra.phi_pairs, irPairNew(P, st->r1));
+        }
+        mapIterInit(preds, &pit);
+        while (mapIterNext(&pit)) {
+            IrBlock *P = (IrBlock *)pit.node->value;
+            IrInstr *st = (IrInstr *)mapGetInt(store_of, P->id);
+            st->op = IR_NOP;
+            st->dst = st->r1 = st->r2 = NULL;
+        }
+        mapRelease(store_of);
+        if (!irSlotHasUses(fn, slot)) {
+            slot_alloca->op = IR_NOP;
+            slot_alloca->dst = slot_alloca->r1 = slot_alloca->r2 = NULL;
+        }
+        changed++;
+    }
+    return changed;
+}
+
+/* How many instructions other than the `skip` ones mention `var_id`?
+ * Var-id based rather than pointer based: every mention of a value is
+ * its own IrValue, so pointer identity finds only the one occurrence. */
+static int irVarMentions(IrFunction *fn, u32 var_id, IrInstr **skip, int nskip)
+{
+    int n = 0;
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (I->op == IR_NOP) continue;
+            int skipped = 0;
+            for (int k = 0; k < nskip; ++k) {
+                if (I == skip[k]) { skipped = 1; break; }
+            }
+            if (skipped) continue;
+            IrValue *vs[4] = { I->dst, I->r1, I->r2, I->idx };
+            for (int k = 0; k < 4; ++k) {
+                if (irIsTmp(vs[k]) && irVarId(vs[k]) == var_id) n++;
+            }
+            if (I->op == IR_CALL && I->r1 && I->r1->as.array.values) {
+                Vec *args = I->r1->as.array.values;
+                for (u64 j = 0; j < args->size; ++j) {
+                    IrValue *v = (IrValue *)args->entries[j];
+                    if (irIsTmp(v) && irVarId(v) == var_id) n++;
+                }
+            }
+            if (I->op == IR_PHI && I->extra.phi_pairs) {
+                Vec *pairs = I->extra.phi_pairs;
+                for (u64 j = 0; j < pairs->size; ++j) {
+                    IrPair *p = (IrPair *)pairs->entries[j];
+                    if (irIsTmp(p->ir_value) &&
+                        irVarId(p->ir_value) == var_id) n++;
+                }
+            }
+        }
+    }
+    return n;
+}
+
+/* The instruction that defines `var_id` with `op`, if there is one. */
+static IrInstr *irFindDefOf(IrFunction *fn, u32 var_id, IrOp op) {
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (I->op != op || !irIsTmp(I->dst)) continue;
+            if (irDstVarId(I) == var_id) return I;
+        }
+    }
+    return NULL;
+}
+
+/* A register-returned aggregate handed straight back to the caller.
+ *
+ *   alloca %slot, <struct>
+ *   lea    %addr, %slot
+ *   ...
+ *   call   %buf, F      ; args[0] == %addr, IRCG_CALL_AGG_RETURN
+ *   ret    %slot
+ *
+ * The callee has already left the bytes in the registers the epilogue
+ * wants. The emitter stores them through %addr anyway and the `ret`
+ * loads them straight back out - a round trip to nowhere, and it drags
+ * the slot and the address-across-the-call with it.
+ *
+ * Three things must hold at once, because if any is missed the function
+ * returns a wrong value in silence:
+ *
+ *  - the `ret` immediately follows the call, so nothing in between can
+ *    disturb the result registers;
+ *  - the buffer the call writes through is the SAME storage the `ret`
+ *    reads - a `lea` of the ret's own slot;
+ *  - both functions return the identical type. Not merely the same
+ *    size: how an aggregate is spread across registers is the ABI's
+ *    business and the two targets disagree, and this pass runs before
+ *    either has been consulted. Identity sidesteps the question.
+ *
+ * The `ret` then keeps no operand at all, which is already how a void
+ * return is spelled - so no backend needs to learn anything for that
+ * half. Only the call is flagged. */
+static void irForwardAggReturn(IrFunction *fn) {
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        for (List *node = bb->instructions->next;
+             node != bb->instructions;
+             node = node->next)
+        {
+            IrInstr *call = (IrInstr *)node->value;
+            if (call->op != IR_CALL) continue;
+            if (!(call->flags & IRCG_CALL_AGG_RETURN)) continue;
+            if (!call->dst || !call->dst->byval_struct_type) continue;
+            /* An INDIRECT return has the callee write through the
+             * buffer itself, so there is no round trip to remove. */
+            AstType *rt = call->dst->byval_struct_type;
+            if (astAggRetIsIndirect(rt, fn->aapcs64)) continue;
+            if (!call->r1 || !call->r1->as.array.values) continue;
+            Vec *args = call->r1->as.array.values;
+            if (args->size == 0) continue;
+            IrValue *buf = (IrValue *)args->entries[0];
+            if (!irIsTmp(buf)) continue;
+
+            List *n2 = node->next;
+            while (n2 != bb->instructions &&
+                   ((IrInstr *)n2->value)->op == IR_NOP) n2 = n2->next;
+            if (n2 == bb->instructions) continue;
+            IrInstr *rt_i = (IrInstr *)n2->value;
+            if (rt_i->op != IR_RET) continue;
+            if (!irIsTmp(rt_i->dst)) continue;
+            if (rt_i->dst->byval_struct_type != rt) continue;
+
+            /* `buf` has to be the address OF the slot the ret reads. */
+            u32 buf_id = irVarId(buf);
+            u32 slot_id = irDstVarId(rt_i);
+            IrInstr *lea = NULL;
+            listForEach(bb->instructions) {
+                IrInstr *I = (IrInstr *)it->value;
+                if (I->op != IR_LEA || !irIsTmp(I->dst)) continue;
+                if (irDstVarId(I) != buf_id) continue;
+                lea = I;
+                break;
+            }
+            if (!lea || !irIsTmp(lea->r1)) continue;
+            if (irVarId(lea->r1) != slot_id) continue;
+
+            /* Nothing else may read the buffer address, the slot, or
+             * the call's own destination - all three stop existing.
+             * The alloca is excused: it is the slot's definition, and
+             * it goes with it. */
+            IrInstr *alloca = irFindDefOf(fn, slot_id, IR_ALLOCA);
+            IrInstr *skip[4] = { call, lea, rt_i, alloca };
+            if (irVarMentions(fn, buf_id, skip, 4)) continue;
+            if (irVarMentions(fn, slot_id, skip, 4)) continue;
+            if (irIsTmp(call->dst) &&
+                irVarMentions(fn, irDstVarId(call), skip, 4)) continue;
+
+            call->flags |= IRCG_AGG_RET_FORWARD;
+            rt_i->dst = NULL;
+            lea->op = IR_NOP;
+            lea->dst = lea->r1 = lea->r2 = lea->idx = NULL;
+            if (alloca) {
+                alloca->op = IR_NOP;
+                alloca->dst = alloca->r1 = alloca->r2 = alloca->idx = NULL;
+            }
+        }
+    }
+}
+
+/* How many instructions other than the `skip` ones mention LOCAL `lid`?
+ *
+ * Not irVarMentions, which matches on the var id alone and is only ever
+ * asked about temporaries. Locals are numbered from `lvar_id` and
+ * temporaries from `ir_tmp_var_id` - two counters, so the same id names
+ * one of each and matching on the number alone answers about the wrong
+ * value. Asking it about a local instead counted no mentions at all,
+ * because every test in it is `irIsTmp`. */
+static int irLocalMentions(IrFunction *fn, u32 lid,
+                           IrInstr **skip, int nskip)
+{
+    int n = 0;
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (I->op == IR_NOP) continue;
+            int skipped = 0;
+            for (int k = 0; k < nskip; ++k) {
+                if (I == skip[k]) { skipped = 1; break; }
+            }
+            if (skipped) continue;
+            IrValue *vs[4] = { I->dst, I->r1, I->r2, I->idx };
+            for (int k = 0; k < 4; ++k) {
+                IrValue *v = vs[k];
+                if (v && v->kind == IR_VAL_LOCAL && irVarId(v) == lid) n++;
+            }
+            if (I->op == IR_CALL && I->r1 && I->r1->as.array.values) {
+                Vec *args = I->r1->as.array.values;
+                for (u64 j = 0; j < args->size; ++j) {
+                    IrValue *a = (IrValue *)args->entries[j];
+                    if (a && a->kind == IR_VAL_LOCAL && irVarId(a) == lid) n++;
+                }
+            }
+            if (I->op == IR_PHI && I->extra.phi_pairs) {
+                Vec *pairs = I->extra.phi_pairs;
+                for (u64 j = 0; j < pairs->size; ++j) {
+                    IrPair *p = (IrPair *)pairs->entries[j];
+                    if (p->ir_value && p->ir_value->kind == IR_VAL_LOCAL &&
+                        irVarId(p->ir_value) == lid) n++;
+                }
+            }
+        }
+    }
+    return n;
+}
+
+/* A parameter spilled into its slot and immediately handed to a call as
+ * the FIRST argument:
+ *
+ *   store %l, %p
+ *   call  %t, f      ; args[0] == %l
+ *
+ * The value is already in the register the parameter arrived in, so the
+ * spill and the reload are a copy to nowhere. `void *M(u64 cap) { return
+ * malloc(cap); }` compiled to `mov x13, x0` and then nothing - the
+ * reload was already elided because x0 still held the value, leaving a
+ * home store whose home is never read.
+ *
+ * Forwarding a register-resident source into call arguments is refused
+ * in general (see irRewriteOperands): the argument-loading sequence
+ * writes the ABI registers in order, so a later argument whose source
+ * sits in an earlier argument's target register reads garbage. Position
+ * ZERO has no earlier argument. Both backends materialise args[0] first
+ * and write no general register before it - provided this is not an
+ * aggregate-returning call, where args[0] is a destination buffer
+ * rather than an argument at all and the emitter touches x9/r10 on the
+ * way past. That case is excluded rather than reasoned about.
+ *
+ * The local then has no references left, so it loses its stack slot and
+ * its promotion together. */
+static void irForwardParamToFirstArg(IrFunction *fn) {
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        for (List *node = bb->instructions->next;
+             node != bb->instructions;
+             node = node->next)
+        {
+            IrInstr *st = (IrInstr *)node->value;
+            if (st->op != IR_STORE) continue;
+            if (!st->dst || st->dst->kind != IR_VAL_LOCAL) continue;
+            if (!st->r1  || st->r1->kind  != IR_VAL_PARAM) continue;
+            /* A narrowing spill is doing real work - the parameter is
+             * wider than the cell it lands in, and the argument must be
+             * the truncated value. */
+            if (st->dst->type != st->r1->type) continue;
+            if (irValueByteSize(st->dst) != irValueByteSize(st->r1)) continue;
+
+            List *n2 = node->next;
+            while (n2 != bb->instructions &&
+                   ((IrInstr *)n2->value)->op == IR_NOP) n2 = n2->next;
+            if (n2 == bb->instructions) continue;
+            IrInstr *call = (IrInstr *)n2->value;
+            if (call->op != IR_CALL) continue;
+            if (call->flags & IRCG_CALL_AGG_RETURN) continue;
+            if (!call->r1 || !call->r1->as.array.values) continue;
+
+            Vec *args = call->r1->as.array.values;
+            if (args->size == 0) continue;
+            u32 lid = irDstVarId(st);
+            IrValue *a0 = (IrValue *)args->entries[0];
+            if (!a0 || a0->kind != IR_VAL_LOCAL || irVarId(a0) != lid) {
+                continue;
+            }
+            /* Exactly one argument, and no other mention anywhere - a
+             * second read would still want the slot this is about to
+             * take away. */
+            int in_args = 0;
+            for (u64 k = 0; k < args->size; ++k) {
+                IrValue *a = (IrValue *)args->entries[k];
+                if (a && a->kind == IR_VAL_LOCAL && irVarId(a) == lid) {
+                    in_args++;
+                }
+            }
+            if (in_args != 1) continue;
+            IrInstr *skip[2] = { st, call };
+            if (irLocalMentions(fn, lid, skip, 2)) continue;
+
+            args->entries[0] = st->r1;
+            st->op = IR_NOP;
+            st->dst = st->r1 = st->r2 = st->idx = NULL;
+        }
+    }
+}
+
 /* Store -> read forwarding within a basic block.
  *
  *   store %slot, %value
@@ -319,6 +736,12 @@ static void irForwardReturnSlot(IrFunction *fn) {
  * read %value's location (often an ABI reg) instead of bouncing
  * through the slot. Kills: IR_CALL (clobbers caller-saved regs),
  * IR_STORE_DEREF / IR_RMW_DEREF (may alias), IR_STORE to same slot. */
+/* Can `I` destroy a caller-saved register the IR does not name? A call,
+ * or an `asm {}` block, which may write any register at all. */
+static int irOpClobbersCallerSaved(IrInstr *I) {
+    return I->op == IR_CALL || I->op == IR_ASM;
+}
+
 static int irValMatchesSlot(IrValue *v, IrValue *slot) {
     return v && slot &&
            v->kind == slot->kind &&
@@ -328,13 +751,38 @@ static int irValMatchesSlot(IrValue *v, IrValue *slot) {
 static int irLocIsScratchClobbered(IrValue *v);
 static int irLocClobberedBy(IrInstr *I, IrValue *v, IrClobberPoint at);
 
-static int irRewriteOperands(IrInstr *I, IrValue *slot, IrValue *source) {
+/* May a SUB-WORD source be forwarded into this instruction?
+ *
+ * Reading a narrow value out of its slot canonicalises it for free -
+ * the load picks the movs/movz form from the slot's declared
+ * signedness. A value still sitting in its ABI argument register has
+ * had no such treatment: SysV leaves the upper bits of a narrow
+ * argument register UNSPECIFIED, so forwarding past the load would
+ * hand the consumer whatever the caller happened to leave there.
+ *
+ * Unless the consumer canonicalises it ITSELF. IR_SEXT / IR_ZEXT /
+ * IR_TRUNC read their operand at exactly `src_sz` bytes and widen or
+ * narrow it explicitly - `movslq %eax, %rax` looks at 32 bits and no
+ * more - so the upper bits they inherit are irrelevant. And those
+ * three are precisely what the IR wraps around every narrow read
+ * (irNormaliseNarrowInt), which is why this is worth doing at all:
+ * `int add(int a, int b)` is a store, a reload and a widen per
+ * parameter, where `long add(long, long)` is a single `addq`. */
+static int irNarrowForwardOk(IrInstr *I) {
+    return I->op == IR_SEXT || I->op == IR_ZEXT || I->op == IR_TRUNC;
+}
+
+static int irRewriteOperands(IrInstr *I, IrValue *slot, IrValue *source,
+                             int narrow)
+{
     int changed = 0;
     /* IR_LEA / IR_GEP / IR_LOAD / IR_STORE_DEREF (address operand) all
      * need their operand to have a real frame loff. They emit
      * `leaq loff(%rbp), ...` and friends. A `loc=REG`-only source
      * (e.g. a param's arrive value) can't satisfy that. */
     if (I->op == IR_LEA || I->op == IR_GEP || I->op == IR_LOAD)
+        return 0;
+    if (narrow && !irNarrowForwardOk(I))
         return 0;
     /* A source living in a backend scratch register (a param's arrive
      * reg overlapping x0/x1/x2 on AArch64) only survives until the
@@ -360,9 +808,22 @@ static int irRewriteOperands(IrInstr *I, IrValue *slot, IrValue *source) {
         I->r2 = source;
         changed = 1;
     }
-    /* IR_BR/IR_RET carry their value operand in dst. STORE_DEREF's
-     * dst is the address (needs loff, don't substitute). */
+    /* IR_BR/IR_RET carry their value operand in dst. */
     if ((I->op == IR_BR || I->op == IR_RET) &&
+        irValMatchesSlot(I->dst, slot) && I->dst != source)
+    {
+        I->dst = source;
+        changed = 1;
+    }
+    /* A deref store's dst is the ADDRESS it writes through - an input,
+     * and the first one materialised, so nothing in the instruction has
+     * run when it is read. Both backends take it straight out of a
+     * register when it already lives in one, so there is no frame
+     * offset to need; the reason this used to be refused outright.
+     * Leaving it refused is what kept `f->e[i] = v` copying `f` into a
+     * register of its own before the store. */
+    if ((I->op == IR_STORE_DEREF || I->op == IR_RMW_DEREF) &&
+        !irLocClobberedBy(I, source, IR_CLOBBER_BEFORE_DST) &&
         irValMatchesSlot(I->dst, slot) && I->dst != source)
     {
         I->dst = source;
@@ -446,9 +907,11 @@ static int irForwardStoreToReads(IrFunction *fn) {
         IrBlock *bb = (IrBlock *)it->value;
 
         /* Parallel arrays: slots[i] is a slot IrValue, sources[i] is
-         * the value currently held in it. */
+         * the value currently held in it, narrow[i] records whether
+         * that value is sub-word (see irNarrowForwardOk). */
         IrValue **slots = NULL;
         IrValue **sources = NULL;
+        int *narrow = NULL;
         u64 n = 0, cap = 0;
 
         listForEach(bb->instructions) {
@@ -456,11 +919,12 @@ static int irForwardStoreToReads(IrFunction *fn) {
             if (I->op == IR_NOP) continue;
 
             for (u64 i = 0; i < n; ++i) {
-                changed += irRewriteOperands(I, slots[i], sources[i]);
+                changed += irRewriteOperands(I, slots[i], sources[i],
+                                             narrow[i]);
             }
 
             /* Kills clear the entire map. */
-            if (I->op == IR_CALL || I->op == IR_STORE_DEREF ||
+            if (irOpClobbersCallerSaved(I) || I->op == IR_STORE_DEREF ||
                 I->op == IR_RMW_DEREF)
             {
                 n = 0;
@@ -483,6 +947,7 @@ static int irForwardStoreToReads(IrFunction *fn) {
                     if (irLocClobberedBy(I, sources[j], IR_CLOBBER_AFTER)) {
                         slots[j] = slots[n - 1];
                         sources[j] = sources[n - 1];
+                        narrow[j] = narrow[n - 1];
                         n--;
                     } else {
                         j++;
@@ -502,28 +967,91 @@ static int irForwardStoreToReads(IrFunction *fn) {
                     if (irValMatchesSlot(I->dst, slots[i])) {
                         slots[i] = slots[n - 1];
                         sources[i] = sources[n - 1];
+                        narrow[i] = narrow[n - 1];
                         n--;
                         break;
                     }
                 }
             }
 
+            /* Writing a slot also invalidates every entry that names it
+             * as a SOURCE. An entry means "this slot holds whatever S
+             * holds"; once S is overwritten that is no longer true, and
+             * forwarding through it reads the new value instead of the
+             * one that was copied.
+             *
+             * A three-way swap is the shape that exposes it:
+             *
+             *     t = p;      map: t -> p
+             *     p = q;      map: t -> p (STALE), p -> q
+             *     q = t;      t rewritten to p, p rewritten to q
+             *
+             * leaving `q = q` and two identical pointers. The dead-store
+             * pass then removed the other two stores as unread, so the
+             * whole swap vanished. Any local swapped through a temporary
+             * was affected, which is most hand-written swaps.
+             *
+             * Applies to any op that writes a slot, not just a store:
+             * `iadd l2, l2, 1` invalidates an entry recording l2 just as
+             * much. A `dst` that is a tmp matches nothing here, because
+             * only locals are ever recorded as slots. */
+            if (I->dst) {
+                u64 i = 0;
+                while (i < n) {
+                    if (!irValMatchesSlot(I->dst, slots[i]) &&
+                        irValMatchesSlot(I->dst, sources[i]))
+                    {
+                        slots[i] = slots[n - 1];
+                        sources[i] = sources[n - 1];
+                        narrow[i] = narrow[n - 1];
+                        n--;
+                    } else {
+                        i++;
+                    }
+                }
+            }
+
             /* Update map on STORE: dst-slot now holds r1's value.
-             * Only forward when the value is 8 bytes wide. A
-             * sub-word value (i32 argc, i8 char param) has unspecified
-             * upper bits in its ABI arg reg, and a movq forwarding
-             * skips the sign/zero extension a slot read would do.
-             * Use irValueByteSize, not as.var.size directly: a const
-             * source carries its value in as._i64, so as.var.size
-             * aliases the value's bits (0 for any small constant) and
-             * the old check silently refused to forward constant
-             * stores - `x = 10` never propagated. */
-            if (I->op == IR_STORE && I->dst && I->r1 &&
-                irValueByteSize(I->r1) == 8)
-            {
+             *
+             * A full-width store is forwardable to any reader. A
+             * SUB-WORD one is recorded too, but flagged, because only
+             * a reader that re-canonicalises may have it - see
+             * irNarrowForwardOk. The store must not itself be doing the
+             * narrowing (`store i8 <- i32` truncates, and that work
+             * cannot be skipped), so the widths have to match, and so
+             * must the signedness the two would extend by. */
+            int st_ok = 0, st_narrow = 0;
+            /* A REG-PINNED local is never forwarded from. The point of
+             * pinning is that the value lives in a named machine
+             * register, where something outside the compiler's view can
+             * change it - an `asm` block being the whole reason anyone
+             * writes it. Forwarding the stored value past that reads a
+             * stale constant, and once every read is rewritten the
+             * store is dead and the pin disappears entirely: no `mov
+             * x23, #23` was emitted at all, so `int reg X23 x = 23;
+             * asm { ADD X23, X23, 1 } return x;` folded to 23. */
+            if (I->op == IR_STORE && I->dst && I->dst->pinned_reg) {
+                /* not forwardable - fall through with st_ok = 0 */
+            } else if (I->op == IR_STORE && I->dst && I->r1) {
+                u32 dsz = irValueByteSize(I->dst);
+                u32 ssz = irValueByteSize(I->r1);
+                if (ssz == 8 && dsz == 8) {
+                    st_ok = 1;
+                } else if (ssz == dsz && (ssz == 1 || ssz == 2 || ssz == 4) &&
+                           irIsInt(I->dst->type) && irIsInt(I->r1->type) &&
+                           ((I->dst->flags & IR_VAL_FLAG_UNSIGNED) ==
+                            (I->r1->flags & IR_VAL_FLAG_UNSIGNED)))
+                {
+                    st_ok = 1;
+                    st_narrow = 1;
+                }
+            }
+
+            if (st_ok) {
                 for (u64 i = 0; i < n; ++i) {
                     if (irValMatchesSlot(I->dst, slots[i])) {
                         sources[i] = I->r1;
+                        narrow[i] = st_narrow;
                         goto did_update;
                     }
                 }
@@ -531,18 +1059,21 @@ static int irForwardStoreToReads(IrFunction *fn) {
                     cap = cap ? cap * 2 : 8;
                     slots = realloc(slots, cap * sizeof(IrValue *));
                     sources = realloc(sources, cap * sizeof(IrValue *));
+                    narrow = realloc(narrow, cap * sizeof(int));
                 }
                 slots[n] = I->dst;
                 sources[n] = I->r1;
+                narrow[n] = st_narrow;
                 n++;
                 did_update:;
             } else if (I->op == IR_STORE && I->dst && I->r1) {
-                /* Sub-word store: drop any tracking for this slot
-                 * (it's being overwritten with a different value). */
+                /* A store we cannot forward still KILLS the slot: it now
+                 * holds something the map does not describe. */
                 for (u64 i = 0; i < n; ++i) {
                     if (irValMatchesSlot(I->dst, slots[i])) {
                         slots[i] = slots[n - 1];
                         sources[i] = sources[n - 1];
+                        narrow[i] = narrow[n - 1];
                         n--;
                         break;
                     }
@@ -552,6 +1083,7 @@ static int irForwardStoreToReads(IrFunction *fn) {
 
         free(slots);
         free(sources);
+        free(narrow);
     }
     return changed;
 }
@@ -581,12 +1113,30 @@ static int irSlotReadCount(IrFunction *fn, u32 var_id) {
         listForEach(bb->instructions) {
             IrInstr *I = (IrInstr *)it->value;
             if (I->op == IR_NOP) continue;
-            IrValue *vs[3] = { I->r1, I->r2, NULL };
-            /* IR_BR/IR_RET read dst; IR_STORE_DEREF reads dst (as
-             * address). IR_STORE's dst is a write target, not a read. */
+            /* `idx` is a READ too. Addressing-mode fusion moves a
+             * value into it and out of r1/r2, so leaving it out here
+             * made a slot look unread the moment it became an index -
+             * dead-store elimination then killed the write, and the
+             * backend emitted the base register for the index as well:
+             * `ldrsw x0, [x1, x1, lsl #2]` for `p->data[i]`. */
+            IrValue *vs[4] = { I->r1, I->r2, I->idx, NULL };
+            /* IR_BR/IR_RET read dst; IR_STORE_DEREF and IR_RMW_DEREF
+             * read dst (as address). IR_STORE's dst is a write target,
+             * not a read.
+             *
+             * IR_RMW_DEREF is the one that has to be spelled out: it is
+             * MADE here, by irFuseLocalRmw folding `*p OP= v` moments
+             * before this runs, so a slot holding the base can lose
+             * every other reader in the same sweep. Leave it out and
+             * the store that fills the base is dead-store eliminated
+             * while the RMW still reads it - a local with no remaining
+             * definition, which regalloc then has no slot for. */
             if (I->op == IR_BR || I->op == IR_RET ||
-                I->op == IR_STORE_DEREF) vs[2] = I->dst;
-            for (int k = 0; k < 3; ++k) {
+                I->op == IR_STORE_DEREF || I->op == IR_RMW_DEREF)
+            {
+                vs[3] = I->dst;
+            }
+            for (int k = 0; k < 4; ++k) {
                 if (vs[k] && irVarId(vs[k]) == var_id) n++;
             }
             if (I->op == IR_CALL && I->r1 && I->r1->as.array.values) {
@@ -697,6 +1247,61 @@ static int irRangeClobbersScratch(List *from, List *to) {
     return 0;
 }
 
+/* The list node holding `I`, searching forward from the node after
+ * `from` up to `sentinel`; NULL if it is not in that range. */
+static List *irNodeOf(List *from, List *sentinel, IrInstr *I) {
+    for (List *p = from->next; p != sentinel; p = p->next) {
+        if ((IrInstr *)p->value == I) return p;
+    }
+    return NULL;
+}
+
+/* True if a call (or an asm block) sits strictly between `from` and `to`. */
+static int irRangeContainsCall(List *from, List *to) {
+    for (List *p = from->next; p != to; p = p->next) {
+        if (irOpClobbersCallerSaved((IrInstr *)p->value)) return 1;
+    }
+    return 0;
+}
+
+/* True if `v` is pinned to a register a callee is free to destroy -
+ * anything outside the callee-saved pool.
+ *
+ * Not the same question as irLocIsScratchClobbered. That one asks
+ * about the registers THIS function's emitter burns between
+ * instructions, and rdi is scratch to nobody; but every call clobbers
+ * it, along with the rest of the argument registers a PARAM arrives
+ * in (rdi/rsi/r8/r9 on SysV, x3-x7 on AAPCS64 - x0-x2 are also
+ * scratch, which is why the bug hid on arm64 for a one-parameter
+ * method). With no pool to consult every register is assumed at
+ * risk. */
+static int irLocIsCallClobbered(IrValue *v) {
+    if (!v || v->loc.kind != IR_LOC_REG || !v->loc.as.reg) return 0;
+    IrRegPool *pool = irRegPoolGet();
+    if (!pool || !pool->callee_saved_regs) return 1;
+    AoStr *vr = v->loc.as.reg;
+    for (u64 i = 0; i < pool->callee_saved_regs->size; ++i) {
+        if (aoStrEq(vr, vecGet(AoStr *, pool->callee_saved_regs, i))) return 0;
+    }
+    return 1;
+}
+
+/* Would moving a read of `v` from `from` to the consumer at `to` carry
+ * it across a call that destroys its register?
+ *
+ * Addressing-mode fusion RELOCATES reads: the base of `iadd %t, %p,
+ * 16` was read at the IADD, and folding it into `store* %p [16]`
+ * reads it at the store instead. A parameter forwarded into the IADD
+ * sits in its argument register, which the forwarding pass correctly
+ * stopped propagating AT the call - and this fold then resurrected it
+ * on the far side. `self->offset += f(...)` stored through rdi after
+ * f had been handed rdi as its own first argument. A consumer whose
+ * node is unknown is treated as out of reach. */
+static int irReadCrossesCall(IrValue *v, List *from, List *to) {
+    if (!irLocIsCallClobbered(v)) return 0;
+    return !to || irRangeContainsCall(from, to);
+}
+
 /* TMP id -> defining instruction. Skips ops that don't "produce"
  * their dst (STORE/STORE_DEREF/RMW_DEREF write to memory; BR/RET
  * pass a value via dst). */
@@ -740,6 +1345,151 @@ static IrInstr *irFindScalingProducer(Map *defs, IrValue *v, u8 *scale) {
     return NULL;
 }
 
+/* Is `J` reading or writing memory through `v` as its address? */
+static int irIsMemAddressUse(IrInstr *J, IrValue *v) {
+    return (J->op == IR_LOAD_DEREF && J->r1 == v) ||
+           ((J->op == IR_STORE_DEREF || J->op == IR_RMW_DEREF) && J->dst == v);
+}
+
+/* Is the local `v`'s address taken anywhere in `fn`? Then a store
+ * through a pointer, or a call, could change it. */
+static int irLocalAddressTaken(IrFunction *fn, IrValue *v) {
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *J = (IrInstr *)it->value;
+            if ((J->op == IR_LEA || J->op == IR_GEP) && J->r1 &&
+                irValMatchesSlot(J->r1, v)) return 1;
+        }
+    }
+    return 0;
+}
+
+/* Does anything strictly between `from` and `to` write the local `v`? */
+static int irLocalWrittenBetween(IrValue *v, List *from, List *to) {
+    for (List *q = from->next; q != to; q = q->next) {
+        IrInstr *J = (IrInstr *)q->value;
+        if (J->op == IR_STORE_DEREF || J->op == IR_RMW_DEREF ||
+            J->op == IR_BR || J->op == IR_RET) continue;
+        if (J->dst && irValMatchesSlot(J->dst, v)) return 1;
+    }
+    return 0;
+}
+
+/* Does `v` read the same between `from` and `to`? Its REGISTER has to
+ * survive as well as its value, so never across a call or an `asm`
+ * block, and never for a value in a scratch register across an op that
+ * burns scratch - SysV's fourth argument arrives in %rcx, the
+ * emitters' scratch. The same two checks the folds make. Otherwise
+ * always for a TMP, a PARAM (never reassigned - a write to a parameter
+ * goes to its local) or a constant; for a LOCAL, when its address is
+ * never taken and nothing in between writes it. */
+static int irValueStable(IrFunction *fn, IrValue *v, List *from, List *to) {
+    if (irIsConstInt(v)) return 1;
+    if (irRangeContainsCall(from, to)) return 0;
+    if (irLocIsScratchClobbered(v) && irRangeClobbersScratch(from, to)) return 0;
+    if (irIsTmp(v) || v->kind == IR_VAL_PARAM) return 1;
+    if (v->kind != IR_VAL_LOCAL) return 0;
+    return !irLocalAddressTaken(fn, v) && !irLocalWrittenBetween(v, from, to);
+}
+
+/* Give each memory access through a shared address its own copy of
+ * the arithmetic, so irFuseIaddIntoMemAddressing - which folds an add
+ * into its ONE consumer - can fold every copy into the addressing mode.
+ * Two shapes: `ptr + k` (a displacement) and `base + (i << s)` (a
+ * scaled index, whose shift is copied too).
+ *
+ * `s->f += 1` reads and writes through one address, computed once so
+ * the base is evaluated once. Shared, the add could not fold and cost
+ * instructions per access (`add x14, x13, #2; ldrh w15, [x14]` where
+ * `ldrh w15, [x13, #2]` will do).
+ *
+ * Only when every operand the copy re-reads is irValueStable up to the
+ * use, and every use of the address is such an access in the same
+ * block, so nothing else needs the sum. Run after the fusion loop has
+ * settled: load-op-store fusion wants the address shared. */
+static int irSplitSharedAddressing(IrFunction *fn) {
+    Map *uses = irBuildTmpUseCounts(fn);
+    Map *defs = irBuildTmpDefs(fn);
+    int changed = 0;
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        List *l = bb->instructions;
+        for (List *cur = l->next; cur != l; cur = cur->next) {
+            IrInstr *I = (IrInstr *)cur->value;
+            if (I->op != IR_IADD && I->op != IR_ISUB) continue;
+            if (!irIsTmp(I->dst) || I->dst->as.var.size != 8) continue;
+            if (!I->r1 || !I->r2) continue;
+            int n_uses = irTmpUseCount(uses, I->dst);
+            if (n_uses < 2) continue;
+
+            /* What a copy has to re-read: the operands of the add, or -
+             * for a scaled index - the base and the shift's operands. */
+            IrInstr *scaler = NULL;
+            List *scaler_node = NULL;
+            IrValue *reads[3] = { I->r1, I->r2, NULL };
+            if (!irIsConstInt(I->r1) && !irIsConstInt(I->r2)) {
+                u8 scale = 0;
+                if (I->op != IR_IADD) continue;
+                int on_r2 = 1;
+                scaler = irFindScalingProducer(defs, I->r2, &scale);
+                if (!scaler) {
+                    scaler = irFindScalingProducer(defs, I->r1, &scale);
+                    on_r2 = 0;
+                }
+                if (!scaler) continue;
+                IrValue *scaled = on_r2 ? I->r2 : I->r1;
+                if (irTmpUseCount(uses, scaled) != 1) continue;
+                for (List *q = l->next; q != cur; q = q->next) {
+                    if (q->value == scaler) { scaler_node = q; break; }
+                }
+                if (!scaler_node) continue;
+                reads[0] = on_r2 ? I->r1 : I->r2;
+                reads[1] = scaler->r1;
+                reads[2] = scaler->r2;
+            }
+
+            int n_mem = 0;
+            for (List *q = cur->next; q != l; q = q->next) {
+                if (irIsMemAddressUse((IrInstr *)q->value, I->dst)) n_mem++;
+            }
+            if (n_mem != n_uses) continue;
+
+            int seen = 0;
+            for (List *q = cur->next; q != l; q = q->next) {
+                IrInstr *J = (IrInstr *)q->value;
+                if (!irIsMemAddressUse(J, I->dst)) continue;
+                if (seen++ == 0) continue;
+                List *from = scaler_node ? scaler_node : cur;
+                int stable = 1;
+                for (int k = 0; k < 3 && stable; ++k) {
+                    if (reads[k] && !irValueStable(fn, reads[k], from, q))
+                        stable = 0;
+                }
+                if (!stable) break;
+
+                IrValue *r1 = I->r1, *r2 = I->r2;
+                if (scaler) {
+                    IrValue *sc = irTmp(scaler->dst->type,
+                                        scaler->dst->as.var.size);
+                    listInsertValueBefore(q, irInstrNew(scaler->op, sc,
+                                                        scaler->r1,
+                                                        scaler->r2));
+                    if (r2 == scaler->dst) r2 = sc; else r1 = sc;
+                }
+                IrValue *copy = irTmp(I->dst->type, 8);
+                listInsertValueBefore(q, irInstrNew(I->op, copy, r1, r2));
+                if (J->op == IR_LOAD_DEREF) J->r1 = copy;
+                else                        J->dst = copy;
+                changed = 1;
+            }
+        }
+    }
+    mapRelease(uses);
+    mapRelease(defs);
+    return changed;
+}
+
 /* Fold IADD/ISUB into the addressing mode of its single mem-op
  * consumer. Two folds, tried in order per IADD:
  *   - const disp: `iadd t, ptr, k_imm` (or `isub ptr, k`) -> set
@@ -769,11 +1519,8 @@ static int irFuseIaddIntoMemAddressing(IrFunction *fn) {
             IrInstr *use = irFindMemConsumer(cur, l, I->dst);
             if (!use) continue;
 
-            /* Find the consumer's list node for the clobber check. */
-            List *use_node = NULL;
-            for (List *p = cur->next; p != l; p = p->next) {
-                if ((IrInstr *)p->value == use) { use_node = p; break; }
-            }
+            /* Find the consumer's list node for the clobber checks. */
+            List *use_node = irNodeOf(cur, l, use);
 
             /* Disp fold. IADD commutative; ISUB only `ptr - k_imm`. */
             if (use->disp == 0) {
@@ -793,10 +1540,17 @@ static int irFuseIaddIntoMemAddressing(IrFunction *fn) {
                      * needs the base again for the store-back, so a
                      * base living in scratch 0 is gone by then
                      * (`str x0, [x0, #40]`). Either way the codegen
-                     * would read a stale register at the consumer. */
-                    if (irLocIsScratchClobbered(ptr) &&
-                        ((use_node && irRangeClobbersScratch(cur, use_node)) ||
-                         irLocClobberedBy(use, ptr, IR_CLOBBER_BEFORE_R1)))
+                     * would read a stale register at the consumer.
+                     *
+                     * And refuse it when a CALL sits between the two:
+                     * a base in a caller-saved register - every
+                     * parameter's - does not survive one, whether or
+                     * not the emitter counts that register as scratch.
+                     * See irReadCrossesCall. */
+                    if ((irLocIsScratchClobbered(ptr) &&
+                         ((use_node && irRangeClobbersScratch(cur, use_node)) ||
+                          irLocClobberedBy(use, ptr, IR_CLOBBER_BEFORE_R1))) ||
+                        irReadCrossesCall(ptr, cur, use_node))
                     {
                         /* fall through to scale-fold attempt */
                     } else {
@@ -821,11 +1575,59 @@ static int irFuseIaddIntoMemAddressing(IrFunction *fn) {
                 else if ((scaler = irFindScalingProducer(defs, I->r1, &scale)) &&
                          irTmpUseCount(uses, I->r1) == 1) base = I->r2;
                 else scaler = NULL;
-                if (scaler && irLocIsScratchClobbered(base) &&
-                    ((use_node && irRangeClobbersScratch(cur, use_node)) ||
-                     irLocClobberedBy(use, base, IR_CLOBBER_BEFORE_R1)))
+                /* The index needs no check against the BASE any
+                 * more. It used to: the base was materialised into a
+                 * hardcoded x1, which is also where the second integer
+                 * argument arrives, so folding `a[i]` destroyed its
+                 * own index and the fold had to be declined for every
+                 * scratch-resident index - which was nearly all of
+                 * them. The deref emitters now resolve the index's
+                 * home first and take a base scratch that avoids it,
+                 * so there is no longer a way for the base to land on
+                 * the index.
+                 *
+                 * That is a claim about ONE instruction, though, and
+                 * it was mistaken for a claim about the whole range.
+                 * Both the base check below and the index check under
+                 * it ask the other question - whether the operand
+                 * survives the instructions BETWEEN the fold and its
+                 * consumer - and the index needs it just as much. */
+                if (scaler &&
+                    ((irLocIsScratchClobbered(base) &&
+                      ((use_node && irRangeClobbersScratch(cur, use_node)) ||
+                       irLocClobberedBy(use, base, IR_CLOBBER_BEFORE_R1))) ||
+                     irReadCrossesCall(base, cur, use_node)))
                 {
                     scaler = NULL;
+                }
+                /* The index's read moves too, and from further back:
+                 * it was read at the scaler, which may sit well before
+                 * this IADD. `s->d[i] += f(s->a)` read `i` out of rsi
+                 * at the `shl`, then again at the store on the other
+                 * side of f. A scaler this block cannot find lives in
+                 * another block, and the whole prefix is scanned. */
+                if (scaler) {
+                    List *scaler_node = irNodeOf(l, l, scaler);
+                    List *from = scaler_node ? scaler_node : l;
+                    if (irReadCrossesCall(scaler->r1, from, use_node)) {
+                        scaler = NULL;
+                    } else if (irLocIsScratchClobbered(scaler->r1) &&
+                               use_node &&
+                               irRangeClobbersScratch(from, use_node))
+                    {
+                        /* The same question the base is asked, and the
+                         * one a CALL check alone does not answer. A
+                         * global's address is materialised into the
+                         * scratch pair (`adrp x1, _g@PAGE`), which is
+                         * no call at all but destroys an index sitting
+                         * in x1 just the same:
+                         *
+                         *     void f(struct S *s, long i) { s->e[i] += g; }
+                         *
+                         * folded the index down past the `lea` and
+                         * indexed by the ADDRESS of `g`. */
+                        scaler = NULL;
+                    }
                 }
                 if (scaler) {
                     use->idx = scaler->r1;
@@ -911,6 +1713,22 @@ static int irFuseLoadOpStore(IrFunction *fn) {
             List *node_l = irPrevNonNop(node_b, l);
             if (!node_l || (IrInstr *)node_l->value != L) continue;
 
+            /* Every backend sizes the RMW's load and store from `r1`,
+             * and `r1` is about to stop being the value that was STORED
+             * and start being the addend. Those two need not be the same
+             * width: `s->i += 1` on a 64-bit field has an `i32` literal
+             * on the right, so the fused form loaded, added and stored
+             * four bytes and dropped the carry - `4294967295 + 1` came
+             * out as 0. The stored value carries the memory's width, so
+             * match it or leave the triple alone.
+             *
+             * A literal is re-labelled rather than rejected: its value
+             * is already held full-width, so only the label changes. */
+            if (irValueByteSize(val) != irValueByteSize(S->r1)) {
+                if (val->kind != IR_VAL_CONST_INT) continue;
+                val = irConstInt(S->r1->type, val->as._i64);
+            }
+
             S->op = IR_RMW_DEREF;
             S->extra.rmw_op = B->op;
             S->r1 = val;
@@ -946,13 +1764,1642 @@ static void irDeadStoreEliminate(IrFunction *fn) {
     }
 }
 
+/* `a >= b` with the same operands swapped is `b <= a`. Mirroring a
+ * predicate lets a comparison put its constant operand second. */
+static IrCmpKind irCmpSwapped(IrCmpKind k) {
+    switch (k) {
+        case IR_CMP_LT:  return IR_CMP_GT;
+        case IR_CMP_GT:  return IR_CMP_LT;
+        case IR_CMP_LE:  return IR_CMP_GE;
+        case IR_CMP_GE:  return IR_CMP_LE;
+        case IR_CMP_ULT: return IR_CMP_UGT;
+        case IR_CMP_UGT: return IR_CMP_ULT;
+        case IR_CMP_ULE: return IR_CMP_UGE;
+        case IR_CMP_UGE: return IR_CMP_ULE;
+        case IR_CMP_OLT: return IR_CMP_OGT;
+        case IR_CMP_OGT: return IR_CMP_OLT;
+        case IR_CMP_OLE: return IR_CMP_OGE;
+        case IR_CMP_OGE: return IR_CMP_OLE;
+        /* Symmetric already. */
+        case IR_CMP_EQ:  case IR_CMP_NE:
+        case IR_CMP_OEQ: case IR_CMP_ONE:
+        case IR_CMP_UNO: case IR_CMP_ORD:
+            return k;
+        default: return IR_CMP_INVALID;
+    }
+}
+
+/* Put a comparison's constant operand on the RIGHT.
+ *
+ * Every target compares register-against-immediate, so `ch <= '9'`
+ * lowers to a single `cmp w0, #57`. Written the other way round -
+ * `'0' >= ch`, which is how a range check reads - the constant had to
+ * be materialised into a register first, and that forced the other
+ * operand out to a stack slot and back:
+ *
+ *      mov  x0, #48        vs.     cmp  x0, #48
+ *      ldur x1, [x29,#-16]
+ *      cmp  x0, x1
+ *
+ * Swapping the operands and mirroring the predicate means the source
+ * spelling stops mattering. */
+static int irCanonicaliseCmpOperands(IrFunction *fn) {
+    int changed = 0;
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (I->op != IR_ICMP && I->op != IR_FCMP &&
+                I->op != IR_CMP_BR)
+            {
+                continue;
+            }
+            if (!I->r1 || !I->r2) continue;
+            int l_const = I->r1->kind == IR_VAL_CONST_INT ||
+                          I->r1->kind == IR_VAL_CONST_FLOAT;
+            int r_const = I->r2->kind == IR_VAL_CONST_INT ||
+                          I->r2->kind == IR_VAL_CONST_FLOAT;
+            if (!l_const || r_const) continue;
+
+            IrCmpKind *kind = (I->op == IR_CMP_BR)
+                            ? &I->extra.cmp_br.cmp_kind
+                            : &I->extra.cmp_kind;
+            IrCmpKind swapped = irCmpSwapped(*kind);
+            if (swapped == IR_CMP_INVALID) continue;
+
+            IrValue *tmp = I->r1;
+            I->r1 = I->r2;
+            I->r2 = tmp;
+            *kind = swapped;
+            changed = 1;
+        }
+    }
+    return changed;
+}
+
+/* Every use of tmp `from` becomes `to`, and how many there were.
+ * Only operand positions - a `dst` that is a definition is left alone,
+ * so the caller has to be replacing something whose def it removes. */
+static int irReplaceTmpUses(IrFunction *fn, IrValue *from, IrValue *to) {
+    int n = 0;
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (I->r1 == from) { if (to) I->r1 = to; n++; }
+            if (I->r2 == from) { if (to) I->r2 = to; n++; }
+            /* IR_BR / IR_RET carry their value in dst. */
+            if ((I->op == IR_BR || I->op == IR_RET) && I->dst == from) {
+                if (to) I->dst = to;
+                n++;
+            }
+            if (I->op == IR_CALL && I->r1 && I->r1->as.array.values) {
+                Vec *args = I->r1->as.array.values;
+                for (u64 k = 0; k < args->size; ++k) {
+                    if ((IrValue *)args->entries[k] == from) {
+                        if (to) args->entries[k] = to;
+                        n++;
+                    }
+                }
+            }
+            if (I->op == IR_PHI && I->extra.phi_pairs) {
+                for (u64 k = 0; k < I->extra.phi_pairs->size; ++k) {
+                    IrPair *pr = (IrPair *)I->extra.phi_pairs->entries[k];
+                    if (pr && pr->ir_value == from) {
+                        if (to) pr->ir_value = to;
+                        n++;
+                    }
+                }
+            }
+        }
+    }
+    return n;
+}
+
+/* `trunc i32 <- (sext i64 <- x i32)` is `x`.
+ *
+ * The pair comes from an assignment converting to the arithmetic type
+ * on the way in and back to the destination's type on the way out -
+ * `v->entries[i] = data` widens `data` to i64 and immediately narrows
+ * it again. On aarch64 that is an `ldursw` plus an `sxtw` producing a
+ * value the very next instruction stores as four bytes.
+ *
+ * Sound only when the extend's SOURCE is exactly the truncation's
+ * result width: `trunc i16 <- sext i64 <- x i32` really does discard
+ * bits. The extend must also have no other use, or removing it would
+ * strand them. */
+static int irFoldExtendTruncate(IrFunction *fn) {
+    int changed = 0;
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (I->op != IR_TRUNC || !I->dst || !I->r1) continue;
+
+            /* Find the definition of the truncation's operand. */
+            IrInstr *ext = NULL;
+            listForEach(bb->instructions) {
+                IrInstr *J = (IrInstr *)it->value;
+                if (J == I) break;
+                if (J->dst == I->r1 &&
+                    (J->op == IR_SEXT || J->op == IR_ZEXT))
+                {
+                    ext = J;
+                }
+            }
+            if (!ext || !ext->r1) continue;
+            /* The fold rewrites every USE of the truncation's
+             * destination to name `ext->r1` instead, which is only
+             * meaningful when that destination is a temporary - a
+             * value, not a place.
+             *
+             * `x = y;` between narrow locals lowers to `trunc <local>,
+             * <tmp>`, so the destination is a LOCAL, and rewriting its
+             * uses substituted a temporary for the variable itself.
+             * Everything downstream then named the temporary, including
+             * `&x`, which became the address of a value with no
+             * storage. The visible symptom was a swap through a
+             * temporary producing garbage, but only once the address
+             * was also taken and dereferenced. */
+            if (!irIsTmp(I->dst)) continue;
+            if (irValueByteSize(ext->r1) != irValueByteSize(I->dst)) continue;
+            /* The fold hands the truncation's consumers `ext->r1`
+             * directly, which is sound only while that value is already
+             * CANONICAL for its own width - sign-extended if signed,
+             * zero-extended if unsigned.
+             *
+             * A narrow value read out of a slot is: the load picks its
+             * movs/movz form from the slot's signedness. A narrow
+             * PARAMETER still sitting in its ABI argument register is
+             * not - the psABI leaves those upper bits unspecified - so
+             * there the extend is doing real work rather than repeating
+             * the load's. Dropping it made
+             * `char TakeI8(char p) { return p; }` return 200 where C
+             * gives -56.
+             *
+             * Only reachable since irForwardStoreToReads learned to
+             * forward sub-word parameters past their home slot; before
+             * that every narrow read came from memory. */
+            if (irValueByteSize(ext->r1) < 8 &&
+                ext->r1->kind == IR_VAL_PARAM &&
+                ext->r1->loc.kind == IR_LOC_REG)
+            {
+                continue;
+            }
+            if (irReplaceTmpUses(fn, ext->dst, NULL) != 1) continue;
+
+            irReplaceTmpUses(fn, I->dst, ext->r1);
+            irMakeNop(I);
+            irMakeNop(ext);
+            changed = 1;
+        }
+    }
+    return changed;
+}
+
+static int irOpReadsTmp(IrInstr *I, u32 var_id);
+
+/* Does `I` WRITE its dst, as opposed to reading it? Mirrors
+ * ir-regalloc.c's irLiveInstrDefines - four ops keep an operand there
+ * rather than a result, and calling those definitions would end a
+ * value's range an instruction early. */
+static int irInstrWritesDst(IrInstr *I) {
+    if (!I->dst) return 0;
+    switch (I->op) {
+    case IR_STORE_DEREF: case IR_RMW_DEREF:
+    case IR_BR: case IR_RET:
+        return 0;
+    default:
+        return 1;
+    }
+}
+
+/* A widening read of a PROMOTED narrow local is a no-op.
+ *
+ * `irPromoteNarrowInt` widens every narrow read at lowering, because a
+ * narrow value in a register otherwise has unspecified upper bits. For
+ * a local that promotion later moved into a register that is no longer
+ * true: its home is canonicalised on every write (see
+ * aarch64StoreNarrowHome), so it already holds exactly the value the
+ * extension would compute. `short s` in x13 read `sxth x0, w13` and
+ * then used x0 - one instruction to copy a register into another
+ * register.
+ *
+ * So the widen is dropped and its destination tmp is given the SOURCE's
+ * home. The tmp keeps its own i64 tagging, which matters: substituting
+ * the narrow value itself would let a consumer size its operation from
+ * two bytes instead of eight.
+ *
+ * Run AFTER irOptPromoteToRegs - `pinned_reg` is what it keys on, and
+ * before promotion nothing has one. That also makes it a no-op on
+ * x86_64, which does not promote at all.
+ *
+ * Two conditions, both about the home holding the right thing for as
+ * long as the tmp is read:
+ *
+ *   - the extension must match how the home is canonicalised (SEXT for
+ *     a signed local, ZEXT for an unsigned one), or it would compute a
+ *     different number than the register holds;
+ *   - nothing may write the local while the tmp is still live, or the
+ *     tmp would silently see the new value. `short s = 1; long a = s;
+ *     s = 2; use(a);` must not read 2. */
+int irElideCanonicalWiden(IrFunction *fn) {
+    int changed = 0;
+    /* Which tmps are call arguments - see the refusal below. */
+    Set *call_args = setNew(16, &set_uint_type);
+    irCollectCallArgValues(fn, call_args);
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        for (List *node = bb->instructions->next; node != bb->instructions;
+             node = node->next)
+        {
+            IrInstr *I = (IrInstr *)node->value;
+            if (I->op != IR_SEXT && I->op != IR_ZEXT) continue;
+            IrValue *src = I->r1, *dst = I->dst;
+            if (!src || !dst || !irIsTmp(dst)) continue;
+            if (src->kind != IR_VAL_LOCAL && src->kind != IR_VAL_PARAM)
+                continue;
+            if (!src->pinned_reg) continue;   /* not promoted */
+            if (!irIsInt(src->type) || !irIsInt(dst->type)) continue;
+            u32 sz = irValueByteSize(src);
+            if (sz == 0 || sz >= 8) continue;
+            if (irValueByteSize(dst) != 8) continue;
+            /* irOptPinResultReg may already have parked this tmp in the
+             * result register so its consumer could read it there. That
+             * is a preference, not a requirement - every consumer looks
+             * the home up - and the source's own register is strictly
+             * better, so it is overridden. A HAND-pinned register is
+             * not: the source asked for that one by name. */
+            if (dst->pinned_reg) continue;
+
+            int uns = (src->flags & IR_VAL_FLAG_UNSIGNED) != 0;
+            if (uns ? (I->op != IR_ZEXT) : (I->op != IR_SEXT)) continue;
+
+            /* Every read of the tmp must happen in this block, before
+             * anything redefines the local. Anything else - a use in
+             * another block, a use after a write - and the home has
+             * stopped standing for the value the tmp was given. */
+            u32 src_id = irVarId(src), dst_id = irVarId(dst);
+            int reads = 0, written = 0, unsafe = 0;
+            /* Is any read of the tmp on the far side of a CALL? */
+            int seen_call = 0, read_after_call = 0;
+            for (List *p = node->next; p != bb->instructions; p = p->next) {
+                IrInstr *J = (IrInstr *)p->value;
+                if (J->op == IR_NOP) continue;
+                if (irOpClobbersCallerSaved(J)) seen_call = 1;
+                /* Read first, then write: an instruction that does both
+                 * - `trunc %s <- %t`, the store back of `s += 7` - reads
+                 * the old value before producing the new one, so it is
+                 * a safe read, not a stale one. */
+                if (irOpReadsTmp(J, dst_id)) {
+                    if (written) { unsafe = 1; break; }
+                    if (seen_call) read_after_call = 1;
+                    reads++;
+                }
+                if (irInstrWritesDst(J) && irVarId(J->dst) == src_id) {
+                    written = 1;
+                }
+            }
+            if (unsafe) continue;
+            /* Every use in the whole function must be one of the reads
+             * counted above - anything else is in another block, or
+             * after the local was rewritten. */
+            if (irReplaceTmpUses(fn, dst, NULL) != reads) continue;
+
+            /* The home may be an ABI ARGUMENT register - the promoter
+             * hands those out now - and `dst` may be handed to a call
+             * as an argument. Sharing the home then puts a value in a
+             * register the argument-loading sequence overwrites before
+             * it reads it: `int a = INT_MAX; a += 1; printf("%ld", a)`
+             * printed the format string's address.
+             *
+             * The allocator refuses that pairing (see
+             * irCollectCallArgValues); this shares a register it did
+             * not choose, so it has to refuse it too. */
+            if (call_args && irRegIsAbiArg(irRegPoolGet(), src->pinned_reg) &&
+                setHas(call_args, (void *)(u64)irVarId(dst)))
+            {
+                continue;
+            }
+
+            /* The LOCAL's range and the TMP's are not the same range.
+             * Promotion picks the local's home from its own liveness,
+             * so a local that dies before the next call gets a
+             * caller-saved register - correct for it, wrong for a tmp
+             * that is still being read afterwards:
+             *
+             *     int m = ...;
+             *     take(m, mk(1), mk(2));    // m's widen read LAST
+             *
+             * `m` is dead after the widen, so it had x13; the widened
+             * value was then read across two calls out of a register
+             * they are free to clobber, and the callee saw an address.
+             * Sharing is only sound while the home outlives every read
+             * of the tmp. */
+            if (read_after_call &&
+                !irRegSurvivesCall(irRegPoolGet(), src->pinned_reg))
+            {
+                continue;
+            }
+
+            /* Share the home and mark it a copy - do NOT remove the
+             * instruction; it is what tells liveness the local is read
+             * here, and without it the store filling that home looks
+             * dead. */
+            dst->loc.kind   = IR_LOC_REG;
+            dst->loc.as.reg = src->pinned_reg;
+            I->flags |= IRCG_WIDEN_IS_COPY;
+            changed = 1;
+        }
+    }
+    setRelease(call_args);
+    return changed;
+}
+
+/* `trunc iM <- (trunc iN <- x)` with M <= N is `trunc iM <- x`.
+ *
+ * Only the low M bits of the inner result survive the outer
+ * truncation, and those are the low M bits of `x` whichever way round
+ * it is done - so the inner one computes nothing that is read. Its
+ * SIGNEDNESS does not matter either, for the same reason: it only ever
+ * set bits at or above M, and the outer extension overwrites all of
+ * them.
+ *
+ * The pair comes from normalising twice. `short s; s += 7;` promotes to
+ * int for the arithmetic, so the result is canonicalised to i32, and
+ * the assignment back to `s` immediately canonicalises to i16 -
+ * `sxtw x0, w0` followed by `sxth x13, w0`.
+ *
+ * The inner truncation must have no other use, or dropping it would
+ * strand them. */
+static int irOpReadsTmp(IrInstr *I, u32 var_id);
+static int irTmpReadCount(IrFunction *fn, u32 id);
+
+/* How many of `val`'s low bytes does anything actually READ?
+ *
+ * The op's own destination width is an upper bound, not the answer.
+ * C's integer promotions make `short + short` an INT operation, so the
+ * add below produces an i32 - but that i32 is immediately truncated
+ * back to i16 and nothing else ever looks at it, so only two bytes are
+ * demanded:
+ *
+ *     iadd  %t18 i32, ...
+ *     trunc %t20 i16, %t18        <- the only reader
+ *
+ * Every reader has to be a truncation for this to be worth anything.
+ * Any other consumer - a store, a comparison, a call argument - reads
+ * the value as it stands, so the answer is the full width and the
+ * caller learns nothing. Returns `dflt` in that case, and for a value
+ * with no readers at all. */
+static u32 irDemandedWidth(IrFunction *fn, IrValue *val, u32 dflt) {
+    if (!irIsTmp(val)) return dflt;
+    u32 id = irVarId(val);
+    u32 demanded = 0;
+    int seen = 0;
+
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (I->op == IR_NOP) continue;
+            if (!irOpReadsTmp(I, id)) continue;
+            seen = 1;
+            if (I->op != IR_TRUNC || !I->dst) return dflt;
+            u32 m = irValueByteSize(I->dst);
+            if (m > demanded) demanded = m;
+        }
+    }
+    if (!seen || demanded == 0) return dflt;
+    return demanded < dflt ? demanded : dflt;
+}
+
+/* An operand of a NARROW op only needs its low bytes.
+ *
+ * `int add(int a, int b)` lowers to a pair of widening reads, a 64-bit
+ * add and a truncation - the widen exists because a narrow value in a
+ * register is otherwise kept sign-extended, and arithmetic on it has to
+ * see the whole thing. But an op the backend will emit in its 32-bit
+ * form (IRCG_OP_NARROW - see x86_64OpIs32Bit / a64OpIs32Bit) reads only
+ * the low 32 bits of its operands, and those are the SAME bits before
+ * and after a widening extend. So the extend is dead work, and the op
+ * can read the extend's source directly.
+ *
+ * Sound only while the source is at least as wide as what is DEMANDED
+ * of the result: `sext i64 <- i8` feeding an add whose low 32 bits are
+ * read really does change those bits, and dropping it there would lose
+ * the 8->32 sign extension.
+ *
+ * Demanded, not the op's own width, because C's integer promotions
+ * make `short + short` an INT operation - the add produces an i32 that
+ * is immediately truncated back to i16. Only two bytes are observed,
+ * and two bytes is exactly what the i16 operands already carry, so the
+ * widen either side of it is dead work. Using the op's width instead
+ * refuses that case (2 < 4) and leaves `short` and `char` arithmetic
+ * paying for a widen nobody reads.
+ *
+ * The extend itself is left alone - it may have other readers - and
+ * simply becomes unreferenced when this was its last one, which the
+ * dead-code sweep then collects. */
+
+/* The rewrite moves the READ of `src` from the extend's position down
+ * to the consumer's. A source homed in a backend scratch register - a
+ * parameter still in its arrival x0, say - only survives that journey
+ * if nothing in between writes the register: the same question
+ * irForwardStoreToReads asks one instruction at a time, asked here
+ * across the whole distance. Without it, `a + (int)c` substituted %p1
+ * into the add PAST the fptosi, whose conversion goes through scratch
+ * x0, and the add summed the conversion result with itself.
+ *
+ * `at` is the consumer's own hazard: materialising r1 has already
+ * written scratch 0 by the time r2 is read. A def in another block
+ * never reaches the consumer's block here and falls out as a refusal,
+ * which is the conservative side. */
+static int irNarrowSrcSurvivesTo(IrBlock *bb, IrInstr *ext, IrInstr *I,
+                                 IrValue *src, IrClobberPoint at,
+                                 IrInstr *skip)
+{
+    if (!irLocIsScratchClobbered(src)) return 1;
+    int seen_ext = 0;
+    listForEach(bb->instructions) {
+        IrInstr *J = (IrInstr *)it->value;
+        if (J == ext) { seen_ext = 1; continue; }
+        if (J == I) {
+            if (!seen_ext) return 0;
+            return !irLocClobberedBy(I, src, at);
+        }
+        if (!seen_ext || J->op == IR_NOP) continue;
+        /* `skip` is the op's OTHER feeding extend, known single-use and
+         * being substituted in the same batch - it dies with this one,
+         * so its emission never happens and cannot clobber anything.
+         * This is what lets BOTH of `int add(int a, int b)`'s widens
+         * disappear instead of the second extend pinning the first
+         * parameter's register. */
+        if (J == skip) continue;
+        if (irLocClobberedBy(J, src, IR_CLOBBER_AFTER)) return 0;
+    }
+    return 0;
+}
+
+static int irNarrowOpOperands(IrFunction *fn) {
+    int changed = 0;
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (!(I->flags & IRCG_OP_NARROW) || !I->dst) continue;
+            u32 w = irValueByteSize(I->dst);
+            if (w == 0 || w > 4) continue;
+            /* What the readers actually take, capped at the op's own
+             * width - the backend computes no more than that. */
+            u32 need = irDemandedWidth(fn, I->dst, w);
+
+            IrValue **slots[2] = { &I->r1, &I->r2 };
+            IrInstr *exts[2] = { NULL, NULL };
+            int solo[2] = { 0, 0 };   /* ext dst has no other reader */
+            for (int k = 0; k < 2; ++k) {
+                IrValue *v = *slots[k];
+                if (!v || !irIsTmp(v)) continue;
+                IrInstr *ext = irFindDefOf(fn, irVarId(v), IR_SEXT);
+                if (!ext) ext = irFindDefOf(fn, irVarId(v), IR_ZEXT);
+                if (!ext || !ext->r1) continue;
+                if (irValueByteSize(ext->r1) < need) continue;
+                if (!irIsInt(ext->r1->type)) continue;
+                exts[k] = ext;
+                solo[k] = irTmpReadCount(fn, irVarId(ext->dst)) == 1;
+            }
+            /* Substitutability is mutual: each operand's clobber walk
+             * may skip the OTHER extend only while that one is itself
+             * being substituted (and dying - single reader). Start
+             * optimistic, drop failures, re-check the survivor without
+             * its dead companion; two operands need at most two
+             * rounds. */
+            int sub[2];
+            for (int k = 0; k < 2; ++k) {
+                IrClobberPoint at = k == 0 ? IR_CLOBBER_BEFORE_R1
+                                           : IR_CLOBBER_BEFORE_R2;
+                IrInstr *skip =
+                    (exts[1 - k] && solo[1 - k]) ? exts[1 - k] : NULL;
+                sub[k] = exts[k] &&
+                         irNarrowSrcSurvivesTo(bb, exts[k], I,
+                                               exts[k]->r1, at, skip);
+            }
+            for (int k = 0; k < 2; ++k) {
+                if (!sub[k] || sub[1 - k]) continue;
+                IrClobberPoint at = k == 0 ? IR_CLOBBER_BEFORE_R1
+                                           : IR_CLOBBER_BEFORE_R2;
+                sub[k] = irNarrowSrcSurvivesTo(bb, exts[k], I,
+                                               exts[k]->r1, at, NULL);
+            }
+            for (int k = 0; k < 2; ++k) {
+                if (!sub[k]) continue;
+                *slots[k] = exts[k]->r1;
+                changed = 1;
+            }
+        }
+    }
+    return changed;
+}
+
+/* How many instructions read tmp `id` anywhere in the function. */
+static int irTmpReadCount(IrFunction *fn, u32 id) {
+    int n = 0;
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (I->op == IR_NOP) continue;
+            if (irOpReadsTmp(I, id)) n++;
+        }
+    }
+    return n;
+}
+
+/* Collapse the canonical increment-of-a-local triple:
+ *
+ *     load  %t,  %L
+ *     iadd  %t2, %t, <rhs>
+ *     store %L,  %t2
+ *
+ * into `iadd %L, %L, <rhs>` - one instruction once %L has a register
+ * home (`add x13, x13, #1`), where the triple costs a load, an op and
+ * a store even when everything is register-resident. The lowering
+ * already produces local-destination arithmetic itself (a compound
+ * assignment's fadd writes its accumulator local directly), so every
+ * consumer downstream handles the rewritten shape.
+ *
+ * The three instructions must be CONSECUTIVE - nothing can touch %L,
+ * %t or memory in between - and both tmps single-use, or a second
+ * reader would see a value this fold no longer computes. */
+static int irFuseLocalRmw(IrFunction *fn) {
+    int changed = 0;
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        List *n1 = bb->instructions->next;
+        for (; n1 != bb->instructions; n1 = n1->next) {
+            IrInstr *ld = (IrInstr *)n1->value;
+            if (ld->op != IR_LOAD || !irIsTmp(ld->dst)) continue;
+            if (!ld->r1 || ld->r1->kind != IR_VAL_LOCAL) continue;
+            List *n2 = n1->next;
+            while (n2 != bb->instructions &&
+                   ((IrInstr *)n2->value)->op == IR_NOP) n2 = n2->next;
+            if (n2 == bb->instructions) continue;
+            IrInstr *op = (IrInstr *)n2->value;
+            switch (op->op) {
+            case IR_IADD: case IR_ISUB: case IR_IMUL:
+            case IR_AND:  case IR_OR:   case IR_XOR:
+            case IR_FADD: case IR_FSUB: case IR_FMUL: case IR_FDIV:
+                break;
+            default: continue;
+            }
+            if (!irIsTmp(op->dst)) continue;
+            List *n3 = n2->next;
+            while (n3 != bb->instructions &&
+                   ((IrInstr *)n3->value)->op == IR_NOP) n3 = n3->next;
+            if (n3 == bb->instructions) continue;
+            IrInstr *st = (IrInstr *)n3->value;
+            if (st->op != IR_STORE || !st->dst ||
+                st->dst->kind != IR_VAL_LOCAL ||
+                irVarId(st->dst) != irVarId(ld->r1))
+            {
+                continue;
+            }
+            if (!irIsTmp(st->r1) ||
+                irVarId(st->r1) != irDstVarId(op)) continue;
+            /* The op must consume the load - either operand side. */
+            u32 t = irVarId(ld->dst);
+            int r1_is_t = irIsTmp(op->r1) && irVarId(op->r1) == t;
+            int r2_is_t = irIsTmp(op->r2) && irVarId(op->r2) == t;
+            if (!r1_is_t && !r2_is_t) continue;
+            /* Same width and value class either side of the store, or
+             * the fold would skip a truncation the store performed. */
+            if (irValueByteSize(st->dst) != irValueByteSize(op->dst))
+                continue;
+            if (irIsInt(st->dst->type) != irIsInt(op->dst->type)) continue;
+            /* Narrow INT locals stay on the load/op/store path: a
+             * register-homed one is kept sign-extended by the store's
+             * canonicalisation (jitStoreNarrowHome), which a local-dst
+             * op writing the home via the w-form alu3 would skip. */
+            if (irIsInt(st->dst->type) && irValueByteSize(st->dst) != 8)
+                continue;
+            /* Single-use tmps: the load feeds the op, the op feeds the
+             * store, nothing else looks at either. */
+            if (irTmpReadCount(fn, t) != 1) continue;
+            if (irTmpReadCount(fn, irDstVarId(op)) != 1) continue;
+
+            if (r1_is_t) op->r1 = ld->r1;
+            if (r2_is_t) op->r2 = ld->r1;
+            op->dst = st->dst;
+            ld->op = IR_NOP;
+            st->op = IR_NOP;
+            changed = 1;
+        }
+    }
+    return changed;
+}
+
+static int irFoldChainedTruncate(IrFunction *fn) {
+    int changed = 0;
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (I->op != IR_TRUNC || !I->dst || !I->r1) continue;
+
+            /* Definition of the outer truncation's operand. */
+            IrInstr *inner = NULL;
+            listForEach(bb->instructions) {
+                IrInstr *J = (IrInstr *)it->value;
+                if (J == I) break;
+                if (J->dst == I->r1) {
+                    inner = (J->op == IR_TRUNC) ? J : NULL;
+                }
+            }
+            if (!inner || !inner->r1) continue;
+            /* The inner truncation is about to be deleted, so its
+             * destination has to be a temporary. A LOCAL destination is
+             * an assignment to a variable, and deleting it drops the
+             * write - the same hazard as the fold above, where a narrow
+             * `x = y` lowers to `trunc <local>, <tmp>`. */
+            if (!irIsTmp(inner->dst)) continue;
+            if (irValueByteSize(I->dst) > irValueByteSize(inner->dst)) continue;
+            if (irReplaceTmpUses(fn, inner->dst, NULL) != 1) continue;
+
+            I->r1 = inner->r1;
+            irMakeNop(inner);
+            changed = 1;
+        }
+    }
+    return changed;
+}
+
+/* Mark sign-extensions a 4-byte load already performed.
+ *
+ * `int x = p->field;` lowers to `load* %t (i32), ...` then
+ * `sext %u (i64), %t` - and the load emitted `ldrsw`, which already
+ * produced the 64-bit sign-extended value. The convert is pure
+ * overhead.
+ *
+ * The existing SEXT path in a64EmitConvert already skips the widen when
+ * the operand is IN MEMORY, because the load folds it. This is the same
+ * observation for an operand the register allocator moved into a
+ * register, where the fold was being missed. */
+static void irMarkRedundantSext(IrFunction *fn) {
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (I->op != IR_SEXT || !I->r1 || !I->dst) continue;
+            if (irValueByteSize(I->r1) != 4) continue;
+
+            /* Producer must be a 4-byte load in this same block - the
+             * only shape that guarantees the sign extension happened.
+             * Anything defining r1 after that load invalidates it. */
+            IrInstr *def = NULL;
+            listForEach(bb->instructions) {
+                IrInstr *J = (IrInstr *)it->value;
+                if (J == I) break;
+                if (J->dst == I->r1) def = J;
+            }
+            if (!def) continue;
+            if (def->op != IR_LOAD && def->op != IR_LOAD_DEREF) continue;
+            if (irValueByteSize(def->dst) != 4) continue;
+            I->flags |= IRCG_SEXT_NOOP;
+        }
+    }
+}
+
+/* A SEXT the pass above proved to be a no-op is BIT-IDENTICAL to its
+ * source: the 4-byte load already sign-extended the full register.
+ * The flag alone only saved the extension instruction - emission
+ * still degraded it to a register-to-register copy, which is where
+ * every `ldrsw x0, [..]; mov x13, x0` pair came from. Since source
+ * and destination hold the same bits, every reader of the destination
+ * can read the source instead and the widen disappears entirely.
+ * The source is SSA (one def, never re-stored), so the substitution
+ * needs no liveness argument beyond the flag's own guarantee. */
+/* Does anything read `v` in a way that depends on its declared WIDTH
+ * rather than on the bits in the register?
+ *
+ * A store does: the backends size the memory access from the VALUE's
+ * width, because the destination of a deref store is only an address
+ * and carries no type. So substituting a 4-byte source for its 8-byte
+ * sign-extended result - bit-identical in the register - silently
+ * turns `str x0` into `str w0`, and the upper four bytes of the
+ * destination keep whatever they held:
+ *
+ *     le->i64 = type->kind;      // int field -> s64 field
+ *     ldrsw x0, [x20, #8]        // correct, x0 = 95
+ *     str   w0, [x19, #8]        // writes 4 bytes, not 8
+ *
+ * That is how a keyword id came back as (1 << 32) | 95 and the lexer
+ * stopped recognising `long`. */
+static int irValueWidthIsObserved(IrFunction *fn, IrValue *v) {
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (I->r1 != v) continue;
+            if (I->op == IR_STORE || I->op == IR_STORE_DEREF) return 1;
+        }
+    }
+    return 0;
+}
+
+static int irCoalesceNoopWidens(IrFunction *fn) {
+    int changed = 0;
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (I->op != IR_SEXT || !(I->flags & IRCG_SEXT_NOOP)) continue;
+            if (!irIsTmp(I->dst) || !irIsTmp(I->r1)) continue;
+            /* The widen is only free where the WIDTH does not matter. */
+            if (irValueByteSize(I->dst) != irValueByteSize(I->r1) &&
+                irValueWidthIsObserved(fn, I->dst))
+            {
+                continue;
+            }
+            if (irReplaceTmpUses(fn, I->dst, NULL) > 0)
+                irReplaceTmpUses(fn, I->dst, I->r1);
+            I->op = IR_NOP;
+            I->dst = I->r1 = I->r2 = NULL;
+            changed++;
+        }
+    }
+    return changed;
+}
+
+/* ---- Devirtualising calls ------------------------------------------
+ *
+ * An indirect call whose target is loaded from a slot that only ever
+ * holds ONE known function becomes a direct call to it:
+ *
+ *     int (*cmp)(int) = twice;        cmp(21)   ->  bl _twice
+ *     auto f = [&x]() { ... };        f()       ->  bl _lambda$0
+ *
+ * A direct call is cheaper on its own, and it is what the inliner can
+ * see through - which is the point for a closure, whose body is
+ * usually a line or two.
+ *
+ * A slot is a local, or a constant offset inside one, reached through
+ * `gep` / `lea` / `iadd <const>`. It qualifies when every write to it
+ * stores the same non-variadic function, nothing else writes over it,
+ * and no pointer to it escapes. An escaping pointer to offset `c` is
+ * taken to reach everything from `c` on - a pointer to a struct member
+ * cannot be walked back to an earlier member - which is what lets a
+ * closure keep its function: the call hands the callee `&f.data`, past
+ * `f.fn`. A read that comes before the only write is undefined, so it
+ * need not stop anything. */
+
+typedef struct IrDvPtr {
+    u32 local;
+    s64 off;
+} IrDvPtr;
+
+typedef struct IrDvWrite {
+    u32 local;
+    s64 off;
+    IrValue *fn;     /* the function stored, or NULL for anything else */
+} IrDvWrite;
+
+typedef struct IrDv {
+    Map *derived;    /* tmp key -> IrDvPtr * */
+    Map *defs;       /* tmp key -> IrInstr *, or IR_DV_MULTI */
+    IrDvWrite *writes;
+    u64 n_writes, cap_writes;
+    IrDvPtr *escapes;   /* off == INT64_MIN: the whole local */
+    u64 n_escapes, cap_escapes;
+} IrDv;
+
+#define IR_DV_MULTI ((IrInstr *)1)
+
+/* Does `op` DEFINE its dst? Everywhere else dst is an operand being
+ * read: a store's target, a `ret`'s value, a branch's condition. */
+static int irDvDstIsDef(IrOp op) {
+    switch (op) {
+        case IR_ALLOCA: case IR_LOAD: case IR_LOAD_DEREF: case IR_LEA:
+        case IR_GEP:
+        case IR_IADD: case IR_ISUB: case IR_IMUL: case IR_IDIV:
+        case IR_UDIV: case IR_IREM: case IR_UREM: case IR_INEG:
+        case IR_FADD: case IR_FSUB: case IR_FMUL: case IR_FDIV:
+        case IR_FNEG:
+        case IR_AND: case IR_OR: case IR_XOR: case IR_SHL: case IR_SHR:
+        case IR_SAR: case IR_NOT:
+        case IR_ICMP: case IR_FCMP:
+        case IR_TRUNC: case IR_ZEXT: case IR_SEXT: case IR_FPTRUNC:
+        case IR_FPEXT: case IR_FPTOUI: case IR_FPTOSI: case IR_UITOFP:
+        case IR_SITOFP: case IR_PTRTOINT: case IR_INTTOPTR: case IR_BITCAST:
+        case IR_CALL: case IR_PHI: case IR_SELECT: case IR_VA_ARG:
+        case IR_FRAME_ADDR:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static u64 irDvKey(IrValue *v) {
+    return ((u64)v->kind << 32) | (u64)irVarId(v);
+}
+
+/* The slot `v` names - a local itself, or a pointer derived from one. */
+static int irDvSlotOf(IrDv *dv, IrValue *v, u32 *local, s64 *off) {
+    if (!v) return 0;
+    if (v->kind == IR_VAL_LOCAL && !v->pinned_reg) {
+        *local = irVarId(v);
+        *off = 0;
+        return 1;
+    }
+    if (v->kind != IR_VAL_TMP) return 0;
+    IrDvPtr *p = (IrDvPtr *)mapGet(dv->derived, (void *)irDvKey(v));
+    if (!p) return 0;
+    *local = p->local;
+    *off = p->off;
+    return 1;
+}
+
+/* The slot a POINTER VALUE points at - the address operand of a
+ * `*_DEREF` op. Only a derived pointer qualifies: a local there is not
+ * the slot, it is a variable HOLDING some pointer. */
+static int irDvSlotAt(IrDv *dv, IrValue *v, u32 *local, s64 *off) {
+    if (!v || v->kind != IR_VAL_TMP) return 0;
+    return irDvSlotOf(dv, v, local, off);
+}
+
+static int irDvIsDerivedTmp(IrDv *dv, IrValue *v) {
+    return v && v->kind == IR_VAL_TMP &&
+           mapHas(dv->derived, (void *)irDvKey(v));
+}
+
+/* The function `v` is the address of, if it is one. */
+static IrValue *irDvFunction(IrDv *dv, IrValue *v) {
+    if (!v) return NULL;
+    if (v->kind == IR_VAL_GLOBAL && (v->flags & IR_VAL_FLAG_FUNC)) return v;
+    if (v->kind != IR_VAL_TMP) return NULL;
+    IrInstr *def = (IrInstr *)mapGet(dv->defs, (void *)irDvKey(v));
+    if (!def || def == IR_DV_MULTI || def->op != IR_LEA) return NULL;
+    IrValue *g = def->r1;
+    if (g && g->kind == IR_VAL_GLOBAL && (g->flags & IR_VAL_FLAG_FUNC)) {
+        return g;
+    }
+    return NULL;
+}
+
+static void irDvWrite(IrDv *dv, u32 local, s64 off, IrValue *fn) {
+    if (dv->n_writes == dv->cap_writes) {
+        dv->cap_writes = dv->cap_writes ? dv->cap_writes * 2 : 16;
+        dv->writes = (IrDvWrite *)realloc(dv->writes,
+                dv->cap_writes * sizeof(IrDvWrite));
+    }
+    dv->writes[dv->n_writes++] = (IrDvWrite){ local, off, fn };
+}
+
+static void irDvEscape(IrDv *dv, u32 local, s64 off) {
+    if (dv->n_escapes == dv->cap_escapes) {
+        dv->cap_escapes = dv->cap_escapes ? dv->cap_escapes * 2 : 16;
+        dv->escapes = (IrDvPtr *)realloc(dv->escapes,
+                dv->cap_escapes * sizeof(IrDvPtr));
+    }
+    dv->escapes[dv->n_escapes++] = (IrDvPtr){ local, off };
+}
+
+/* `v` used somewhere that is not a plain load or store through it - an
+ * argument, a value stored away, an operand of arithmetic. */
+static void irDvUse(IrDv *dv, IrValue *v) {
+    u32 local;
+    s64 off;
+    if (irDvIsDerivedTmp(dv, v) && irDvSlotOf(dv, v, &local, &off)) {
+        irDvEscape(dv, local, off);
+    }
+}
+
+/* A store whose value is an aggregate writes more than a word. */
+static int irDvWideValue(IrValue *v) {
+    return v && (v->type == IR_TYPE_STRUCT || v->type == IR_TYPE_ARRAY ||
+                 v->type == IR_TYPE_ARRAY_INIT);
+}
+
+/* The function a load from (`local`, `off`) must produce, or NULL. */
+static IrValue *irDvSlotFunction(IrDv *dv, u32 local, s64 off) {
+    IrValue *fn = NULL;
+    for (u64 i = 0; i < dv->n_escapes; ++i) {
+        if (dv->escapes[i].local == local && dv->escapes[i].off <= off) {
+            return NULL;
+        }
+    }
+    for (u64 i = 0; i < dv->n_writes; ++i) {
+        IrDvWrite *w = &dv->writes[i];
+        if (w->local != local) continue;
+        if (w->off == INT64_MIN) return NULL;
+        if (w->off != off) {
+            /* Word-sized writes: anything starting within a word of the
+             * slot overlaps it. */
+            if (w->off < off + 8 && off < w->off + 8) return NULL;
+            continue;
+        }
+        if (!w->fn) return NULL;
+        if (fn && !aoStrEq(fn->as.global.name, w->fn->as.global.name)) {
+            return NULL;
+        }
+        fn = w->fn;
+    }
+    if (fn && (fn->flags & IR_VAL_FLAG_VARIADIC_FUNC)) return NULL;
+    return fn;
+}
+
+static int g_devirtualise = 0;
+
+void irOptSetDevirtualise(int enabled) {
+    g_devirtualise = enabled;
+}
+
+static void irDvRelease(IrDv *dv) {
+    MapIter mi;
+    mapIterInit(dv->derived, &mi);
+    while (mapIterNext(&mi)) free(mi.node->value);
+    mapRelease(dv->derived);
+    mapRelease(dv->defs);
+    free(dv->writes);
+    free(dv->escapes);
+}
+
+/* Fill `dv` for `fn`: every tmp's definition, every pointer derived
+ * from a local, every write to a local's slots and every escape of
+ * one. Returns 0, with nothing to release, when the function has
+ * inline asm - which can write any local it names - or when
+ * `need_indirect` and there is no indirect call to look at. */
+static int irDvAnalyse(IrFunction *fn, IrDv *dv_out, int need_indirect) {
+    IrDv dv;
+    memset(&dv, 0, sizeof(IrDv));
+    IrDv *dv_ref = &dv;
+    int has_indirect = 0;
+
+    /* Definitions, and whether there is anything to do at all. */
+    dv.defs = mapNew(64, &map_uint_to_uint_type);
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            /* Inline asm can write any local it names. */
+            if (I->op == IR_ASM) {
+                mapRelease(dv.defs);
+                return 0;
+            }
+            if (I->op == IR_CALL && I->r2 &&
+                (!I->r1 || !I->r1->as.array.label))
+            {
+                has_indirect = 1;
+            }
+            if (I->dst && I->dst->kind == IR_VAL_TMP &&
+                I->op != IR_STORE && I->op != IR_STORE_DEREF &&
+                I->op != IR_RMW_DEREF)
+            {
+                void *k = (void *)irDvKey(I->dst);
+                mapAdd(dv.defs, k, mapHas(dv.defs, k) ? IR_DV_MULTI : I);
+            }
+        }
+    }
+    if (need_indirect && !has_indirect) {
+        mapRelease(dv.defs);
+        return 0;
+    }
+
+    /* Pointers derived from locals: `gep l, c`, `lea l`, `lea <gep>`,
+     * `iadd <ptr>, c`. Chains are resolved by going round until nothing
+     * new turns up. */
+    dv.derived = mapNew(64, &map_uint_to_uint_type);
+    for (int grew = 1; grew; ) {
+        grew = 0;
+        listForEach(fn->blocks) {
+            IrBlock *bb = (IrBlock *)it->value;
+            listForEach(bb->instructions) {
+                IrInstr *I = (IrInstr *)it->value;
+                if (!I->dst || I->dst->kind != IR_VAL_TMP) continue;
+                void *k = (void *)irDvKey(I->dst);
+                if (mapHas(dv.derived, k)) continue;
+                if (mapGet(dv.defs, k) != I) continue;   /* one def only */
+                u32 local;
+                s64 off, add = 0;
+                IrValue *base = NULL;
+                if (I->op == IR_GEP) {
+                    if (!I->r2 || I->r2->kind != IR_VAL_CONST_INT) continue;
+                    base = I->r1;
+                    add = I->r2->as._i64;
+                } else if (I->op == IR_LEA) {
+                    base = I->r1;
+                } else if (I->op == IR_IADD || I->op == IR_ISUB) {
+                    if (I->r2 && I->r2->kind == IR_VAL_CONST_INT &&
+                        irDvIsDerivedTmp(dv_ref, I->r1))
+                    {
+                        base = I->r1;
+                        add = I->r2->as._i64;
+                    } else if (I->op == IR_IADD && I->r1 &&
+                               I->r1->kind == IR_VAL_CONST_INT &&
+                               irDvIsDerivedTmp(dv_ref, I->r2))
+                    {
+                        base = I->r2;
+                        add = I->r1->as._i64;
+                    }
+                    if (I->op == IR_ISUB) add = -add;
+                }
+                if (!base || !irDvSlotOf(dv_ref, base, &local, &off)) continue;
+                IrDvPtr *p = (IrDvPtr *)malloc(sizeof(IrDvPtr));
+                p->local = local;
+                p->off = off + add;
+                mapAdd(dv.derived, k, p);
+                grew = 1;
+            }
+        }
+    }
+
+    /* Every write and every escape. */
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            u32 local;
+            s64 off;
+            switch (I->op) {
+                case IR_NOP:
+                    break;
+                case IR_STORE:
+                    if (irDvSlotOf(dv_ref, I->dst, &local, &off)) {
+                        irDvWrite(dv_ref, local,
+                                  irDvWideValue(I->r1) ? INT64_MIN : off,
+                                  irDvFunction(dv_ref, I->r1));
+                    }
+                    irDvUse(dv_ref, I->r1);
+                    break;
+                case IR_STORE_DEREF:
+                case IR_RMW_DEREF:
+                    if (irDvSlotAt(dv_ref, I->dst, &local, &off)) {
+                        int unknown = I->idx || irDvWideValue(I->r1);
+                        irDvWrite(dv_ref, local,
+                                  unknown ? INT64_MIN : off + I->disp,
+                                  I->op == IR_STORE_DEREF
+                                      ? irDvFunction(dv_ref, I->r1) : NULL);
+                    } else {
+                        irDvUse(dv_ref, I->dst);
+                    }
+                    irDvUse(dv_ref, I->r1);
+                    irDvUse(dv_ref, I->idx);
+                    break;
+                case IR_LOAD:
+                case IR_LOAD_DEREF:
+                    /* Reading through the address is no escape. */
+                    irDvUse(dv_ref, I->idx);
+                    break;
+                case IR_GEP:
+                case IR_LEA:
+                case IR_IADD:
+                case IR_ISUB:
+                    /* Deriving a tracked pointer is no escape either -
+                     * its own uses are what matter. */
+                    if (I->dst && irDvIsDerivedTmp(dv_ref, I->dst)) break;
+                    /* `lea %local, <function>` - a function pointer
+                     * local initialised with an address. */
+                    if (I->op == IR_LEA && I->dst &&
+                        I->dst->kind == IR_VAL_LOCAL &&
+                        irDvFunction(dv_ref, I->r1) &&
+                        irDvSlotOf(dv_ref, I->dst, &local, &off))
+                    {
+                        irDvWrite(dv_ref, local, 0, irDvFunction(dv_ref, I->r1));
+                        break;
+                    }
+                    /* An address taken and not tracked - stored in a
+                     * local (`pp = &f`), or derived in a way this does
+                     * not follow - lets anything write the slot. */
+                    if ((I->op == IR_LEA || I->op == IR_GEP) && I->r1 &&
+                        I->r1->kind == IR_VAL_LOCAL &&
+                        irDvSlotOf(dv_ref, I->r1, &local, &off))
+                    {
+                        s64 at = 0;
+                        if (I->op == IR_GEP && I->r2 &&
+                            I->r2->kind == IR_VAL_CONST_INT)
+                        {
+                            at = I->r2->as._i64;
+                        } else if (I->op == IR_GEP) {
+                            at = INT64_MIN;
+                        }
+                        irDvEscape(dv_ref, local, at);
+                    }
+                    irDvUse(dv_ref, I->r1);
+                    irDvUse(dv_ref, I->r2);
+                    break;
+                case IR_CALL:
+                    if (I->r1 && I->r1->as.array.values) {
+                        Vec *args = I->r1->as.array.values;
+                        for (u64 a = 0; a < args->size; ++a) {
+                            irDvUse(dv_ref, (IrValue *)args->entries[a]);
+                        }
+                    }
+                    break;
+                case IR_PHI:
+                    if (I->extra.phi_pairs) {
+                        for (u64 p = 0; p < I->extra.phi_pairs->size; ++p) {
+                            IrPair *pr = vecGet(IrPair *, I->extra.phi_pairs, p);
+                            if (pr) irDvUse(dv_ref, pr->ir_value);
+                        }
+                    }
+                    break;
+                default:
+                    if (!irDvDstIsDef(I->op)) irDvUse(dv_ref, I->dst);
+                    irDvUse(dv_ref, I->r1);
+                    irDvUse(dv_ref, I->r2);
+                    irDvUse(dv_ref, I->idx);
+                    break;
+            }
+            /* Any other definition of a local overwrites it. */
+            if (I->dst && I->dst->kind == IR_VAL_LOCAL &&
+                irDvDstIsDef(I->op) && I->op != IR_LEA &&
+                irDvSlotOf(dv_ref, I->dst, &local, &off))
+            {
+                irDvWrite(dv_ref, local, INT64_MIN, NULL);
+            }
+        }
+    }
+    *dv_out = dv;
+    return 1;
+}
+
+int irDevirtualiseCalls(IrFunction *fn) {
+    if (!g_devirtualise) return 0;
+    IrDv dv;
+    if (!irDvAnalyse(fn, &dv, 1)) return 0;
+
+    /* Rewrite the calls whose target is pinned down. */
+    int changed = 0;
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (I->op != IR_CALL || !I->r2 || !I->r1 ||
+                I->r1->as.array.label)
+            {
+                continue;
+            }
+            u32 local;
+            s64 off;
+            IrValue *target = I->r2;
+            int found = 0;
+            if (target->kind == IR_VAL_LOCAL) {
+                found = irDvSlotOf(&dv, target, &local, &off);
+            } else if (target->kind == IR_VAL_TMP) {
+                IrInstr *def = (IrInstr *)mapGet(dv.defs,
+                                                 (void *)irDvKey(target));
+                if (def && def != IR_DV_MULTI && !def->idx &&
+                    ((def->op == IR_LOAD &&
+                      irDvSlotOf(&dv, def->r1, &local, &off)) ||
+                     (def->op == IR_LOAD_DEREF &&
+                      irDvSlotAt(&dv, def->r1, &local, &off))))
+                {
+                    off += def->op == IR_LOAD_DEREF ? def->disp : 0;
+                    found = 1;
+                }
+            }
+            if (!found) continue;
+            IrValue *callee = irDvSlotFunction(&dv, local, off);
+            if (!callee) continue;
+            I->r1->as.array.label = callee->as.global.name;
+            I->r2 = NULL;
+            changed++;
+        }
+    }
+
+    irDvRelease(&dv);
+    return changed;
+}
+
+/* ---- Local memory (`-O`) --------------------------------------------
+ *
+ * Three rewrites of locals that live in memory, run to a fixed point:
+ *
+ *   forward  a load from a slot takes the value last stored to it, or
+ *            what an identical earlier load produced, within a block;
+ *   direct   `*&x` - a load or store through the address of a scalar
+ *            local - becomes a plain load or store of `x`, so taking
+ *            the address stops being what keeps `x` in memory;
+ *   dead     stores to a local nothing reads and nobody else can reach
+ *            are dropped.
+ *
+ * A local whose address never escapes cannot be touched by a store
+ * through an unknown pointer or by a call, which is what makes the
+ * first and last safe. Same analysis as devirtualisation (IrDv).
+ *
+ * After inlining a closure this is most of what is left: its state was
+ * written into the closure only to be read straight back out. */
+
+typedef struct IrLmEntry {
+    u32 local;
+    s64 off;
+    u32 size;
+    IrValue *val;
+} IrLmEntry;
+
+static int irLmEscaped(IrDv *dv, u32 local) {
+    for (u64 i = 0; i < dv->n_escapes; ++i) {
+        if (dv->escapes[i].local == local) return 1;
+    }
+    return 0;
+}
+
+static int irLmSame(IrValue *a, IrValue *b) {
+    return a && b && a->kind == b->kind && irVarId(a) == irVarId(b);
+}
+
+/* Every use of tmp `from` now reads `to`. */
+static void irLmSubstitute(IrFunction *fn, IrValue *from, IrValue *to) {
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (I->op == IR_NOP) continue;
+            if (irLmSame(I->dst, from)) I->dst = to;
+            if (irLmSame(I->r1, from)) I->r1 = to;
+            if (irLmSame(I->r2, from)) I->r2 = to;
+            if (irLmSame(I->idx, from)) I->idx = to;
+            if (I->op == IR_CALL && I->r1 && I->r1->as.array.values) {
+                Vec *args = I->r1->as.array.values;
+                for (u64 k = 0; k < args->size; ++k) {
+                    if (irLmSame(args->entries[k], from)) args->entries[k] = to;
+                }
+            }
+            if (I->op == IR_PHI && I->extra.phi_pairs) {
+                Vec *pairs = I->extra.phi_pairs;
+                for (u64 k = 0; k < pairs->size; ++k) {
+                    IrPair *pr = (IrPair *)pairs->entries[k];
+                    if (pr && irLmSame(pr->ir_value, from)) pr->ir_value = to;
+                }
+            }
+        }
+    }
+}
+
+/* A value that means the same thing wherever it is read later in the
+ * block: a constant, a global's address, or a tmp defined once. */
+static int irLmStable(IrDv *dv, IrValue *v) {
+    if (!v) return 0;
+    if (v->kind == IR_VAL_CONST_INT || v->kind == IR_VAL_GLOBAL) return 1;
+    if (v->kind != IR_VAL_TMP) return 0;
+    IrInstr *def = (IrInstr *)mapGet(dv->defs, (void *)irDvKey(v));
+    return def && def != IR_DV_MULTI;
+}
+
+/* The slot a memory op reads or writes, when it is one of ours. */
+static int irLmSlot(IrDv *dv, IrInstr *I, IrValue *addr, u32 *local,
+                    s64 *off)
+{
+    if (I->idx) return 0;
+    if (I->op == IR_LOAD || I->op == IR_STORE) {
+        return irDvSlotOf(dv, addr, local, off);
+    }
+    if (!irDvSlotAt(dv, addr, local, off)) return 0;
+    *off += I->disp;
+    return 1;
+}
+
+static int irLmForward(IrFunction *fn, IrDv *dv) {
+    int changed = 0;
+    IrLmEntry *tab = NULL;
+    u64 n = 0, cap = 0;
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        n = 0;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            u32 local;
+            s64 off;
+            if (I->op == IR_NOP) continue;
+
+            if ((I->op == IR_LOAD || I->op == IR_LOAD_DEREF) &&
+                irLmSlot(dv, I, I->r1, &local, &off))
+            {
+                u32 size = irValueByteSize(I->dst);
+                IrLmEntry *hit = NULL;
+                for (u64 k = 0; k < n; ++k) {
+                    if (tab[k].local == local && tab[k].off == off &&
+                        tab[k].size == size &&
+                        tab[k].val->type == I->dst->type)
+                    {
+                        hit = &tab[k];
+                    }
+                }
+                /* A constant stands in for a pointer badly: it would end
+                 * up in address positions. */
+                if (hit && !(hit->val->kind == IR_VAL_CONST_INT &&
+                             I->dst->type == IR_TYPE_PTR))
+                {
+                    IrValue *from = I->dst;
+                    irMakeNop(I);
+                    irLmSubstitute(fn, from, hit->val);
+                    changed = 1;
+                    continue;
+                }
+                /* Remember the load itself: the next identical one can
+                 * reuse it. */
+                if (irLmStable(dv, I->dst)) {
+                    if (n == cap) {
+                        cap = cap ? cap * 2 : 16;
+                        tab = (IrLmEntry *)realloc(tab, cap * sizeof(IrLmEntry));
+                    }
+                    tab[n++] = (IrLmEntry){ local, off, size, I->dst };
+                }
+                continue;
+            }
+
+            int is_store = I->op == IR_STORE || I->op == IR_STORE_DEREF;
+            if ((is_store || I->op == IR_RMW_DEREF) &&
+                irLmSlot(dv, I, I->dst, &local, &off))
+            {
+                u32 size = irValueByteSize(I->r1);
+                /* Drop whatever this overwrites. */
+                for (u64 k = 0; k < n; ) {
+                    if (tab[k].local == local &&
+                        tab[k].off < off + (s64)size &&
+                        off < tab[k].off + (s64)tab[k].size)
+                    {
+                        tab[k] = tab[--n];
+                    } else {
+                        ++k;
+                    }
+                }
+                if (is_store && irLmStable(dv, I->r1)) {
+                    if (n == cap) {
+                        cap = cap ? cap * 2 : 16;
+                        tab = (IrLmEntry *)realloc(tab, cap * sizeof(IrLmEntry));
+                    }
+                    tab[n++] = (IrLmEntry){ local, off, size, I->r1 };
+                }
+                continue;
+            }
+
+            /* Anything else that can write memory reaches only locals
+             * whose address got out. */
+            if (I->op == IR_STORE_DEREF || I->op == IR_RMW_DEREF ||
+                I->op == IR_CALL || I->op == IR_VA_START ||
+                I->op == IR_VA_ARG)
+            {
+                for (u64 k = 0; k < n; ) {
+                    if (irLmEscaped(dv, tab[k].local)) tab[k] = tab[--n];
+                    else ++k;
+                }
+            }
+            /* A local defined some other way. */
+            if (I->dst && I->dst->kind == IR_VAL_LOCAL) {
+                for (u64 k = 0; k < n; ) {
+                    if (tab[k].local == irVarId(I->dst)) tab[k] = tab[--n];
+                    else ++k;
+                }
+            }
+        }
+    }
+    free(tab);
+    return changed;
+}
+
+/* `load* %t, &x` / `store* &x, %v` -> a plain access to scalar `x`. */
+static int irLmDirect(IrFunction *fn, IrDv *dv, Map *locals) {
+    int changed = 0;
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (I->op != IR_LOAD_DEREF && I->op != IR_STORE_DEREF) continue;
+            if (I->idx || I->disp) continue;
+            IrValue *addr = I->op == IR_LOAD_DEREF ? I->r1 : I->dst;
+            u32 local;
+            s64 off;
+            if (!irDvSlotAt(dv, addr, &local, &off) || off != 0) continue;
+            IrValue *lv = (IrValue *)mapGet(locals, (void *)(u64)local);
+            if (!lv || lv->type == IR_TYPE_STRUCT || lv->type == IR_TYPE_ARRAY) {
+                continue;
+            }
+            IrValue *val = I->op == IR_LOAD_DEREF ? I->dst : I->r1;
+            if (irValueByteSize(val) != irValueByteSize(lv)) continue;
+            if (I->op == IR_LOAD_DEREF) {
+                I->op = IR_LOAD;
+                I->r1 = lv;
+            } else {
+                I->op = IR_STORE;
+                I->dst = lv;
+            }
+            changed = 1;
+        }
+    }
+    return changed;
+}
+
+/* Is tmp `v` read by anything? */
+static int irLmUsed(Map *uses, IrValue *v) {
+    return v && mapHas(uses, (void *)irDvKey(v));
+}
+
+static void irLmCountUse(Map *uses, IrValue *v) {
+    if (v && (v->kind == IR_VAL_TMP || v->kind == IR_VAL_LOCAL)) {
+        mapAdd(uses, (void *)irDvKey(v), (void *)1);
+    }
+}
+
+static int irLmDead(IrFunction *fn, IrDv *dv) {
+    /* Who reads what. A local counts as read when anything takes its
+     * VALUE, or a live load reads one of its slots. */
+    Map *uses = mapNew(64, &map_uint_to_uint_type);
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (I->op == IR_NOP) continue;
+            if (!irDvDstIsDef(I->op)) irLmCountUse(uses, I->dst);
+            irLmCountUse(uses, I->r1);
+            irLmCountUse(uses, I->r2);
+            irLmCountUse(uses, I->idx);
+            if (I->op == IR_CALL && I->r1 && I->r1->as.array.values) {
+                Vec *args = I->r1->as.array.values;
+                for (u64 k = 0; k < args->size; ++k) {
+                    irLmCountUse(uses, args->entries[k]);
+                }
+            }
+            if (I->op == IR_PHI && I->extra.phi_pairs) {
+                Vec *pairs = I->extra.phi_pairs;
+                for (u64 k = 0; k < pairs->size; ++k) {
+                    IrPair *pr = (IrPair *)pairs->entries[k];
+                    if (pr) irLmCountUse(uses, pr->ir_value);
+                }
+            }
+        }
+    }
+
+    Set *read = setNew(16, &set_uint_type);
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            u32 local;
+            s64 off;
+            if (I->op == IR_NOP) continue;
+            if ((I->op == IR_LOAD || I->op == IR_LOAD_DEREF ||
+                 I->op == IR_RMW_DEREF) &&
+                irLmUsed(uses, I->dst) | (I->op == IR_RMW_DEREF))
+            {
+                IrValue *addr = I->op == IR_RMW_DEREF ? I->dst : I->r1;
+                if (I->op == IR_LOAD ? irDvSlotOf(dv, addr, &local, &off)
+                                     : irDvSlotAt(dv, addr, &local, &off))
+                {
+                    setAdd(read, (void *)(u64)local);
+                }
+            }
+            /* A local's value used directly. Address positions - a
+             * store's target, a load's source, `lea`/`gep` of it - are
+             * not reads of the value. */
+            IrValue *ops[3] = { I->r1, I->r2, I->idx };
+            for (int k = 0; k < 3; ++k) {
+                IrValue *v = ops[k];
+                if (!v || v->kind != IR_VAL_LOCAL) continue;
+                if (k == 0 && (I->op == IR_LOAD || I->op == IR_LEA ||
+                               I->op == IR_GEP)) continue;
+                setAdd(read, (void *)(u64)irVarId(v));
+            }
+            /* `ret %l`, `br %l`, and the pointer a `store*` writes
+             * through: the dst is read. A plain store's is the slot. */
+            if (I->dst && I->dst->kind == IR_VAL_LOCAL &&
+                !irDvDstIsDef(I->op) && I->op != IR_STORE)
+            {
+                setAdd(read, (void *)(u64)irVarId(I->dst));
+            }
+            if (I->op == IR_CALL && I->r1 && I->r1->as.array.values) {
+                Vec *args = I->r1->as.array.values;
+                for (u64 k = 0; k < args->size; ++k) {
+                    IrValue *v = args->entries[k];
+                    if (v && v->kind == IR_VAL_LOCAL) {
+                        setAdd(read, (void *)(u64)irVarId(v));
+                    }
+                }
+            }
+            if (I->op == IR_PHI && I->extra.phi_pairs) {
+                Vec *pairs = I->extra.phi_pairs;
+                for (u64 k = 0; k < pairs->size; ++k) {
+                    IrPair *pr = (IrPair *)pairs->entries[k];
+                    if (pr && pr->ir_value && pr->ir_value->kind == IR_VAL_LOCAL) {
+                        setAdd(read, (void *)(u64)irVarId(pr->ir_value));
+                    }
+                }
+            }
+        }
+    }
+
+    int changed = 0;
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            u32 local;
+            s64 off;
+            int hit = 0;
+            switch (I->op) {
+                case IR_STORE:
+                    hit = !I->idx && irDvSlotOf(dv, I->dst, &local, &off);
+                    break;
+                case IR_STORE_DEREF:
+                case IR_RMW_DEREF:
+                    hit = irDvSlotAt(dv, I->dst, &local, &off);
+                    break;
+                case IR_LOAD:
+                    hit = !irLmUsed(uses, I->dst) &&
+                          irDvSlotOf(dv, I->r1, &local, &off);
+                    break;
+                case IR_LOAD_DEREF:
+                    hit = !irLmUsed(uses, I->dst) &&
+                          irDvSlotAt(dv, I->r1, &local, &off);
+                    break;
+                case IR_LEA:
+                    /* `lea %local, <function>` writes the local. */
+                    hit = I->dst && I->dst->kind == IR_VAL_LOCAL &&
+                          irDvSlotOf(dv, I->dst, &local, &off);
+                    break;
+                default:
+                    break;
+            }
+            if (!hit) continue;
+            if (setHas(read, (void *)(u64)local)) continue;
+            if (irLmEscaped(dv, local)) continue;
+            irMakeNop(I);
+            changed = 1;
+        }
+    }
+    setRelease(read);
+    mapRelease(uses);
+    return changed;
+}
+
+/* setjmp returns twice, and the second time the values forwarding put
+ * in temporaries are whatever the registers held at the first. */
+static int irLmCallsSetjmp(IrFunction *fn) {
+    listForEach(fn->blocks) {
+        IrBlock *bb = (IrBlock *)it->value;
+        listForEach(bb->instructions) {
+            IrInstr *I = (IrInstr *)it->value;
+            if (I->op != IR_CALL || !I->r1 || !I->r1->as.array.label) continue;
+            char *name = I->r1->as.array.label->data;
+            if (!strcmp(name, "setjmp") || !strcmp(name, "_setjmp") ||
+                !strcmp(name, "sigsetjmp") || !strcmp(name, "__sigsetjmp"))
+            {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+int irOptLocalMemory(IrFunction *fn) {
+    if (!g_devirtualise) return 0;
+    if (irLmCallsSetjmp(fn)) return 0;
+    int total = 0;
+    for (int round = 0; round < 8; ++round) {
+        int changed = 0;
+        for (int phase = 0; phase < 3; ++phase) {
+            IrDv dv;
+            if (!irDvAnalyse(fn, &dv, 0)) return total;
+            /* The function's OWN IrValue for each local: the register
+             * allocator places values by object, not by id, so a load
+             * built on some other object naming the same local reads
+             * a home that was never assigned. */
+            Map *locals = mapNew(32, &map_uint_to_uint_type);
+            if (fn->variables) {
+                MapIter vi;
+                mapIterInit(fn->variables, &vi);
+                while (mapIterNext(&vi)) {
+                    IrValue *v = (IrValue *)vi.node->value;
+                    if (v && v->kind == IR_VAL_LOCAL) {
+                        mapAdd(locals, (void *)(u64)irVarId(v), v);
+                    }
+                }
+            }
+            int c = phase == 0 ? irLmForward(fn, &dv)
+                  : phase == 1 ? irLmDirect(fn, &dv, locals)
+                               : irLmDead(fn, &dv);
+            mapRelease(locals);
+            irDvRelease(&dv);
+            changed |= c;
+        }
+        if (!changed) break;
+        total = 1;
+    }
+    return total;
+}
+
 void irBasicFunctionOptimisations(IrFunction *fn) {
     irRemoveAllNops(fn);
+    /* Before anything reasons about operand positions. */
+    irCanonicaliseCmpOperands(fn);
+    /* First, while loads and stores are still in the shape lowering
+     * left them: the fusion passes below fold addresses into them. And
+     * before the inliner, which is what a direct call is for. */
+    irDevirtualiseCalls(fn);
     irRemoveRedundantBlocks(fn);
     irFoldPassThroughBlocks(fn);
     irRemoveRedundantBlocks(fn);
     irFoldGlobalDeref(fn);
     irForwardReturnSlot(fn);
+    irPromoteSlotToPhi(fn);
     /* Constant folding and store->read forwarding feed each other: a
      * forwarded `store %slot, <const>` turns a downstream `iadd %t,
      * %slot, %slot2` into a const+const the folder can collapse, and
@@ -965,6 +3412,19 @@ void irBasicFunctionOptimisations(IrFunction *fn) {
         folded  = irEvalConstantExpressions(fn);
         folded += irForwardStoreToReads(fn);
     } while (folded);
+    /* `-O`: memory traffic on locals, then fold what it exposes. */
+    if (irOptLocalMemory(fn)) {
+        do {
+            folded  = irEvalConstantExpressions(fn);
+            folded += irForwardStoreToReads(fn);
+        } while (folded);
+    }
+    while (irFoldExtendTruncate(fn)) { /* to a fixed point */ }
+    while (irFoldChainedTruncate(fn)) { /* likewise */ }
+    /* After the folds, so it sees the SEXTs that survived them. */
+    irMarkRedundantSext(fn);
+    irCoalesceNoopWidens(fn);
+    irFuseLocalRmw(fn);
     irDeadStoreEliminate(fn);
     /* Address-mode + RMW fusion to fixed point. RMW collapses a
      * two-use IADD (used by both load and store on the same addr)
@@ -977,6 +3437,40 @@ void irBasicFunctionOptimisations(IrFunction *fn) {
         changed  = irFuseIaddIntoMemAddressing(fn);
         changed |= irFuseLoadOpStore(fn);
     } while (changed);
+    if (irSplitSharedAddressing(fn)) {
+        while (irFuseIaddIntoMemAddressing(fn)) { /* fold the copies */ }
+    }
+
+    /* Forwarding again, now that fusion has been over the block.
+     *
+     * A source living in a scratch register survives only until an
+     * instruction writes that register, so the first sweep drops it at
+     * the first arithmetic op it crosses. Fusion then folds much of
+     * that arithmetic INTO an addressing mode - the `shl` that scaled
+     * an index becomes an `lsl #2` on the load - and the instruction
+     * whose clobber ended the range no longer exists. `int at(struct S
+     * *s, long i) { return s->e[i]; }` kept `mov x13, x0` purely
+     * because the base was considered while a since-vanished `shl` was
+     * still in the way of `s`.
+     *
+     * Only worth a second pass, not a fixed point: fusion consumes
+     * arithmetic, and forwarding rewrites operands without producing
+     * any for it to consume. */
+    if (irForwardStoreToReads(fn)) {
+        irDeadStoreEliminate(fn);
+    }
+    /* After the extend/truncate folds have settled which widens are
+     * really there: an op the backend will emit 32-bit reads only the
+     * low half of its operands, so any widen feeding one is dead work.
+     * Removing the reference is what makes the widen collectable. */
+    if (irNarrowOpOperands(fn)) {
+        irDeadStoreEliminate(fn);
+    }
+
+    /* Both need the instruction ORDER settled, so they run once nothing
+     * else is moving things about. */
+    irForwardParamToFirstArg(fn);
+    irForwardAggReturn(fn);
     irRemoveAllNops(fn);
 }
 
@@ -1007,6 +3501,16 @@ static int irOpDefsIntoResultReg(IrInstr *I) {
         case IR_SITOFP: case IR_UITOFP:
         case IR_FPTRUNC: case IR_FPEXT:
             return is_float;
+        default:
+            return 0;
+    }
+}
+
+static int irOpIsCommutativeInt(IrOp op) {
+    switch (op) {
+        case IR_IADD: case IR_IMUL:
+        case IR_AND:  case IR_OR:   case IR_XOR:
+            return 1;
         default:
             return 0;
     }
@@ -1046,10 +3550,11 @@ static int irOpReadsAsR1(IrInstr *I, u32 var_id) {
 
 /* Does op `I` read `var_id` anywhere as an operand? */
 static int irOpReadsTmp(IrInstr *I, u32 var_id) {
-    IrValue *vs[3] = { I->r1, I->r2, NULL };
+    /* `idx` counts - see irSlotReadCount. */
+    IrValue *vs[4] = { I->r1, I->r2, I->idx, NULL };
     if (I->op == IR_BR || I->op == IR_RET ||
-        I->op == IR_STORE_DEREF || I->op == IR_RMW_DEREF) vs[2] = I->dst;
-    for (int k = 0; k < 3; ++k) {
+        I->op == IR_STORE_DEREF || I->op == IR_RMW_DEREF) vs[3] = I->dst;
+    for (int k = 0; k < 4; ++k) {
         if (irIsTmp(vs[k]) && irVarId(vs[k]) == var_id) return 1;
     }
     if (I->op == IR_CALL && I->r1 && I->r1->as.array.values) {
@@ -1121,12 +3626,64 @@ void irOptPinResultReg(IrFunction *fn) {
                 continue;
             }
 
+            /* The only use is a phi in the block this one falls into.
+             *
+             * A phi's copy is materialised on the EDGE, after the
+             * terminator, so the consumer is not an instruction in this
+             * block and none of the checks below can see it. Without
+             * this the value went to its stack slot and came straight
+             * back out again:
+             *
+             *     cset x0, le
+             *     stur x0, [x29,#-16]      <- def spills
+             *     ldur x0, [x29,#-16]      <- phi copy reloads
+             *     sturb w0, [x29,#-24]
+             *
+             * Only for an unconditional jump: a conditional terminator
+             * reads its own operand out of the result register, and the
+             * copies then run per-edge. */
+            if (next->op == IR_JMP) {
+                IrBlock *succ = next->extra.blocks.target_block;
+                IrInstr *first = succ && succ->instructions
+                               ? (IrInstr *)succ->instructions->next->value
+                               : NULL;
+                if (first && first->op == IR_PHI &&
+                    irOpReadsTmp(first, dst_id) &&
+                    !irIsFloat(cur->dst->type))
+                {
+                    if (pool) {
+                        cur->dst->loc.kind   = IR_LOC_REG;
+                        cur->dst->loc.as.reg = cur->op == IR_CALL
+                                               ? pool->int_return_reg
+                                               : pool->int_result_reg;
+                        continue;
+                    }
+                }
+            }
+
+            /* A commutative consumer reading this tmp as r2: swap it to
+             * r1, the only operand the backend can take from the result
+             * reg (it may load r1 there, clobbering an r2 it held).
+             * Same-typed operands only: some emitters size the op from
+             * r1. */
+            if (irOpIsCommutativeInt(next->op) &&
+                irIsTmp(next->r2) && irVarId(next->r2) == dst_id &&
+                next->r1 && !(irIsTmp(next->r1) && irVarId(next->r1) == dst_id) &&
+                next->r1->type == next->r2->type &&
+                irValueByteSize(next->r1) == irValueByteSize(next->r2))
+            {
+                IrValue *tmp = next->r1;
+                next->r1 = next->r2;
+                next->r2 = tmp;
+            }
+
             /* The consumer reads this tmp from the result reg.
              * Match r1-of-next, dst-of-next (STORE_DEREF address),
              * idx-of-next (SIB), or args[0]-of-next (CALL arg0).
              * Skip type-mismatched chains. */
             int matches = 0;
             int consumer_reads_float = 0;
+            int via_arg0 = 0;
             if (irOpReadsAsR1(next, dst_id)) {
                 matches = 1;
                 /* Most ops follow r1->type; a few are type-opaque. */
@@ -1173,6 +3730,7 @@ void irOptPinResultReg(IrFunction *fn) {
                     next->r1->as.array.values->entries[0];
                 if (irIsTmp(arg0) && irVarId(arg0) == dst_id) {
                     matches = 1;
+                    via_arg0 = 1;
                     consumer_reads_float = irIsFloat(arg0->type);
                 }
             }
@@ -1181,10 +3739,17 @@ void irOptPinResultReg(IrFunction *fn) {
             int producer_is_float = irIsFloat(cur->dst->type);
             if (producer_is_float != consumer_reads_float) continue;
             if (!pool) continue;
+            /* The ABI register when the value is born there (a call
+             * result) or needed there (returned, or the first argument);
+             * otherwise the accumulator the consumer computes in. */
+            int abi = cur->op == IR_CALL || next->op == IR_RET || via_arg0;
             cur->dst->loc.kind   = IR_LOC_REG;
-            cur->dst->loc.as.reg = producer_is_float
-                                   ? pool->float_return_reg
-                                   : pool->int_return_reg;
+            if (producer_is_float)
+                cur->dst->loc.as.reg = abi ? pool->float_return_reg
+                                           : pool->float_result_reg;
+            else
+                cur->dst->loc.as.reg = abi ? pool->int_return_reg
+                                           : pool->int_result_reg;
         }
     }
 

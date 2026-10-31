@@ -246,6 +246,12 @@ typedef struct Lexer {
 void lexemeMemoryInit(void);
 void lexemeMemoryRelease(void);
 void lexemeMemoryStats(void);
+/* Bytes the lexeme arena has handed out since (re)init. */
+u64 lexemeArenaBytes(void);
+/* Drop the cached macro-processor Cctrl. It holds Lexemes and
+ * interned strings from the arenas, so it must be forgotten before
+ * they are reset. */
+void lexerForgetMacroProcessor(void);
 void lexerRelease(Lexer *l);
 
 Lexeme *lexemeTokNew(char *start, int len, int line, s64 ch);

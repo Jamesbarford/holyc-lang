@@ -39,7 +39,13 @@ U0 IntArray()
 U0 PointerArray()
 {
   I64 j = 1, correct = 0, tests = 2;
-  Point *arr = MAlloc(sizeof(Point *) * 10);
+  /* sizeof(Point), not sizeof(Point *): this is an array of ten Points,
+   * and `arr[8].y` writes at offset 136. Sized by the pointer it only
+   * reserved 80 bytes, so the write ran off the end of the block. AOT
+   * never noticed - the overrun happened in a child process - but the
+   * JIT runs the test inside the compiler, where it corrupted hcc's own
+   * heap and took the whole run down at teardown. */
+  Point *arr = MAlloc(sizeof(Point) * 10);
   
   arr[8].y = 420;
   arr[0].x = 10;

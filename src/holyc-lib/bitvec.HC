@@ -1,6 +1,3 @@
-#include <defs.HH>
-#include <memory.HC>
-
 #define BIT_VEC_BITS 32
 
 class BitVec

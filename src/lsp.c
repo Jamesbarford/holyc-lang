@@ -46,6 +46,7 @@
 #include "json.h"
 #include "lexer.h"
 #include "lsp.h"
+#include "memory.h"
 #include "parser.h"
 #include "util.h"
 #include "version.h"
@@ -65,6 +66,26 @@ typedef struct LspCtx {
     Vec *pending;           /* uris awaiting a debounced analyze */
     s64 pending_since_ms;   /* when the oldest pending uri landed */
 } LspCtx;
+
+/* `Map<char *, AoStr *>` for LspCtx.docs. Owns its strdup'd uri keys so
+ * replacing a document frees the old one; the AoStr values are managed
+ * by hand (lspDocSet / lspRecycle) because a recycle has to copy them
+ * out before the arena they live in is reset. */
+static void lspDocKeyRelease(void *key) {
+    free(key);
+}
+
+static MapType map_lsp_docs_type = {
+    .match           = mapCStringEq,
+    .hash            = mapCStringHash,
+    .get_key_len     = mapCStringLen,
+    .key_to_string   = mapCStringToString,
+    .key_release     = lspDocKeyRelease,
+    .value_to_string = NULL,
+    .value_release   = NULL,
+    .key_type        = "char *",
+    .value_type      = "AoStr *",
+};
 
 /* Crash guard around parses. Stays global: the signal handler gets no
  * context argument. */
@@ -255,6 +276,11 @@ static int lspParse(LspCtx *ctx, const char *path, AoStr *text) {
 
     cctrlDiagClear(ctx->cc);
     cctrlResetTokenBuffer(ctx->cc);
+    /* Nothing here consumes the parse's output lists - queries are
+     * answered out of the symbol tables - so start each re-parse with
+     * them empty instead of stacking another copy of the document's
+     * top-level definitions onto them per keystroke. */
+    cctrlResetParseAccumulators(ctx->cc);
 
     int crashed = 0;
     lsp_crash_sig = 0;
@@ -427,7 +453,139 @@ static void lspPublishDiagnostics(LspCtx *ctx, const char *uri,
     lspLog(ctx, "lsp: published %d diagnostic(s) for %s", emitted, path);
 }
 
+/* How much arena GARBAGE to tolerate before a full compiler recycle.
+ *
+ * hcc allocates every Ast, AstType, Lexeme and AoStr from bump arenas
+ * and frees none of them until the process exits - which is the right
+ * call for a compiler that runs once, and a leak for a server that
+ * re-parses the open document on every keystroke. Nothing can hand an
+ * individual parse back, so past this much garbage we drop the whole
+ * compiler and reset the arenas underneath it.
+ *
+ * This is garbage ON TOP of the live set (`lsp_arena_live`), not total
+ * arena size, and the difference matters. Measured against an absolute
+ * total, a project big enough that re-parsing everything open
+ * approaches the number leaves almost no headroom, so the server
+ * recycles on nearly every edit - and thrashes: with 8 files open a
+ * total-arena trigger of 8MB gave a p50 latency of 180ms and a HIGHER
+ * peak RSS than a larger one. Budgeting the garbage instead makes the
+ * recycle interval independent of how much is open.
+ *
+ * Peak RSS lands at roughly (live set + this). The number trades that
+ * against how often everything open gets re-parsed. */
+#define HCC_LSP_ARENA_BUDGET_BYTES (32ull * 1024 * 1024)
+
+/* Arena bytes in use immediately after the last recycle finished, i.e.
+ * the live set: the stdlib plus one parse of every open document.
+ * Zero until the first recycle, which is why the initial trigger is
+ * just the budget - the bootstrap's own ~750KB is noise against it. */
+static u64 lsp_arena_live = 0;
+
+/* `HCC_LSP_ARENA_BUDGET_KB` overrides it. Kilobytes rather than
+ * megabytes because the useful test setting is BELOW one megabyte:
+ * bootstrapping tos.HH alone costs ~750KB, so anything coarser cannot
+ * force a recycle on the small fixtures the LSP suite uses. Run that
+ * suite with it set low (`HCC_LSP_ARENA_BUDGET_KB=800`) and every
+ * case exercises the rebuild path. */
+static u64 lspArenaBudget(void) {
+    static u64 budget = 0;
+    if (budget == 0) {
+        budget = HCC_LSP_ARENA_BUDGET_BYTES;
+        const char *env = getenv("HCC_LSP_ARENA_BUDGET_KB");
+        if (env) {
+            long kb = strtol(env, NULL, 10);
+            if (kb > 0) budget = (u64)kb * 1024;
+        }
+    }
+    return budget;
+}
+
+/* Drop the compiler and everything the arenas hold, then rebuild.
+ *
+ * Must run with NOTHING arena-allocated in hand: every Ast from the
+ * last parse, every document AoStr and every interned string dies
+ * here. The document TEXTS are the one thing worth keeping, so they
+ * are copied into plain malloc'd buffers and re-made afterwards.
+ * (Message-level Json data is safe - it lives in lspRun's own arena,
+ * which this does not touch.)
+ *
+ * cctrlRelease has to come BEFORE memoryRecycleArenas: it reads the
+ * arena-backed containers it is freeing. */
+static void lspRecycle(LspCtx *ctx) {
+    u64 n = ctx->docs->size;
+    char **uris  = n ? (char **)malloc(sizeof(char *) * n) : NULL;
+    char **texts = n ? (char **)malloc(sizeof(char *) * n) : NULL;
+    u64   *lens  = n ? (u64 *)malloc(sizeof(u64) * n) : NULL;
+
+    u64 saved = 0;
+    MapIter it;
+    mapIterInit(ctx->docs, &it);
+    while (mapIterNext(&it) && saved < n) {
+        AoStr *text = (AoStr *)it.node->value;
+        if (!text) continue;
+        /* Copy the key as well as the text: the map owns its keys
+         * and frees them on release, so the stored pointer does not
+         * survive the mapRelease below. */
+        uris[saved]  = strdup((char *)it.node->key);
+        lens[saved]  = text->len;
+        texts[saved] = (char *)malloc(text->len + 1);
+        memcpy(texts[saved], text->data, text->len);
+        texts[saved][text->len] = '\0';
+        saved++;
+    }
+    mapRelease(ctx->docs);
+
+    cctrlRelease(ctx->cc);
+    ctx->cc = NULL;
+    memoryRecycleArenas();
+
+    ctx->docs = mapNew(16, &map_lsp_docs_type);
+    for (u64 i = 0; i < saved; ++i) {
+        mapAdd(ctx->docs, uris[i], aoStrDupRaw(texts[i], lens[i]));
+        free(texts[i]);
+    }
+    free(uris);
+    free(texts);
+    free(lens);
+
+    ctx->cc = lspFreshCctrl(ctx);
+    ctx->cc_dirty = 0;
+
+    /* Re-parse every open document. The rebuilt Cctrl knows only the
+     * stdlib, and queries are answered out of its symbol tables - so
+     * without this, a hover or definition against any document OTHER
+     * than the one that happened to trigger the recycle would find
+     * nothing until that document was next edited. Canary-parsed like
+     * any other input: a buffer that is mid-edit and crashes the
+     * parser must not take the server down here either.
+     *
+     * Diagnostics are not published; the caller is about to analyse
+     * its own document and publish those. */
+    MapIter reparse;
+    mapIterInit(ctx->docs, &reparse);
+    while (mapIterNext(&reparse)) {
+        char *path = lspUriToPath((const char *)reparse.node->key);
+        AoStr *text = (AoStr *)reparse.node->value;
+        if (path && text) lspCanaryParse(ctx, path, text);
+        free(path);
+    }
+
+    /* Everything open has now been re-parsed, so what the arenas hold
+     * is exactly the live set. The next trigger is measured from here,
+     * so the interval reflects how much garbage has piled up rather
+     * than how big the project is. */
+    lsp_arena_live = memoryArenaBytes();
+    lspLog(ctx, "lsp: recycled compiler arenas (%llu docs kept, live %lluKB)",
+           (unsigned long long)saved,
+           (unsigned long long)(lsp_arena_live / 1024));
+}
+
 static void lspAnalyze(LspCtx *ctx, const char *uri) {
+    /* Before anything from the old arenas is in hand - `text` below is
+     * one of the AoStrs a recycle destroys. */
+    if (memoryArenaBytes() > lsp_arena_live + lspArenaBudget()) {
+        lspRecycle(ctx);
+    }
     AoStr *text = (AoStr *)mapGet(ctx->docs, (void *)uri);
     if (text == NULL) return;
     char *path = lspUriToPath(uri);
@@ -534,6 +692,9 @@ static void lspDocSet(LspCtx *ctx, const char *uri, const char *text,
 {
     AoStr *old = (AoStr *)mapGet(ctx->docs, (void *)uri);
     if (old) {
+        /* map_lsp_docs_type frees the stored key here. It used not to,
+         * and this is where didChange lands - so re-adding the same uri
+         * leaked a strdup per keystroke. */
         mapRemove(ctx->docs, (void *)uri);
         aoStrRelease(old);
     }
@@ -635,6 +796,13 @@ static int lspTextDocPosition(Json *params, const char **uri,
     return *line >= 0 && *character >= 0;
 }
 
+/* Both defined below, next to the handlers that grew them; hover
+ * resolves identifiers exactly the way go-to-definition does. */
+static AstType *lspMemberClassAt(LspCtx *ctx, AoStr *text, u32 doc_id,
+                                 int line, int character, int *is_member);
+static Ast *lspResolveValue(LspCtx *ctx, u32 doc_id, int cursor_line,
+                            const char *ident, s64 ilen, int *in_doc);
+
 static void lspHover(LspCtx *ctx, Json *id, Json *params) {
     const char *uri;
     int line, character;
@@ -650,29 +818,65 @@ static void lspHover(LspCtx *ctx, Json *id, Json *params) {
     }
     s64 ilen = (s64)strlen(ident);
 
-    /* Render whatever the name is: a class/union layout, a function
-     * prototype, a global's type, or a macro. */
+    /* Same file-id the AST was stamped with at parse, so the local
+     * lookup below can tell which function encloses the cursor. */
+    AoStr path_s = {
+        .data = (char *)lspUriToPath(uri),
+        .len = 0,
+        .capacity = 0
+    };
+    path_s.len = strlen(path_s.data);
+    u32 doc_id = cctrlRegisterFile(ctx->cc, &path_s);
+    free(path_s.data);
+
+    /* Resolve in the same order as go-to-definition - member field,
+     * then value, then type - so the two never disagree about what
+     * the identifier under the cursor refers to.
+     *
+     * Values go through lspResolveValue, which finds the enclosing
+     * function and searches its params and locals before falling back
+     * to the global tables. Hover used to skip it and read the global
+     * tables directly, so it had nothing to say about a local or a
+     * parameter - by far the most common thing to hover over. */
     AoStr *rendered = aoStrNew();
-    AstType *cls = mapGetLen(ctx->cc->clsdefs, ident, ilen);
-    AstType *uni = cls ? NULL : mapGetLen(ctx->cc->uniondefs, ident, ilen);
-    Ast *entry = NULL;
-    if (cls || uni) {
-        AoStr *body = astClassToAoStr(cls ? cls : uni);
-        aoStrCatLen(rendered, body->data, body->len);
-        aoStrRelease(body);
-    } else if ((entry = mapGetLen(ctx->cc->global_env, ident, ilen)) ||
-               (entry = mapGetLen(ctx->cc->asm_funcs, ident, ilen))) {
-        /* asm_funcs: `public _extern _LABEL ...` prototypes (most of
-         * the stdlib) live there rather than in global_env. */
-        if (astIsFnLike(entry)) {
-            char *proto = astFunctionToString(entry);
-            aoStrCatPrintf(rendered, "%s", proto);
-        } else if (entry->type) {
-            aoStrCatPrintf(rendered, "%s %s", astTypeToString(entry->type),
-                           ident);
+    int is_member = 0;
+    AstType *mcls = lspMemberClassAt(ctx, text, doc_id, line, character,
+                                     &is_member);
+    if (mcls) {
+        AstType *field = (AstType *)mapGetLen(mcls->fields, ident, ilen);
+        if (field) {
+            aoStrCatPrintf(rendered, "%s %s", astTypeToString(field), ident);
         }
-    } else if (mapGetLen(ctx->cc->macro_defs, ident, ilen)) {
-        aoStrCatPrintf(rendered, "#define %s", ident);
+    }
+
+    Ast *entry = NULL;
+    if (!is_member && rendered->len == 0) {
+        int in_doc = 0;
+        entry = lspResolveValue(ctx, doc_id, line + 1, ident, ilen, &in_doc);
+        if (entry) {
+            /* asm_funcs, which lspResolveValue also searches, is where
+             * the `public _extern _LABEL ...` prototypes that make up
+             * most of the stdlib live rather than global_env. */
+            if (astIsFnLike(entry)) {
+                char *proto = astFunctionToString(entry);
+                aoStrCatPrintf(rendered, "%s", proto);
+            } else if (entry->type) {
+                aoStrCatPrintf(rendered, "%s %s", astTypeToString(entry->type),
+                               ident);
+            }
+        }
+    }
+
+    if (!is_member && rendered->len == 0) {
+        AstType *cls = mapGetLen(ctx->cc->clsdefs, ident, ilen);
+        AstType *uni = cls ? NULL : mapGetLen(ctx->cc->uniondefs, ident, ilen);
+        if (cls || uni) {
+            AoStr *body = astClassToAoStr(cls ? cls : uni);
+            aoStrCatLen(rendered, body->data, body->len);
+            aoStrRelease(body);
+        } else if (mapGetLen(ctx->cc->macro_defs, ident, ilen)) {
+            aoStrCatPrintf(rendered, "#define %s", ident);
+        }
     }
 
     if (rendered->len == 0) {
@@ -762,8 +966,6 @@ static char *lspConstantSuggestionResolver(Ast *entry, int *_type) {
 
 /* Defined with the definition machinery below; completion needs it
  * for member completion (`recv.` / `recv->` field suggestions). */
-static AstType *lspMemberClassAt(LspCtx *ctx, AoStr *text, u32 doc_id,
-                                 int line, int character, int *is_member);
 
 /* Find matching prefix in a symbol table */
 void lspScanMapForSuggestion(Map *suggestions,
@@ -891,7 +1093,12 @@ static Ast *lspResolveValue(LspCtx *ctx, u32 doc_id, int cursor_line,
     mapIterInit(ctx->cc->global_env, &mi);
     while (mapIterNext(&mi)) {
         Ast *fn = (Ast *)mi.node->value;
-        if (!astIsFnLike(fn) || fn->file_id != doc_id) continue;
+        /* `body`, not just fn-like: a prototype or an asm binding
+         * declares a name and some parameters but has no statements,
+         * so it cannot be what encloses the cursor. Picking one would
+         * offer its parameters as the locals in scope. */
+        if (!astIsFnLike(fn) || fn->body == NULL) continue;
+        if (fn->file_id != doc_id) continue;
         if (fn->line > 0 && fn->line <= cursor_line &&
             (encl == NULL || fn->line > encl->line))
         {
@@ -1245,8 +1452,10 @@ static void lspDefinition(LspCtx *ctx, Json *id, Json *params) {
      * a file:// uri must be absolute or the editor guesses. */
     char abs_path[PATH_MAX];
     const char *out_path = fname->data;
-    if (out_path[0] != '/' && realpath(out_path, abs_path) != NULL)
-        out_path = abs_path;
+    /* Canonical even when already absolute: the include root is joined
+     * with a slash of its own, and `include//tos.HH` is a different file
+     * to an editor than the one it has open. */
+    if (realpath(out_path, abs_path) != NULL) out_path = abs_path;
     AoStr *result = aoStrNew();
     aoStrCatPrintf(result, "{\"uri\":\"file://");
     jsonEscapeInto(result, out_path, strlen(out_path));
@@ -2047,8 +2256,11 @@ int lspRun(CliArgs *args) {
     LspCtx *ctx = &lsp_ctx;
     ctx->log_on = getenv("HCC_LSP_LOG") != NULL;
     ctx->target = args->target;
-    ctx->root_dir = mprintf("%s/include/", args->install_dir);
-    ctx->docs = mapNew(16, &map_cstring_opaque_type);
+    /* strdup, not the raw mprintf: mprintf hands back pool memory cut
+     * from the global arena, and root_dir has to outlive a recycle. */
+    char *root = mprintf("%s/include/", args->install_dir);
+    ctx->root_dir = strdup(root);
+    ctx->docs = mapNew(16, &map_lsp_docs_type);
     ctx->pending = vecNew(&vec_cstring_owned_type);
     ctx->cc = lspFreshCctrl(ctx);
     lspInstallCrashHandlers();

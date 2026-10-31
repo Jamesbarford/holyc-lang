@@ -408,6 +408,7 @@ const char *irOpcodeToString(IrInstr *ir_instr) {
         case IR_SELECT:   ir_op_str = "select"; break;
         case IR_VA_ARG:   ir_op_str = "va_arg"; break;
         case IR_VA_START: ir_op_str = "va_start"; break;
+        case IR_FRAME_ADDR: ir_op_str = "frame_addr"; break;
         case IR_VA_END:   ir_op_str = "va_end"; break;
         default: loggerPanic("Unhandled opcode: %d\n", opcode);
     }
@@ -578,7 +579,29 @@ AoStr *irInstrToString(IrInstr *ir_instr) {
             break;
         }
     }
-    
+
+    /* The fused addressing mode. `idx`, `scale` and `disp` are real
+     * operands - a load or store carries its whole effective address in
+     * them after fusion - and leaving them out of the dump makes two
+     * quite different instructions print identically. Chasing a
+     * dropped displacement through `store* %t46, 4.5` when the truth
+     * was `store* %t46, 4.5  ; +104 [%t48 * 8]` is time nobody should
+     * spend twice. */
+    if (ir_instr->idx || ir_instr->disp) {
+        if (ir_instr->disp) {
+            aoStrCatFmt(buf, "  ; %s%I", ir_instr->disp < 0 ? "-" : "+",
+                        (s64)(ir_instr->disp < 0 ? -ir_instr->disp
+                                                 : ir_instr->disp));
+        } else {
+            aoStrCatLen(buf, str_lit("  ;"));
+        }
+        if (ir_instr->idx) {
+            AoStr *idx_str = irValueToString(ir_instr->idx);
+            aoStrCatFmt(buf, " [%S * %i]", idx_str, (int)ir_instr->scale);
+            aoStrRelease(idx_str);
+        }
+    }
+
     return buf;
 }
 

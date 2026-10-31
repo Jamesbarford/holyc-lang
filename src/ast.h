@@ -189,7 +189,8 @@ typedef struct AstType {
 } AstType;
 
 
-#define AST_FLAG_INLINE  (1<<0)
+/* Just a hint */
+#define AST_FLAG_INLINE_HINT (1<<0)
 #define AST_FLAG_BUILTIN (1<<1)
 /* Set on an AST_GVAR / AST_DECL that came from `extern Type name;` -
  * a TempleOS-style forward declaration. The parser registers the
@@ -197,6 +198,10 @@ typedef struct AstType {
  * codegen skips emitting storage: the canonical definition lives in
  * another translation unit (typically libtos). */
 #define AST_FLAG_EXTERN  (1<<2)
+/* A `static` function: internal linkage, so the object writers emit a
+ * local symbol for it. The HolyC parser does not set this yet. */
+#define AST_FLAG_STATIC_FN (1<<3)
+
 
 /* AST_LVAR.pinned_kind values. */
 #define LVAR_AUTO  0  /* compiler chooses storage (default) */
@@ -385,7 +390,6 @@ typedef struct Ast {
         /* @Typeo
          * Compound statement */
         struct {
-            Ast *inline_ret;
             List *stms;
         };
 
@@ -457,6 +461,9 @@ extern Ast *ast_forever_sentinal;
 
 extern VecType vec_ast_type;
 Vec *astVecNew(void);
+/* A List owned by the AST: freed wholesale by astMemoryRelease.
+ * Only for lists reached solely through an Ast - see ast.c. */
+List *astListNew(void);
 
 extern MapType map_asttype_type;
 extern MapType map_ast_type;
@@ -466,6 +473,8 @@ Map *astMapNew(void);
 void astMemoryInit(void);
 void astMemoryRelease(void);
 void astMemoryStats(void);
+/* Bytes the AST arenas have handed out since (re)init. */
+u64 astArenaBytes(void);
 
 AstType *astTypeCopy(AstType *type);
 
@@ -570,6 +579,37 @@ typedef int (*AstClassFieldCb)(AoStr *field_name, AstType *field, void *ud);
 int astForEachClassField(AstType *cls, AstClassFieldCb cb, void *ud);
 AstType *astClassFieldAt(AstType *cls, int idx);
 
+/* ---- aggregate initialiser helpers, shared by the data emitters ----
+ *
+ * One entry per initialiser element, in the order the bytes are laid
+ * down. `offset` is the byte offset within the aggregate, or -1 for
+ * "directly after the previous element" - HolyC has no designated
+ * initialisers, so today every slot is -1 and the order is the list
+ * order; the shape exists so a writer that CAN place at an offset
+ * (the object writer's byte image) needs no second walk. */
+typedef struct AstInitSlot {
+    Ast *value;
+    int offset;
+    u64 index;   /* position in the initialiser list */
+} AstInitSlot;
+
+/* malloc'd array of `*n_out` slots for `init_list` (an AST_ARRAY_INIT's
+ * `arrayinit`); the caller frees it. */
+AstInitSlot *astAggregateInitOrder(AstType *type, List *init_list,
+                                   u64 *n_out);
+/* Declared type of element `index` of an aggregate: the field for a
+ * class/union, the element type for an array, NULL otherwise. */
+AstType *astAggregateFieldType(AstType *type, u64 index);
+/* The object whose address an initialiser expression takes: `&Fn`,
+ * `&g`, `Fn`, or any of them behind a cast. NULL when `init` is not
+ * such an expression. */
+Ast *astInitAddressTarget(Ast *init);
+/* The lexer keeps escape sequences in their textual form (`\n` is
+ * the two bytes `\` `n`). Decode `len` bytes of that into `out`
+ * (which must hold at least len+1 bytes) and return the decoded
+ * length; `out` is NUL-terminated. */
+int astDecodeStringLiteral(const char *s, int len, char *out);
+
 /* Platform C-ABI classification of an aggregate passed/returned by value:
  *  - AAPCS_HFA: Homogeneous Floating-point Aggregate (1-4 same FP members)
  *               -> FP registers; hfa_elem (4/8) + hfa_count written.
@@ -577,6 +617,14 @@ AstType *astClassFieldAt(AstType *cls, int idx);
  *  - AAPCS_INDIRECT: aggregate > 16 bytes -> passed/returned by reference. */
 typedef enum { AAPCS_INTEGER, AAPCS_HFA, AAPCS_INDIRECT } AapcsClass;
 AapcsClass astAapcsClassify(AstType *type, int *hfa_elem, int *hfa_count);
+
+/* Is an aggregate of this type RETURNED through a hidden out-pointer?
+ *
+ * Size alone does not decide it. SysV sends anything over 16 bytes to
+ * memory, but AAPCS64 classifies first: an HFA of three or four doubles
+ * is 24 or 32 bytes and still comes back in d0-d3. `aapcs64` is non-zero
+ * when the target is AArch64. */
+int astAggRetIsIndirect(AstType *type, int aapcs64);
 
 /* System V AMD64 classification of an aggregate passed/returned by value.
  * The aggregate is split into 8-byte "eightbytes"; each is classified
@@ -608,6 +656,7 @@ int astIsBinOpKind(Ast *ast, AstBinOp op);
 int astIsBinOpCmp(Ast *ast);
 
 int astIsFnLike(Ast *maybe_fn);
+int astUsesHolyCVarargs(Ast *callee);
 
 AoStr *astMakeLabel(void);
 AoStr *astMakeTmpName(void);

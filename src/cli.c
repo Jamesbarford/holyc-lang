@@ -127,7 +127,10 @@ static CliParser parsers[] = {
     {str_lit("--version"),  0, CLI_VERSION, "--version", "Print the version of the compiler", &cliParseNop},
     {str_lit("--help"),     0, CLI_HELP, "--help", "Print this message", &cliParseNop},
     {str_lit("--terry"),    0, CLI_TERRY, "--terry", "Information about Terry A. Davis", &cliParseNop},
-    {str_lit("--use-legacy-x86"), 0, CLI_USE_LEGACY_X86, "--use-legacy-x86", "Fall back to the legacy AST-based x86_64 codegen (src/x86.c) instead of the default IR-based src/x86_64.c. Kept as a debugging escape hatch while the IR backend matures.", &cliParseNop},
+    {str_lit("-O"), 0, CLI_OPTIMISE, "-O", "Optimise harder. Turns indirect calls whose target is known into direct calls, and forwards stores through locals whose address does not escape", &cliParseNop},
+    {str_lit("-fno-reg-promote"), 0, CLI_NO_REG_PROMOTE, "-fno-reg-promote", "Keep every local and parameter in a stack slot. A debugging escape hatch", &cliParseNop},
+    {str_lit("-fno-inline"), 0, CLI_NO_INLINE, "-fno-inline", "Leave every call a call instead of splicing small accessors (`Len`, `At`, `UnWrap`) into their callers. A debugging escape hatch: if a program misbehaves, this says whether inlining is implicated.", &cliParseNop},
+
 };
 
 static u64 longestCommand(void) {
@@ -519,7 +522,9 @@ int cliParseArgs(CliArgs *args, int argc, char **argv) {
             case CLI_HELP:    cliPrintUsage(); break;
             case CLI_VERSION: cliVersionPrint(args); break;
             case CLI_TERRY:   cliTerryInfo(); break;
-            case CLI_USE_LEGACY_X86: args->use_legacy_x86 = 1; break;
+            case CLI_NO_INLINE: args->no_inline = 1; break;
+            case CLI_NO_REG_PROMOTE: args->no_reg_promote = 1; break;
+            case CLI_OPTIMISE: args->optimise = 1; break;
         }
     }
 

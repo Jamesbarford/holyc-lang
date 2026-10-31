@@ -20,11 +20,6 @@
 #define CCTRL_PASTE_DEFINES        (1<<2)
 #define CCTRL_PRESERVE_SIZEOF      (1<<3)
 #define CCTRL_ASM_HAS_INITIALISERS (1<<4)
-/* Escape hatch back to the legacy AST-based x86_64 codegen
- * (src/x86.c). Default is now the IR-based src/x86_64.c. The
- * legacy path will be deleted once the IR backend has full unit-
- * test coverage; until then this flag stays as a debugging tool. */
-#define CCTRL_USE_LEGACY_X86       (1<<5)
 /* REPL mode: re-defining a function replaces the previous definition
  * instead of raising "Cannot redefine function", and floating
  * expressions (`2+2;`, `(x*3);`) are legal at the top level so they
@@ -96,6 +91,15 @@ typedef struct Cctrl {
 
     /* Local environment for a function */
     Map *localenv;
+
+    /* Every scope map `cctrlCreateAstMap` has handed out for the parse
+     * in flight. Closing a scope only rewinds `localenv` to its parent,
+     * so without an owner the map itself is unreachable and unfreed -
+     * one ~1KB Map per lexical scope. A batch compile never noticed
+     * (the process exits); `hcc -lsp` re-parses on every keystroke and
+     * it was the single largest source of its growth. Released by
+     * `cctrlReleaseScopeMaps`. */
+    Vec *scope_maps;
 
     /* assembly functions that have been bound to HC, this is the HC 
      * name, not the assembly name */
@@ -218,10 +222,31 @@ typedef struct Cctrl {
      * each as `-l<name>` to the linker; the JIT probes
      * lib<name>.{dylib,so} with dlopen. */
     List *link_libs;
+
+    /* Symbols that are RAW assembly labels rather than C identifiers:
+     * `_extern _MALLOC ...` bindings and labels defined by an `asm { }`
+     * block. The platform's leading-underscore mangling must not be
+     * applied to these - they are already the final symbol - whereas
+     * every C identifier needs it, including the `_`-prefixed ones that
+     * fill the system headers (`__swbuf`, `__sputc`). Provenance is the
+     * only reliable way to tell the two apart; the spelling is not. */
+    Set *raw_asm_labels;
+    /* `__asm("sym")` renames and `@[spangle]` bindings (see asm.c).
+     * Nothing in the HolyC front end populates these yet, so they stay
+     * NULL and every lookup falls through to the ordinary spelling. */
+    Map *asm_renames;
+    Map *asm_spangled;
+
+    Set *extern_globals;
 } Cctrl;
 
 /* Instantiate a new compiler control struct */
 Cctrl *cctrlNew(enum CliTarget target);
+/* Free a Cctrl and the containers it owns. For a caller that discards
+ * a whole compiler rather than exiting - see the definition for what
+ * it deliberately leaves alone, and for the ordering it needs against
+ * memoryRecycleArenas. */
+void cctrlRelease(Cctrl *cc);
 /* Slimmed down Cctrl, for expanding macros */
 Cctrl *ccMacroProcessor(Map *macro_defs);
 /* File-id registry over cc->file_map; ids are what Ast->file_id holds. */
@@ -278,6 +303,13 @@ void cctrlDiagClear(Cctrl *cc);
 /* Empty the token ring buffer so a fresh parse doesn't consume tokens
  * left over from a previous (possibly errored) one. */
 void cctrlResetTokenBuffer(Cctrl *cc);
+/* Drop the ring buffer's cached filler Lexeme; it lives in the lexeme
+ * arena and must not survive a memoryRecycleArenas. */
+void cctrlForgetTokenFiller(void);
+/* Empty the lists a parse appends its output to (ast_list, initialisers,
+ * asm blocks). For a Cctrl that gets re-parsed instead of code
+ * generated - see the definition. */
+void cctrlResetParseAccumulators(Cctrl *cc);
 
 /* Build a CctrlDiagnostic from a pre-rendered message and the current source
  * position. Takes ownership of `rendered` and `suggestion`. */
@@ -307,7 +339,13 @@ AoStr *cctrlInfoAtPreviousLine(Cctrl *cc, Lexeme *tok, const char *fmt, ...);
 void cctrlSyncToplevel(Cctrl *cc);
 void cctrlSyncStatement(Cctrl *cc);
 
-Map *cctrlCreateAstMap(Map *parent);
+Map *cctrlCreateAstMap(Cctrl *cc);
+/* Does this translation unit own the program entry point - a `Main`
+ * definition or file-scope statements? Only that unit may define the
+ * `argc`/`argv` globals in an object file; every other unit leaves
+ * them undefined for the linker to bind. */
+int cctrlUnitHasEntryPoint(Cctrl *cc);
+void cctrlReleaseScopeMaps(Cctrl *cc);
 Map *cctrlCreateLexemeMap(void);
 void cctrlAddDefine(Cctrl *cc, char *name);
 

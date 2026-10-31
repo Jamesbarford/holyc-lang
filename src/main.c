@@ -15,10 +15,16 @@
 #include "compile.h"
 #include "config.h"
 #include "ir.h"
+#include "ir-inliner.h"
+#include "ir-optimise.h"
+#include "ir-regalloc.h"
 #include "ir-types.h"
 #ifdef HCC_ENABLE_JIT
-#include "aarch64-jit.h"
-#include "x86_64-jit.h"
+#include "aarch64.h"
+#include "jit-common.h"
+#include "machine/obj.h"
+#include "prsasm.h"
+#include "x86_64.h"
 #include "memsafe.h"
 #include "repl.h"
 #endif
@@ -244,50 +250,75 @@ int writeAsmToTmp(AoStr *asmbuf) {
     return 1;
 } 
 
-void emitFile(Cctrl *cc, AoStr *asmbuf, CliArgs *args) {
+/* Lower the whole program and write it as a relocatable object at
+ * `path`, through the machine layer's Mach-O / ELF writer - the same
+ * selection the JIT runs, with every global and call left for the
+ * linker. No assembler is involved. */
+static void writeObjectFile(Cctrl *cc, const char *path) {
+    Target arch = prsAsmTasmArch(cc);
+    const HccJitBackend *backend = arch == TASM_ARCH_ARM64
+                                 ? aarch64JitBackend() : x86_64JitBackend();
+    int is_darwin = cc->target == TARGET_AARCH64_APPLE_DARWIN ||
+                    cc->target == TARGET_X86_64_APPLE_DARWIN;
+    FILE *out = fopen(path, "wb");
+    if (!out) {
+        loggerPanic("Failed to create object file '%s': %s\n",
+                    path, strerror(errno));
+    }
+    int rc = hccJitCompileObject(cc, backend, arch,
+                                 obj_format_for_os_darwin(is_darwin), out);
+    fclose(out);
+    if (rc != 0) {
+        remove(path);
+        loggerPanic("Failed to write object file '%s'\n", path);
+    }
+}
+
+/* `-S` only: the same selector's stream printed as assembler text. */
+static void emitAsmText(Cctrl *cc, CliArgs *args) {
+    AoStr *asmbuf = compileToAsm(cc);
+    int fd;
+    u64 flags = O_CREAT|O_RDWR|O_TRUNC;
+
+    if (args->to_stdout) {
+        fd = STDOUT_FILENO;
+    } else if (args->output_filename != NULL) {
+        fd = open(args->output_filename, flags, 0644);
+    } else {
+        fd = open(args->asm_outfile, flags, 0644);
+    }
+    if (fd == -1) {
+        loggerPanic("Failed to open '%s' - %s\n",
+            args->asm_outfile, strerror(errno));
+    }
+    s64 written = write(fd,asmbuf->data,asmbuf->len);
+    if (written != (s64)asmbuf->len) {
+        loggerPanic("Failed to write data expected %ld got %ld\n",
+                (s64)asmbuf->len, written);
+    }
+    if (fd != STDOUT_FILENO) close(fd);
+    aoStrRelease(asmbuf);
+}
+
+/* Every AOT product but `-S` starts from a directly written object;
+ * `cc` is only ever the LINKER from here on. */
+void emitFile(Cctrl *cc, CliArgs *args) {
     AoStr *cmd = aoStrNew();
     hccLib lib;
-    if (args->emit_object) {
-        writeAsmToTmp(asmbuf);
-        char *object_file_name = args->output_filename ? 
+    /* Per-process, so concurrent compiles (a test runner, a parallel
+     * make) do not link each other's objects. */
+    char obj_tmp[64];
+    snprintf(obj_tmp, sizeof(obj_tmp), "/tmp/holyc-obj-%d.o", (int)getpid());
+    if (args->assemble_only) {
+        emitAsmText(cc, args);
+    } else if (args->emit_object) {
+        char *object_file_name = args->output_filename ?
                                  args->output_filename :
                                  args->obj_outfile;
-        char *fPIC = args->fPIC ? "-fPIC -shared" : "";
-        aoStrCatPrintf(cmd, "%s -c %s %s "CLIBS" %s -o ./%s",
-                cc->CC,
-                fPIC,
-                ASM_TMP_FILE,
-                args->clibs,
-                object_file_name);
-        safeSystem(cmd->data, 0);
-    } else if (args->asm_outfile && args->assemble_only) {
-        int fd;
-        u64 flags = O_CREAT|O_RDWR|O_TRUNC;
-
-        if (args->to_stdout) {
-            fd = STDOUT_FILENO;
-        } else if (args->output_filename != NULL) {
-            fd = open(args->output_filename, flags, 0644);
-        } else {
-            fd = open(args->asm_outfile, flags, 0644);
-        }
-        if (fd == -1) {
-            loggerPanic("Failed to open '%s' - %s\n",
-                args->asm_outfile, strerror(errno));
-        }
-        s64 written = write(fd,asmbuf->data,asmbuf->len);
-        if (written != (s64)asmbuf->len) {
-            loggerPanic("Failed to write data expected %ld got %ld\n",
-                    (s64)asmbuf->len, written);
-        }
-        close(fd);
+        writeObjectFile(cc, object_file_name);
     } else if (args->emit_dylib) {
-        writeAsmToTmp(asmbuf);
         hccLibInit(cc, &lib,args,args->lib_name);
-        aoStrCatPrintf(cmd, "%s -shared -fPIC -c %s -o ./%s",
-                cc->CC,
-                ASM_TMP_FILE,args->obj_outfile);
-        safeSystem(cmd->data,1);
+        writeObjectFile(cc, args->obj_outfile);
         /* The archive first: install_cmd copies it, so building it
          * afterwards would ship a stale (or absent) one. */
         safeSystem(lib.stylib_cmd, 1);
@@ -315,30 +346,29 @@ void emitFile(Cctrl *cc, AoStr *asmbuf, CliArgs *args) {
             aoStrPutChar(ofiles, ' ');
         }
 
+        writeObjectFile(cc, obj_tmp);
+
         if (args->run) {
             AoStr *run_cmd = aoStrNew();
-            writeAsmToTmp(asmbuf);
             AoStr *argv = cliConcatArgv(args);
             aoStrCatPrintf(run_cmd,"%s -L%s/lib %s %s %s %s "CLIBS" -ltos && ./a.out && rm ./a.out %s",
                     cc->CC,
                     args->install_dir,
-                    ASM_TMP_FILE,
+                    obj_tmp,
                     ofiles->data,
                     link_flags->data,
                     args->clibs ? args->clibs : "",
                     argv->data);
             aoStrRelease(argv);
-            aoStrRelease(run_cmd);
             /* Don't use 'safeSystem' else anything other than a '0' exit
              * code will cause a panic which is incorrect... This is a bit of a
              * hack as run, in an ideal world, would not be calling out to `_CC` */
             int ret = system(run_cmd->data);
             (void)ret;
             aoStrRelease(run_cmd);
+            remove(obj_tmp);
             exit(EXIT_SUCCESS);
         }
-
-        writeAsmToTmp(asmbuf);
 
         if (args->output_filename == NULL) {
             args->output_filename = "a.out";
@@ -348,17 +378,22 @@ void emitFile(Cctrl *cc, AoStr *asmbuf, CliArgs *args) {
         aoStrCatPrintf(cmd, "%s -L%s/lib %s %s %s %s -ltos "CLIBS" -o %s",
                 cc->CC,
                 args->install_dir,
-                ASM_TMP_FILE,
+                obj_tmp,
                 ofiles->data,
                 link_flags->data,
                 clibs,
                 args->output_filename);
 
-        safeSystem(cmd->data, 0);
+        /* The temp object goes whether or not the link succeeds; a
+         * failed link is reported by the linker's own output. */
+        int rc = system(cmd->data);
+        remove(obj_tmp);
+        if (rc != 0) {
+            loggerPanic("Failed to execute command: '%s'\n", cmd->data);
+        }
     }
-    remove(ASM_TMP_FILE);
+    remove(obj_tmp);
     aoStrRelease(cmd);
-    aoStrRelease(asmbuf);
 }
 
 void assemble(Cctrl *cc, CliArgs *args) {
@@ -425,7 +460,6 @@ int main(int argc, char **argv) {
      * at the end. */
 
     int lexer_flags = CCF_PRE_PROC;
-    AoStr *asmbuf;
     Cctrl *cc;
 
     CliArgs args;
@@ -466,9 +500,11 @@ int main(int argc, char **argv) {
         cc->CC = mprintf("cc");
     }
 
-    if (args.use_legacy_x86) cc->flags |= CCTRL_USE_LEGACY_X86;
     if (args.werror)         cc->flags |= CCTRL_WERROR;
     if (args.memsafe)        cc->flags |= CCTRL_MEMSAFE;
+    irInlineSetEnabled(!args.no_inline);
+    irRegPromoteSetEnabled(!args.no_reg_promote);
+    irOptSetDevirtualise(args.optimise);
 
     /* Exactly one of the two is always defined; `#ifjit` / `#ifaot`
      * key off them. The REPL runs on the JIT, so it counts. */
@@ -585,8 +621,7 @@ int main(int argc, char **argv) {
         goto success;
     }
 
-    asmbuf = compileToAsm(cc);
-    emitFile(cc, asmbuf, &args);
+    emitFile(cc, &args);
 
     if (args.defines_list) {
         listRelease(args.defines_list,NULL);
