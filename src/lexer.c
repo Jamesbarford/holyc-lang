@@ -358,6 +358,10 @@ int tokenPunctIs(Lexeme *tok, s64 ch) {
     return tok && (tok->tk_type == TK_PUNCT || tok->tk_type == TK_EOF) && tok->i64 == ch;
 }
 
+int tokenKwIs(Lexeme *tok, s64 kw) {
+    return tok && (tok->tk_type == TK_KEYWORD) && tok->i64 == kw;
+}
+
 /* Is the token an identifier and does the string match */
 int tokenIdentIs(Lexeme *tok, char *ident, int len) {
     return tok && tok->tk_type == TK_IDENT 

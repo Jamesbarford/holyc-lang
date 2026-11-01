@@ -2470,16 +2470,110 @@ static void parseToplevelInitEnd(Cctrl *cc, AstType *base) {
     }
 }
 
+/* evalIntConstExprOrErr works in signed 64-bit and the host's own
+ * arithmetic, so only let it see what it gets right. An unsigned divide,
+ * shift or compare, a division by zero or an oversized shift has to stay
+ * a runtime expression. */
+static int parseIntInitIsConst(Ast *ast) {
+    int ok = 1;
+    s64 rhs;
+
+    switch (ast->kind) {
+        case AST_LITERAL:
+            return astIsIntType(ast->type);
+        case AST_UNOP:
+            switch (ast->unop) {
+                case AST_UN_OP_PLUS:
+                case AST_UN_OP_MINUS:
+                case AST_UN_OP_LOG_NOT:
+                case AST_UN_OP_BIT_NOT:
+                    return parseIntInitIsConst(ast->operand);
+                default:
+                    return 0;
+            }
+        case AST_BINOP:
+            if (!parseIntInitIsConst(ast->left) ||
+                !parseIntInitIsConst(ast->right)) {
+                return 0;
+            }
+            rhs = evalIntConstExprOrErr(ast->right, &ok);
+            if (!ok) return 0;
+            int is_u64 = astIsU64(ast->left->type) ||
+                         astIsU64(ast->right->type);
+            switch (ast->binop) {
+                case AST_BIN_OP_DIV:
+                case AST_BIN_OP_MOD:
+                    return !is_u64 && rhs != 0 && rhs != -1;
+                case AST_BIN_OP_SHR:
+                    return !is_u64 && rhs >= 0 && rhs < 64;
+                case AST_BIN_OP_SHL:
+                    return rhs >= 0 && rhs < 64;
+                case AST_BIN_OP_LT:
+                case AST_BIN_OP_LE:
+                case AST_BIN_OP_GT:
+                case AST_BIN_OP_GE:
+                    return !is_u64;
+                case AST_BIN_OP_MUL:
+                case AST_BIN_OP_ADD:
+                case AST_BIN_OP_SUB:
+                case AST_BIN_OP_EQ:
+                case AST_BIN_OP_NE:
+                case AST_BIN_OP_BIT_AND:
+                case AST_BIN_OP_BIT_XOR:
+                case AST_BIN_OP_BIT_OR:
+                    return 1;
+                default:
+                    return 0;
+            }
+        default:
+            return 0;
+    }
+}
+
+/* The literal to put in the data section for `dst name = init;`, or NULL
+ * if the assignment has to run from the entry point. Mixed int/float
+ * expressions are left alone: evalFloatExprOrErr would turn `3 / 2` into
+ * 1.5, and a float does not convert to every integer type by a plain
+ * truncation. */
+static Ast *parseGlobalConstInit(Ast *init, AstType *dst) {
+    if (astIsIntType(init->type)) {
+        if (!parseIntInitIsConst(init)) return NULL;
+        if (astIsFloatType(dst) && astIsU64(init->type)) return NULL;
+
+        int ok = 1;
+        Ast *lit = astI64Type(evalIntConstExprOrErr(init, &ok));
+        if (!ok) return NULL;
+        if (dst->kind == AST_TYPE_POINTER) {
+            lit->type = astTypeCopy(dst);
+            return lit;
+        }
+        init = lit;
+    } else if (astIsFloatType(init->type) && astIsFloatType(dst)) {
+        Ast *lit = init;
+        if (lit->kind == AST_UNOP && (lit->unop == AST_UN_OP_MINUS ||
+                                      lit->unop == AST_UN_OP_PLUS)) {
+            lit = lit->operand;
+        }
+        if (lit->kind != AST_LITERAL) return NULL;
+    } else {
+        return NULL;
+    }
+
+    Ast *folded = parseFoldInitElement(init, dst);
+    return folded->kind == AST_LITERAL ? folded : NULL;
+}
+
 Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
     Ast *variable, *asm_block, *asm_func, *extern_func, *ast;
     AstType *type = NULL;
     AstType *base = cc->tmp_decl_base;
     Lexeme *tok, *name, *peek;
-    int is_static = 0;
     int is_next_declarator = base != NULL;
+    int is_static = 0;
 
     if (base) {
         cc->tmp_decl_base = NULL;
+        is_static = cc->tmp_decl_static;
         type = parsePointerType(cc,base);
         goto declarator;
     }
@@ -2510,6 +2604,11 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
                 }
 
                 case KW_EXTERN: {
+                    if (is_static) {
+                        cctrlRaiseException(cc,
+                            "Only valid definition is `extern <Type>` "
+                            "you can't have a `static extern` or `extern static`");
+                    }
                     tok = cctrlTokenGet(cc);
                     if (tok->tk_type == TK_STR && !strncmp(tok->start,"c",1)) {
                         /* extern "c" func(...) - C-ABI function decl. */
@@ -2543,6 +2642,13 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
                 }
                 case KW_INLINE: {
                     peek = cctrlTokenPeek(cc);
+
+                    if (tokenKwIs(peek, KW_STATIC)) {
+                        // kinda not a peek but tee-s up the next call to ensure
+                        // we get a type.
+                        is_static = 1;
+                        peek = cctrlTokenGet(cc);
+                    }
                     if (!cctrlGetKeyWord(cc, peek->start, peek->len)) {
                         cctrlRaiseException(cc,"Expected return type declaration got: '%.*s'",
                                 peek->len,peek->start);
@@ -2552,6 +2658,9 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
                     
                     ast = parseFunctionOrDef(cc,type,name->start,name->len,1);
                     ast->flags |= AST_FLAG_INLINE_HINT;
+                    if (is_static) {
+                        ast->flags |= AST_FLAG_STATIC_FN;
+                    }
                     ast->line = name->line;
                     ast->col = name->col;
                     return ast;
@@ -2562,11 +2671,8 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
                     continue;
 
                 case KW_STATIC:
-                    type = parseToplevelType(cc,&base);
-                    /* static at the global scope does not yet do anything */
                     is_static = 1;
-                    (void)is_static;
-                    break;
+                    continue;
                 
                 case KW_CLASS:
                     parseClassDef(cc,0);
@@ -2707,6 +2813,7 @@ Ast *parseToplevelDef(Cctrl *cc, int *is_global) {
         }
 
 declarator:
+        cc->tmp_decl_static = is_static;
         name = cctrlTokenGet(cc);
         /* End of input mid-definition: stop parsing so any accumulated
          * diagnostics surface, rather than dereferencing a NULL token. */
@@ -2758,7 +2865,7 @@ declarator:
             type->kind == AST_TYPE_CLASS && !type->is_intrinsic &&
             tokenPunctIs(cctrlTokenPeekBy(cc,1),'{'))
         {
-            variable = astGVar(type,name->start,name->len,0);
+            variable = astGVar(type,name->start,name->len,is_static);
             mapAdd(cc->global_env,variable->gname->data,variable);
             cc->tmp_gvar_decl = variable;
             ast = parseVariableInitialiser(cc,variable,
@@ -2768,7 +2875,12 @@ declarator:
         }
 
         if (tokenPunctIs(tok,'=') && type->kind != AST_TYPE_ARRAY) {
-            variable = astGVar(type,name->start,name->len,0);
+            /* A redeclaration shares the first one's storage and the
+             * emitters keep only the first, so its value must stay an
+             * assignment. */
+            int is_redecl = mapGetLen(cc->global_env,name->start,name->len)
+                            != NULL;
+            variable = astGVar(type,name->start,name->len,is_static);
             Ast *ast_decl = astDecl(variable,NULL);
 
             listAppend(cc->ast_list,ast_decl);
@@ -2794,6 +2906,13 @@ declarator:
                     parseToplevelDeclEnd(cc,base);
                     return ast_decl;
                 }
+                Ast *auto_init = is_redecl ? NULL :
+                                 parseGlobalConstInit(rhs,variable->type);
+                if (auto_init) {
+                    ast_decl->declinit = auto_init;
+                    parseToplevelDeclEnd(cc,base);
+                    return ast_decl;
+                }
                 int is_err = 0;
                 Ast *assign = astBinaryOp(AST_BIN_OP_ASSIGN, variable,
                                           rhs, &is_err);
@@ -2806,6 +2925,17 @@ declarator:
 
             Ast *ast_expr = parseExpr(cc,16); // parseVariableInitialiser(cc,variable,PUNCT_TERM_COMMA|PUNCT_TERM_SEMI);
 
+            Ast *const_init = NULL;
+            if (!is_redecl && astIsBinOpKind(ast_expr, AST_BIN_OP_ASSIGN)) {
+                const_init = parseGlobalConstInit(ast_expr->right,type);
+            }
+
+            if (const_init) {
+                ast_decl->declinit = const_init;
+                parseToplevelDeclEnd(cc,base);
+                return ast_decl;
+            }
+
             if (ast_expr->right->kind != AST_STRING) {
                 *is_global = 1;
             } else {
@@ -2816,7 +2946,7 @@ declarator:
             parseToplevelDeclEnd(cc,base);
             return ast_expr;
         } else if (type->kind == AST_TYPE_ARRAY) {
-            variable = astGVar(type,name->start,name->len,0);
+            variable = astGVar(type,name->start,name->len,is_static);
             mapAdd(cc->global_env,variable->gname->data,variable);
             cc->tmp_gvar_decl = variable;
             ast = parseVariableInitialiser(cc,variable,PUNCT_TERM_COMMA|PUNCT_TERM_SEMI);
@@ -2846,7 +2976,7 @@ declarator:
 
         if (tokenPunctIs(tok,';') || tokenPunctIs(tok, ',')) {
             parseToplevelDeclEnd(cc,base);
-            variable = astGVar(type,name->start,name->len,0);
+            variable = astGVar(type,name->start,name->len,is_static);
             mapAdd(cc->global_env,variable->gname->data,variable);
             return astDecl(variable,NULL);
         }

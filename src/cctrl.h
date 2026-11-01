@@ -30,6 +30,7 @@
 /* Create wrappers over MAlloc/Free and friends for tracking allocations
  * JIT only presently */
 #define CCTRL_MEMSAFE              (1<<8)
+#define CCTRL_OPTIMISE             (1<<9)
 
 /* For messages */
 #define CCTRL_ICE   0
@@ -161,6 +162,8 @@ typedef struct Cctrl {
     /* Base type of a top-level `I64 a, b;` after a `,`: the next call of
      * parseToplevelDef carries on with the next declarator. */
     AstType *tmp_decl_base;
+    /* Was the declaration `tmp_decl_base` belongs to `static` */
+    int tmp_decl_static;
 
     /* When parsing & converting to assembly these keep a reference to the
      * current loop's labels */

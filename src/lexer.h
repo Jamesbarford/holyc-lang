@@ -276,6 +276,7 @@ char *lexemeToString(Lexeme *tok);
 AoStr *lexemeToAoStr(Lexeme *tok);
 void lexReleaseAllFiles(Lexer *l);
 int tokenPunctIs(Lexeme *tok, s64 ch);
+int tokenKwIs(Lexeme *tok, s64 kw);
 int tokenIdentIs(Lexeme *tok, char *ident, int len);
 void lexemeFree(void *_le);
 char *lexerReportLine(Lexer *l, s64 lineno);
