@@ -429,7 +429,8 @@ int main(int argc, char **argv) {
 
     if (args.werror)         cc->flags |= CCTRL_WERROR;
     if (args.memsafe)        cc->flags |= CCTRL_MEMSAFE;
-    irInlineSetEnabled(!args.no_inline);
+    if (args.optimise)       cc->flags |= CCTRL_OPTIMISE;
+    irInlineSetEnabled(!args.no_inline && (cc->flags & CCTRL_OPTIMISE));
     irRegPromoteSetEnabled(!args.no_reg_promote);
     irOptSetDevirtualise(args.optimise);
 

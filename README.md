@@ -30,12 +30,13 @@ https://holyc-lang.com/
 - [LSP][#lsp] and [see here for setup with neovim](#neovim-lsp-example)
 - Assembler, used in `asm {}` blocks
 - Disassembler
+- A bare-bones optimiser
 - A myriad of pernicious bugs
 
 ## Introduction
 A holyc compiler built from scratch in C. Constant folding, dead code
-elimination, inlining and register promotion are always on, and `-O` goes
-further: indirect calls whose target is known become direct calls, and stores
+elimination and register promotion are always on. `-O` turns on inline-ing and
+goes further: indirect calls whose target is known become direct calls, and stores
 are forwarded through locals whose address does not escape. But broadly it
 should be easy to see how the assembly maps to the source code. It works by
 creating an AST, lowering to an SSA based IR and selecting x86_64/AArch64

@@ -36,7 +36,7 @@
 
 /* A body bigger than this is not an accessor, and inlining it trades
  * code size for a call that was not costing much. */
-#define IR_INLINE_MAX_INSTRS 8
+#define IR_INLINE_MAX_INSTRS 16
 
 /* Marked with `inline` / `__attribute__((inline))` / `@[inline]`. The
  * author has said the trade is worth making, so the budget is theirs
