@@ -516,11 +516,13 @@ int main(int argc, char **argv) {
         listPrepend(args.argv, args.infile);
         args.argc++;
 
-        char **jit_argv = malloc(sizeof(char *) * args.argc);
+        /* argv[argc] is NULL for a compiled program, so it is here too. */
+        char **jit_argv = malloc(sizeof(char *) * (args.argc + 1));
         int i = 0;
         listForEach(args.argv) {
             jit_argv[i++] = it->value;
         }
+        jit_argv[i] = NULL;
         int rc = hccJitRunMain(jit, args.argc, jit_argv);
         if (args.memsafe) memsafeReportLeaks(stderr);
         hccJitFree(jit);
